@@ -41,6 +41,29 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 
 #define IK_PRINT_TIMING 0
 
+// ---- W1 temporary instrumentation (IK_W1_PROF=1) — NOT FOR COMMIT ----
+// Per-decode-step phase attribution: set_inputs / graph submit / expert-cache
+// step boundary sub-phases / logits issue, plus the sampler-triggered
+// llama_synchronize wait and promotion-worker copy time. Prints W1STEP/W1SYNC
+// lines to stderr.
+#include <atomic>
+static bool w1_prof_on() {
+    static const bool on = getenv("IK_W1_PROF") != nullptr;
+    return on;
+}
+struct w1_boundary_prof {
+    int64_t publish_us = 0;    // fence poll + remap publish of completed copies
+    int64_t cls_sync_us = 0;   // explicit classify-backend sync before ids readback
+    int64_t cls_read_us = 0;   // per-layer staged ids tensor_get loop
+    int64_t admission_us = 0;  // candidate scan/sort/queue
+    int64_t sim_us = 0;        // shadow classic-LRU sim update
+    int64_t upload_us = 0;     // device classify table re-upload (async issue)
+    int64_t promo_issue_us = 0; // worker thread: staging memcpy + H2D issue (delta this step)
+    int64_t promo_bytes = 0;    // worker thread: bytes copied (delta this step)
+};
+static w1_boundary_prof g_w1_boundary;
+// ---- end W1 instrumentation ----
+
 #ifdef GGML_USE_RPC
 #  include "ggml-rpc.h"
 #endif
@@ -707,7 +730,7 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fi
            mtp_step_idx == the_prev->mtp_step_idx &&
            mtp_n_heads == the_prev->mtp_n_heads &&
            update_cache_copies();
-    if (false && !result) {
+    if (w1_prof_on() && !result) {
         printf("%s(%d):", __func__, cparams.mtp_op_type);
         why_not_reuse_previous(u_batch, *this, the_prev, seq_fingerprint, model_state_hash);
     }
@@ -7166,6 +7189,10 @@ struct llama_context::expert_cache_state::expert_cache_promoter {
     struct inflight { int32_t il, slot, expert; uint64_t copy_fence; };
     std::deque<inflight>    pending;
 
+    // W1: worker-side copy time/byte counters (read+reset at the step boundary)
+    std::atomic<int64_t> w1_issue_us{0};
+    std::atomic<int64_t> w1_bytes{0};
+
 #ifdef GGML_USE_CUDA
     ggml_cuda_copy_engine_t engine = nullptr; // slots_on_cuda only
 #endif
@@ -7212,8 +7239,13 @@ struct llama_context::expert_cache_state::expert_cache_promoter {
             if (engine) {
                 // ordering vs the compute stream was already enqueued at queue
                 // time (sync_compute); the copy stream is FIFO
+                const int64_t w1_t0 = w1_prof_on() ? ggml_time_us() : 0;
                 for (int i = 0; i < 3; i++) {
                     ggml_backend_cuda_copy_engine_h2d(engine, j.dst[i], j.src[i], j.size[i]);
+                }
+                if (w1_prof_on()) {
+                    w1_issue_us.fetch_add(ggml_time_us() - w1_t0, std::memory_order_relaxed);
+                    w1_bytes.fetch_add((int64_t) (j.size[0] + j.size[1] + j.size[2]), std::memory_order_relaxed);
                 }
                 const uint64_t f = ggml_backend_cuda_copy_engine_fence_copy(engine);
                 std::lock_guard<std::mutex> lock(mtx);
@@ -7515,8 +7547,13 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
     if (!cache) {
         return;
     }
+    if (w1_prof_on()) g_w1_boundary = w1_boundary_prof{};
     // M3b: promotions publish even on steps that staged nothing
-    llama_expert_cache_publish(lctx);
+    {
+        const int64_t w1_t = w1_prof_on() ? ggml_time_us() : 0;
+        llama_expert_cache_publish(lctx);
+        if (w1_prof_on()) g_w1_boundary.publish_us = ggml_time_us() - w1_t;
+    }
 
     // M3e device classify: no mid-graph callback staged the routed ids, so the
     // boundary reads back this step's ids from the persistent per-layer staging
@@ -7536,12 +7573,15 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
         const auto & layer0 = lctx.model.layers[cache->layers.begin()->first];
         const int bi = ggml_backend_sched_get_backend_idx(lctx.sched, layer0.ffn_exp_cache_ids_stage->buffer);
         if (bi >= 0) {
+            const int64_t w1_t = w1_prof_on() ? ggml_time_us() : 0;
             ggml_backend_synchronize(ggml_backend_sched_get_backend(lctx.sched, bi));
+            if (w1_prof_on()) g_w1_boundary.cls_sync_us = ggml_time_us() - w1_t;
         }
         // staging layout [c*EXP_CACHE_STAGE_KMAX + j] — matches the classify
         // op's side-effect write (ggml.c / exp-cache-classify.cu)
         constexpr int64_t EXP_CACHE_STAGE_KMAX = 8;
         int32_t stage_buf[EXP_CACHE_STAGE_KMAX * EXP_CACHE_STAGE_KMAX];
+        const int64_t w1_tr = w1_prof_on() ? ggml_time_us() : 0;
         for (auto & kv : cache->layers) {
             auto & cl = kv.second;
             const ggml_tensor * tk = cl.topk_ids; // host-side shape metadata only
@@ -7568,6 +7608,7 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
             cl.sim_staged_step = cache->step;
             cache->staged_layers.push_back(kv.first);
         }
+        if (w1_prof_on()) g_w1_boundary.cls_read_us = ggml_time_us() - w1_tr;
     }
 
     // M3c admission policy (PHASE4-M3C-ADMISSION.md, option C "the routing
@@ -7595,7 +7636,9 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
 
     if (cache->staged_layers.empty()) {
         // publish above may still have dirtied the device classify tables
+        const int64_t w1_t = w1_prof_on() ? ggml_time_us() : 0;
         llama_expert_cache_upload_tables(lctx);
+        if (w1_prof_on()) g_w1_boundary.upload_us = ggml_time_us() - w1_t;
         return;
     }
     static const int32_t window = [] {
@@ -7623,6 +7666,7 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
     // count >= 2 IS the queue, re-presented by the routing stream.
     struct exp_cache_candidate { int32_t il, id, count; uint64_t recency; };
     std::vector<exp_cache_candidate> candidates;
+    const int64_t w1_tadm = w1_prof_on() ? ggml_time_us() : 0;
     {
         const int32_t H = cache->h;
         for (int32_t il : cache->staged_layers) {
@@ -7788,6 +7832,8 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
             cache->inflight_highwater = std::max(cache->inflight_highwater, cache->promoter->n_inflight());
         }
     }
+    if (w1_prof_on()) g_w1_boundary.admission_us = ggml_time_us() - w1_tadm;
+    const int64_t w1_tsim = w1_prof_on() ? ggml_time_us() : 0;
     for (int32_t il : cache->staged_layers) {
         auto & cl = cache->layers[il];
         const int64_t k    = cl.sim_staged_k;
@@ -7846,6 +7892,7 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
         }
     }
     cache->staged_layers.clear();
+    if (w1_prof_on()) g_w1_boundary.sim_us = ggml_time_us() - w1_tsim;
 
     // M3b validation hook: one forced promotion at a chosen step.
     // IK_EXP_CACHE_FORCE_PROMOTE=il:slot:expert:step; expert -1 self-selects
@@ -7896,8 +7943,17 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
     // M3e: the device classify tables (remap/pending) mutate only at step
     // boundaries — publish, queue-time eviction (both above) and the FORCE
     // hook.
-    llama_expert_cache_upload_tables(lctx);
+    {
+        const int64_t w1_t = w1_prof_on() ? ggml_time_us() : 0;
+        llama_expert_cache_upload_tables(lctx);
+        if (w1_prof_on()) g_w1_boundary.upload_us += ggml_time_us() - w1_t;
+    }
     cache->step++;
+
+    if (w1_prof_on() && cache->promoter) {
+        g_w1_boundary.promo_issue_us = cache->promoter->w1_issue_us.exchange(0, std::memory_order_relaxed);
+        g_w1_boundary.promo_bytes    = cache->promoter->w1_bytes.exchange(0, std::memory_order_relaxed);
+    }
 
     static int dbg = -1;
     if (dbg < 0) {
@@ -8849,6 +8905,7 @@ static int llama_decode_internal(
 #endif
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
+        const int64_t w1_tb = w1_prof_on() ? ggml_time_us() : 0;
         const uint64_t seq_fingerprint = llama_ubatch_seq_fingerprint(u_batch, lctx.model.arch);
         const uint64_t state_hash      = model_state_hash(lctx);
         if (!lctx.can_reuse_graph(u_batch, seq_fingerprint, state_hash)) {
@@ -8969,7 +9026,9 @@ static int llama_decode_internal(
         tim1 = ggml_time_us();
 #endif
         //fprintf(stderr, "%s: setting inputs\n", __func__);
+        const int64_t w1_t0 = w1_prof_on() ? ggml_time_us() : 0;
         llama_set_inputs(lctx, u_batch);
+        const int64_t w1_t1 = w1_prof_on() ? ggml_time_us() : 0;
 #if IK_PRINT_TIMING == 1
         tim2 = ggml_time_us();
         printf("set_inputs(...): %d us\n", int(tim2-tim1));
@@ -8980,12 +9039,14 @@ static int llama_decode_internal(
         //fprintf(stderr, "%s: invoking llama_graph_compute\n", __func__);
         g_snap.cur_pos0 = u_batch.pos && u_batch.n_tokens > 0 ? (int64_t) u_batch.pos[0] : -1;
         llama_graph_compute(lctx, gf, n_threads);
+        const int64_t w1_t2 = w1_prof_on() ? ggml_time_us() : 0;
 
         // M3a: TG step boundary — apply classify-staged routing to the shadow
         // LRU sim. PP ubatches (n_tokens > 8) are read-only by design.
         if (lctx.expert_cache && n_tokens <= 8) {
             llama_expert_cache_step_boundary(lctx);
         }
+        const int64_t w1_t3 = w1_prof_on() ? ggml_time_us() : 0;
 
         if (lctx.expert_tracer) {
             llama_expert_trace_record(lctx, gf, u_batch);
@@ -9213,6 +9274,18 @@ static int llama_decode_internal(
             }
         }
 
+        if (w1_prof_on()) {
+            const auto & b = g_w1_boundary;
+            fprintf(stderr, "W1STEP ntok=%d total_us=%lld build_us=%lld set_inputs_us=%lld submit_us=%lld boundary_us=%lld rest_us=%lld "
+                    "publish_us=%lld cls_sync_us=%lld cls_read_us=%lld admission_us=%lld sim_us=%lld upload_us=%lld "
+                    "promo_issue_us=%lld promo_bytes=%lld\n",
+                    (int) n_tokens,
+                    (long long) (ggml_time_us() - w1_tb), (long long) (w1_t0 - w1_tb), (long long) (w1_t1 - w1_t0), (long long) (w1_t2 - w1_t1),
+                    (long long) (w1_t3 - w1_t2), (long long) (ggml_time_us() - w1_t3),
+                    (long long) b.publish_us, (long long) b.cls_sync_us, (long long) b.cls_read_us,
+                    (long long) b.admission_us, (long long) b.sim_us, (long long) b.upload_us,
+                    (long long) b.promo_issue_us, (long long) b.promo_bytes);
+        }
         n_outputs_prev += lctx.n_outputs;
         n_outputs_prev_embd += (has_mtp && embd) ? embd->ne[1] : lctx.n_outputs;
         cur_token += n_tokens;
@@ -14553,7 +14626,11 @@ void llama_set_mtp_n_heads(llama_context * ctx, int32_t mtp_n_heads) {
 }
 
 void llama_synchronize(struct llama_context * ctx) {
+    const int64_t w1_t = w1_prof_on() ? ggml_time_us() : 0;
     ggml_backend_sched_synchronize(ctx->sched);
+    if (w1_prof_on()) {
+        fprintf(stderr, "W1SYNC us=%lld\n", (long long) (ggml_time_us() - w1_t));
+    }
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
     // this should only happen when using batch size 1 to evaluate a batch

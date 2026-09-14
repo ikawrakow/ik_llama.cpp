@@ -23,6 +23,67 @@
 
 #define IK_PRINT_TIMING 0
 
+// ---- W1 temporary instrumentation (IK_W1_PROF=1) — NOT FOR COMMIT ----
+// Per-graph-call wall-time attribution of the sequential splits loop:
+// input-copy time (with the host-blocking sync subset), eval time split by
+// backend class (CUDA launch vs CPU compute; CPU further split into MoE
+// expert splits vs other). Prints one W1SPLITS line per compute_splits call.
+#include <atomic>
+static bool w1_prof_on() {
+    static const bool on = getenv("IK_W1_PROF") != nullptr;
+    return on;
+}
+static bool w1_prof_splits_on() {
+    static const bool on = getenv("IK_W1_PROF_SPLITS") != nullptr;
+    return on;
+}
+struct w1_prof_acc {
+    int64_t copy_us = 0;        // wall inside ggml_backend_sched_copy_inputs
+    int64_t wait_us = 0;        // subset of copy_us: host blocked in event/backend synchronize
+    int64_t eval_cuda_us = 0;   // device splits (launch-only, async)
+    int64_t eval_cpu_moe_us = 0;
+    int64_t eval_cpu_other_us = 0;
+    int n_cuda = 0, n_cpu_moe = 0, n_cpu_other = 0;
+};
+static std::atomic<int64_t> g_w1_wait_us{0}; // copy_inputs may run on a worker thread in async paths
+static std::atomic<int64_t> g_w1_wait_ids_us{0}; // subset: the only_active_experts cold-ids readback sync
+static void w1_timed_sync_ids(void (*fn)(ggml_backend_t), ggml_backend_t b) {
+    if (!w1_prof_on()) { fn(b); return; }
+    const int64_t t0 = ggml_time_us();
+    fn(b);
+    const int64_t d = ggml_time_us() - t0;
+    g_w1_wait_us.fetch_add(d, std::memory_order_relaxed);
+    g_w1_wait_ids_us.fetch_add(d, std::memory_order_relaxed);
+}
+static void w1_timed_sync(void (*fn)(ggml_backend_t), ggml_backend_t b) {
+    if (!w1_prof_on()) { fn(b); return; }
+    const int64_t t0 = ggml_time_us();
+    fn(b);
+    g_w1_wait_us.fetch_add(ggml_time_us() - t0, std::memory_order_relaxed);
+}
+static void w1_timed_ev_sync(ggml_backend_event_t ev) {
+    if (!w1_prof_on()) { ggml_backend_event_synchronize(ev); return; }
+    const int64_t t0 = ggml_time_us();
+    ggml_backend_event_synchronize(ev);
+    g_w1_wait_us.fetch_add(ggml_time_us() - t0, std::memory_order_relaxed);
+}
+static std::atomic<int64_t> g_w1_xfer_us{0}; // time inside ggml_backend_tensor_copy crossing calls
+static void w1_timed_tensor_copy(struct ggml_tensor * src, struct ggml_tensor * dst) {
+    if (!w1_prof_on()) { ggml_backend_tensor_copy(src, dst); return; }
+    const int64_t t0 = ggml_time_us();
+    ggml_backend_tensor_copy(src, dst);
+    const int64_t d = ggml_time_us() - t0;
+    g_w1_xfer_us.fetch_add(d, std::memory_order_relaxed);
+    if (w1_prof_splits_on() && d > 20) {
+        fprintf(stderr, "W1COPY us=%lld bytes=%lld src='%s' host_src=%d host_dst=%d src_cont=%d\n",
+                (long long) d, (long long) ggml_nbytes(src), src->name,
+                src->buffer ? (int) ggml_backend_buffer_is_host(src->buffer) : -1,
+                dst->buffer ? (int) ggml_backend_buffer_is_host(dst->buffer) : -1,
+                (int) ggml_is_contiguous(src));
+    }
+}
+// ---- end W1 instrumentation ----
+
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 // backend buffer type
@@ -2125,20 +2186,20 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
             // if there are multiple inputs for the split, and we have already synchronized this backend, no need to do it again.
             if (!synced_on_input) {
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                    ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                    w1_timed_ev_sync(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    w1_timed_sync(ggml_backend_synchronize, split_backend);
                 }
                 synced_on_input = true;
             }
-            ggml_backend_tensor_copy(input, input_cpy);
+            w1_timed_tensor_copy(input, input_cpy);
         } else {
             // wait for the split backend to finish using the input before overwriting it
             if (needs_sync[split_backend_id]) {
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    w1_timed_sync(ggml_backend_synchronize, split_backend);
                 }
                 needs_sync[split_backend_id] = k_set_sync;
             }
@@ -2150,7 +2211,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE)) {
 
                 if (input_backend != last_input_backend) {
-                    ggml_backend_synchronize(input_backend);
+                    w1_timed_sync(ggml_backend_synchronize, input_backend);
                     last_input_backend = input_backend;
                 }
 
@@ -2174,7 +2235,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
 
                     ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
 
-                    ggml_backend_synchronize(ids_backend);
+                    w1_timed_sync_ids(ggml_backend_synchronize, ids_backend);
                     if (auto id = tensor_backend_id(ids_tensor); id >= 0 && id < GGML_SCHED_MAX_BACKENDS) {
                         needs_sync[id] = k_set_sync;
                     }
@@ -2252,17 +2313,17 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                         int ps = sched->tensor_producer_split[input_id];
                         if (ps >= 0 && ps < sched->n_splits) crossing_ev = sched->split_events[ps].ev;
                     }
-                    if (crossing_ev != NULL) ggml_backend_event_synchronize(crossing_ev);
-                    else                     ggml_backend_synchronize(input_backend);
+                    if (crossing_ev != NULL) w1_timed_ev_sync(crossing_ev);
+                    else                     w1_timed_sync(ggml_backend_synchronize, input_backend);
                     if (needs_sync[split_backend_id]) {
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                            ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                            w1_timed_ev_sync(sched->events[split_backend_id][sched->cur_copy]);
                         } else {
-                            ggml_backend_synchronize(split_backend);
+                            w1_timed_sync(ggml_backend_synchronize, split_backend);
                         }
                         needs_sync[split_backend_id] = k_set_sync;
                     }
-                    ggml_backend_tensor_copy(input, input_cpy);
+                    w1_timed_tensor_copy(input, input_cpy);
                 }
         }
     }
@@ -2325,6 +2386,10 @@ static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_back
 }
 
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
+
+    w1_prof_acc w1_acc;
+    const int64_t w1_t0 = w1_prof_on() ? ggml_time_us() : 0;
+    g_w1_wait_us.store(0, std::memory_order_relaxed);
 
     for (auto & item : sched->needs_sync) item = true;
 
@@ -2612,7 +2677,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         // copy the input tensors to the split backend
+        int64_t w1_tcopy = w1_prof_on() ? ggml_time_us() : 0;
+        const int64_t w1_wait0 = w1_prof_on() ? g_w1_wait_us.load(std::memory_order_relaxed) : 0;
+        const int64_t w1_idsw0 = w1_prof_on() ? g_w1_wait_ids_us.load(std::memory_order_relaxed) : 0;
         ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+        const int64_t w1_copy_d = w1_prof_on() ? ggml_time_us() - w1_tcopy : 0;
+        w1_acc.copy_us += w1_copy_d;
 
         // ids are now final and host-visible; enqueue the selected expert
         // slices of this split's host-computed MoE matmuls (up/gate and down
@@ -2632,9 +2702,47 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
+        int64_t w1_teval = w1_prof_on() ? ggml_time_us() : 0;
         auto ec = ggml_backend_sched_eval(sched, split_backend, split);
         if (ec != GGML_STATUS_SUCCESS) {
             return ec;
+        }
+        if (w1_prof_on()) {
+            const int64_t d = ggml_time_us() - w1_teval;
+            const bool is_cpu = ggml_backend_is_cpu(split_backend);
+            bool is_moe = false;
+            for (int n = 0; n < split->graph.n_nodes; n++) {
+                const auto op = split->graph.nodes[n]->op;
+                if (op == GGML_OP_MUL_MAT_ID || op == GGML_OP_MOE_FUSED_UP_GATE) { is_moe = true; break; }
+            }
+            if (!is_cpu)          { w1_acc.eval_cuda_us      += d; w1_acc.n_cuda++;      }
+            else if (is_moe)      { w1_acc.eval_cpu_moe_us   += d; w1_acc.n_cpu_moe++;   }
+            else                  { w1_acc.eval_cpu_other_us += d; w1_acc.n_cpu_other++; }
+            static int w1_dump_steps = getenv("IK_W1_PROF_SPLITS") ? 2 : 0;
+            if (w1_dump_steps > 0) {
+                bool has_cls = false;
+                for (int n = 0; n < split->graph.n_nodes; n++) {
+                    if (split->graph.nodes[n]->op == GGML_OP_EXP_CACHE_CLASSIFY) { has_cls = true; break; }
+                }
+                if (has_cls || is_moe) {
+                    fprintf(stderr, "W1DUMP i=%d be=%s:", i, is_cpu ? "cpu" : "dev");
+                    for (int n = 0; n < split->graph.n_nodes; n++) {
+                        auto * nd = split->graph.nodes[n];
+                        fprintf(stderr, " %s%s", nd->name, nd->op == GGML_OP_EXP_CACHE_CLASSIFY ? "[CLS]" : "");
+                    }
+                    fprintf(stderr, "\n");
+                }
+                if (i == sched->n_splits - 1) w1_dump_steps--;
+            }
+            if (w1_prof_splits_on()) {
+                fprintf(stderr, "W1SPLIT i=%d/%d be=%s moe=%d nin=%d copy_us=%lld wait_us=%lld idsw_us=%lld eval_us=%lld n0=%s nN=%s\n",
+                        i, sched->n_splits, is_cpu ? "cpu" : "dev", (int) is_moe, (int) split->n_inputs,
+                        (long long) w1_copy_d,
+                        (long long) (g_w1_wait_us.load(std::memory_order_relaxed) - w1_wait0),
+                        (long long) (g_w1_wait_ids_us.load(std::memory_order_relaxed) - w1_idsw0), (long long) d,
+                        split->graph.n_nodes > 0 ? split->graph.nodes[0]->name : "-",
+                        split->graph.n_nodes > 0 ? split->graph.nodes[split->graph.n_nodes - 1]->name : "-");
+            }
         }
 #if IK_PRINT_TIMING
         // CPU splits block in eval (true compute time); CUDA splits return
@@ -2667,6 +2775,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     }
 
     sched->cur_copy = (sched->cur_copy + 1) % sched->n_copies;
+
+    if (w1_prof_on()) {
+        w1_acc.wait_us = g_w1_wait_us.load(std::memory_order_relaxed);
+        fprintf(stderr, "W1SPLITS wall_us=%lld copy_us=%lld wait_us=%lld xfer_us=%lld eval_cuda_us=%lld cpu_moe_us=%lld cpu_other_us=%lld nsplits=%d n_cuda=%d n_cpu_moe=%d n_cpu_other=%d\n",
+                (long long) (ggml_time_us() - w1_t0), (long long) w1_acc.copy_us, (long long) w1_acc.wait_us,
+                (long long) g_w1_xfer_us.exchange(0, std::memory_order_relaxed),
+                (long long) w1_acc.eval_cuda_us, (long long) w1_acc.eval_cpu_moe_us, (long long) w1_acc.eval_cpu_other_us,
+                sched->n_splits, w1_acc.n_cuda, w1_acc.n_cpu_moe, w1_acc.n_cpu_other);
+    }
 
     return GGML_STATUS_SUCCESS;
 }

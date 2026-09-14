@@ -653,20 +653,89 @@ GGML_CALL static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
+// IK_CUDA_PINNED_IO=1: bounded use of pinned host memory for small
+// host<->device traffic in GGML_CUDA_NO_PINNED runs (where the model's
+// hundreds of GiB must stay pageable):
+//   - ggml_cuda_host_malloc below pins allocations up to
+//     IK_CUDA_PIN_IO_MAX_SIZE despite NO_PINNED (covers the ~126 MiB CPU
+//     compute buffer; multi-GiB model shards stay pageable)
+//   - the sync buffer set/get paths stage small (<= 256 KiB) copies through a
+//     pinned slot, removing the pageable transient-pin cost at issue
+//     (~10-40 us/copy, worse under memory pressure)
+//   - cpy_tensor_async serves crossings from genuinely pinned host buffers
+//     with a direct stream-ordered async DMA (no host block, no staging)
+// Total extra pinned memory: the small host buffers + 2 x 256 KiB slots.
+#define IK_CUDA_PIN_STAGE_SIZE (256 << 10)
+#define IK_CUDA_PIN_IO_MAX_SIZE (512 << 20)
+
+static bool ggml_cuda_pin_stage_on() {
+    static const bool on = getenv("IK_CUDA_PINNED_IO") != nullptr;
+    return on;
+}
+
+struct ggml_cuda_pin_stage_dev {
+    std::mutex      mtx;
+    // synchronous staging slots (serialized by the caller-visible sync)
+    char *          sync_h2d = nullptr;
+    char *          sync_d2h = nullptr;
+};
+
+static ggml_cuda_pin_stage_dev & ggml_cuda_pin_stage(int device) {
+    static ggml_cuda_pin_stage_dev devs[GGML_CUDA_MAX_DEVICES];
+    GGML_ASSERT(device >= 0 && device < GGML_CUDA_MAX_DEVICES);
+    return devs[device];
+}
+
 GGML_CALL static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+    if (ggml_cuda_pin_stage_on() && size <= IK_CUDA_PIN_STAGE_SIZE) {
+        auto & st = ggml_cuda_pin_stage(ctx->device);
+        std::lock_guard<std::mutex> lock(st.mtx);
+        if (!st.sync_h2d) {
+            CUDA_CHECK(cudaHostAlloc(&st.sync_h2d, IK_CUDA_PIN_STAGE_SIZE, cudaHostAllocDefault));
+        }
+        memcpy(st.sync_h2d, data, size);
+        CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, st.sync_h2d, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+        return;
+    }
+    static const bool w1_prof = getenv("IK_W1_PROF") != nullptr;
+    const int64_t w1_t0 = w1_prof && size <= (256 << 10) ? ggml_time_us() : 0;
     CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+    const int64_t w1_t1 = w1_prof && size <= (256 << 10) ? ggml_time_us() : 0;
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+    if (w1_t0) {
+        fprintf(stderr, "W1CUDACPY h2d bytes=%zu issue_us=%lld sync_us=%lld\n", size,
+                (long long) (w1_t1 - w1_t0), (long long) (ggml_time_us() - w1_t1));
+    }
 }
 
 GGML_CALL static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+    if (ggml_cuda_pin_stage_on() && size <= IK_CUDA_PIN_STAGE_SIZE) {
+        auto & st = ggml_cuda_pin_stage(ctx->device);
+        std::lock_guard<std::mutex> lock(st.mtx);
+        if (!st.sync_d2h) {
+            CUDA_CHECK(cudaHostAlloc(&st.sync_d2h, IK_CUDA_PIN_STAGE_SIZE, cudaHostAllocDefault));
+        }
+        CUDA_CHECK(cudaMemcpyAsync(st.sync_d2h, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
+        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+        memcpy(data, st.sync_d2h, size);
+        return;
+    }
+    static const bool w1_prof = getenv("IK_W1_PROF") != nullptr;
+    const int64_t w1_t0 = w1_prof && size <= (256 << 10) ? ggml_time_us() : 0;
     CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
+    const int64_t w1_t1 = w1_prof && size <= (256 << 10) ? ggml_time_us() : 0;
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+    if (w1_t0) {
+        fprintf(stderr, "W1CUDACPY d2h bytes=%zu issue_us=%lld sync_us=%lld\n", size,
+                (long long) (w1_t1 - w1_t0), (long long) (ggml_time_us() - w1_t1));
+    }
 }
 
 GGML_CALL static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
@@ -1432,7 +1501,10 @@ GGML_CALL static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buf
 }
 
 static void * ggml_cuda_host_malloc(size_t size) {
-    if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
+    if (getenv("GGML_CUDA_NO_PINNED") != nullptr &&
+            !(ggml_cuda_pin_stage_on() && size <= (size_t) IK_CUDA_PIN_IO_MAX_SIZE)) {
+        // NO_PINNED keeps big buffers (model shards) pageable; IK_CUDA_PINNED_IO
+        // re-enables pinning only for small buffers (compute/io, <= 512 MiB)
         return nullptr;
     }
 
@@ -1494,7 +1566,10 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
 #else // !__linux__
 static void * ggml_cuda_host_malloc(size_t size) {
-    if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
+    if (getenv("GGML_CUDA_NO_PINNED") != nullptr &&
+            !(ggml_cuda_pin_stage_on() && size <= (size_t) IK_CUDA_PIN_IO_MAX_SIZE)) {
+        // NO_PINNED keeps big buffers (model shards) pageable; IK_CUDA_PINNED_IO
+        // re-enables pinning only for small buffers (compute/io, <= 512 MiB)
         return nullptr;
     }
     constexpr double k_warn_limit = 8.0;
@@ -4359,6 +4434,36 @@ GGML_CALL static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend,
 GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
     ggml_backend_buffer_t buf_src = src->view_src ? src->view_src->buffer : src->buffer;
     ggml_backend_buffer_t buf_dst = dst->view_src ? dst->view_src->buffer : dst->buffer;
+
+    // IK_CUDA_PINNED_IO: host -> device crossing from a genuinely pinned host
+    // buffer (get_name is overridden only when ggml_cuda_host_malloc actually
+    // pinned the allocation; the pageable fallback keeps the CPU name): issue
+    // the DMA directly on the dst compute stream, stream-ordered exactly like
+    // a device->device async copy — no host block, no staging. Pageable
+    // sources return false and keep the synchronous (staged-slot) fallback.
+    //
+    // The async source must stay valid until the DMA runs. Sources live in
+    // the pinned compute buffer: intra-graph their regions are never reused
+    // (ggml-alloc liveness), and across computes every TG decode is followed
+    // by a full sched synchronize (the sampler's logits readback, plus the
+    // expert-cache step boundary) before any region is overwritten. There is
+    // NO such drain between back-to-back PP ubatches though, so the branch
+    // is capped to TG-sized crossings (<= 256 KiB covers the 120 KiB
+    // experts_cold of a 1-token step); PP-scale crossings keep the stock
+    // synchronous path. Precondition: embeddings that issue multiple TG
+    // llama_decode calls without an intervening llama_synchronize (no
+    // decode->sample loop) must keep this gate off.
+    if (ggml_cuda_pin_stage_on() && ggml_backend_is_cuda(backend_dst) &&
+            buf_src && buf_src->iface.get_name == ggml_backend_cuda_host_buffer_name &&
+            dst->buffer && ggml_backend_buffer_is_cuda(dst->buffer)) {
+        const size_t nbytes = ggml_nbytes(dst);
+        if (nbytes <= IK_CUDA_PIN_STAGE_SIZE) {
+            ggml_backend_cuda_context * cuda_ctx_dst = (ggml_backend_cuda_context *)backend_dst->context;
+            ggml_cuda_set_device(cuda_ctx_dst->device);
+            CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, nbytes, cudaMemcpyHostToDevice, cuda_ctx_dst->stream()));
+            return true;
+        }
+    }
 
     if (!ggml_backend_is_cuda(backend_src) || !ggml_backend_is_cuda(backend_dst)) {
         return false;
