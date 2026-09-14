@@ -2276,6 +2276,30 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q8_K_R8     : ( 256,  258),
 }
 
+# row_meta_size from the ggml.c type traits; ggml_row_size() adds it once per row
+GGML_ROW_META_SIZES: dict[GGMLQuantizationType, int] = {
+    GGMLQuantizationType.IQ1_BN      :  2,
+    GGMLQuantizationType.IQ2_BN      :  4,
+    GGMLQuantizationType.IQ2_BN_R4   :  4,
+    GGMLQuantizationType.IQ1_S_R4    :  2,
+    GGMLQuantizationType.IQ1_M_R4    :  2,
+    GGMLQuantizationType.IQ2_KS      :  2,
+    GGMLQuantizationType.IQ2_KL      :  2,
+    GGMLQuantizationType.IQ3_KS      :  2,
+    GGMLQuantizationType.IQ4_KS      :  4,
+    GGMLQuantizationType.IQ4_KS_R4   :  4,
+    GGMLQuantizationType.IQ4_KSS     :  4,
+    GGMLQuantizationType.IQ5_KS      :  4,
+    GGMLQuantizationType.IQ5_KS_R4   :  4,
+    GGMLQuantizationType.IQ1_KT      :  4,
+    GGMLQuantizationType.IQ2_KT      :  4,
+    GGMLQuantizationType.IQ3_KT      :  4,
+    GGMLQuantizationType.IQ4_KT      :  4,
+    GGMLQuantizationType.Q8_KV       :  8,
+    GGMLQuantizationType.Q8_KV_R8    :  4,
+    GGMLQuantizationType.Q8_K16      : 20,
+}
+
 
 # Aliases for backward compatibility.
 
