@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-cparams.h"
 #include "llama-sampling.h"
+#include "llama-engram.h"
 
 #include "llama-spec-features.h"
 
@@ -724,6 +725,132 @@ struct llama_context {
     };
     dsv4_runtime dsv4;
 
+    // DeepSeek-V4.1 (CSA2) runtime. M3 step 1 covers the raw sliding-window K
+    // read/write index plumbing; step 2 the engram; step 3 adds the r2/r1
+    // compressed-KV plans, caches, and partial-group state rings; step 4 the
+    // indexer key cache (lid_k at index-key owners, derived from the shared
+    // compressor latent — there is no LID plan in V4.1) and the sparse
+    // top-k attention.
+    struct dsv41_runtime {
+        static constexpr uint32_t R2_RATIO = 2;
+        static constexpr uint32_t R1_RATIO = 1;
+
+        struct slot_info {
+            int32_t s0 = 0;
+            int32_t s1 = 0;
+            std::vector<llama_seq_id> strm;
+            std::vector<std::vector<uint32_t>> idxs;
+
+            void resize(size_t n) {
+                strm.resize(n);
+                idxs.resize(n);
+            }
+
+            size_t size() const {
+                GGML_ASSERT(strm.size() == idxs.size());
+                if (idxs.empty()) {
+                    return 0;
+                }
+
+                return idxs[0].size();
+            }
+
+            size_t n_stream() const {
+                GGML_ASSERT(strm.size() == idxs.size());
+                return strm.size();
+            }
+
+            bool empty() const {
+                return idxs.empty();
+            }
+        };
+
+        struct raw_context {
+            std::vector<int32_t> write_src_idxs;
+            std::vector<int32_t> write_dst_idxs;
+            std::vector<int32_t> read_dst_idxs;
+            std::vector<int32_t> write_counts;
+            std::vector<int32_t> read_counts;
+            slot_info sinfo_write;
+            slot_info sinfo_read;
+            int64_t graph_n_stream = 1;
+            int64_t n_kv = 0;
+        };
+
+        struct comp_context {
+            slot_info sinfo;
+            int64_t graph_n_stream = 1;
+            int64_t n_kv = 0;
+        };
+
+        struct comp_plan {
+            std::vector<int32_t> state_pos;
+            std::vector<int32_t> state_delta_src_idxs;
+            std::vector<int32_t> state_delta_dst_idxs;
+            std::vector<int32_t> state_persist_src_idxs;
+            std::vector<int32_t> state_persist_dst_idxs;
+            std::vector<int32_t> state_read_idxs;
+            std::vector<int64_t> state_write_idxs;
+            std::vector<int32_t> state_write_pos;
+            std::vector<int32_t> n_visible;
+            int64_t n_stream = 1;
+            int64_t n_kv = 0;
+        };
+
+        struct comp_inputs {
+            struct ggml_tensor * state_pos = nullptr;
+            struct ggml_tensor * state_persist_src_idxs = nullptr;
+            struct ggml_tensor * state_persist_dst_idxs = nullptr;
+            struct ggml_tensor * state_read_idxs = nullptr;
+            struct ggml_tensor * state_write_idxs = nullptr;
+            struct ggml_tensor * state_write_pos = nullptr;
+            struct ggml_tensor * kq_mask = nullptr;
+        };
+
+        struct storage {
+            // M3 step 3: comp_k[il] (compressed latent rows) and the f32
+            // partial-group state rings exist only at kv_source layers
+            // (hparams.dsv41_is_kv_source(il)). M3 step 4: lid_k[il] (indexer
+            // keys derived from the shared pre-RoPE latent) exists only at
+            // index-key owners (hparams.dsv41_owns_index_k(il))
+            std::vector<struct ggml_tensor *> comp_k;
+            std::vector<struct ggml_tensor *> comp_state_kv;
+            std::vector<struct ggml_tensor *> comp_state_score;
+            std::vector<struct ggml_tensor *> lid_k;
+
+            struct ggml_context * cache_ctx = nullptr;
+            std::vector<ggml_backend_buffer_t> cache_bufs;
+            uint32_t n_stream = 1;
+        };
+
+        struct input_state {
+            struct ggml_tensor * raw_k_write_src_idxs = nullptr;
+            struct ggml_tensor * raw_k_write_idxs = nullptr;
+            struct ggml_tensor * raw_k_read_idxs = nullptr;
+            // M3 step 2: one F32 [(max_ngram-1)*n_heads*key_len, n_tokens] gathered-rows
+            // input per engram slot, set from engram_gather every ubatch
+            std::array<struct ggml_tensor *, LLAMA_MAX_ENGRAM_LAYERS> engram_rows = {};
+            // M3 step 3: the ratio-2 / ratio-1 compressed plans (both non-overlap)
+            comp_inputs r2;
+            comp_inputs r1;
+        };
+
+        storage cache;
+        input_state inputs;
+        raw_context raw;
+        comp_context r2_ctx;
+        comp_context r1_ctx;
+        comp_plan r2_plan;
+        comp_plan r1_plan;
+
+        // M3 step 2: engram n-gram cache (single-sequence) + per-ubatch scratch for the
+        // hash row ids and the gathered F32 rows that feed inputs.engram_rows
+        llama_engram engram;
+        std::vector<uint64_t> engram_ids;
+        std::vector<float>    engram_gather;
+    };
+    dsv41_runtime dsv41;
+
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
@@ -834,6 +961,8 @@ struct llama_context {
     void free_dflash_kv_cache_tensors();
     bool ensure_dsv4_cache_tensors();
     void free_dsv4_cache_tensors();
+    bool ensure_dsv41_cache_tensors();
+    void free_dsv41_cache_tensors();
 
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx);

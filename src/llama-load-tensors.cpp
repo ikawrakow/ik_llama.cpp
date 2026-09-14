@@ -129,6 +129,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_deepseek2_tensors(const LLM_TN & tn);
     bool create_deepseek4_tensors(const LLM_TN & tn);
+    bool create_deepseek41_tensors(const LLM_TN & tn);
     bool create_openpangu_tensors(const LLM_TN & tn);
 
     bool create_glm_dsa_tensors(const LLM_TN & tn);
@@ -3330,6 +3331,157 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
+bool create_tensors_helper::create_deepseek41_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    auto create_tensor_from_meta = [&](ggml_context * ctx, const std::string & name, int flags = 0) -> ggml_tensor * {
+        ggml_tensor * meta = (flags & (llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP))
+            ? ml.get_tensor_meta(name.c_str())
+            : ml.require_tensor_meta(name.c_str());
+        if (meta == nullptr) {
+            return nullptr;
+        }
+
+        std::vector<int64_t> ne;
+        const int n_dims = ggml_n_dims(meta);
+        ne.reserve(n_dims);
+        for (int d = 0; d < n_dims; ++d) {
+            ne.push_back(meta->ne[d]);
+        }
+
+        return create_tensor(ctx, name, ne, flags);
+    };
+
+    auto layer_weight_name = [](int i, const char * stem) {
+        return format("blk.%d.%s.weight", i, stem);
+    };
+
+    // V4.1 base GGUFs: 40 layers, no nextn blocks, no learned hc head
+    model.tok_embd    = create_tensor_from_meta(ctx_input,  "token_embd.weight");
+    model.output_norm = create_tensor_from_meta(ctx_output, "output_norm.weight");
+    model.output      = create_tensor_from_meta(ctx_output, "output.weight");
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+        auto & layer = model.layers[i];
+
+        layer.attn_norm      = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_norm"));
+        layer.attn_sinks     = create_tensor_from_meta(ctx_split, format("blk.%d.attn_sinks.weight", i), llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.wq_a           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_a"));
+        layer.attn_q_a_norm  = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_a_norm"));
+        layer.wq_b           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_b"));
+        layer.wkv_latent     = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_kv"));
+        layer.wkv_b          = layer.wkv_latent;
+        layer.wkv_a_mqa      = layer.wkv_latent;
+        layer.attn_kv_a_norm = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_kv_a_norm"));
+        layer.attn_kv_norm   = layer.attn_kv_a_norm;
+        layer.wo_a           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_output_a"));
+        layer.wo_b           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_output_b"));
+        layer.wo             = layer.wo_b;
+
+        layer.hc_attn_base  = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_base.weight", i));
+        layer.hc_attn_fn    = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_fn.weight", i));
+        layer.hc_attn_scale = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_scale.weight", i));
+        layer.hc_ffn_base   = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_base.weight", i));
+        layer.hc_ffn_fn     = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_fn.weight", i));
+        layer.hc_ffn_scale  = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_scale.weight", i));
+
+        // shared-KV compressor: kv_source layers only (vcruz names, no ape in V4.1)
+        layer.attn_comp_wkv   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_compressor_kv"),   llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.attn_comp_wgate = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_compressor_gate"), llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.attn_comp_norm  = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_compressor_norm"), llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        // lightning indexer: index_source layers only (dot-naming is vcruz's explicit schema)
+        layer.indexer_k_norm   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "indexer.k_norm"),   llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.indexer_attn_k   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "indexer.attn_k"),   llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.indexer_proj     = create_tensor_from_meta(ctx_split, layer_weight_name(i, "indexer.proj"),     llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.indexer_attn_q_b = create_tensor_from_meta(ctx_split, layer_weight_name(i, "indexer.attn_q_b"), llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        layer.ffn_gate_inp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_inp"));
+        layer.ffn_norm       = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_norm"));
+
+        use_mmap_buffer &= !create_std_ffn_exps_from_meta(tn, i, 0);
+
+        layer.ffn_gate_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_shexp"));
+        layer.ffn_down_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_down_shexp"));
+        layer.ffn_up_shexp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_up_shexp"));
+
+        layer.ffn_exp_probs_b    = create_tensor_from_meta(ctx_split, format("blk.%d.exp_probs_b.bias", i),    llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_exp_probs_b_vl = create_tensor_from_meta(ctx_split, format("blk.%d.exp_probs_b_vl.bias", i), llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        // engram tables (advertised layers only): the big Q8_0 table stays in the host
+        // input context — it is gathered row-wise from the mmap, never uploaded to a GPU
+        layer.engram_embd = create_tensor_from_meta(ctx_input, format("blk.%d.engram_embd.weight", i), llama_model_loader::TENSOR_NOT_REQUIRED);
+        if (layer.engram_embd != nullptr) {
+            if (!hparams.is_engram(i)) {
+                throw std::runtime_error(format(
+                    "DeepSeek-V4.1 layer %d has engram tensors but is not listed in engram.layer_ids", i));
+            }
+            layer.engram_k   = create_tensor_from_meta(ctx_split, format("blk.%d.engram_k.weight", i));
+            layer.engram_q   = create_tensor_from_meta(ctx_split, format("blk.%d.engram_q.weight", i));
+            layer.engram_wkv = create_tensor_from_meta(ctx_split, format("blk.%d.engram_wkv.weight", i));
+        } else if (hparams.is_engram(i)) {
+            throw std::runtime_error(format(
+                "DeepSeek-V4.1 layer %d is listed in engram.layer_ids but has no engram tensors", i));
+        }
+    }
+
+    // Work out which layer publishes the stream each layer reads. Only a source carries a
+    // compressor, only an index key owner carries indexer_attn_k, and only an index source
+    // carries indexer_attn_q_b, so the file itself says which layer plays which role.
+    auto & hp = model.hparams;
+    hp.dsv41_kv_source.fill(-1);
+    hp.dsv41_index_key_source.fill(-1);
+    hp.dsv41_topk_source.fill(-1);
+
+    int32_t last_kv_source    = -1;
+    int32_t last_key_owner    = -1;
+    int32_t last_index_source = -1;
+
+    for (int i = 0; i < n_layer; ++i) {
+        const auto & layer = model.layers[i];
+
+        if (layer.attn_comp_wkv)    { last_kv_source    = i; }
+        if (layer.indexer_attn_k)   { last_key_owner    = i; }
+        if (layer.indexer_attn_q_b) { last_index_source = i; }
+
+        if (hp.dsv4_compress_ratios[i] == 0) {
+            // pure sliding window, no compressed stream to read
+            continue;
+        }
+
+        if (last_kv_source < 0 || last_key_owner < 0 || last_index_source < 0) {
+            throw std::runtime_error(format(
+                "DeepSeek-V4.1 layer %d reads a compressed stream before any layer publishes one", i));
+        }
+
+        // the row layout of a stream follows the ratio it was compressed at, so a reader that
+        // disagrees with its source would index into rows that stand for different positions.
+        // vcruz throws here; we only warn because the tiny test model deliberately pairs a
+        // ratio-1 reader (layer 3) with a ratio-2 source (layer 2) to exercise both rope
+        // branches — the reader's own ratio still selects its rope theta.
+        if (hp.dsv4_compress_ratios[i] != hp.dsv4_compress_ratios[last_kv_source]) {
+            LLAMA_LOG_WARN("%s: DeepSeek-V4.1 layer %d compresses at ratio %u but reads layer %d, compressed at %u\n",
+                __func__, i, hp.dsv4_compress_ratios[i], last_kv_source, hp.dsv4_compress_ratios[last_kv_source]);
+        }
+
+        hp.dsv41_kv_source[i]        = last_kv_source;
+        hp.dsv41_index_key_source[i] = last_key_owner;
+        hp.dsv41_topk_source[i]      = last_index_source;
+    }
+
+    // a compressor with no gate only makes sense where there is nothing to pool
+    for (int i = 0; i < n_layer; ++i) {
+        if (hp.dsv41_is_kv_source(i) && !model.layers[i].attn_comp_wgate && hp.dsv4_compress_ratios[i] != 1) {
+            throw std::runtime_error(format(
+                "DeepSeek-V4.1 layer %d compresses %u tokens per row but has no pooling gate",
+                i, hp.dsv4_compress_ratios[i]));
+        }
+    }
+
+    return use_mmap_buffer;
+}
+
 bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
@@ -5591,6 +5743,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_deepseek2_tensors(tn); break;
         case LLM_ARCH_DEEPSEEK4:
             use_mmap_buffer = create_deepseek4_tensors(tn); break;
+        case LLM_ARCH_DEEPSEEK41:
+            use_mmap_buffer = create_deepseek41_tensors(tn); break;
         case LLM_ARCH_GLM_DSA:
             use_mmap_buffer = create_glm_dsa_tensors(tn); break;
         case LLM_ARCH_OPENPANGU:

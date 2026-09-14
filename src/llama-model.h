@@ -447,6 +447,16 @@ struct llama_layer {
     struct ggml_tensor * attn_comp_ape     = nullptr;
     struct ggml_tensor * attn_comp_norm    = nullptr;
 
+    // DeepSeek-V4.1 engram n-gram embedding (engram layers only); engram_embd is the big
+    // host-resident Q8_0 table, the rest are small gating projections
+    struct ggml_tensor * engram_embd = nullptr;
+    struct ggml_tensor * engram_k    = nullptr;
+    struct ggml_tensor * engram_q    = nullptr;
+    struct ggml_tensor * engram_wkv  = nullptr;
+
+    // DeepSeek-V4.1 vision-language selection bias (per layer, alongside ffn_exp_probs_b)
+    struct ggml_tensor * ffn_exp_probs_b_vl = nullptr;
+
     // long rope factors
     struct ggml_tensor * rope_long  = nullptr;
     struct ggml_tensor * rope_short = nullptr;
@@ -666,7 +676,8 @@ struct llama_model {
     }
 
     float swiglu_limit(uint32_t il, bool shared) const {
-        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_GLM5NEXT) {
+        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_GLM5NEXT &&
+            arch != LLM_ARCH_DEEPSEEK41) {
             return 0.0f;
         }
         return shared ? hparams.swiglu_limits_shared[il] : hparams.swiglu_limits[il];

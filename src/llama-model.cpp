@@ -1277,6 +1277,57 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_DEEPSEEK41,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,             "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,            "output_norm" },
+            { LLM_TENSOR_OUTPUT,                 "output" },
+            { LLM_TENSOR_ATTN_NORM,              "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_SINKS,             "blk.%d.attn_sinks" },
+            { LLM_TENSOR_ATTN_Q_A_NORM,          "blk.%d.attn_q_a_norm" },
+            { LLM_TENSOR_ATTN_KV_A_NORM,         "blk.%d.attn_kv_a_norm" },
+            { LLM_TENSOR_ATTN_Q,                 "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_Q_A,               "blk.%d.attn_q_a" },
+            { LLM_TENSOR_ATTN_Q_B,               "blk.%d.attn_q_b" },
+            { LLM_TENSOR_ATTN_KV_LATENT,         "blk.%d.attn_kv" },
+            { LLM_TENSOR_ATTN_OUT_A,             "blk.%d.attn_output_a" },
+            { LLM_TENSOR_ATTN_OUT_B,             "blk.%d.attn_output_b" },
+            { LLM_TENSOR_ATTN_COMP_KV,           "blk.%d.attn_compressor_kv" },
+            { LLM_TENSOR_ATTN_COMP_GATE,         "blk.%d.attn_compressor_gate" },
+            { LLM_TENSOR_ATTN_COMP_NORM,         "blk.%d.attn_compressor_norm" },
+            { LLM_TENSOR_ATTN_OUT,               "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,               "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,               "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_UP,                 "blk.%d.ffn_up" },
+            { LLM_TENSOR_FFN_DOWN,               "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_GATE_INP,           "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_EXPS,          "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,          "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,            "blk.%d.ffn_up_exps" },
+            { LLM_TENSOR_FFN_GATE_UP_EXPS,       "blk.%d.ffn_gate_up_exps" },
+            { LLM_TENSOR_FFN_GATE_INP_SHEXP,     "blk.%d.ffn_gate_inp_shexp" },
+            { LLM_TENSOR_FFN_GATE_SHEXP,         "blk.%d.ffn_gate_shexp" },
+            { LLM_TENSOR_FFN_DOWN_SHEXP,         "blk.%d.ffn_down_shexp" },
+            { LLM_TENSOR_FFN_UP_SHEXP,           "blk.%d.ffn_up_shexp" },
+	        { LLM_TENSOR_FFN_EXP_PROBS_B,        "blk.%d.exp_probs_b" },
+            { LLM_TENSOR_FFN_EXP_PROBS_B_VL,     "blk.%d.exp_probs_b_vl" },
+            { LLM_TENSOR_INDEXER_K_NORM,         "blk.%d.indexer.k_norm" },
+            { LLM_TENSOR_INDEXER_PROJ,           "blk.%d.indexer.proj" },
+            { LLM_TENSOR_INDEXER_ATTN_K,         "blk.%d.indexer.attn_k" },
+            { LLM_TENSOR_INDEXER_ATTN_Q_B,       "blk.%d.indexer.attn_q_b" },
+            { LLM_TENSOR_HC_ATTN_BASE,           "blk.%d.hc_attn_base" },
+            { LLM_TENSOR_HC_ATTN_FN,             "blk.%d.hc_attn_fn" },
+            { LLM_TENSOR_HC_ATTN_SCALE,          "blk.%d.hc_attn_scale" },
+            { LLM_TENSOR_HC_FFN_BASE,            "blk.%d.hc_ffn_base" },
+            { LLM_TENSOR_HC_FFN_FN,              "blk.%d.hc_ffn_fn" },
+            { LLM_TENSOR_HC_FFN_SCALE,           "blk.%d.hc_ffn_scale" },
+            { LLM_TENSOR_ENGRAM_EMBD,            "blk.%d.engram_embd" },
+            { LLM_TENSOR_ENGRAM_K,               "blk.%d.engram_k" },
+            { LLM_TENSOR_ENGRAM_Q,               "blk.%d.engram_q" },
+            { LLM_TENSOR_ENGRAM_WKV,             "blk.%d.engram_wkv" },
+        },
+    },
+    {
         LLM_ARCH_MISTRAL4,
         {
             { LLM_TENSOR_TOKEN_EMBD,         "token_embd" },
@@ -2579,7 +2630,9 @@ bool llama_model_is_split_mode_graph(const struct llama_model * model) {
 
 bool llama_model_supports_ctx_shift(const struct llama_model * model) {
     // openPangu and DeepSeek4 keep position-dependent private state outside the generic KV cache.
-    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_DEEPSEEK4;
+    // DeepSeek-V4.1 will too (CSA2 compressed-KV state); exclude it until that runtime lands.
+    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_DEEPSEEK4 &&
+           model->arch != LLM_ARCH_DEEPSEEK41;
 }
 
 bool llama_model_supports_partial_kv_reuse(const struct llama_model * model) {

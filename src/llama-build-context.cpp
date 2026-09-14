@@ -1552,7 +1552,8 @@ llm_expert_gating_func_type   gating_op,
         if (lctx.model.arch == LLM_ARCH_LAGUNA) {
             weights_sum = ggml_clamp(ctx, weights_sum, 6.103515625e-5f, INFINITY);
             cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
-        } else if (lctx.model.arch == LLM_ARCH_BAILINGMOE2 || lctx.model.arch == LLM_ARCH_BAILINGMOE3 || lctx.model.arch == LLM_ARCH_STEP35) {
+        } else if (lctx.model.arch == LLM_ARCH_BAILINGMOE2 || lctx.model.arch == LLM_ARCH_BAILINGMOE3 || lctx.model.arch == LLM_ARCH_STEP35 ||
+                   lctx.model.arch == LLM_ARCH_DEEPSEEK41) {
             weights_sum = ggml_scale_bias(ctx, weights_sum, 1.0, 1e-20);
             cb(weights_sum, "ffn_moe_weights_sum_biased", il);
         }
@@ -3075,6 +3076,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_DEEPSEEK4:
             {
                 result = llm.build_deepseek4();
+            } break;
+        case LLM_ARCH_DEEPSEEK41:
+            {
+                result = llm.build_deepseek41();
             } break;
         case LLM_ARCH_OPENPANGU:
             {

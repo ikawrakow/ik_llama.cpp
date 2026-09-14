@@ -9,6 +9,12 @@
 #define LLAMA_MAX_LAYERS  512
 #define LLAMA_MAX_PLE_NGRAM 8
 #define LLAMA_MAX_PLE_HEADS 64
+// DeepSeek-V4.1 engram bounds (real model: 2 layers, max_ngram 4, 8 heads -> 24 head slots/layer)
+#define LLAMA_MAX_ENGRAM_LAYERS 4
+#define LLAMA_MAX_ENGRAM_NGRAM  8
+#define LLAMA_MAX_ENGRAM_HEADS  64
+// compressed-token map has one entry per vocab token (V4.1 vocab is 129280)
+#define LLAMA_MAX_ENGRAM_TOKEN_MAP 131072
 
 enum llm_expert_gating_func_type {
     LLM_EXPERT_GATING_FUNC_TYPE_NONE             = 0,
@@ -155,6 +161,30 @@ struct llama_hparams {
     float    dsv4_compress_rope_base = 0.0f;
     float    dsv4_hc_eps             = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios = {};
+
+    // DeepSeek-V4.1 compresses KV on a few source layers and shares each stream with the layers
+    // that follow, so for every layer these hold the layer that published what it reads, or -1
+    // when it reads nothing. A layer whose entry is itself is a source. Filled at the end of
+    // create_deepseek41_tensors (roles derive from tensor presence, vcruz-style).
+    std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_kv_source        = {};
+    std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_index_key_source = {};
+    std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_topk_source      = {};
+
+    // DeepSeek-V4.1 engram (n-gram embedding tables on engram_layer_arr layers).
+    // multipliers are [layer_slot][lookback] (max_ngram_size per layer); primes/offsets are
+    // [layer_slot][head_slot] with (max_ngram_size - 1) * engram_n_heads slots per layer.
+    uint32_t engram_layer_count    = 0;
+    uint32_t engram_n_heads        = 0;
+    uint32_t engram_key_length     = 0;
+    uint32_t engram_max_ngram_size = 0;
+    uint32_t engram_pad_id         = 0;
+    uint32_t engram_token_map_size = 0;
+    std::array<bool,     LLAMA_MAX_LAYERS> engram_layer_arr = {};
+    std::array<uint32_t, LLAMA_MAX_ENGRAM_LAYERS> engram_layer_ids = {};
+    std::array<uint64_t, LLAMA_MAX_ENGRAM_LAYERS * LLAMA_MAX_ENGRAM_NGRAM> engram_multipliers = {};
+    std::array<uint64_t, LLAMA_MAX_ENGRAM_LAYERS * LLAMA_MAX_ENGRAM_HEADS> engram_primes = {};
+    std::array<uint64_t, LLAMA_MAX_ENGRAM_LAYERS * LLAMA_MAX_ENGRAM_HEADS> engram_offsets = {};
+    std::array<int32_t,  LLAMA_MAX_ENGRAM_TOKEN_MAP> engram_token_map = {};
 
     // qwen4exp. hc_low_rank 0 means the full-rank hyper-connection form; the
     // ple_* group is inert unless the model carries an n-gram embedding layer.
@@ -400,6 +430,16 @@ struct llama_hparams {
     bool is_ple(uint32_t il) const {
         return il < n_layer ? ple_layer_arr[il] : false;
     }
+
+    // the layer carries a DeepSeek-V4.1 engram n-gram embedding table
+    bool is_engram(uint32_t il) const {
+        return il < n_layer ? engram_layer_arr[il] : false;
+    }
+
+    // DeepSeek-V4.1 layer roles: a layer whose source entry is itself publishes that stream
+    bool dsv41_is_kv_source   (uint32_t il) const { return il < n_layer ? dsv41_kv_source[il]        == (int32_t) il : false; }
+    bool dsv41_owns_index_k   (uint32_t il) const { return il < n_layer ? dsv41_index_key_source[il] == (int32_t) il : false; }
+    bool dsv41_is_index_source(uint32_t il) const { return il < n_layer ? dsv41_topk_source[il]      == (int32_t) il : false; }
 
     // the layer runs Qwen sparse attention over pooled blocks; deepseek4 fills the same
     // ratio array for its CSA/HCA layers and reads the ratio value directly instead

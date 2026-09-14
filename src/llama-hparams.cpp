@@ -2117,6 +2117,200 @@ void llm_load_hparams(
                     validate_dflash_hparams(hparams, model.arch);
                 }
             } break;
+        case LLM_ARCH_DEEPSEEK41:
+            {
+                // V4.1 base GGUFs carry no nextn layers (the DSpark head is separate work)
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,     hparams.n_ff_exp);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);
+                // mirror of the DEEPSEEK4 block: the indexer k_norm LayerNorm needs a
+                // non-zero f_norm_eps and the GGUF only carries the RMS eps
+                if (hparams.f_norm_eps <= 0.0f) hparams.f_norm_eps = hparams.f_norm_rms_eps;
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
+
+                // MoE parameters
+                ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert);
+                ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
+
+                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,     hparams.swiglu_limits,   hparams.n_layer);
+                if (!ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,   hparams.swiglu_limits_shared, hparams.n_layer, 0)) {
+                    hparams.swiglu_limits_shared = hparams.swiglu_limits;
+                }
+
+                // K==V single latent: kv_lora_rank doubles as the compressed-KV width
+                ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,      hparams.n_lora_q);
+                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv, false);
+                if (hparams.n_lora_kv == 0) {
+                    const uint32_t probe_layer = hparams.n_layer - 1;
+                    if (auto * kv_norm = ml.get_tensor_meta(format("blk.%u.attn_kv_a_norm.weight", probe_layer).c_str())) {
+                        hparams.n_lora_kv = (uint32_t) kv_norm->ne[0];
+                    } else if (auto * kv = ml.get_tensor_meta(format("blk.%u.attn_kv.weight", probe_layer).c_str())) {
+                        const int64_t kv_inner = kv->ne[0] == hparams.n_embd ? kv->ne[1] : kv->ne[0];
+                        hparams.n_lora_kv = (uint32_t) kv_inner;
+                    }
+                }
+
+                // DSA parameters
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
+
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+                hparams.rope_freq_scale_train_swa = 1.0f;
+                if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false) && hparams.n_swa > 0) {
+                    std::fill(hparams.swa_layers.begin(), hparams.swa_layers.end(), true);
+                }
+
+                // every layer feeds the 128-token raw SWA window; compressed/stream roles
+                // derive from tensor presence below and from compress_ratios
+                const uint32_t probe_layer = hparams.n_layer - 1;
+                const auto * wo_a_0 = ml.get_tensor_meta(format("blk.%u.attn_output_a.weight", probe_layer).c_str());
+                const auto * wo_b_0 = ml.get_tensor_meta(format("blk.%u.attn_output_b.weight", probe_layer).c_str());
+
+                // V4.1 output projection is a grouped LoRA (block-diagonal over head groups):
+                // wo_a [n_head*head_dim, o_groups*o_lora_rank], wo_b [o_groups*o_lora_rank, n_embd].
+                // Neither KV can be derived from the shapes alone (one product, two unknowns),
+                // and V4's wo_a-based hc_mult inference is invalid here (no learned hc head,
+                // wo_a is not hc-widened) — the converter always writes all three KVs.
+                ml.get_key(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT, hparams.dsv4_o_group_count, false);
+                ml.get_key(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,   hparams.dsv4_o_lora_rank, false);
+                ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,       hparams.dsv4_hc_mult, false);
+                if (!ml.get_key(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE, hparams.dsv4_compress_rope_base, false)) {
+                    hparams.dsv4_compress_rope_base = hparams.rope_freq_base_train_swa != 0.0f
+                        ? hparams.rope_freq_base_train_swa
+                        : hparams.rope_freq_base_train;
+                }
+                if (hparams.n_embd_out == hparams.n_embd && hparams.dsv4_hc_mult > 1) {
+                    hparams.n_embd_out = hparams.n_embd * hparams.dsv4_hc_mult;
+                }
+                if (!ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters, false)) {
+                    hparams.dsv4_hc_sinkhorn_iters = 3;
+                }
+                if (!ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON, hparams.dsv4_hc_eps, false)) {
+                    hparams.dsv4_hc_eps = hparams.f_norm_rms_eps;
+                }
+                ml.get_key(LLM_KV_HASH_LAYER_COUNT, hparams.dsv4_hash_layer_count, false);
+
+                // ratio 2 at kv_source layers, 1 at the top-of-encoder source layer, 0 elsewhere;
+                // unlike V4 this cannot be recovered from tensor presence alone (2 vs 1), so
+                // the converter always writes the array
+                uint32_t n_compress_ratios = 0;
+                if (!ml.get_arr_n(LLM_KV_ATTENTION_COMPRESS_RATIOS, n_compress_ratios, false)) {
+                    throw std::runtime_error("DeepSeek-V4.1: attention.compress_ratios is missing");
+                }
+                if (n_compress_ratios < hparams.n_layer) {
+                    throw std::runtime_error("DeepSeek-V4.1 compress_ratios is shorter than block_count");
+                }
+                {
+                    std::vector<uint32_t> compress_ratios;
+                    ml.get_arr(ml.llm_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS), compress_ratios);
+                    std::copy_n(compress_ratios.begin(), hparams.n_layer, hparams.dsv4_compress_ratios.begin());
+                }
+
+                if (hparams.dsv4_hc_mult == 0) {
+                    throw std::runtime_error("DeepSeek-V4.1 hyper_connection.count is missing (cannot be inferred for this arch)");
+                }
+                if (hparams.dsv4_o_group_count == 0 || hparams.dsv4_o_lora_rank == 0) {
+                    throw std::runtime_error("DeepSeek-V4.1 output_group_count/output_lora_rank are missing (cannot be inferred for this arch)");
+                }
+                if (wo_a_0 != nullptr &&
+                    (wo_a_0->ne[0] != (int64_t) hparams.n_head() * hparams.n_embd_head_k(0) / hparams.dsv4_o_group_count ||
+                     wo_a_0->ne[1] != (int64_t) hparams.dsv4_o_group_count * hparams.dsv4_o_lora_rank)) {
+                    throw std::runtime_error("DeepSeek-V4.1 attn_output_a shape does not match (n_head*head_dim/o_groups) x o_groups*o_lora_rank");
+                }
+                if (wo_b_0 != nullptr &&
+                    (wo_b_0->ne[0] != (int64_t) hparams.dsv4_o_group_count * hparams.dsv4_o_lora_rank ||
+                     wo_b_0->ne[1] != hparams.n_embd)) {
+                    throw std::runtime_error("DeepSeek-V4.1 attn_output_b shape does not match o_groups*o_lora_rank x n_embd");
+                }
+
+                // layer roles follow tensor presence (indexer layers carry indexer.attn_q_b)
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.indexer_is_full[il] =
+                        ml.get_tensor_meta(format("blk.%u.indexer.attn_q_b.weight", il).c_str()) != nullptr;
+                }
+
+                // Expert gating function (sqrtsoftplus only for V4.1)
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
+                if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {
+                    hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
+                }
+                if (hparams.expert_gating_func != LLM_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
+                    throw std::runtime_error("DeepSeek-V4.1 loader currently expects sqrtsoftplus MoE scoring");
+                }
+
+                hparams.n_layer_kv_from_start = hparams.n_layer;
+
+                // engram tables and hash constants
+                uint32_t n_engram_layers = 0;
+                if (ml.get_arr_n(LLM_KV_ENGRAM_LAYER_IDS, n_engram_layers, false) && n_engram_layers > 0) {
+                    if (n_engram_layers > LLAMA_MAX_ENGRAM_LAYERS) {
+                        throw std::runtime_error(format("DeepSeek-V4.1 engram layer count %u exceeds the supported maximum %d",
+                                n_engram_layers, LLAMA_MAX_ENGRAM_LAYERS));
+                    }
+                    std::vector<uint32_t> layer_ids;
+                    ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_LAYER_IDS), layer_ids);
+                    hparams.engram_layer_count = n_engram_layers;
+                    for (uint32_t slot = 0; slot < n_engram_layers; ++slot) {
+                        const uint32_t il = layer_ids[slot];
+                        if (il >= hparams.n_layer) {
+                            throw std::runtime_error(format("DeepSeek-V4.1 engram layer id %u is out of range (%u layers)",
+                                    il, hparams.n_layer));
+                        }
+                        hparams.engram_layer_ids[slot] = il;
+                        hparams.engram_layer_arr[il]   = true;
+                    }
+
+                    // the hash constants are hard-required once engram layers are advertised:
+                    // a missing set is exactly the published-GGUF KV bug, and silently zeroed
+                    // constants would corrupt every table lookup
+                    ml.get_key(LLM_KV_ENGRAM_HEAD_COUNT,     hparams.engram_n_heads);
+                    ml.get_key(LLM_KV_ENGRAM_KEY_LENGTH,     hparams.engram_key_length);
+                    ml.get_key(LLM_KV_ENGRAM_MAX_NGRAM_SIZE, hparams.engram_max_ngram_size);
+                    ml.get_key(LLM_KV_ENGRAM_PAD_ID,         hparams.engram_pad_id);
+
+                    if (hparams.engram_max_ngram_size < 2 ||
+                        hparams.engram_max_ngram_size > LLAMA_MAX_ENGRAM_NGRAM ||
+                        (hparams.engram_max_ngram_size - 1) * hparams.engram_n_heads > LLAMA_MAX_ENGRAM_HEADS) {
+                        throw std::runtime_error("DeepSeek-V4.1 engram geometry exceeds the supported bounds");
+                    }
+
+                    std::vector<uint64_t> mults, primes, offsets;
+                    ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_MULTIPLIERS), mults);
+                    ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_PRIMES),      primes);
+                    ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_OFFSETS),     offsets);
+                    std::vector<int32_t> token_map;
+                    ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_TOKEN_MAP),   token_map);
+
+                    const size_t n_mult  = (size_t) n_engram_layers * hparams.engram_max_ngram_size;
+                    const size_t n_slots = (size_t) n_engram_layers * (hparams.engram_max_ngram_size - 1) * hparams.engram_n_heads;
+                    if (mults.size() != n_mult || primes.size() != n_slots || offsets.size() != n_slots) {
+                        throw std::runtime_error(format(
+                                "DeepSeek-V4.1 engram hash arrays do not match the declared geometry "
+                                "(multipliers %zu != %zu, primes %zu != %zu, offsets %zu != %zu)",
+                                mults.size(), n_mult, primes.size(), n_slots, offsets.size(), n_slots));
+                    }
+                    if (hparams.n_vocab > 0 && token_map.size() != hparams.n_vocab) {
+                        throw std::runtime_error(format("DeepSeek-V4.1 engram token_map has %zu entries, expected %u (n_vocab)",
+                                token_map.size(), hparams.n_vocab));
+                    }
+                    if (token_map.size() > LLAMA_MAX_ENGRAM_TOKEN_MAP) {
+                        throw std::runtime_error("DeepSeek-V4.1 engram token_map exceeds the supported bounds");
+                    }
+                    std::copy(mults.begin(),     mults.end(),     hparams.engram_multipliers.begin());
+                    std::copy(primes.begin(),    primes.end(),    hparams.engram_primes.begin());
+                    std::copy(offsets.begin(),   offsets.end(),   hparams.engram_offsets.begin());
+                    std::copy(token_map.begin(), token_map.end(), hparams.engram_token_map.begin());
+                    hparams.engram_token_map_size = (uint32_t) token_map.size();
+                }
+
+                model.type = e_model::MODEL_UNKNOWN;
+            } break;
         case LLM_ARCH_GLM5NEXT:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);

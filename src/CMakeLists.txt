@@ -44,6 +44,8 @@ add_library(llama
             llama-spec-features-dflash.cpp
             llama-dflash.cpp
             llama-dsv4.cpp
+            llama-dsv41.cpp
+            llama-engram.cpp
             llama-vocab.cpp
             llama-grammar.cpp
             llama-sampling.cpp
@@ -117,6 +119,7 @@ add_library(llama
             graphs/build_arctic.cpp
             graphs/build_deepseek2.cpp
             graphs/build_deepseek4.cpp
+            graphs/build_deepseek41.cpp
             graphs/build_openpangu.cpp
             graphs/build_glm4.cpp
             graphs/build_bitnet.cpp

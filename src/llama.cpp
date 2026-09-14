@@ -20,6 +20,7 @@
 #include "llama-spec-features.h"
 #include "llama-dflash.h"
 #include "llama-dsv4.h"
+#include "llama-dsv41.h"
 #include "llama-quantize.h"
 
 #include "unicode.h"
@@ -596,11 +597,28 @@ static uint64_t llama_ubatch_seq_fingerprint(const llama_batch & b, const llm_ar
 }
 
 static inline uint64_t model_state_hash(const llama_context & lctx) {
-    if (lctx.model.arch != LLM_ARCH_DEEPSEEK4) {
+    if (lctx.model.arch != LLM_ARCH_DEEPSEEK4 && lctx.model.arch != LLM_ARCH_DEEPSEEK41) {
         return 0ull;
     }
     uint64_t h = 1469598103934665603ull;
     auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
+    if (lctx.model.arch == LLM_ARCH_DEEPSEEK41) {
+        auto mix_plan = [&mix] (const llama_context::dsv41_runtime::comp_plan & plan) {
+            mix(plan.state_pos.size());
+            mix(plan.state_persist_src_idxs.size());
+            mix(plan.state_persist_dst_idxs.size());
+            mix(plan.state_read_idxs.size());
+            mix(plan.state_write_idxs.size());
+            mix(plan.state_write_pos.size());
+            mix(plan.n_kv);
+        };
+        mix_plan(lctx.dsv41.r2_plan);
+        mix_plan(lctx.dsv41.r1_plan);
+        mix(lctx.dsv41.raw.write_src_idxs.size());
+        mix(lctx.dsv41.raw.write_dst_idxs.size());
+        mix(lctx.dsv41.raw.read_dst_idxs.size());
+        return h;
+    }
     auto mix_plan = [&mix] (const llama_context::dsv4_runtime::comp_plan & plan) {
         mix(plan.state_pos.size());
         mix(plan.state_persist_src_idxs.size());
@@ -699,6 +717,7 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fi
 bool llama_context::update_cache_copies() {
     if (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) return true;
     if (model.arch == LLM_ARCH_DEEPSEEK4) return true;
+    if (model.arch == LLM_ARCH_DEEPSEEK41) return true;
     auto patch_dsa_cache_copies = [&]() -> bool {
         // DSA indexer-key cache: patch the kr_l write offset for reused graphs. Each
         // registered cpy writes this ubatch's index keys into kr_l at the kv_head slot;
@@ -864,6 +883,7 @@ llama_context::~llama_context() {
     kv_self.ckpt.release();
     free_dflash_kv_cache_tensors();
     free_dsv4_cache_tensors();
+    free_dsv41_cache_tensors();
     ggml_backend_sched_free(sched);
 
     for (ggml_backend_t backend : backends) {
@@ -1243,7 +1263,7 @@ static bool llama_kv_cache_init(
         }
     }
 
-    const bool is_dsv4_k_only = model.arch == LLM_ARCH_DEEPSEEK4;
+    const bool is_dsv4_k_only = model.arch == LLM_ARCH_DEEPSEEK4 || model.arch == LLM_ARCH_DEEPSEEK41;
     bool is_mla_attn = model.is_mla_model();
 
     bool split_cache   = false;
@@ -8815,6 +8835,9 @@ static int llama_decode_internal(
             if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch, false, false)) {
                 return GGML_STATUS_FAILED;
             }
+            if (lctx.model.arch == LLM_ARCH_DEEPSEEK41 && !llama_prepare_dsv41_graph_inputs(lctx, u_batch, false, false)) {
+                return GGML_STATUS_FAILED;
+            }
         }
 
 #if IK_PRINT_TIMING
@@ -8883,6 +8906,10 @@ static int llama_decode_internal(
         }
 
         if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch, true, false)) {
+            return GGML_STATUS_FAILED;
+        }
+
+        if (lctx.model.arch == LLM_ARCH_DEEPSEEK41 && !llama_prepare_dsv41_graph_inputs(lctx, u_batch, true, false)) {
             return GGML_STATUS_FAILED;
         }
 
@@ -9675,6 +9702,10 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
                 LLAMA_LOG_WARN("%s: DeepSeek4 does not support context shifting; use --no-context-shift or increase context size\n",
                                __func__);
             }
+            if (lctx.model.arch == LLM_ARCH_DEEPSEEK41) {
+                LLAMA_LOG_WARN("%s: DeepSeek-V4.1 does not support context shifting; use --no-context-shift or increase context size\n",
+                               __func__);
+            }
             return 1;
         }
 
@@ -9754,6 +9785,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
         llama_token token = llama_token_bos(&lctx.model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
         llama_batch reserve_batch = llama_batch_get_one(&token, n_tokens, n_past, 0);
         if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, reserve_batch, false, true)) {
+            return GGML_STATUS_FAILED;
+        }
+        if (lctx.model.arch == LLM_ARCH_DEEPSEEK41 && !llama_prepare_dsv41_graph_inputs(lctx, reserve_batch, false, true)) {
             return GGML_STATUS_FAILED;
         }
         ggml_cgraph * gf = llm_build_context::llama_build_graph(lctx, reserve_batch, true, lctx.cparams.worst_graph_tokens);
@@ -10490,9 +10524,9 @@ struct llama_context * llama_init_from_model(
     //    params.flash_attn = false;
     //}
 
-    if (model->arch == LLM_ARCH_DEEPSEEK4 && params.type_v != GGML_TYPE_F16) {
-        LLAMA_LOG_WARN("%s: DeepSeek4 has no independent V-cache; ignoring requested V-cache type %s\n",
-                __func__, ggml_type_name(params.type_v));
+    if ((model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) && params.type_v != GGML_TYPE_F16) {
+        LLAMA_LOG_WARN("%s: %s has no independent V-cache; ignoring requested V-cache type %s\n",
+                __func__, model->arch == LLM_ARCH_DEEPSEEK4 ? "DeepSeek4" : "DeepSeek-V4.1", ggml_type_name(params.type_v));
         params.type_v = GGML_TYPE_F16;
     }
 
@@ -10502,21 +10536,22 @@ struct llama_context * llama_init_from_model(
         return nullptr;
     }
 
-    if (model->arch == LLM_ARCH_DEEPSEEK4 && params.k_cache_hadamard) {
-        LLAMA_LOG_ERROR("%s: DeepSeek4 K-cache Hadamard is not supported; use an untransformed K-cache\n",
-                        __func__);
+    if ((model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) && params.k_cache_hadamard) {
+        LLAMA_LOG_ERROR("%s: %s K-cache Hadamard is not supported; use an untransformed K-cache\n",
+                        __func__, model->arch == LLM_ARCH_DEEPSEEK4 ? "DeepSeek4" : "DeepSeek-V4.1");
         return nullptr;
     }
 
-    if (model->arch == LLM_ARCH_DEEPSEEK4 &&
+    if ((model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) &&
             params.type_k != GGML_TYPE_F16 && params.type_k != GGML_TYPE_BF16 && params.type_k != GGML_TYPE_Q8_0) {
-        LLAMA_LOG_ERROR("%s: DeepSeek4 K-cache supports only F16, BF16, and Q8_0 (requested %s)\n",
-                        __func__, ggml_type_name(params.type_k));
+        LLAMA_LOG_ERROR("%s: %s K-cache supports only F16, BF16, and Q8_0 (requested %s)\n",
+                        __func__, model->arch == LLM_ARCH_DEEPSEEK4 ? "DeepSeek4" : "DeepSeek-V4.1", ggml_type_name(params.type_k));
         return nullptr;
     }
 
-    if (model->arch == LLM_ARCH_DEEPSEEK4 && params.v_cache_hadamard) {
-        LLAMA_LOG_WARN("%s: DeepSeek4 has no independent V-cache; ignoring -vhad\n", __func__);
+    if ((model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) && params.v_cache_hadamard) {
+        LLAMA_LOG_WARN("%s: %s has no independent V-cache; ignoring -vhad\n",
+                __func__, model->arch == LLM_ARCH_DEEPSEEK4 ? "DeepSeek4" : "DeepSeek-V4.1");
         params.v_cache_hadamard = false;
     }
 
@@ -10741,6 +10776,17 @@ struct llama_context * llama_init_from_model(
 
     // this is necessary due to kv_self.n being padded later during inference
     cparams.n_ctx            = GGML_PAD(cparams.n_ctx, llama_kv_cache::get_padding(cparams.flash_attn));
+
+    // DeepSeek-V4.1 (M3, plan B12): the two-level candidate pre-filter of the reference
+    // indexer (block-max-pool of index scores, top-2048 blocks of 8) is not implemented.
+    // It is a no-op below 2048*8 = 16384 compressed positions, so beyond that context
+    // length compressed-attention numerics diverge from the reference. Warn but do not
+    // fail: the raw-window path is unaffected and M4 experimentation needs the headroom.
+    if (model->arch == LLM_ARCH_DEEPSEEK41 && cparams.n_ctx > 16384) {
+        LLAMA_LOG_WARN("%s: DEEPSEEK41 n_ctx=%u exceeds 16384: the indexer candidate pre-filter is not implemented, "
+                "compressed-attention numerics will diverge from the reference beyond 16384 compressed positions\n",
+                __func__, cparams.n_ctx);
+    }
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch          = hparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
@@ -11148,7 +11194,7 @@ struct llama_context * llama_init_from_model(
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T: not used\n", __func__,
                             (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
                             ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f));
-                } else if (model->arch == LLM_ARCH_DEEPSEEK4) {
+                } else if (model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) {
                     LLAMA_LOG_INFO("%s: KV self size = %7.2f MiB, K-only (%s): %7.2f MiB; independent V-cache: not used\n", __func__,
                             (float) memory_size_k / (1024.0f * 1024.0f),
                             ggml_type_name(type_k), (float) memory_size_k / (1024.0f * 1024.0f));
@@ -11245,6 +11291,10 @@ struct llama_context * llama_init_from_model(
             llama_token token = llama_token_bos(&ctx->model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
             llama_batch reserve_batch = llama_batch_get_one(&token, n_tokens, n_past, 0);
             if (ctx->model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(*ctx, reserve_batch, false, true)) {
+                llama_free(ctx);
+                return nullptr;
+            }
+            if (ctx->model.arch == LLM_ARCH_DEEPSEEK41 && !llama_prepare_dsv41_graph_inputs(*ctx, reserve_batch, false, true)) {
                 llama_free(ctx);
                 return nullptr;
             }
@@ -11431,6 +11481,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_ARCTIC:
         case LLM_ARCH_DEEPSEEK2:
         case LLM_ARCH_DEEPSEEK4:
+        case LLM_ARCH_DEEPSEEK41:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GLM4:
         case LLM_ARCH_GRANITE:
@@ -11859,6 +11910,7 @@ int32_t llama_get_kv_cache_used_cells(const struct llama_context * ctx) {
 void llama_kv_cache_clear(struct llama_context * ctx) {
     llama_kv_cache_clear(ctx->kv_self);
     llama_reset_dsv4_state(ctx);
+    llama_reset_dsv41_state(ctx);
 }
 
 // Unified speculative-checkpoint
@@ -12208,6 +12260,14 @@ bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llam
     const bool result = llama_kv_cache_seq_rm(ctx->kv_self, seq_id, p0, p1);
     if (result && ctx->model.arch == LLM_ARCH_DEEPSEEK4 && p0 <= 0 && p1 < 0) {
         llama_reset_dsv4_state(ctx, seq_id);
+    }
+    if (result && ctx->model.arch == LLM_ARCH_DEEPSEEK41) {
+        // DSV41 deliberately deviates from V4's narrower p0<=0 && p1<0 condition:
+        // compressed rows cannot be un-written, so ANY seq_rm touching a sequence
+        // invalidates that stream's compressed/indexer state. Conservatively reset the
+        // stream's private state in full (and the single-seq engram cache); a partial
+        // removal must be followed by a re-prefill from scratch.
+        llama_reset_dsv41_state(ctx, seq_id);
     }
     return result;
 }
@@ -12695,6 +12755,42 @@ struct llama_data_write {
                 }
             }
         }
+
+        // DSV41 compressed/indexer cache (mirrors the DSV4 block above; only present
+        // for DSV41 models — same file-layout preservation argument)
+        if (ctx->model.arch == LLM_ARCH_DEEPSEEK41 && ctx->dsv41.cache.cache_ctx != nullptr) {
+            const uint32_t dsv41_n_layer = n_layer;
+            write(&dsv41_n_layer, sizeof(dsv41_n_layer));
+
+            // Per-sequence save: only the stream for this seq_id
+            // Full save: all streams
+            const uint32_t dsv41_single_stream = (seq_id != -1) ? 1 : 0;
+            write(&dsv41_single_stream, sizeof(dsv41_single_stream));
+            const int32_t dsv41_stream_idx = (seq_id != -1) ? seq_id : -1;
+            write(&dsv41_stream_idx, sizeof(dsv41_stream_idx));
+            write(&ctx->dsv41.cache.n_stream, sizeof(ctx->dsv41.cache.n_stream));
+
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                const uint32_t layer_type =
+                    il < ctx->dsv41.cache.comp_k.size() && ctx->dsv41.cache.comp_k[il] != nullptr ? 1 : 0;
+                write(&layer_type, sizeof(layer_type));
+                if (layer_type != 0) {
+                    write_dsv41_cache(ctx, il, dsv41_stream_idx);
+                }
+            }
+
+            // The engram n-gram cache has no V4 equivalent, but without it decoding
+            // cannot resume after a restore (the hash history would be missing). It is
+            // single-sequence (sequence 0), so it is only meaningful in a full save or
+            // a per-sequence save of sequence 0.
+            const uint32_t engram_state = !ctx->dsv41.engram.compressed.empty() && (seq_id == -1 || seq_id == 0) ? 1 : 0;
+            write(&engram_state, sizeof(engram_state));
+            if (engram_state != 0) {
+                const uint64_t engram_size = (uint64_t) ctx->dsv41.engram.compressed.size();
+                write(&engram_size, sizeof(engram_size));
+                write(ctx->dsv41.engram.compressed.data(), (size_t) engram_size*sizeof(int32_t));
+            }
+        }
     }
 
     void write_dsv4_cache(const struct llama_context * ctx, int il, int32_t stream_idx) {
@@ -12721,6 +12817,31 @@ struct llama_data_write {
             write_tensor_stream(cache.hca_state_kv[il], il);
             write_tensor_stream(cache.hca_state_score[il], il);
         }
+    }
+
+    // DSV41 analog of write_dsv4_cache: comp_k + the f32 partial-group state rings at a
+    // kv_source layer, plus lid_k when the layer also owns index keys (nullptr there, so
+    // nothing is written — the reader derives the same per-layer presence from its own
+    // cache layout, which is identical for the same model/config)
+    void write_dsv41_cache(const struct llama_context * ctx, int il, int32_t stream_idx) {
+        const auto & cache = ctx->dsv41.cache;
+        const uint32_t n_stream = cache.n_stream;
+        auto write_tensor_stream = [&](const struct ggml_tensor * tensor, int layer_il) {
+            if (tensor == nullptr) {
+                return;
+            }
+            if (stream_idx < 0) {
+                write_tensor_data(tensor, 0, ggml_nbytes(tensor), layer_il);
+            } else {
+                size_t offset, size;
+                GGML_ASSERT(dsv4_stream_offset_size(tensor, n_stream, stream_idx, offset, size));
+                write_tensor_data(tensor, offset, size, layer_il);
+            }
+        };
+        write_tensor_stream(cache.comp_k[il], il);
+        write_tensor_stream(cache.comp_state_kv[il], il);
+        write_tensor_stream(cache.comp_state_score[il], il);
+        write_tensor_stream(il < (int)cache.lid_k.size() ? cache.lid_k[il] : nullptr, il);
     }
 
     void write_kv_cache(const struct llama_context * ctx, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) {
@@ -13522,6 +13643,103 @@ struct llama_data_read {
                 if (!set_ok) {
                     return false;
                 }
+            }
+        }
+
+        // DSV41 compressed/indexer cache (mirrors the DSV4 block above)
+        if (ctx->model.arch == LLM_ARCH_DEEPSEEK41) {
+
+            auto & cache = ctx->dsv41.cache;
+            if (cache.cache_ctx == nullptr) {
+                LLAMA_LOG_ERROR("%s: DSV41 cache not initialized\n", __func__);
+                return false;
+            }
+
+            uint32_t dsv41_n_layer;
+            read_to(&dsv41_n_layer, sizeof(dsv41_n_layer));
+            if (dsv41_n_layer != n_layer) {
+                LLAMA_LOG_ERROR("%s: DSV41 cache layer count mismatch (%u != %u)\n", __func__, dsv41_n_layer, n_layer);
+                return false;
+            }
+
+            uint32_t dsv41_single_stream;
+            read_to(&dsv41_single_stream, sizeof(dsv41_single_stream));
+
+            int32_t dsv41_stream_idx;
+            read_to(&dsv41_stream_idx, sizeof(dsv41_stream_idx));
+
+            uint32_t dsv41_n_stream;
+            read_to(&dsv41_n_stream, sizeof(dsv41_n_stream));
+            if (dsv41_n_stream != cache.n_stream) {
+                LLAMA_LOG_ERROR("%s: DSV41 cache stream count mismatch (%u != %u)\n", __func__, dsv41_n_stream, cache.n_stream);
+                return false;
+            }
+
+            // Consistency check: per-stream data requires a destination seq_id
+            if (dsv41_single_stream && seq_id == -1) {
+                LLAMA_LOG_ERROR("%s: per-stream DSV41 cache cannot be restored to full KV cache\n", __func__);
+                return false;
+            }
+            if (!dsv41_single_stream && seq_id != -1) {
+                LLAMA_LOG_ERROR("%s: full-stream DSV41 cache cannot be restored to single sequence\n", __func__);
+                return false;
+            }
+
+            // Destination stream: when restoring per-stream, write to seq_id's slot
+            const int32_t dsv41_dst_stream = dsv41_single_stream ? (int32_t)seq_id : -1;
+
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                uint32_t layer_type;
+                read_to(&layer_type, sizeof(layer_type));
+
+                bool set_ok = true;
+                auto set_tensor_stream = [&](struct ggml_tensor * tensor) {
+                    if (!set_ok) return;
+                    if (tensor == nullptr) return; // lid_k exists only at index-key owners (see write_dsv41_cache)
+                    if (dsv41_single_stream) {
+                        size_t dst_offset, stream_size;
+                        if (!dsv4_stream_offset_size(tensor, cache.n_stream, dsv41_dst_stream, dst_offset, stream_size)) {
+                            set_ok = false;
+                            return;
+                        }
+                        ggml_backend_tensor_set(tensor, read(stream_size), dst_offset, stream_size);
+                    } else {
+                        ggml_backend_tensor_set(tensor, read(ggml_nbytes(tensor)), 0, ggml_nbytes(tensor));
+                    }
+                };
+
+                if (layer_type == 1) {
+                    set_tensor_stream(cache.comp_k[il]);
+                    set_tensor_stream(cache.comp_state_kv[il]);
+                    set_tensor_stream(cache.comp_state_score[il]);
+                    set_tensor_stream(il < (int)cache.lid_k.size() ? cache.lid_k[il] : nullptr);
+                } else if (layer_type != 0) {
+                    LLAMA_LOG_ERROR("%s: unknown DSV41 cache layer type %u (layer %d)\n", __func__, layer_type, il);
+                    return false;
+                }
+                if (!set_ok) {
+                    return false;
+                }
+            }
+
+            // engram n-gram cache (written only for full saves or sequence 0)
+            uint32_t engram_state;
+            read_to(&engram_state, sizeof(engram_state));
+            if (engram_state != 0) {
+                if (dsv41_single_stream && dsv41_dst_stream != 0) {
+                    LLAMA_LOG_ERROR("%s: engram n-gram cache cannot be restored to sequence %d\n", __func__, dsv41_dst_stream);
+                    return false;
+                }
+                uint64_t engram_size;
+                read_to(&engram_size, sizeof(engram_size));
+                if (engram_size > (uint64_t) ctx->cparams.n_ctx) {
+                    LLAMA_LOG_ERROR("%s: DSV41 engram cache size (%llu) exceeds n_ctx\n", __func__, (unsigned long long) engram_size);
+                    return false;
+                }
+                auto & engram = ctx->dsv41.engram;
+                engram.compressed.resize((size_t) engram_size);
+                read_to(engram.compressed.data(), (size_t) engram_size*sizeof(int32_t));
+                engram.size = (uint32_t) engram_size;
             }
         }
         return true;
