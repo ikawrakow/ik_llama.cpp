@@ -10134,6 +10134,7 @@ struct llama_context_params llama_context_default_params() {
         /*.only_active_experts         =*/ false,
         /*.prefetch_experts            =*/ false,
         /*.prefetch_experts_threads    =*/ 0,
+        /*.prefetch_experts_ahead      =*/ -1,
         /*.expert_cache_h              =*/ 0,
         /*.expert_cache_promote_gbps   =*/ 2.0f,
         /*.k_cache_hadamard            =*/ false,
@@ -10640,6 +10641,7 @@ struct llama_context * llama_init_from_model(
         LLAMA_LOG_WARN("%s: --dsa is not active under -sm graph/attn (tensor-parallel attention has no indexer); running dense MLA\n", __func__);
     }
     cparams.prefetch_experts = params.prefetch_experts;
+    cparams.prefetch_experts_ahead = params.prefetch_experts_ahead;
 
     // Phase 4: dynamic expert cache — per-layer routing/placement state + the
     // classify eval callback. Initial placement: experts 0..H-1 resident
@@ -11357,6 +11359,9 @@ struct llama_context * llama_init_from_model(
     if (params.prefetch_experts) {
         LLAMA_LOG_INFO("%s: enabling MoE expert read-ahead (prefetch_experts), %s\n", __func__,
                 ggml_backend_prefetch_init(params.prefetch_experts_threads) ? "threaded populate engine" : "madvise fallback");
+        if (cparams.prefetch_experts_ahead >= 0) {
+            ggml_backend_sched_set_moe_prefetch_ahead(ctx->sched, cparams.prefetch_experts_ahead);
+        }
         for (const auto & mapping : model->mappings) {
             ggml_backend_prefetch_register_mapping(mapping->addr(), mapping->size());
         }

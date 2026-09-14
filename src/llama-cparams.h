@@ -43,6 +43,7 @@ struct llama_cparams {
     bool rope_cache;
     bool graph_reuse;
     bool prefetch_experts;
+    int  prefetch_experts_ahead = -1; // batch-graph expert streaming lookahead (<0 = default 3, 0 = selective only)
     bool k_cache_hadamard;
     bool v_cache_hadamard;
     bool dsa_indexer_hadamard = true; // apply Walsh-Hadamard rotation to DSA indexer q/k (precision)

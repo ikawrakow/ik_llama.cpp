@@ -505,6 +505,7 @@ extern "C" {
         bool only_active_experts;
         bool prefetch_experts;  // if true, stream mmap'd MoE expert weights into the page cache (Linux only)
         int  prefetch_experts_threads; // number of expert prefetch workers (<=0 = auto)
+        int  prefetch_experts_ahead;   // batch-graph expert streaming lookahead depth (<0 = default 3, 0 = selective per-split prefetch only; inert unless prefetch_experts is set — the CLI implies it)
         int32_t expert_cache_h;       // >0: per-MoE-layer dynamic expert cache with this many resident slots (Phase 4) [EXPERIMENTAL]
         float   expert_cache_promote_gbps; // expert cache promotion rate cap in GB/s (<=0 = unlimited) [EXPERIMENTAL]
         bool k_cache_hadamard;  // if true, apply Hadamard transform to K-cache

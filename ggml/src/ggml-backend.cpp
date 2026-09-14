@@ -1199,6 +1199,7 @@ struct ggml_backend_sched {
     std::array<bool, GGML_SCHED_MAX_BACKENDS> own_cpy;
 
     bool only_active_experts;
+    int  moe_prefetch_ahead; // lookahead depth for batch-graph expert streaming; 0 = selective per-split only
     bool expert_cache_cuda_inputs = false; // place ffn_exp_cache_hot_* inputs on backend 0
     bool split_mode_graph;
     bool is_async = false;
@@ -1235,6 +1236,14 @@ void ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op 
 void ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool on_or_off) {
     if (!sched) return;
     sched->only_active_experts = on_or_off;
+}
+
+// lookahead depth for the MoE prefetch streamer (full-tensor streaming only
+// fires for batch/PP graphs; 0 disables it and keeps just the selective
+// per-split enqueue of the already-routed expert slices)
+void ggml_backend_sched_set_moe_prefetch_ahead(ggml_backend_sched_t sched, int ahead) {
+    if (!sched) return;
+    sched->moe_prefetch_ahead = ahead;
 }
 
 // Phase 4: when expert-cache hot slots are device-resident, the hot ids/mask graph
@@ -2530,10 +2539,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     };
     std::vector<moe_split_info> moe_infos;
     const bool moe_prefetch = ggml_moe_prefetch_enabled();
-    static const size_t moe_ahead = [] {
-        const char * env = getenv("GGML_MOE_PREFETCH_AHEAD");
-        return env ? (size_t) std::max(0, atoi(env)) : (size_t) 3;
-    }();
+    const size_t moe_ahead = (size_t) std::max(0, sched->moe_prefetch_ahead);
     if (moe_prefetch) {
         ggml_moe_prefetch_new_epoch();
         for (int i = 0; i < sched->n_splits; i++) {
@@ -2676,6 +2682,10 @@ ggml_backend_sched_t ggml_backend_sched_new(
     for (int i = 0; i < (GGML_OP_COUNT + 31)/32; ++i) sched->op_offload[i] = 0xffffffff;
 
     sched->debug = getenv("GGML_SCHED_DEBUG") != NULL;
+    {
+        const char * env = getenv("GGML_MOE_PREFETCH_AHEAD");
+        sched->moe_prefetch_ahead = env ? std::max(0, atoi(env)) : 3;
+    }
     // M3f: event-scoped crossing waits for expert-cache classify splits;
     // setting the env restores the full-stream sync behavior (A/B + rollback)
     sched->crossing_events = getenv("IK_EXP_CACHE_NO_CROSSING_EVENTS") == NULL;

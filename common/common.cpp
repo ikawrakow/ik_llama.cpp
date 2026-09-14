@@ -2217,6 +2217,14 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.prefetch_experts_threads = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "--prefetch-experts-ahead") {
+        CHECK_ARG;
+        params.prefetch_experts_ahead = std::stoi(argv[i]);
+        if (params.prefetch_experts_ahead >= 0) {
+            params.prefetch_experts = true;
+        }
+        return true;
+    }
     if (arg == "--fit-margin") {
         CHECK_ARG;
         int32_t margin = std::stoi(argv[i]);
@@ -3345,6 +3353,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
     options.push_back({ "*",           "       --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
+    options.push_back({ "*",           "       --prefetch-experts-ahead N",
+                                                                        "batch-graph expert streaming lookahead depth (0 = selective per-split prefetch only, default: 3 or $GGML_MOE_PREFETCH_AHEAD; overrides the env var); implies --prefetch-experts"});
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
     options.push_back({ "*",           "-gfm,  --gpu-fit-margin N",     "per-layer GPU fit margin as layer_id,margin pairs, comma-separated" });
     options.push_back({ "*",           "-wgt, --worst-graph-tokens N",  "number of tokens to use for worst-case graph"});
@@ -4414,6 +4424,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.only_active_experts = params.only_active_exps;
     cparams.prefetch_experts  = params.prefetch_experts;
     cparams.prefetch_experts_threads = params.prefetch_experts_threads;
+    cparams.prefetch_experts_ahead = params.prefetch_experts_ahead;
     cparams.expert_cache_h    = params.expert_cache_h;
     cparams.expert_cache_promote_gbps = params.expert_cache_promote_gbps;
     cparams.max_extra_alloc   = params.max_extra_alloc_MiB;
@@ -5415,6 +5426,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "defer_experts: %s # default: false\n", params.defer_experts ? "true" : "false");
     fprintf(stream, "prefetch_experts: %s # default: false\n", params.prefetch_experts ? "true" : "false");
     fprintf(stream, "prefetch_experts_threads: %d # default: 0 (auto)\n", params.prefetch_experts_threads);
+    fprintf(stream, "prefetch_experts_ahead: %d # default: -1 (3; 0 = selective only)\n", params.prefetch_experts_ahead);
     fprintf(stream, "max_extra_alloc: %d # default: 256\n", params.max_extra_alloc_MiB);
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
