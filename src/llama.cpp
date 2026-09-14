@@ -12262,16 +12262,50 @@ void llama_spec_ckpt_discard(struct llama_context * ctx) {
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    if (ctx->model.arch == LLM_ARCH_DEEPSEEK41) {
+        // DSV41 deliberately deviates from V4's narrower p0<=0 && p1<0 condition:
+        // compressed rows cannot be un-written, so ANY seq_rm touching a sequence
+        // invalidates that stream's compressed/indexer state. But the single-seq engram
+        // n-gram cache is position-contiguous from 0, so a partial removal followed by
+        // decode from the trim point crashes ("position gap"), and a NO-OP removal must
+        // not invalidate anything either (llama-server calls seq_rm [p0, end) on every
+        // prompt, including pure-continuation turns where p0 sits at the frontier and
+        // nothing is removed). Hence:
+        //   - no-op range (nothing cached at or above p0): pass through WITHOUT the
+        //     reset, so exact-continuation turns keep KV reuse and the engram cache;
+        //   - partial range touching cached cells: refuse, so callers fall back to a
+        //     full clear + re-prefill from scratch (the reset's documented contract);
+        //   - full clear (p0 <= 0 && p1 < 0): proceed and reset the stream state below.
+        // seq_id < 0 applies the removal to ALL sequences (llama-cli session resume,
+        // lookahead), so the no-op test must span every cached cell, not one sequence.
+        const bool full_clear = p0 <= 0 && p1 < 0;
+        if (!full_clear) {
+            const llama_pos q0 = p0 < 0 ? 0 : p0;
+            bool touches;
+            if (seq_id < 0) {
+                touches = false;
+                for (uint32_t i = 0; i < ctx->kv_self.size && !touches; ++i) {
+                    const llama_kv_cell & cell = ctx->kv_self.cells[i];
+                    touches = !cell.is_empty() && cell.pos >= q0 && (p1 < 0 || cell.pos < p1);
+                }
+            } else {
+                touches = llama_kv_cache_seq_pos_min(ctx->kv_self, seq_id) >= 0 &&
+                          q0 <= llama_kv_cache_seq_pos_max(ctx->kv_self, seq_id) &&
+                          (p1 < 0 || p1 > q0);
+            }
+            if (!touches) {
+                return true;
+            }
+            LLAMA_LOG_WARN("%s: DSV41 cannot partially remove [%d, %d) from sequence %d; "
+                    "refusing so the caller re-prefills from scratch\n", __func__, p0, p1, seq_id);
+            return false;
+        }
+    }
     const bool result = llama_kv_cache_seq_rm(ctx->kv_self, seq_id, p0, p1);
     if (result && ctx->model.arch == LLM_ARCH_DEEPSEEK4 && p0 <= 0 && p1 < 0) {
         llama_reset_dsv4_state(ctx, seq_id);
     }
     if (result && ctx->model.arch == LLM_ARCH_DEEPSEEK41) {
-        // DSV41 deliberately deviates from V4's narrower p0<=0 && p1<0 condition:
-        // compressed rows cannot be un-written, so ANY seq_rm touching a sequence
-        // invalidates that stream's compressed/indexer state. Conservatively reset the
-        // stream's private state in full (and the single-seq engram cache); a partial
-        // removal must be followed by a re-prefill from scratch.
         llama_reset_dsv41_state(ctx, seq_id);
     }
     return result;
