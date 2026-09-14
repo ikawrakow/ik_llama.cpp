@@ -431,6 +431,7 @@ struct llm_build_context {
 
     ggml_cgraph * build_bailingmoe2();
     ggml_cgraph * build_bailingmoe3();
+    ggml_cgraph * build_glm5next();
 
     ggml_cgraph * build_minimaxm2();
     ggml_cgraph * build_minimaxm3();

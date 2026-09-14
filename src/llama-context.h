@@ -637,6 +637,10 @@ struct llama_context {
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
+    struct ggml_tensor * inp_kpool_cells     = nullptr; // I32 [kpool*n_pool] cell index of each pool member (pool b, member j at [b*kpool+j])
+    struct ggml_tensor * inp_kpool_bias      = nullptr; // F32 [n_pool, n_tokens] 0 if pool complete & visible to query, else -inf
+    struct ggml_tensor * inp_kpool_tail      = nullptr; // I32 [kpool-1, n_tokens] trailing incomplete pool cells (null when kpool==1)
+    struct ggml_tensor * inp_kpool_ape_slots = nullptr; // I32 [kpool] identity [0..kpool-1], gathers the ape rows in order
 
     // Qwen sparse attention: everything that depends on cache layout is computed on the host,
     // so the graph only gathers, pools and scores. One entry per distinct compress ratio.
