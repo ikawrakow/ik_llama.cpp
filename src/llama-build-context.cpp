@@ -3053,6 +3053,11 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             GGML_ABORT("fatal error");
     }
 
+    if (result == nullptr) {
+        llm.free();
+        return nullptr;
+    }
+
     result->n_batch = llm.n_tokens;
 
     // add on pooling layer
