@@ -152,6 +152,17 @@ class Keys:
         SCALING_YARN_BETA_FAST   = "{arch}.rope.scaling.yarn_beta_fast"
         SCALING_YARN_BETA_SLOW   = "{arch}.rope.scaling.yarn_beta_slow"
 
+    class Engram:
+        LAYER_IDS      = "{arch}.engram.layer_ids"
+        HEAD_COUNT     = "{arch}.engram.head_count"
+        KEY_LENGTH     = "{arch}.engram.key_length"
+        MAX_NGRAM_SIZE = "{arch}.engram.max_ngram_size"
+        MULTIPLIERS    = "{arch}.engram.multipliers"
+        PRIMES         = "{arch}.engram.primes"
+        OFFSETS        = "{arch}.engram.offsets"
+        TOKEN_MAP      = "{arch}.engram.token_map"
+        PAD_ID         = "{arch}.engram.pad_id"
+
     class Split:
         LLM_KV_SPLIT_NO            = "split.no"
         LLM_KV_SPLIT_COUNT         = "split.count"
@@ -272,6 +283,7 @@ class MODEL_ARCH(IntEnum):
     ARCTIC       = auto()
     DEEPSEEK2    = auto()
     DEEPSEEK4    = auto()
+    DEEPSEEK41   = auto()
     GLM4_MOE     = auto()
     OPENPANGU    = auto()
     CHATGLM      = auto()
@@ -450,6 +462,15 @@ class MODEL_TENSOR(IntEnum):
     MHC_MERGE_GAMMA      = auto()
     # openPangu-2.0 (sandwich norm: extra whole-block post-norm on a layer subset)
     BLOCK_POST_NORM      = auto()
+    # deepseek-v4.1 (engram + compressor + vision-language gate bias)
+    ENGRAM_EMBD          = auto()
+    ENGRAM_K             = auto()
+    ENGRAM_Q             = auto()
+    ENGRAM_WKV           = auto()
+    ATTN_COMPRESSOR_WKV  = auto()
+    ATTN_COMPRESSOR_WGATE = auto()
+    ATTN_COMPRESSOR_NORM = auto()
+    FFN_EXP_PROBS_B_VL   = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -501,6 +522,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ARCTIC:         "arctic",
     MODEL_ARCH.DEEPSEEK2:      "deepseek2",
     MODEL_ARCH.DEEPSEEK4:      "deepseek4",
+    MODEL_ARCH.DEEPSEEK41:     "deepseek41",
     MODEL_ARCH.CHATGLM:        "chatglm",
     MODEL_ARCH.GLM4_MOE:       "glm4moe",
     MODEL_ARCH.OPENPANGU:      "openpangu",
@@ -681,6 +703,15 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.MHC_MERGE_BETA:            "merge_mhc_beta",
     MODEL_TENSOR.MHC_MERGE_GAMMA:           "merge_mhc_gamma",
     MODEL_TENSOR.BLOCK_POST_NORM:           "blk.{bid}.block_post_norm",
+    # deepseek-v4.1
+    MODEL_TENSOR.ENGRAM_EMBD:               "blk.{bid}.engram_embd",
+    MODEL_TENSOR.ENGRAM_K:                  "blk.{bid}.engram_k",
+    MODEL_TENSOR.ENGRAM_Q:                  "blk.{bid}.engram_q",
+    MODEL_TENSOR.ENGRAM_WKV:                "blk.{bid}.engram_wkv",
+    MODEL_TENSOR.ATTN_COMPRESSOR_WKV:       "blk.{bid}.attn_compressor_kv",
+    MODEL_TENSOR.ATTN_COMPRESSOR_WGATE:     "blk.{bid}.attn_compressor_gate",
+    MODEL_TENSOR.ATTN_COMPRESSOR_NORM:      "blk.{bid}.attn_compressor_norm",
+    MODEL_TENSOR.FFN_EXP_PROBS_B_VL:        "blk.{bid}.exp_probs_b_vl",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -1441,6 +1472,51 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.DEEPSEEK41: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_SINKS,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_EXP_PROBS_B_VL,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV_NORM,
+        MODEL_TENSOR.ATTN_KV,
+        MODEL_TENSOR.ATTN_OUT_A,
+        MODEL_TENSOR.ATTN_OUT_B,
+        MODEL_TENSOR.HC_ATTN_FN,
+        MODEL_TENSOR.HC_ATTN_BASE,
+        MODEL_TENSOR.HC_ATTN_SCALE,
+        MODEL_TENSOR.HC_FFN_FN,
+        MODEL_TENSOR.HC_FFN_BASE,
+        MODEL_TENSOR.HC_FFN_SCALE,
+        MODEL_TENSOR.ATTN_COMPRESSOR_WKV,
+        MODEL_TENSOR.ATTN_COMPRESSOR_WGATE,
+        MODEL_TENSOR.ATTN_COMPRESSOR_NORM,
+        # NOTE: TENSOR_NAMES for the four INDEXER_* entries below are shadowed by
+        # the openPangu entries later in the dict (duplicate keys, last wins).
+        # The V4.1 converter must format these names explicitly:
+        #   blk.{bid}.indexer.k_norm / .proj / .attn_k / .attn_q_b
+        MODEL_TENSOR.INDEXER_K_NORM,
+        MODEL_TENSOR.ENGRAM_EMBD,
+        MODEL_TENSOR.ENGRAM_K,
+        MODEL_TENSOR.ENGRAM_Q,
+        MODEL_TENSOR.ENGRAM_WKV,
+        MODEL_TENSOR.INDEXER_PROJ,
+        MODEL_TENSOR.INDEXER_ATTN_K,
+        MODEL_TENSOR.INDEXER_ATTN_Q_B,
     ],
     MODEL_ARCH.CHATGLM : [
         MODEL_TENSOR.TOKEN_EMBD,
