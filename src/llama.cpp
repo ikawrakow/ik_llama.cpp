@@ -2421,8 +2421,8 @@ bool llama_kv_cache::per_step_restore(ggml_backend_sched_t sched, int step, uint
             auto split_sl = (const ggml_split_tensor_t *) s_l[il]->extra;
             for (int id = 0; id < split_sl->n_device; ++id) {
                 if (!split_sl->splits[id]) continue;
-                const ggml_tensor * per_step_ssm_tensor = per_step_ssm[id];
-                const ggml_tensor * per_step_conv_tensor = per_step_conv[id];
+                ggml_tensor * per_step_ssm_tensor = per_step_ssm[id];
+                ggml_tensor * per_step_conv_tensor = per_step_conv[id];
                 if (slot >= (uint32_t) split_sl->splits[id]->ne[1]) return false;
                 const size_t ssm_bytes = (size_t) per_step_ssm_tensor->ne[0] /
                     (size_t) (ckpt.per_step_max_allocated - 1) * sizeof(float);
