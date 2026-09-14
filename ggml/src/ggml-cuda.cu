@@ -1630,6 +1630,9 @@ GGML_CALL static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_
 
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
     buffer->buft = buft;
+    // invariant relied on by IK_CUDA_PINNED_IO (cpy_tensor_async): this name
+    // is patched only here, only after a successful ggml_cuda_host_malloc —
+    // get_name == ggml_backend_cuda_host_buffer_name means genuinely pinned
     buffer->iface.get_name = ggml_backend_cuda_host_buffer_name;
     buffer->iface.free_buffer = ggml_backend_cuda_host_buffer_free_buffer;
 
