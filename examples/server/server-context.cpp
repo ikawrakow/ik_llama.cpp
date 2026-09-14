@@ -3710,13 +3710,8 @@ void server_context::apply_checkpoint(server_slot & slot) {
                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                     }
                     slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
-
-                    {
-                        const llama_pos pos_next_prompt = std::min(
-                            slot.prompt_tokens.pos_next(slot.n_past_prompt),
-                            it->pos_max_prompt + 1);
-                        slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(pos_next_prompt);
-                    }
+                    auto prefix= slot.cache_tokens.get_common_prefix_first_n(ctx, slot.prompt_tokens, slot.n_past);
+                    slot.n_past_prompt = prefix.second;
 
                     slot.checkpoint_pos = it->pos_max;
 
