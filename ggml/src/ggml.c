@@ -17170,10 +17170,10 @@ static void ggml_compute_forward_fused_mul_unary_f32(
                 case GGML_UNARY_OP_SIGMOID: ggml_vec_sigmoid_mul_f32(n, x, y, z); break;
                 case GGML_UNARY_OP_SILU: {
                     if (limit < 1e-6f) {
-                        ggml_vec_mul_silu_f32(nc, z, x, y);
+                        ggml_vec_mul_silu_f32(n, z, x, y);
                     } else {
                         // TODO: simdify this
-                        for (int i = 0; i < nc; ++i) {
+                        for (int i = 0; i < n; ++i) {
                             float gate = ggml_silu_f32(x[i]);
                             gate = MIN(gate, limit);
                             float up = MAX(-limit, MIN(limit, y[i]));
