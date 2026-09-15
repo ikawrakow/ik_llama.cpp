@@ -90,6 +90,7 @@
 #define TN_MVLM_PROJ_BLOCK "mm.model.mb_block.%d.block.%d.%s"
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"
 #define TN_IMAGE_NEWLINE   "model.image_newline"
+#define TN_IMAGE_NEWLINE_V "v.image_newline" // deepseek4v (fork v. prefix convention)
 #define TN_MM_INP_NORM     "mm.input_norm.weight"
 #define TN_MM_INP_NORM_B   "mm.input_norm.bias"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
@@ -97,6 +98,9 @@
 #define TN_MM_PROJECTOR    "mm.model.fc.weight"         // idefics3
 #define TN_MM_PATCH_MERGER "mm.patch_merger.weight"     // mistral small 3.1
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
+#define TN_TOK_IMG_START   "v.token_embd.img_start"     // deepseek4v
+#define TN_TOK_IMG_END     "v.token_embd.img_end"       // deepseek4v
+#define TN_TOK_IMG_PAD     "v.token_embd.img_pad"       // deepseek4v
 #define TN_TOK_GLM_BOI     "adapter.boi"                // glm-edge (these embeddings are not in text model)
 #define TN_TOK_GLM_EOI     "adapter.eoi"                // glm-edge (these embeddings are not in text model)
 #define TN_DEEPSTACK_NORM  "v.deepstack.%d.norm.%s"     // qwen3vl deepstack
@@ -140,6 +144,22 @@
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
+// deepseek4v: layout of the LLM token block built from the aligner grid
+struct dsv4_block_layout {
+    int rows;     // grid rows, padded to an even count
+    int row_len;  // grid width + 1 newline
+    int pad_last; // trailing pads
+    int n_out;    // total block size, including lead pads and the start/end sentinels
+};
+static inline dsv4_block_layout dsv4_get_block_layout(int n_llm_w, int n_llm_h, int lead_pad) {
+    dsv4_block_layout bl;
+    bl.rows     = n_llm_h + (n_llm_h % 2);
+    bl.row_len  = n_llm_w + 1;
+    bl.pad_last = (bl.rows / 2 * bl.row_len) % 2 * 2;
+    bl.n_out    = lead_pad + 1 + bl.rows * bl.row_len + bl.pad_last + 1;
+    return bl;
+}
+
 enum projector_type {
     PROJECTOR_TYPE_MLP,
     PROJECTOR_TYPE_MLP_NORM,
@@ -168,6 +188,7 @@ enum projector_type {
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
     PROJECTOR_TYPE_MINIMAX_M3_VL,
+    PROJECTOR_TYPE_DEEPSEEK4V,
     PROJECTOR_TYPE_UNKNOWN,
 
 };
@@ -199,6 +220,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
     { PROJECTOR_TYPE_MINIMAX_M3_VL, "minimax_m3_vl"},
+    { PROJECTOR_TYPE_DEEPSEEK4V, "deepseek4v"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -227,6 +249,9 @@ struct clip_image_f32 {
     int ny;
 
     std::vector<float> buf;
+
+    // deepseek4v: leading IMAGE_PAD embeddings, aligns IMAGE_START to the compressor boundary
+    int32_t lead_pad = 0;
 };
 
 //
