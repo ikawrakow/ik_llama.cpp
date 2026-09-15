@@ -2228,7 +2228,7 @@ void llm_load_hparams(
                         hparams.dsv41_index_key_source.fill(-1);
                         hparams.dsv41_topk_source.fill(-1);
                         int32_t last_kv = -1, last_key = -1, last_idx = -1;
-                        uint32_t ratio_a = 0, ratio_b = 0;
+                        uint32_t csa_ratio = 0, hca_ratio = 0;
                         for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                             const bool has_comp  = ml.get_tensor_meta(format("blk.%u.attn_compressor_kv.weight", il).c_str()) != nullptr;
                             const bool has_gate  = ml.get_tensor_meta(format("blk.%u.attn_compressor_gate.weight", il).c_str()) != nullptr;
@@ -2252,22 +2252,28 @@ void llm_load_hparams(
                             hparams.dsv41_kv_source[il]        = last_kv;
                             hparams.dsv41_index_key_source[il] = last_key;
                             hparams.dsv41_topk_source[il]      = last_idx;
-                            if (r == ratio_a || r == ratio_b) continue;
-                            if      (ratio_a == 0) ratio_a = r;
-                            else if (ratio_b == 0) ratio_b = r;
+                            if (r == csa_ratio || r == hca_ratio) continue;
+                            if      (csa_ratio == 0) csa_ratio = r;
+                            else if (hca_ratio == 0) hca_ratio = r;
                             else throw std::runtime_error("DeepSeek-V4.1 supports at most two compression ratios");
                         }
                         // a file with no compressed layers is pure sliding window attention; the
                         // ratios only have to stay non-zero for the size arithmetic
-                        if (ratio_a == 0) ratio_a = 1;
-                        if (ratio_b == 0) ratio_b = ratio_a;
-                        hparams.dsv4_ratio_a = ratio_a;
-                        hparams.dsv4_ratio_b = ratio_b;
-                        hparams.dsv4_overlap_a = false;
-                        hparams.dsv4_overlap_b = false;
+                        if (csa_ratio == 0) csa_ratio = 1;
+                        if (hca_ratio == 0) hca_ratio = csa_ratio;
+                        // V4 splits the two streams by role -- the indexed one at CSA_RATIO, the
+                        // other at HCA_RATIO. V4.1 does not: both of its streams carry index
+                        // sources (indexer.attn_q_b on layers 2, 8, 14 at ratio 2 and on 20, 24,
+                        // 28, 32, 36 at ratio 1 in the released Flash file), so these two hold the
+                        // file's compression segments in layer order and nothing reads them as
+                        // roles -- the cache arithmetic and the graph both go through the ratio.
+                        hparams.dsv4_csa_ratio = csa_ratio;
+                        hparams.dsv4_hca_ratio = hca_ratio;
+                        hparams.dsv4_csa_overlap = false;
+                        hparams.dsv4_hca_overlap = false;
                         hparams.dsv4_hc_lag = true;
                         hparams.dsv4_q_head_norm = false;
-                        LLAMA_LOG_INFO("%s: DeepSeek-V4.1 compressed streams: ratio %u and %u, shared from source layers\n", __func__, ratio_a, ratio_b);
+                        LLAMA_LOG_INFO("%s: DeepSeek-V4.1 compressed streams: csa ratio %u, hca ratio %u, shared from source layers\n", __func__, csa_ratio, hca_ratio);
                     }
                     if (hparams.dsv4_hc_mult == 0) {
                         throw std::runtime_error("DeepSeek-V4 hyper_connection.count is missing and could not be inferred");
