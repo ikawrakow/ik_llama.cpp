@@ -844,15 +844,6 @@ static void mul_mat_iq4_nl_r4_q8_2(int n, const void * vx, size_t bx, const Data
         qx[3] = _mm512_shuffle_epi8(values, _mm512_and_si512(_mm512_srli_epi16(bits2, 4), m4));
         return scales;
     };
-    auto dot = [&qx] (__m256i y8) {
-        auto y = _mm512_inserti32x8(_mm512_castsi256_si512(y8), y8, 1);
-        auto sumi = _mm512_setzero_si512();
-        sumi = _mm512_dpbusd_epi32(sumi, qx[0], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x00)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[1], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x55)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[2], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xaa)));
-        sumi = _mm512_dpbusd_epi32(sumi, qx[3], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xff)));
-        return sumi;
-    };
     auto dot = [&qx] (const int8_t * qy) {
         auto sumi = _mm512_setzero_si512();
         sumi = _mm512_dpbusd_epi32(sumi, qx[0],  _mm512_set1_epi32(*(const int32_t *)(qy +  0)));
