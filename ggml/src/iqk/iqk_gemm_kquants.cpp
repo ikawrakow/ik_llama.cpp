@@ -2615,6 +2615,76 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
 }
 
 // TODO: move this to iqk_gemm_iquants
+void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+
+#ifdef HAVE_FANCY_SIMD
+    constexpr int k_nr = 16;
+    using block_q8_k_r = block_q8_k_r16;
+#else
+    constexpr int k_nr = 8;
+    using block_q8_k_r = block_q8_k_r8;
+#endif
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%k_nr == 0);
+
+    const int nb = n/QK_K;
+
+    const block_iq4_xs_r8 * xg[k_nr/8];
+    block_q8_k_r * y = (block_q8_k_r *)vy;
+
+    auto values128 = _mm_loadu_si128((const __m128i *)iq4k_values);
+    auto values    = MM256_SET1_M128I(values128);
+    const auto m4  = _mm256_set1_epi8(0xf);
+    const auto dup = _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3);
+
+    int16_t  ls[16];
+    float    dnew[k_nr];
+    __m256i  xv[8];
+    uint32_t block[8];
+
+    for (int ix = 0; ix < nrc_x; ix += k_nr) {
+        for (int g = 0; g < k_nr/8; ++g) {
+            xg[g] = (const block_iq4_xs_r8 *)((const char *)vx + (ix + 8*g)*bx);
+        }
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < k_nr; ++k) {
+                const auto& src = xg[k/8][i];
+                const int kk = k & 7;
+                const float d = GGML_FP16_TO_FP32(src.d[kk]);
+                for (int ib = 0; ib < 8; ++ib) {
+                    const int is = 8*ib + kk;
+                    const uint8_t sl = (src.scales_l[is%32] >> 4*(is/32)) & 0xf;
+                    const uint8_t sh = (src.scales_h[is%16] >> 2*(is/16)) & 3;
+                    ls[2*ib+0] = ls[2*ib+1] = (sl | (sh << 4)) - 32;
+                    const uint8_t * q = src.qs + 128*ib + 4*kk;
+                    uint32_t w[4];
+                    std::memcpy(w+0, q +  0, 4);
+                    std::memcpy(w+1, q + 32, 4);
+                    std::memcpy(w+2, q + 64, 4);
+                    std::memcpy(w+3, q + 96, 4);
+                    auto v   = _mm256_permutevar8x32_epi32(
+                                   _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)w)), dup);
+                    auto lo  = _mm256_and_si256(v, m4);
+                    auto hi  = _mm256_and_si256(_mm256_srli_epi16(v, 4), m4);
+                    auto nib = _mm256_blend_epi32(lo, hi, 0xAA);
+                    xv[ib]   = _mm256_shuffle_epi8(values, nib);
+                }
+                dnew[k] = d * convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
+            }
+#ifdef HAVE_FANCY_SIMD
+            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_loadu_ps(dnew), _MM_ROUND_NEAREST));
+            for (int l = 0; l < 64; ++l) {
+                auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
+                _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
+            }
+#else
+            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_loadu_ps(dnew), _MM_ROUND_NEAREST));
+#endif
+        }
+        y += nb;
+    }
+}
+
 void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
 
 #ifdef HAVE_FANCY_SIMD
@@ -2674,6 +2744,8 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
 bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
 
     auto etypeA = ggml_type(typeA);
+    if (etypeA == GGML_TYPE_Q8_K_R16 && ggml_type(typeB) == GGML_TYPE_Q8_K32) typeB = GGML_TYPE_Q8_K;
+
     auto expected_type_B = etypeA == GGML_TYPE_IQ4_XS_R8 || etypeA == GGML_TYPE_Q4_K_R4 || etypeA == GGML_TYPE_Q5_K_R4 ? GGML_TYPE_Q8_K32
                          //: etypeA == GGML_TYPE_Q8_K_R8 ? GGML_TYPE_Q8_KR8
                          : etypeA == GGML_TYPE_Q8_KV || etypeA == GGML_TYPE_Q8_KV_R8 ? GGML_TYPE_Q8_KV
@@ -2766,6 +2838,7 @@ bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, voi
         case GGML_TYPE_Q5_K: iqk_convert_q5_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_K: iqk_convert_q6_k_q8_0_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_XS: iqk_convert_iq4_xs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ4_XS_R8: iqk_convert_iq4_xs_r8_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         default: return false;
     }
     return true;
