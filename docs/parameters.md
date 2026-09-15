@@ -91,7 +91,7 @@ Some often used terms.
 | `--indexer-cache-type-k type, -ictk` | Indexer K-cache data type | off | Use quantized indexer cache [PR 2075](https://github.com/ikawrakow/ik_llama.cpp/pull/2075) |
 | `--fused-indexer-topk, -fidx` | Enable the fused indexer topk op | disabled | Use a dedicated op for computing the DSA indexer top_k KV cache entries [PR 2098](https://github.com/ikawrakow/ik_llama.cpp/pull/2098) |
 | `--swa-compress` | Allocate sliding-window layers at window size instead of `n_ctx` | disabled | [PR 2266](https://github.com/ikawrakow/ik_llama.cpp/pull/2266) |
-| `-amb, --attention-max-batch` | Max batch size for attention computations | 0 | Specifies the maximum K*Q size in MB we want to tolerate. [PR 237](https://github.com/ikawrakow/ik_llama.cpp/pull/237) |
+| `-amb, --attention-max-batch` | Max batch size for attention computations | 256 | Specifies the maximum K*Q size in MB we want to tolerate. Default changed from 0 to 256 in [PR 2312](https://github.com/ikawrakow/ik_llama.cpp/pull/2312) to avoid very large temporary compute buffers on MLA models. [PR 237](https://github.com/ikawrakow/ik_llama.cpp/pull/237) |
 | `-fmoe or --fused-moe` | Fused MoE ffn_up and ffn_gate | - | Speedup for MoE models. [PR 229](https://github.com/ikawrakow/ik_llama.cpp/pull/229) |
 | `--no-fmoe, --no-fused-moe` | Disable fused MoE | enabled | See `--fused-moe` |
 | `-ger, --grouped-expert-routing` | Enable grouped expert routing | disabled | For BailingMoeV2 architecture (Ling/Ring models). [PR 836](https://github.com/ikawrakow/ik_llama.cpp/pull/836) [PR 838](https://github.com/ikawrakow/ik_llama.cpp/pull/838) |
@@ -112,6 +112,7 @@ Some often used terms.
 | `--no-mmap` | Do not memory-map model (slower load but may reduce pageouts) | - |  |
 | `--ui-mcp-proxy, --webui-mcp-proxy` | Experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments | disabled | Support CORS Proxy on llama-server backend side. It is required to make external mcp server work on llamacpp webui. [PR 1904](https://github.com/ikawrakow/ik_llama.cpp/pull/1904) |
 | `--defer-experts` | Defer expert mmap residency on Linux to reduce model load time | false | Using this flag, expert tensor pages are faulted in on demand rather than being eagerly loaded during initialization. This allows us to reduce cold-start latency, thus improving the load time of MoE models, particularly on systems where users are running models off of storage. [PR 1634](https://github.com/ikawrakow/ik_llama.cpp/pull/1634) |
+| `--defer-ple` | Defer per-layer token embedding (PLE) residency to keep it out of resident memory | false | For models with per-layer token embeddings (e.g. Qwen3.8-Flash-Next), PLE tensors are not kept resident, reducing memory usage. [PR 2389](https://github.com/ikawrakow/ik_llama.cpp/pull/2389) |
 | `-rtr, --run-time-repack` | Repack tensors if interleaved variant is available | - | May improve performance on some systems. [PR 147](https://github.com/ikawrakow/ik_llama.cpp/pull/147) |
 | `--ctx-checkpoints N` | Set the number of checkpoints per slot | 32 | Enable checkpoint for recurrent models Qwen3-Next and Qwen3.5-MoE. [PR 1310](https://github.com/ikawrakow/ik_llama.cpp/pull/1310) |
 | `--ctx-checkpoints-interval N` | Minimum number of tokens between each context checkpoint. | 512 |  If you want to create the checkpoint more frequently, set it to a small value. If it's set to positive number, it saves checkpoints during TG at this interval. During PP, it can only save checkpoint every batch size, so it becomes minimum number of tokens between each context checkpoint. [PR 1310](https://github.com/ikawrakow/ik_llama.cpp/pull/1310) |
@@ -488,6 +489,7 @@ llama-gguf-split --split --split-max-size 1G --no-tensor-first-split /models/mod
 | `--symmetric-q40` | Use [-7:7] range for Q4_0 quantization (turns off imatrix) | - | This is useful for some models that have been trained to int4 using this specific quantization range (e.g., Kimi-2.6) [PR 1677](https://github.com/ikawrakow/ik_llama.cpp/pull/1677) |
 | `--slow-iq2ks` | Use the original very slow IQ2_KS quantization method | - | Alternative to the compile-time option [PR 1677](https://github.com/ikawrakow/ik_llama.cpp/pull/1677) |
 | `--extra-output-tensor ggml_type` | Requantize and add output tensor of that type. | - | [PR 1810](https://github.com/ikawrakow/ik_llama.cpp/pull/1810) see `--mtp-requantize-output-tensor type` as on-the-fly alternative. |
+| `--fudge-factor` | Value to undo the built-in fudge factors of certain quant types | - | Some quant types now carry built-in fudge factors; supply the matching value from the PR's type/factor table to undo them. [PR 2361](https://github.com/ikawrakow/ik_llama.cpp/pull/2361) |
 
 ### Build Arguments
 
@@ -530,6 +532,7 @@ CUDA_VISIBLE_DEVICES=0,2 llama-server -m /models/model-bf16.gguf
 | - | - |
 | CUDA_VISIBLE_DEVICES | Use only specified GPUs. Example: Use first and 3rd `CUDA_VISIBLE_DEVICES=0,2` |
 | GGML_CUDA_NO_PINNED | Do not use pinned memory |
+| GGML_CUDA_NO_PINNED_WEIGHTS | Keep CPU-resident (CPU-overridden) model weights mmapped instead of pinned, while staging buffers stay pinned. Reduces RAM usage for hybrid CPU/GPU inference, e.g. MoE experts left on the CPU (`-ot`, `--cpu-moe`). [PR 2444](https://github.com/ikawrakow/ik_llama.cpp/pull/2444) |
 | GGML_CUDA_HOST_MALLOC_THP | Use THP for host allocations with GGML_CUDA_HOST_MALLOC_THP [PR 2010](https://github.com/ikawrakow/ik_llama.cpp/pull/2010) |
 
 ## Unique parameters
