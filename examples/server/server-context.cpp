@@ -3725,7 +3725,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     slot.server_cached_prompt.checkpoints.clear();
                     slot.checkpoint_pos = -1;
                 }
-                SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data.\n", "");
+                SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data.%s\n","");
                 slot.n_past = 0;
                 slot.n_past_prompt = 0;
                 slot.n_past_se = 0;
