@@ -1759,6 +1759,11 @@ size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth)
             auto row_size_q = ggml_row_size(tt.vec_dot_type, q->ne[0]);
             size = row_size_q * q->ne[1];
         }
+#ifdef __aarch64__
+        else if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32) {
+            size = ggml_row_size(GGML_TYPE_F16, q->ne[0]) * q->ne[1];   // q is converted to f16 (no f16 x f32 kernel on arm)
+        }
+#endif
         size += k_indexer_chunks * q->ne[1] * sizeof(float);
         size += k->ne[1] * sizeof(float);
         size += k->ne[1] * sizeof(int32_t);
@@ -1881,6 +1886,7 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
         ++counts[i];
     }
 #else
+    for (int i = 0; i < nbucket; ++i) counts[i] = 0;
     for (int j = 0; j < ngood; ++j) {
         int i = int(av*values[j] + bv);
         i = std::min(i, nbucket-1);
@@ -1983,6 +1989,11 @@ size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread
         auto row_size_q = ggml_row_size(tt.vec_dot_type, q->ne[0]);
         size = row_size_q * q->ne[1] * q->ne[2];
     }
+#ifdef __aarch64__
+    else if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32) {
+        size = ggml_row_size(GGML_TYPE_F16, q->ne[0]) * q->ne[1] * q->ne[2];
+    }
+#endif
     size += k->ne[1] * q->ne[1] * sizeof(float);
     size += k->ne[1] * sizeof(float);
     size += k->ne[1] * sizeof(int32_t);
@@ -2046,6 +2057,16 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
         quantize_size = row_size_q * q->ne[1];
         q_type = tt.vec_dot_type;
     }
+#ifdef __aarch64__
+    else if (k_type == GGML_TYPE_F16 && q_type == GGML_TYPE_F32) {
+        // arm: iqk_set_kernels_float provides f16 x f16 but not f16 x f32; convert the q rows to f16
+        auto ttq = ggml_internal_get_type_traits(GGML_TYPE_F16);
+        from_float = ttq.from_float;
+        row_size_q = ggml_row_size(GGML_TYPE_F16, q->ne[0]);
+        quantize_size = row_size_q * q->ne[1];
+        q_type = GGML_TYPE_F16;
+    }
+#endif
 
     MulMat mm;
     if (!MulMat::prepare(int(k_type), int(q_type), k->ne[0], mm, q->ne[1])) {
