@@ -159,10 +159,10 @@ struct llama_hparams {
 
     // The two compressed-stream plan slots. V4 hardcodes 4 (overlapping groups) and 128;
     // V4.1 takes both ratios from the file and pools disjoint groups in both.
-    uint32_t dsv4_ratio_a   = 4;
-    uint32_t dsv4_ratio_b   = 128;
-    bool     dsv4_overlap_a = true;
-    bool     dsv4_overlap_b = false;
+    uint32_t dsv4_csa_ratio   = 4;
+    uint32_t dsv4_hca_ratio   = 128;
+    bool     dsv4_csa_overlap = true;
+    bool     dsv4_hca_overlap = false;
 
     // DeepSeek-V4.1: only a few source layers compress, and the layers after each one read the
     // same rows. For every layer these hold the layer that published what it reads, or -1. A

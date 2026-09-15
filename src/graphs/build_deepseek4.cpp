@@ -941,8 +941,8 @@ static void ds4_build_comp(ggml_tensor * cur, llm_build_context & llm, ggml_cont
         ggml_tensor * source_kv = dsv4_concat_named(ctx0, cache_state, state_kv, 1, (tag + "_source_kv").c_str());
         ggml_tensor * source_score = dsv4_concat_named(ctx0, cache_score, state_score, 1, (tag + "_source_score").c_str());
         const auto & hp = llm.model.hparams;
-        const uint32_t ratio = is_hca ? hp.dsv4_ratio_b : hp.dsv4_ratio_a;
-        const bool  overlap  = is_hca ? hp.dsv4_overlap_b : hp.dsv4_overlap_a;
+        const uint32_t ratio = is_hca ? hp.dsv4_hca_ratio : hp.dsv4_csa_ratio;
+        const bool  overlap  = is_hca ? hp.dsv4_hca_overlap : hp.dsv4_csa_overlap;
         ggml_tensor * comp = build_compressed_kv_from_state(ctx0, llm,
                                            source_kv, source_score,
                                            inputs.state_read_idxs,
@@ -1131,8 +1131,8 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
     const float kq_scale = 1.0f / std::sqrt(float(n_embd_head));
 
     const bool shared = hparams.dsv4_shared_streams;
-    const bool is_a = ratio != 0 && ratio == hparams.dsv4_ratio_a;
-    const bool is_b = ratio != 0 && !is_a && ratio == hparams.dsv4_ratio_b;
+    const bool is_a = ratio != 0 && ratio == hparams.dsv4_csa_ratio;
+    const bool is_b = ratio != 0 && !is_a && ratio == hparams.dsv4_hca_ratio;
     auto & slot_in   = is_a ? lctx.dsv4.inputs.csa : lctx.dsv4.inputs.hca;
     auto & slot_plan = is_a ? lctx.dsv4.csa_plan   : lctx.dsv4.hca_plan;
     auto & slot_ctx  = is_a ? lctx.dsv4.csa_ctx    : lctx.dsv4.hca_ctx;
@@ -1172,7 +1172,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         }
     }
 
-    if (!shared && ratio == hparams.dsv4_ratio_a &&
+    if (!shared && ratio == hparams.dsv4_csa_ratio &&
             lctx.dsv4.inputs.csa.state_pos != nullptr &&
             lctx.dsv4.csa_plan.state_pos.size() > 0) {
 
@@ -1193,7 +1193,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
 
     }
 
-    if (!shared && ratio == hparams.dsv4_ratio_b &&
+    if (!shared && ratio == hparams.dsv4_hca_ratio &&
             lctx.dsv4.inputs.hca.state_pos != nullptr &&
             lctx.dsv4.hca_plan.state_pos.size() > 0) {
 
@@ -1362,7 +1362,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         }
         attn = build_the_attn(raw_k, raw_mask, comp_mask, comp_kv, slot_ctx, is_a ? "csa" : "hca", n_eff);
         cb(attn, "attn_shared", il);
-    } else if (!shared && ratio == hparams.dsv4_ratio_a &&
+    } else if (!shared && ratio == hparams.dsv4_csa_ratio &&
             lctx.dsv4.inputs.csa.kq_mask != nullptr &&
             lctx.dsv4.csa_plan.n_kv > 0 &&
             lctx.dsv4.lid_plan.n_kv > 0 &&
@@ -1388,7 +1388,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         int n_csa = hparams.n_swa + hparams.indexer_top_k;
         attn = build_the_attn(raw_k, raw_mask, csa_mask, csa_kv, lctx.dsv4.csa_ctx, "csa", n_csa);
         cb(attn, "attn_csa", il);
-    } else if (!shared && ratio == hparams.dsv4_ratio_b &&
+    } else if (!shared && ratio == hparams.dsv4_hca_ratio &&
             lctx.dsv4.inputs.hca.kq_mask != nullptr &&
             lctx.dsv4.hca_plan.n_kv > 0 &&
             std::any_of(lctx.dsv4.hca_plan.n_visible.begin(), lctx.dsv4.hca_plan.n_visible.end(),
@@ -1396,7 +1396,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             !cparams.k_cache_hadamard) {
         ggml_tensor * hca_mask = dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.hca.kq_mask, nullptr,
                 lctx.dsv4.hca_plan.n_kv, n_tokens, num_streams(lctx.dsv4.hca_ctx), cb, il);
-        int n_hca = hparams.n_swa + (n_kv + hparams.dsv4_ratio_b - 1)/hparams.dsv4_ratio_b;
+        int n_hca = hparams.n_swa + (n_kv + hparams.dsv4_hca_ratio - 1)/hparams.dsv4_hca_ratio;
         attn = build_the_attn(raw_k, raw_mask, hca_mask, lctx.dsv4.cache.hca_k[il], lctx.dsv4.hca_ctx, "hca", n_hca);
         cb(attn, "attn_hca", il);
     } else {

@@ -887,10 +887,10 @@ bool llama_context::ensure_dsv4_cache_tensors() {
     const int64_t n_indexer_head = model.hparams.indexer_head_size;
     const uint32_t n_stream = std::max<uint32_t>(1, cparams.n_seq_max);
     const auto & hp = model.hparams;
-    const uint32_t ratio_a = hp.dsv4_ratio_a;
-    const uint32_t ratio_b = hp.dsv4_ratio_b;
-    const uint32_t csa_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, ratio_a), 256u);
-    const uint32_t hca_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, ratio_b), 256u);
+    const uint32_t csa_ratio = hp.dsv4_csa_ratio;
+    const uint32_t hca_ratio = hp.dsv4_hca_ratio;
+    const uint32_t csa_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, csa_ratio), 256u);
+    const uint32_t hca_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, hca_ratio), 256u);
 
     if (!dsv4_validate_cache_type(kv_self.type_k, n_embd_head, "raw/CSA/HCA") ||
         !dsv4_validate_cache_type(cparams.idx_type_k, n_indexer_head, "LID")) {
@@ -950,10 +950,10 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             // rows and pooling state live on the source layer, index keys on the key owner; every
             // other layer is aliased onto its source below. Disjoint groups: one row per pooled token
             if (hp.dsv41_is_kv_source(il)) {
-                auto & k     = ratio == ratio_a ? cache.csa_k           : cache.hca_k;
-                auto & st_kv = ratio == ratio_a ? cache.csa_state_kv    : cache.hca_state_kv;
-                auto & st_sc = ratio == ratio_a ? cache.csa_state_score : cache.hca_state_score;
-                const uint32_t n_rows = ratio == ratio_a ? csa_kv : hca_kv;
+                auto & k     = ratio == csa_ratio ? cache.csa_k           : cache.hca_k;
+                auto & st_kv = ratio == csa_ratio ? cache.csa_state_kv    : cache.hca_state_kv;
+                auto & st_sc = ratio == csa_ratio ? cache.csa_state_score : cache.hca_state_score;
+                const uint32_t n_rows = ratio == csa_ratio ? csa_kv : hca_kv;
                 k[(size_t) il]     = ggml_new_tensor_3d(cache.cache_ctx, kv_self.type_k, n_embd_head, n_rows*n_stream, 1);
                 st_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, ratio*n_stream);
                 st_sc[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, ratio*n_stream);
@@ -964,7 +964,7 @@ bool llama_context::ensure_dsv4_cache_tensors() {
                 }
             }
             if (hp.dsv41_owns_index_k(il)) {
-                const uint32_t n_rows = ratio == ratio_a ? csa_kv : hca_kv;
+                const uint32_t n_rows = ratio == csa_ratio ? csa_kv : hca_kv;
                 cache.lid_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, cparams.idx_type_k, n_indexer_head, n_rows*n_stream, 1);
                 if (!alloc_tensor(cache.lid_k[(size_t) il], buft)) {
                     LLAMA_LOG_ERROR("%s: failed to allocate DSV4.1 index key buffer for layer %d\n", __func__, il);
@@ -975,13 +975,13 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             continue;
         }
 
-        if (ratio == ratio_a) {
+        if (ratio == csa_ratio) {
             cache.csa_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, kv_self.type_k, n_embd_head, csa_kv*n_stream, 1);
             cache.lid_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, cparams.idx_type_k, n_indexer_head, csa_kv*n_stream, 1);
-            cache.csa_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_embd_head, 2*ratio_a*n_stream);
-            cache.csa_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_embd_head, 2*ratio_a*n_stream);
-            cache.lid_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*ratio_a*n_stream);
-            cache.lid_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*ratio_a*n_stream);
+            cache.csa_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_embd_head, 2*csa_ratio*n_stream);
+            cache.csa_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_embd_head, 2*csa_ratio*n_stream);
+            cache.lid_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*csa_ratio*n_stream);
+            cache.lid_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*csa_ratio*n_stream);
 
             if (!alloc_tensor(cache.csa_k[(size_t) il], buft) ||
                 !alloc_tensor(cache.lid_k[(size_t) il], buft) ||
@@ -993,10 +993,10 @@ bool llama_context::ensure_dsv4_cache_tensors() {
                 free_dsv4_cache_tensors();
                 return false;
             }
-        } else if (ratio == ratio_b) {
+        } else if (ratio == hca_ratio) {
             cache.hca_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, kv_self.type_k, n_embd_head, hca_kv*n_stream, 1);
-            cache.hca_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, ratio_b*n_stream);
-            cache.hca_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, ratio_b*n_stream);
+            cache.hca_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, hca_ratio*n_stream);
+            cache.hca_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, hca_ratio*n_stream);
 
             if (!alloc_tensor(cache.hca_k[(size_t) il], buft) ||
                 !alloc_tensor(cache.hca_state_kv[(size_t) il], buft) ||
@@ -1798,25 +1798,25 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
 
     //auto tim1 = ggml_time_us();
     const auto & hp = lctx.model.hparams;
-    const uint32_t ratio_a = hp.dsv4_ratio_a, ratio_b = hp.dsv4_ratio_b;
-    const bool overlap_a = hp.dsv4_overlap_a, overlap_b = hp.dsv4_overlap_b;
-    lctx.dsv4.csa_plan = build_plan(ratio_a, overlap_a, csa_state_size, csa_kv_size, cache_n_stream);
-    lctx.dsv4.hca_plan = build_plan(ratio_b, overlap_b, hca_state_size, hca_kv_size, cache_n_stream);
+    const uint32_t csa_ratio = hp.dsv4_csa_ratio, hca_ratio = hp.dsv4_hca_ratio;
+    const bool csa_overlap = hp.dsv4_csa_overlap, hca_overlap = hp.dsv4_hca_overlap;
+    lctx.dsv4.csa_plan = build_plan(csa_ratio, csa_overlap, csa_state_size, csa_kv_size, cache_n_stream);
+    lctx.dsv4.hca_plan = build_plan(hca_ratio, hca_overlap, hca_state_size, hca_kv_size, cache_n_stream);
     // index keys come from the pooled latent, so they follow the stream plans
     lctx.dsv4.lid_plan = hp.dsv4_shared_streams ? lctx.dsv4.csa_plan
-                       : build_plan(ratio_a, overlap_a, lid_state_size, lid_kv_size, cache_n_stream);
+                       : build_plan(csa_ratio, csa_overlap, lid_state_size, lid_kv_size, cache_n_stream);
     lctx.dsv4.csa_ctx = dsv4_build_comp_context(batch, cache_n_stream, lctx.dsv4.csa_plan.n_kv);
     lctx.dsv4.hca_ctx = dsv4_build_comp_context(batch, cache_n_stream, lctx.dsv4.hca_plan.n_kv);
     lctx.dsv4.lid_ctx = dsv4_build_comp_context(batch, cache_n_stream, lctx.dsv4.lid_plan.n_kv);
     //auto tim2 = ggml_time_us();
     //fprintf(stderr, "%s: %ld us to buils plans\n", __func__, tim2-tim1);
 
-    if (!dsv4_validate_comp_plan("csa", batch, lctx.dsv4.csa_plan, ratio_a, overlap_a, csa_state_size, csa_kv_size, cache_n_stream) ||
-        !dsv4_validate_comp_plan("hca", batch, lctx.dsv4.hca_plan, ratio_b, overlap_b, hca_state_size, hca_kv_size, cache_n_stream)) {
+    if (!dsv4_validate_comp_plan("csa", batch, lctx.dsv4.csa_plan, csa_ratio, csa_overlap, csa_state_size, csa_kv_size, cache_n_stream) ||
+        !dsv4_validate_comp_plan("hca", batch, lctx.dsv4.hca_plan, hca_ratio, hca_overlap, hca_state_size, hca_kv_size, cache_n_stream)) {
         return false;
     }
     if (!hp.dsv4_shared_streams &&
-        (!dsv4_validate_comp_plan("lid", batch, lctx.dsv4.lid_plan, ratio_a, overlap_a, lid_state_size, lid_kv_size, cache_n_stream) ||
+        (!dsv4_validate_comp_plan("lid", batch, lctx.dsv4.lid_plan, csa_ratio, csa_overlap, lid_state_size, lid_kv_size, cache_n_stream) ||
          !dsv4_validate_csa_lid_visibility(lctx, csa_kv_size, lid_kv_size))) {
         return false;
     }
