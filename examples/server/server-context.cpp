@@ -3666,7 +3666,7 @@ void server_context::create_checkpoint_at_interval(server_slot & slot) {
 void server_context::apply_checkpoint(server_slot & slot) {
     llama_pos pos_next = slot.cache_tokens.pos_next(slot.n_past);
     const bool has_new_tokens = (slot.n_past < slot.prompt_tokens.size());
-    const auto pos_min_thold = std::max(0, pos_next - (has_new_tokens ? 0 : 1) - llama_kv_cache_swa(ctx));
+    const auto pos_min_thold = std::max(0, pos_next - (has_new_tokens ? 0 : 1) - llama_kv_cache_n_swa(ctx));
     const bool is_openpangu = llama_model_is_openpangu(model);
     if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
         int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);

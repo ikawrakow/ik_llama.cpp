@@ -10367,8 +10367,13 @@ llama_pos llama_kv_cache_swa_rewind_floor(const struct llama_context * ctx) {
     return ctx->kv_self.pos_base_swa + (llama_pos) ctx->kv_self.window_swa;
 }
 
-llama_pos llama_kv_cache_swa(const struct llama_context * ctx) {
+llama_pos llama_kv_cache_n_swa(const struct llama_context * ctx) {
     if (!ctx || !ctx->kv_self.any_compacted()) {
+        return 0;
+    }
+    // dsv4 kv-cache has SWA but it cannot be used as a rollback because of
+    // other compression ratios, so we return 0 here  
+    if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
         return 0;
     }
     return (llama_pos)ctx->kv_self.window_swa;
