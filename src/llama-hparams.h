@@ -468,6 +468,10 @@ struct llama_hparams {
         return v ? v : swa_layers[il] ? n_rot_swa : n_rot;
     }
 
+    bool rope_factors_on_layer(uint32_t il) const {
+        return rope_scaling_apply_mask & (swa_layers[il] ? 0x2 : 0x1);
+    }
+
     static const char * rope_scaling_type_name(llama_rope_scaling_type);
 
 };

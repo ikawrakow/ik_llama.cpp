@@ -186,11 +186,18 @@ ggml_cgraph * llm_build_context::build_k_shift() {
         }
         const int64_t n_head_kv = hparams.n_head_kv(il);
         const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
-        struct ggml_tensor * rope_factors = build_rope_factors(il);
+        const int64_t n_embd_head_k_l = hparams.n_embd_head_k(il);
+        const int     n_rot_l = hparams.rope_n_rot(il);
+        float freq_base_l  = hparams.swa_layers[il] ? hparams.rope_freq_base_train_swa  : freq_base;
+        float freq_scale_l = hparams.swa_layers[il] ? hparams.rope_freq_scale_train_swa : freq_scale;
+        if (hparams.has_rope_freq_base_per_layer) {
+            freq_base_l = hparams.rope_freq_base_per_layer[il];
+        }
+        struct ggml_tensor * rope_factors = hparams.rope_factors_on_layer(il) ? build_rope_factors(il) : nullptr;
         struct ggml_tensor * k =
             ggml_view_3d(ctx0, kv_self.k_l[il],
-                    n_embd_head_k, n_head_kv, n_ctx,
-                    ggml_row_size(kv_self.k_l[il]->type, n_embd_head_k),
+                    n_embd_head_k_l, n_head_kv, n_ctx,
+                    ggml_row_size(kv_self.k_l[il]->type, n_embd_head_k_l),
                     ggml_row_size(kv_self.k_l[il]->type, n_embd_k_gqa),
                     0);
 
@@ -207,14 +214,14 @@ ggml_cgraph * llm_build_context::build_k_shift() {
                 }
             }
             tmp = ggml_rope_ext_inplace(ctx0, tmp,
-                    lctx.inp_K_shift, rope_factors, n_rot, rope_type_shift, n_ctx_orig, freq_base, freq_scale,
+                    lctx.inp_K_shift, rope_factors, n_rot_l, rope_type_shift, n_ctx_orig, freq_base_l, freq_scale_l,
                     ext_factor, yarn_attn_factor_shift, beta_fast, beta_slow);
             cb(tmp, "K_shifted_f32", il);
             tmp = ggml_cpy(ctx0, tmp, k);
         } else {
             // we rotate only the first n_rot dimensions
             tmp = ggml_rope_ext_inplace(ctx0, k,
-                    lctx.inp_K_shift, rope_factors, n_rot, rope_type_shift, n_ctx_orig, freq_base, freq_scale,
+                    lctx.inp_K_shift, rope_factors, n_rot_l, rope_type_shift, n_ctx_orig, freq_base_l, freq_scale_l,
                     ext_factor, yarn_attn_factor_shift, beta_fast, beta_slow);
         }
         cb(tmp, "K_shifted", il);
@@ -2084,7 +2091,7 @@ static ggml_tensor * llm_build_kqv(
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         cb(cur, "fa", il);
         ggml_flash_attn_ext_add_sinks(cur, sinks);
-        if (n_swa > 0) {
+        if (n_swa > 0 && !kv.cells_disordered) {
             ((int32_t *)cur->op_params)[4] = n_swa;
         }
 
@@ -3312,7 +3319,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 } else {
                     ggml_flash_attn_ext_add_sinks(cur, sinks);
                 }
-                if (n_swa > 0) {
+                if (n_swa > 0 && !lctx.kv_self.cells_disordered) {
                     ((int32_t *)cur->op_params)[4] = n_swa;
                 }
                 // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
