@@ -714,6 +714,8 @@ extern "C" {
 
     LLAMA_API llama_pos llama_kv_cache_swa_rewind_floor(const struct llama_context * ctx);
 
+    LLAMA_API llama_pos llama_kv_cache_n_swa(const struct llama_context * ctx);
+
     // Returns true if the model is a Gemma 4 MTP assistant (external frozen-KV speculative drafter)
     LLAMA_API bool llama_model_is_gemma4_mtp_assistant(const struct llama_model * model);
 

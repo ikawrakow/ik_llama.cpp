@@ -344,6 +344,8 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_QWEN35MOE:
     case LLM_ARCH_QWEN35:
     case LLM_ARCH_QWEN4EXP:
+    case LLM_ARCH_DEEPSEEK4:
+    case LLM_ARCH_OPENPANGU:
     case LLM_ARCH_BAILINGMOE3:
     case LLM_ARCH_GLM5NEXT:
     case LLM_ARCH_LFM2:
