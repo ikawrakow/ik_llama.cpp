@@ -1822,6 +1822,30 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
     const uint32_t dst_row = cache.sink_rows;
 
     auto copy_bytes = [&](ggml_tensor * tensor, size_t src_offset, size_t dst_offset, size_t nbytes) {
+        // The nbytes % sizeof(float) condition is just lazyness. It should be true for any cache type.
+        if (!tensor->view_src && dst_offset < src_offset && nbytes % sizeof(float) == 0) {
+            auto max_bytes = sizeof(float)*((src_offset - dst_offset)/sizeof(float));
+            int nstep = max_bytes > 0 ? (nbytes + max_bytes - 1)/max_bytes : 0;
+            if (nstep > 0 && nstep <= 4) {
+                auto src = *tensor;
+                src.type = GGML_TYPE_F32;
+                src.ne[1] = src.ne[2] = src.ne[3] = 1;
+                src.nb[0] = sizeof(float);
+                for (int istep = 0; istep < nstep; ++istep) {
+                    size_t nleft = std::min(max_bytes, nbytes);
+                    src.ne[0] = nleft / sizeof(float);
+                    src.nb[1] = src.nb[2] = src.nb[3] = src.ne[0]*sizeof(float);
+                    src.data = (char *)tensor->data + src_offset;
+                    auto dst = src;
+                    dst.data = (char *)tensor->data + dst_offset;
+                    ggml_backend_tensor_copy(&src, &dst);
+                    src_offset += nleft;
+                    dst_offset += nleft;
+                    nbytes -= nleft;
+                }
+                return;
+            }
+        }
         if (scratch.size() < nbytes) {
             scratch.resize(nbytes);
         }
