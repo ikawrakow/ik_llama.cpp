@@ -16,7 +16,10 @@ struct server_task_multi {
 
 struct server_queue {
     int id = 0;
-    bool running;
+    bool running = false;
+    bool sleeping = false;
+    bool req_stop_sleeping = false;
+    int64_t time_last_task = 0;
 
     // queues
     std::deque<server_task> queue_tasks;
@@ -31,6 +34,7 @@ struct server_queue {
     std::function<void(server_task &&)> callback_new_task;
     std::function<void(server_task_multi &)> callback_finish_multitask;
     std::function<void(void)>                callback_update_slots;
+    std::function<void(bool)>                callback_sleeping_state;
 
 
     // Add a new task to the end of the queue
@@ -59,8 +63,24 @@ struct server_queue {
         callback_update_slots = std::move(callback);
     }
 
+    // Register callback for sleeping state change
+    // note: when entering sleeping state, the callback is called AFTER sleeping is set to true
+    //       when leaving sleeping state, the callback is called BEFORE sleeping is set to false
+    void on_sleeping_state(std::function<void(bool)> callback) {
+        callback_sleeping_state = std::move(callback);
+    }
+
     // Call when the state of one slot is changed
     void notify_slot_changed();
+
+    // if sleeping, request exiting sleep state and wait until it is done
+    // returns immediately if not sleeping
+    void wait_until_no_sleep();
+
+    bool is_sleeping() {
+        std::unique_lock<std::mutex> lock(mutex_tasks);
+        return sleeping;
+    }
 
     // end the start_loop routine
     void terminate() {
@@ -75,8 +95,15 @@ struct server_queue {
      * - Process the task (i.e. maybe copy data into slot)
      * - Check if multitask is finished
      * - Update all slots
+     *
+     * Sleeping procedure (disabled if idle_sleep_ms < 0):
+     * - If there is no task after idle_sleep_ms, enter sleeping state
+     * - Call callback_sleeping_state(true)
+     * - Wait until req_stop_sleeping is set to true
+     * - Call callback_sleeping_state(false)
+     * - Exit sleeping state
      */
-    void start_loop();
+    void start_loop(int64_t idle_sleep_ms = -1);
 
     //
     // functions to manage multitasks
