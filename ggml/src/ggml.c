@@ -3525,6 +3525,40 @@ inline static float32x4_t ggml_v_softcap(float32x4_t x, float32x4_t s_before, fl
     //return vmulq_f32(th, s_after);
 }
 
+inline static void ggml_vec_sigmoid_mul_f32(int n, const float * x, const float * y, float * z) {
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t one  = vdupq_n_f32(1.0f);
+    int i = 0;
+    _Pragma("GCC unroll 4")
+    for ( ; i + 3 < n; i += 4) {
+        float32x4_t vx = vld1q_f32(x + i);
+        float32x4_t vy = vld1q_f32(y + i);
+        float32x4_t exp_vx = ggml_v_expf(vsubq_f32(zero, vx));
+        float32x4_t denom  = vaddq_f32(one, exp_vx);
+        float32x4_t result = vdivq_f32(vy, denom);
+        vst1q_f32(z + i, result);
+    }
+    for (; i < n; ++i) {
+        z[i] = y[i]/(1.0f + expf(-x[i]));
+    }
+}
+
+inline static void ggml_vec_simd_sigmoid_f32(int n, const float * x, float * y) {
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t one  = vdupq_n_f32(1.0f);
+    int i = 0;
+    _Pragma("GCC unroll 4")
+    for ( ; i + 3 < n; i += 4) {
+        float32x4_t vx = vld1q_f32(x + i);
+        float32x4_t exp_vx = ggml_v_expf(vsubq_f32(zero, vx));
+        float32x4_t denom  = vaddq_f32(one, exp_vx);
+        float32x4_t result = vdivq_f32(one, denom);
+        vst1q_f32(y + i, result);
+    }
+    if (i < n) {
+        ggml_vec_sigmoid_f32(n - i, y + i, x + i);
+    }
+}
 
 // Slower than lookup on my M2-Max
 inline static float32x4_t ggml_v_gelu(float32x4_t x, float32x4_t c1, float32x4_t c2) {
@@ -3608,6 +3642,41 @@ inline static __m512 ggml_v_gelu(__m512 x, __m512 c1, __m512 c2) {
     return _mm512_mul_ps(x, _mm512_mask_blend_ps(mask, ratio, one));
 }
 
+inline static void ggml_vec_sigmoid_mul_f32(int n, const float * x, const float * y, float * z) {
+    const __m512 zero = _mm512_setzero_ps();
+    const __m512 one = _mm512_set1_ps(1.0f);
+    int i = 0;
+    _Pragma("GCC unroll 4")
+    for ( ; i + 15 < n; i += 16) {
+        __m512 vx = _mm512_loadu_ps(x + i);
+        __m512 vy = _mm512_loadu_ps(y + i);
+        __m512 exp_vx = ggml_v_expf(_mm512_sub_ps(zero, vx));
+        __m512 denom  = _mm512_add_ps(one, exp_vx);
+        __m512 result = _mm512_div_ps(vy, denom);
+        _mm512_storeu_ps(z + i, result);
+    }
+    for (; i < n; ++i) {
+        z[i] = y[i]/(1.0f + expf(-x[i]));
+    }
+}
+
+inline static void ggml_vec_simd_sigmoid_f32(int n, const float * x, float * y) {
+    const __m512 zero = _mm512_setzero_ps();
+    const __m512 one = _mm512_set1_ps(1.0f);
+    int i = 0;
+    _Pragma("GCC unroll 4")
+    for ( ; i + 15 < n; i += 16) {
+        __m512 vx = _mm512_loadu_ps(x + i);
+        __m512 exp_vx = ggml_v_expf(_mm512_sub_ps(zero, vx));
+        __m512 denom  = _mm512_add_ps(one, exp_vx);
+        __m512 result = _mm512_div_ps(one, denom);
+        _mm512_storeu_ps(y + i, result);
+    }
+    if (i < n) {
+        ggml_vec_sigmoid_f32(n - i, y + i, x + i);
+    }
+}
+
 #elif defined(__AVX2__) && defined(__FMA__)
 
 // adapted from arm limited optimized routine
@@ -3687,6 +3756,41 @@ inline static __m256 ggml_v_gelu(__m256 x, __m256 c1, __m256 c2) {
     __m256 exp_arg = ggml_v_expf(arg);
     __m256 gelu = _mm256_mul_ps(x, _mm256_div_ps(exp_arg, _mm256_add_ps(exp_arg, one)));
     return _mm256_or_ps(_mm256_and_ps(mask, x), _mm256_andnot_ps(mask, gelu));
+}
+
+inline static void ggml_vec_sigmoid_mul_f32(int n, const float * x, const float * y, float * z) {
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256 one = _mm256_set1_ps(1.0f);
+    int i = 0;
+    _Pragma("GCC unroll 4")
+    for ( ; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 vy = _mm256_loadu_ps(y + i);
+        __m256 exp_vx = ggml_v_expf(_mm256_sub_ps(zero, vx));
+        __m256 denom  = _mm256_add_ps(one, exp_vx);
+        __m256 result = _mm256_div_ps(vy, denom);
+        _mm256_storeu_ps(z + i, result);
+    }
+    for (; i < n; ++i) {
+        z[i] = y[i]/(1.0f + expf(-x[i]));
+    }
+}
+
+inline static void ggml_vec_simd_sigmoid_f32(int n, const float * x, float * y) {
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256 one = _mm256_set1_ps(1.0f);
+    int i = 0;
+    _Pragma("GCC unroll 4")
+    for ( ; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 exp_vx = ggml_v_expf(_mm256_sub_ps(zero, vx));
+        __m256 denom  = _mm256_add_ps(one, exp_vx);
+        __m256 result = _mm256_div_ps(one, denom);
+        _mm256_storeu_ps(y + i, result);
+    }
+    if (i < n) {
+        ggml_vec_sigmoid_f32(n - i, y + i, x + i);
+    }
 }
 
 #elif defined(__SSE2__) // __AVX2__ / __ARM_NEON
@@ -16165,10 +16269,23 @@ static void ggml_compute_forward_sigmoid_f32(
     int first = ith*npt;
     int last  = MIN(first + npt, n);
 
+    if (n == 1 || (n < nth && ggml_is_contiguous(src0) && ggml_is_contiguous(dst))) {
+        const int64_t k_block_size = 256;
+        const int64_t nelem = ggml_nelements(dst);
+        const int64_t nblock = (nelem + k_block_size - 1)/k_block_size;
+        for (int64_t ib = ith; ib < nblock; ib += nth) {
+            const int64_t offset = ib*k_block_size;
+                  float * y = (      float *) dst->data + offset;
+            const float * x = (const float *)src0->data + offset;
+            int ne = offset + k_block_size <= nelem ? k_block_size : nelem - offset;
+            ggml_vec_simd_sigmoid_f32(ne, x, y);
+        }
+        return;
+    }
+
     for (int i = first; i < last; i++) {
-        ggml_vec_sigmoid_f32(nc,
-                (float *) ((char *) dst->data  + i*( dst->nb[1])),
-                (float *) ((char *) src0->data + i*(src0->nb[1])));
+        //ggml_vec_sigmoid_f32(nc, (float *) ((char *) dst->data  + i*( dst->nb[1])), (float *) ((char *) src0->data + i*(src0->nb[1])));
+        ggml_vec_simd_sigmoid_f32(nc, (const float *)((char *)src0->data  + i*src0->nb[1]), (float *)((char *)dst->data + i*dst->nb[1]));
     }
 }
 
@@ -17045,6 +17162,39 @@ static void ggml_compute_forward_fused_mul_unary_f32(
     GGML_ASSERT(ggml_are_same_shape(src0, src1));
     GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU || op == GGML_UNARY_OP_SIGMOID);
 
+    if (nr == 1 || (nr < nth && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst))) {
+        const int64_t k_block_size = 256;
+        int64_t nelem = ggml_nelements(dst);
+        int64_t nblock = (nelem + k_block_size - 1)/k_block_size;
+        for (int64_t ib = ith; ib < nblock; ib += nth) {
+            int64_t offset = ib*k_block_size;
+                  float * z = (      float *) dst->data + offset;
+            const float * x = (const float *)src0->data + offset;
+            const float * y = (const float *)src1->data + offset;
+            int n = offset + k_block_size <= nelem ? k_block_size : nelem - offset;
+            switch (op) {
+                case GGML_UNARY_OP_GELU: ggml_vec_gelu_f32(n, z, x); ggml_vec_mul_f32(n, z, z, y); break;
+                case GGML_UNARY_OP_RELU: ggml_vec_relu_f32(n, z, x); ggml_vec_mul_f32(n, z, z, y); break;
+                case GGML_UNARY_OP_SIGMOID: ggml_vec_sigmoid_mul_f32(n, x, y, z); break;
+                case GGML_UNARY_OP_SILU: {
+                    if (limit < 1e-6f) {
+                        ggml_vec_mul_silu_f32(n, z, x, y);
+                    } else {
+                        // TODO: simdify this
+                        for (int i = 0; i < n; ++i) {
+                            float gate = ggml_silu_f32(x[i]);
+                            gate = MIN(gate, limit);
+                            float up = MAX(-limit, MIN(limit, y[i]));
+                            z[i] = up * gate;
+                        }
+                    }
+                } break;
+                default: GGML_ABORT("fatal error");
+            }
+        }
+        return;
+    }
+
     for (int i1 = ir0; i1 < ir1; i1++) {
         float * z = (float *) ((char *) dst->data  + i1*( dst->nb[1]));
         const float * x = (const float *) ((char *) src0->data + i1*(src0->nb[1]));
@@ -17052,7 +17202,7 @@ static void ggml_compute_forward_fused_mul_unary_f32(
         switch (op) {
             case GGML_UNARY_OP_GELU: ggml_vec_gelu_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
             case GGML_UNARY_OP_RELU: ggml_vec_relu_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
-            case GGML_UNARY_OP_SIGMOID: ggml_vec_sigmoid_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
+            case GGML_UNARY_OP_SIGMOID: ggml_vec_sigmoid_mul_f32(nc, x, y, z); break;
             case GGML_UNARY_OP_SILU: {
                 if (limit < 1e-6f) {
                     ggml_vec_mul_silu_f32(nc, z, x, y);
