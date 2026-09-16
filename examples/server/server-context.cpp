@@ -35,90 +35,11 @@ static bool server_speculative_multimodal_supported(const common_params_speculat
 
 // ---- context-checkpoint disk spill (NVMe offload for checkpoint RAM) ----
 // A spilled entry keeps positions + spill_path with empty data; restore
-// reloads from disk, failures fall back to full reprocessing (status quo).
+// reloads from disk (slot-checkpoint file format), failures fall back to
+// full reprocessing (status quo). Spill victims are picked by the same
+// variance-eviction rule create_checkpoint uses for cap eviction.
 #include <cstdio>
-#include <sys/stat.h>
 #include <dirent.h>
-#ifdef _WIN32
-#include <direct.h>
-static void ckpt_mkdir(const std::string & dir) {
-    _mkdir(dir.c_str());
-}
-#else
-static void ckpt_mkdir(const std::string & dir) {
-    mkdir(dir.c_str(), 0755);
-}
-#endif
-
-static std::string ckpt_spill_path(int slot_id, const server_prompt_checkpoint & ckpt, const std::string & dir) {
-    char buf[512];
-    snprintf(buf, sizeof(buf), "%s/ckpt-s%d-p%d-n%lld.bin", dir.c_str(), slot_id, (int) ckpt.pos_max, (long long) ckpt.n_tokens);
-    return std::string(buf);
-}
-
-static bool spill_checkpoint(int slot_id, server_prompt_checkpoint & ckpt, const std::string & dir) {
-    if (ckpt.data.empty() || dir.empty()) {
-        return !ckpt.data.empty();
-    }
-    const std::string path = ckpt_spill_path(slot_id, ckpt, dir);
-    FILE * f = fopen(path.c_str(), "wb");
-    if (!f) {
-        return false;
-    }
-    const uint32_t magic = 0x434b5054; // 'CKPT'
-    const int64_t vals[4] = { (int64_t) ckpt.pos_min, (int64_t) ckpt.pos_max, ckpt.n_tokens, (int64_t) ckpt.data.size() };
-    bool ok = fwrite(&magic, sizeof(magic), 1, f) == 1
-           && fwrite(vals, sizeof(vals), 1, f) == 1
-           && fwrite(ckpt.data.data(), 1, ckpt.data.size(), f) == ckpt.data.size();
-    fclose(f);
-    if (!ok) {
-        remove(path.c_str());
-        return false;
-    }
-    ckpt.spill_path = path;
-    ckpt.data.clear();
-    ckpt.data.shrink_to_fit();
-    return true;
-}
-
-static bool load_spilled_checkpoint(server_prompt_checkpoint & ckpt) {
-    if (!ckpt.data.empty()) {
-        return true;
-    }
-    if (ckpt.spill_path.empty()) {
-        return false;
-    }
-    FILE * f = fopen(ckpt.spill_path.c_str(), "rb");
-    if (!f) {
-        return false;
-    }
-    uint32_t magic = 0;
-    int64_t vals[4] = { 0, -1, 0, 0 };
-    bool ok = fread(&magic, sizeof(magic), 1, f) == 1 && fread(vals, sizeof(vals), 1, f) == 1;
-    ok = ok && magic == 0x434b5054 && vals[0] == ckpt.pos_min && vals[1] == ckpt.pos_max
-        && vals[2] == ckpt.n_tokens && vals[3] > 0;
-    std::vector<uint8_t> buf;
-    if (ok) {
-        buf.resize((size_t) vals[3]);
-        ok = fread(buf.data(), 1, buf.size(), f) == buf.size();
-    }
-    fclose(f);
-    if (!ok) {
-        return false;
-    }
-    ckpt.data = std::move(buf);
-    return true;
-}
-
-static size_t count_resident_ckpts(const std::list<server_prompt_checkpoint> & ckpts) {
-    size_t n = 0;
-    for (const auto & c : ckpts) {
-        if (!c.data.empty()) {
-            n++;
-        }
-    }
-    return n;
-}
 
 static std::list<server_prompt_checkpoint>::iterator drop_checkpoint_entry(
         std::list<server_prompt_checkpoint> & ckpts,
@@ -136,25 +57,6 @@ static void clear_checkpoints_and_spill(std::list<server_prompt_checkpoint> & ck
         }
     }
     ckpts.clear();
-}
-
-// enforce: total entries <= cap_total; resident entries <= ram_live (spill oldest first).
-// with spill disabled this reduces to today's total-cap eviction.
-static void enforce_checkpoint_memory(server_slot & slot, int cap_total, int ram_live, const std::string & dir) {
-    auto & ckpts = slot.server_cached_prompt.checkpoints;
-    if (!dir.empty() && ram_live >= 0) {
-        for (auto & c : ckpts) {
-            if ((int) count_resident_ckpts(ckpts) <= ram_live) {
-                break;
-            }
-            if (!c.data.empty()) {
-                spill_checkpoint(slot.id, c, dir);
-            }
-        }
-    }
-    while ((int) ckpts.size() > cap_total && cap_total >= 0) {
-        drop_checkpoint_entry(ckpts, ckpts.begin());
-    }
 }
 
 static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min, llama_pos pos_max) {
@@ -553,7 +455,7 @@ void server_context::init() {
     if (!params_base.ctx_checkpoint_spill_dir.empty()) {
         // checkpoint spill: fresh session owns the dir; drop stale files
         // from crashed runs so orphans can never accumulate
-        ckpt_mkdir(params_base.ctx_checkpoint_spill_dir);
+        fs_create_directory_with_parents(params_base.ctx_checkpoint_spill_dir);
         DIR * dp = opendir(params_base.ctx_checkpoint_spill_dir.c_str());
         if (dp) {
             struct dirent * de;
@@ -2920,6 +2822,57 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
     return pos;
 }
 
+// spill one checkpoint's blob to disk as a single-checkpoint slot-file;
+// the entry keeps positions and an empty data vector afterwards.
+static std::string ckpt_spill_path(int slot_id, const server_prompt_checkpoint & ckpt, const std::string & dir) {
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s/ckpt-s%d-p%d-n%lld.bin", dir.c_str(), slot_id, (int) ckpt.pos_max, (long long) ckpt.n_tokens);
+    return std::string(buf);
+}
+
+static bool spill_checkpoint(int slot_id, server_prompt_checkpoint & ckpt, const std::string & dir) {
+    if (ckpt.data.empty() || dir.empty()) {
+        return !ckpt.data.empty();
+    }
+    const std::string path = ckpt_spill_path(slot_id, ckpt, dir);
+    std::list<server_prompt_checkpoint> out;
+    out.push_back(std::move(ckpt)); // data moves into the record, positions stay
+    save_checkpoints_to_file(path, out);
+    // read back with the shared loader (validates magic/version/records);
+    // a corrupt blob falls back to full reprocessing right away, not on restore
+    std::list<server_prompt_checkpoint> loaded;
+    load_checkpoints_from_file(path, loaded);
+    bool ok = loaded.size() == 1 && !loaded.front().data.empty()
+        && loaded.front().pos_min == ckpt.pos_min && loaded.front().pos_max == ckpt.pos_max;
+    if (!ok) {
+        remove(path.c_str());
+        return false;
+    }
+    ckpt.spill_path = path;
+    return true;
+}
+
+static bool load_spilled_checkpoint(server_prompt_checkpoint & ckpt) {
+    if (!ckpt.data.empty()) {
+        return true;
+    }
+    if (ckpt.spill_path.empty()) {
+        return false;
+    }
+    std::list<server_prompt_checkpoint> loaded;
+    load_checkpoints_from_file(ckpt.spill_path, loaded);
+    if (loaded.size() != 1) {
+        return false;
+    }
+    const auto & e = loaded.front();
+    if (e.pos_min != ckpt.pos_min || e.pos_max != ckpt.pos_max || e.data.empty()) {
+        remove(ckpt.spill_path.c_str()); // stale or corrupt blob
+        return false;
+    }
+    ckpt.data = std::move(e.data); // n_tokens/positions stay from the in-memory entry
+    return true;
+}
+
 static size_t save_server_tokens_to_file(const std::string & filename, const server_tokens & tokens) {
     std::ofstream file(filename, std::ios::binary);
     json token_json = tokens.to_json();
@@ -3958,6 +3911,41 @@ static std::list<server_prompt_checkpoint>::iterator evict_checkpoint_by_varianc
     }
     std::advance(it, best_idx);
     return it;
+}
+
+static size_t count_resident_ckpts(const std::list<server_prompt_checkpoint> & ckpts) {
+    size_t n = 0;
+    for (const auto & c : ckpts) {
+        if (!c.data.empty()) {
+            n++;
+        }
+    }
+    return n;
+}
+
+// enforce: total entries <= cap_total; resident entries <= ram_live.
+// victim choice uses the same variance-eviction rule as cap eviction;
+// with spill disabled this reduces to today's total-cap eviction.
+static void enforce_checkpoint_memory(server_slot & slot, int cap_total, int ram_live, const std::string & dir) {
+    auto & ckpts = slot.server_cached_prompt.checkpoints;
+    if (!dir.empty() && ram_live >= 0) {
+        while ((int) count_resident_ckpts(ckpts) > ram_live && !ckpts.empty()) {
+            auto it = evict_checkpoint_by_variance(slot, ckpts);
+            if (it->data.empty()) {
+                // already spilled; nothing to offload, drop it to make progress
+                it = drop_checkpoint_entry(ckpts, it);
+                continue;
+            }
+            spill_checkpoint(slot.id, *it, dir);
+            if (!it->data.empty()) {
+                break; // spill write failed; do not loop on the same entry
+            }
+        }
+    }
+    while ((int) ckpts.size() > cap_total && cap_total >= 0 && !ckpts.empty()) {
+        auto it = evict_checkpoint_by_variance(slot, ckpts);
+        it = drop_checkpoint_entry(ckpts, it);
+    }
 }
 
 bool server_context::create_checkpoint(server_slot & slot) {
