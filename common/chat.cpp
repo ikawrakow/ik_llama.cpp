@@ -2384,6 +2384,8 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
     data.thinking_end_tag   = THINK_END;
     data.preserved_tokens   = {
         THINK_START, THINK_END,
+        "<ifm|think_fast>", "</ifm|think_fast>",
+        "<ifm|think_faster>", "</ifm|think_faster>",
         TOOL_CALLS_BEGIN, TOOL_CALLS_END,
         TOOL_CALL_BEGIN, TOOL_CALL_END,
         "<ifm|arg_key>", "</ifm|arg_key>",
@@ -2398,9 +2400,16 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto end = p.end();
 
-        auto reasoning = extract_reasoning ? p.optional(THINK_START + p.reasoning(
-            p.until_one_of({ THINK_END, TOOL_CALLS_BEGIN })) +
-            p.optional(p.literal(THINK_END))) : p.eps();
+        auto THINK_FAST_START   = "<ifm|think_fast>";
+        auto THINK_FAST_END     = "</ifm|think_fast>";
+        auto THINK_FASTER_START = "<ifm|think_faster>";
+        auto THINK_FASTER_END   = "</ifm|think_faster>";
+
+        auto reasoning = extract_reasoning ? p.optional(
+            (THINK_START + p.reasoning(p.until_one_of({ THINK_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_END))) |
+            (THINK_FAST_START + p.reasoning(p.until_one_of({ THINK_FAST_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_FAST_END))) |
+            (THINK_FASTER_START + p.reasoning(p.until_one_of({ THINK_FASTER_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_FASTER_END)))
+        ) : p.eps();
 
         auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
 
@@ -2428,7 +2437,7 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
         });
 
         auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
-        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
+        auto max_calls  = inputs.parallel_tool_calls ? 5 : 1;
         // Outer wrapper: <ifm|tool_calls> ... </ifm|tool_calls> (end tag optional — model often omits it)
         auto additional_calls = max_calls > 0 ? p.repeat(p.space() + tool_choice, 0, max_calls - 1) :
                                p.repeat(p.space() + tool_choice, 0, -1);
