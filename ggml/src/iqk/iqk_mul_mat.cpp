@@ -271,7 +271,7 @@ struct MulMat {
             case GGML_TYPE_Q4_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
 #ifdef HAVE_FANCY_SIMD
             case GGML_TYPE_Q4_0_R8 : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
-            case GGML_TYPE_MXFP4_R8: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            //case GGML_TYPE_MXFP4_R8: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
 #endif
             case GGML_TYPE_IQ4_NL_R4: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_Q5_0_R4: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
