@@ -169,9 +169,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
     int n_device = model.splits.size();
     GGML_ASSERT(n_device > 1);
     GGML_ASSERT(cparams.flash_attn);
-    // llama_kv_cache_init() refuses --swa-compress with a split/replicated cache, so this
-    // builder never sees a compacted cache and does not handle the compacted layout.
-    GGML_ASSERT(!kv_self.any_compacted());
+
     ggml_cgraph * gf = llm.new_graph_custom();
 
     bool is_moe = hparams.n_expert > 0;
@@ -331,11 +329,17 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             ggml_build_forward_expand(gf, Kcur);
             ggml_build_forward_expand(gf, Vcur);
 
+            const bool compacted = llm.kv_self.is_compacted(il);
+            const bool use_swa_window = compacted && lctx.swa_window_view.active;
+            const int32_t store_head = compacted ? llm.swa_head : llm.kv_head;
+            const int32_t n_kv_view = use_swa_window ? (int32_t) lctx.swa_window_view.w_view : llm.n_kv;
+            const int32_t kv_view_offset = use_swa_window ? (int32_t) lctx.swa_window_view.win_off : 0;
+
             auto idx = 2*n_device*il + 2*id;
             GGML_ASSERT(idx+1 < (int)lctx.cache_copies.size());
             auto k_row_size = ggml_row_size(kl->splits[id]->type, n_embd_head_k);
             ggml_tensor * k_cache_view = ggml_view_2d(ctx0, kl->splits[id], n_embd_head_k, n_tokens*n_head_kv,
-                    k_row_size, k_row_size*n_head_kv*llm.kv_head);
+                    k_row_size, k_row_size*n_head_kv*store_head);
 
             lctx.cache_copies[idx+0].cpy  = ggml_cpy(ctx0, Kcur, k_cache_view);
             cb(lctx.cache_copies[idx+0].cpy, "k_cache", il_cb);
@@ -346,7 +350,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
                 wv = wk;
             }
             auto v_cache_view = ggml_view_1d(ctx0, vl->splits[id], n_tokens*wv->splits[id]->ne[1],
-                    llm.kv_head*ggml_row_size(vl->splits[id]->type, wv->splits[id]->ne[1]));
+                    store_head*ggml_row_size(vl->splits[id]->type, wv->splits[id]->ne[1]));
             lctx.cache_copies[idx+1].step = ggml_row_size(vl->splits[id]->type, wv->splits[id]->ne[1]);
             lctx.cache_copies[idx+1].cpy  = ggml_cpy(ctx0, Vcur, v_cache_view);
             cb(lctx.cache_copies[idx+1].cpy, "v_cache", il_cb);
@@ -357,13 +361,14 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
 
             auto q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
             cb(q, "q", il_cb);
-            auto k = ggml_view_3d(ctx0, split_kl, n_embd_head_k, llm.n_kv, n_head_kv,
-                    ggml_row_size(split_kl->type, n_embd_head_k)*n_head_kv,
-                    ggml_row_size(split_kl->type, n_embd_head_k), 0);
+            auto knb1 = k_row_size*n_head_kv;
+            auto k = ggml_view_3d(ctx0, split_kl, n_embd_head_k, n_kv_view, n_head_kv,
+                    knb1, k_row_size, kv_view_offset*knb1);
             cb(k, "k", il_cb);
-            auto v = ggml_view_3d(ctx0, split_vl, n_embd_head_v, llm.n_kv, n_head_kv,
-                    ggml_row_size(split_vl->type, wv->splits[id]->ne[1]),
-                    ggml_row_size(split_vl->type, n_embd_head_v), 0);
+            auto v_row_size = ggml_row_size(split_vl->type, n_embd_head_v);
+            auto vnb1 = ggml_row_size(split_vl->type, wv->splits[id]->ne[1]);
+            auto v = ggml_view_3d(ctx0, split_vl, n_embd_head_v, n_kv_view, n_head_kv,
+                    vnb1, v_row_size, kv_view_offset*vnb1);
             cb(v, "v", il_cb);
 
             cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask_l, hparams.f_attention_scale, hparams.f_max_alibi_bias,
