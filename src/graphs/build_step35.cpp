@@ -59,7 +59,11 @@ ggml_cgraph * llm_build_context::build_step35() {
         bool is_swa = hparams.swa_layers[il];
         auto & layer = const_cast<llama_layer&>(model.layers[il]);
 
-        ggml_tensor * rope_factors = hparams.rope_factors_on_layer(il) ? build_rope_factors(il) : nullptr;
+        ggml_tensor * rope_factors = nullptr;
+        const uint32_t apply_mask = hparams.rope_scaling_apply_mask;
+        if ((is_swa && (apply_mask & 0x2)) || (!is_swa && (apply_mask & 0x1))) {
+            rope_factors = build_rope_factors(il);
+        }
         auto rope_freqs = layer.rope_freqs;
         layer.rope_freqs = nullptr;
         cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
@@ -142,7 +146,11 @@ ggml_tensor * llm_build_context::build_step35_mtp(
             tok_embd, il, "mtp_eh_proj");
 
     const bool is_swa = hparams.swa_layers[il];
-    ggml_tensor * rope_factors = hparams.rope_factors_on_layer(il) ? build_rope_factors(il) : nullptr;
+    ggml_tensor * rope_factors = nullptr;
+    const uint32_t apply_mask = hparams.rope_scaling_apply_mask;
+    if ((is_swa && (apply_mask & 0x2)) || (!is_swa && (apply_mask & 0x1))) {
+        rope_factors = build_rope_factors(il);
+    }
     auto KQ_mask = is_swa ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
     const float kq_scale = 1.0f / sqrtf(float(hparams.n_embd_head_k(il)));
 

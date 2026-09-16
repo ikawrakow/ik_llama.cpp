@@ -193,7 +193,11 @@ ggml_cgraph * llm_build_context::build_k_shift() {
         if (hparams.has_rope_freq_base_per_layer) {
             freq_base_l = hparams.rope_freq_base_per_layer[il];
         }
-        struct ggml_tensor * rope_factors = hparams.rope_factors_on_layer(il) ? build_rope_factors(il) : nullptr;
+        struct ggml_tensor * rope_factors = nullptr;
+        const uint32_t apply_mask = hparams.rope_scaling_apply_mask;
+        if ((hparams.swa_layers[il] && (apply_mask & 0x2)) || (!hparams.swa_layers[il] && (apply_mask & 0x1))) {
+            rope_factors = build_rope_factors(il);
+        }
         struct ggml_tensor * k =
             ggml_view_3d(ctx0, kv_self.k_l[il],
                     n_embd_head_k_l, n_head_kv, n_ctx,
