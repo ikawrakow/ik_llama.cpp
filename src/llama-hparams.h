@@ -53,6 +53,10 @@ struct llama_hparams {
     uint32_t n_ff_exp           = 0;
     uint32_t n_ff_shexp         = 0;
     uint32_t n_expert_shared    = 0;
+    // K2 Horizon MoVA
+    uint32_t n_value_expert      = 0;
+    uint32_t n_value_expert_used = 0;
+
     uint32_t n_norm_groups      = 0;
     uint32_t n_expert_groups    = 0;
     uint32_t n_group_used       = 0;
@@ -250,6 +254,8 @@ struct llama_hparams {
         if (this->n_ff_exp           != other.n_ff_exp)           return true;
         if (this->n_ff_shexp         != other.n_ff_shexp)         return true;
         if (this->n_expert_shared    != other.n_expert_shared)    return true;
+        if (this->n_value_expert      != other.n_value_expert)      return true;
+        if (this->n_value_expert_used != other.n_value_expert_used) return true;
 
         if (this->rope_finetuned  != other.rope_finetuned)  return true;
         if (this->n_ctx_orig_yarn != other.n_ctx_orig_yarn) return true;
