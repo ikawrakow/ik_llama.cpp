@@ -39,6 +39,16 @@ static bool server_speculative_multimodal_supported(const common_params_speculat
 #include <cstdio>
 #include <sys/stat.h>
 #include <dirent.h>
+#ifdef _WIN32
+#include <direct.h>
+static void ckpt_mkdir(const std::string & dir) {
+    _mkdir(dir.c_str());
+}
+#else
+static void ckpt_mkdir(const std::string & dir) {
+    mkdir(dir.c_str(), 0755);
+}
+#endif
 
 static std::string ckpt_spill_path(int slot_id, const server_prompt_checkpoint & ckpt, const std::string & dir) {
     char buf[512];
@@ -543,7 +553,7 @@ void server_context::init() {
     if (!params_base.ctx_checkpoint_spill_dir.empty()) {
         // checkpoint spill: fresh session owns the dir; drop stale files
         // from crashed runs so orphans can never accumulate
-        mkdir(params_base.ctx_checkpoint_spill_dir.c_str(), 0755);
+        ckpt_mkdir(params_base.ctx_checkpoint_spill_dir);
         DIR * dp = opendir(params_base.ctx_checkpoint_spill_dir.c_str());
         if (dp) {
             struct dirent * de;
