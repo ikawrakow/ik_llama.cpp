@@ -50,6 +50,9 @@ static inline llama_swa_window_view llama_swa_calc_window_view_compact(
 
 struct llama_kv_cell {
     llama_pos pos   = -1;
+    // the token stored in this cell; n-gram architectures (DeepSeek-V4.1 engram)
+    // read a token's predecessors from here, which can sit in an earlier decode call
+    llama_token tok = -1;
     llama_pos delta = 0;
     int32_t   src   = 0; // used by recurrent state models to copy states
 
@@ -627,11 +630,17 @@ struct llama_context {
 
         std::vector<float> csa_mask_data;
         std::vector<float> hca_mask_data;
+
+        // the indexer top-k an index source picked, reused by its stream; one graph build only
+        struct ggml_tensor * top_k_a = nullptr;
+        struct ggml_tensor * top_k_b = nullptr;
     };
     dsv4_runtime dsv4;
 
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
+    std::vector<struct ggml_tensor *> inp_engram_rows; // I32 [n_cols*n_batch], one per engram layer
+    std::vector<struct ggml_tensor *> inp_engram_gate_ids; // I32 [hc]: 0..hc-1, dequantizes the gate scales via get_rows
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
     struct ggml_tensor * inp_pos;         // I32 [n_batch]
     struct ggml_tensor * inp_out_ids;     // I32 [n_outputs]

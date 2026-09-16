@@ -54,6 +54,7 @@ enum llm_arch {
     LLM_ARCH_ARCTIC,
     LLM_ARCH_DEEPSEEK2,
     LLM_ARCH_DEEPSEEK4,
+    LLM_ARCH_DEEPSEEK41,
     LLM_ARCH_CHATGLM,
     LLM_ARCH_GLM4,
     LLM_ARCH_GLM4_MOE,
@@ -216,6 +217,15 @@ enum llm_kv {
     LLM_KV_PLE_IMAGE_TOKEN_ID,
 
     LLM_KV_HASH_LAYER_COUNT,
+    LLM_KV_ENGRAM_HEAD_COUNT,
+    LLM_KV_ENGRAM_KEY_LENGTH,
+    LLM_KV_ENGRAM_MAX_NGRAM_SIZE,
+    LLM_KV_ENGRAM_LAYER_IDS,
+    LLM_KV_ENGRAM_MULTIPLIERS,
+    LLM_KV_ENGRAM_PRIMES,
+    LLM_KV_ENGRAM_OFFSETS,
+    LLM_KV_ENGRAM_TOKEN_MAP,
+    LLM_KV_ENGRAM_PAD_ID,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
     LLM_KV_ROPE_DIMENSION_COUNT_SWA,
@@ -434,6 +444,10 @@ enum llm_tensor {
     LLM_TENSOR_INDEXER_COMP_APE,
     LLM_TENSOR_INDEXER_COMP_NORM,
     LLM_TENSOR_FFN_GATE_TID2EID,
+    LLM_TENSOR_ENGRAM_EMBD,
+    LLM_TENSOR_ENGRAM_K,
+    LLM_TENSOR_ENGRAM_Q,
+    LLM_TENSOR_ENGRAM_WKV,
     LLM_TENSOR_HC_HEAD_BASE,
     LLM_TENSOR_HC_HEAD_FN,
     LLM_TENSOR_HC_HEAD_SCALE,
@@ -531,3 +545,7 @@ bool llm_arch_is_dflash_family(const llm_arch & arch);
 bool llm_arch_requires_all_graph_output_rows(const llm_arch & arch);
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il);
+
+static inline bool llm_arch_is_dsv4(llm_arch arch) {
+    return arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41;
+}

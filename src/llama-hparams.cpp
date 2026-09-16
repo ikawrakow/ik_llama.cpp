@@ -1891,6 +1891,7 @@ void llm_load_hparams(
             } break;
         case LLM_ARCH_DFLASH:
         case LLM_ARCH_DEEPSEEK4:
+        case LLM_ARCH_DEEPSEEK41:
         case LLM_ARCH_GLM_DSA:
             {
                 if (model.arch == LLM_ARCH_DFLASH) {
@@ -1936,9 +1937,9 @@ void llm_load_hparams(
                     model.type = e_model::MODEL_UNKNOWN;
                     break;
                 }
-                const bool is_dsv4 = model.arch == LLM_ARCH_DEEPSEEK4 || hparams.dflash_dsv4;
+                const bool is_dsv4 = llm_arch_is_dsv4(model.arch) || hparams.dflash_dsv4;
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
-                if (model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_layer == 43 && hparams.nextn_predict_layers > 0) {
+                if (llm_arch_is_dsv4(model.arch) && hparams.n_layer == 43 && hparams.nextn_predict_layers > 0) {
                     LLAMA_LOG_WARN("===============================================================================================\n");
                     LLAMA_LOG_WARN("Unexpected number of layers (%d) and nextn_predict_layers (%d) for DeepSeek4-Flash\n",
                             hparams.n_layer, hparams.nextn_predict_layers);
@@ -2071,6 +2072,45 @@ void llm_load_hparams(
                     }
                     ml.get_key(LLM_KV_HASH_LAYER_COUNT, hparams.dsv4_hash_layer_count, false);
 
+                    if (model.arch == LLM_ARCH_DEEPSEEK41) {
+                        ml.get_arr_n(LLM_KV_ENGRAM_LAYER_IDS, hparams.engram_n_layer);
+                        if (hparams.engram_n_layer == 0 || hparams.engram_n_layer > LLAMA_MAX_LAYERS) {
+                            throw std::runtime_error(format("DeepSeek-V4.1 engram layer count %u is out of range", hparams.engram_n_layer));
+                        }
+                        {
+                            std::vector<uint32_t> ids;
+                            ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_LAYER_IDS), ids);
+                            std::copy_n(ids.begin(), std::min<size_t>(ids.size(), LLAMA_MAX_LAYERS), hparams.engram_layer_ids.begin());
+                        }
+                        ml.get_key(LLM_KV_ENGRAM_HEAD_COUNT,     hparams.engram_n_head);
+                        ml.get_key(LLM_KV_ENGRAM_KEY_LENGTH,     hparams.engram_key_length);
+                        ml.get_key(LLM_KV_ENGRAM_MAX_NGRAM_SIZE, hparams.engram_max_ngram_size);
+                        ml.get_key(LLM_KV_ENGRAM_PAD_ID,         model.engram_pad_id);
+                        if (hparams.engram_n_head == 0 || hparams.engram_max_ngram_size < 2) {
+                            throw std::runtime_error("DeepSeek-V4.1 engram needs at least one head and a 2-gram");
+                        }
+                        for (uint32_t e = 0; e < hparams.engram_n_layer; ++e) {
+                            if (hparams.engram_layer_ids[e] >= hparams.n_layer) {
+                                throw std::runtime_error(format("engram layer %u is out of range", hparams.engram_layer_ids[e]));
+                            }
+                        }
+                        ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_MULTIPLIERS), model.engram_multipliers);
+                        ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_PRIMES),      model.engram_primes);
+                        ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_OFFSETS),     model.engram_offsets);
+                        ml.get_arr(ml.llm_kv(LLM_KV_ENGRAM_TOKEN_MAP),   model.engram_token_map);
+                        const size_t n_bucket = (size_t) (hparams.engram_max_ngram_size - 1) * hparams.engram_n_head;
+                        if (model.engram_multipliers.size() != (size_t) hparams.engram_n_layer * hparams.engram_max_ngram_size) {
+                            throw std::runtime_error("engram multiplier count does not match layers * ngram size");
+                        }
+                        if (model.engram_primes.size() != (size_t) hparams.engram_n_layer * n_bucket ||
+                            model.engram_offsets.size() != model.engram_primes.size()) {
+                            throw std::runtime_error("engram prime or offset count does not match layers * buckets");
+                        }
+                        for (uint64_t p : model.engram_primes) {
+                            if (p == 0) throw std::runtime_error("engram prime of zero would divide by zero in the hash");
+                        }
+                    }
+
                     uint32_t n_compress_ratios = 0;
                     if (ml.get_arr_n(LLM_KV_ATTENTION_COMPRESS_RATIOS, n_compress_ratios, false)) {
                         if (n_compress_ratios < hparams.n_layer) {
@@ -2097,6 +2137,61 @@ void llm_load_hparams(
                         }
                     }
 
+                    if (model.arch == LLM_ARCH_DEEPSEEK41) {
+                        // a source carries a compressor, a key owner indexer.attn_k, an index source
+                        // indexer.attn_q_b: walk the layers once and record who reads from whom
+                        hparams.dsv4_shared_streams = true;
+                        hparams.dsv41_kv_source.fill(-1);
+                        hparams.dsv41_index_key_source.fill(-1);
+                        hparams.dsv41_topk_source.fill(-1);
+                        int32_t last_kv = -1, last_key = -1, last_idx = -1;
+                        uint32_t csa_ratio = 0, hca_ratio = 0;
+                        for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                            const bool has_comp  = ml.get_tensor_meta(format("blk.%u.attn_compressor_kv.weight", il).c_str()) != nullptr;
+                            const bool has_gate  = ml.get_tensor_meta(format("blk.%u.attn_compressor_gate.weight", il).c_str()) != nullptr;
+                            const bool has_idx_k = ml.get_tensor_meta(format("blk.%u.indexer.attn_k.weight", il).c_str()) != nullptr;
+                            const bool has_idx_q = ml.get_tensor_meta(format("blk.%u.indexer.attn_q_b.weight", il).c_str()) != nullptr;
+                            if (has_comp)  last_kv  = (int32_t) il;
+                            if (has_idx_k) last_key = (int32_t) il;
+                            if (has_idx_q) last_idx = (int32_t) il;
+                            const uint32_t r = hparams.dsv4_compress_ratios[il];
+                            if (r == 0) continue;
+                            if (last_kv < 0 || last_key < 0 || last_idx < 0) {
+                                throw std::runtime_error(format("DeepSeek-V4.1 layer %u reads a compressed stream before any layer publishes one", il));
+                            }
+                            if (r != hparams.dsv4_compress_ratios[last_kv]) {
+                                throw std::runtime_error(format("DeepSeek-V4.1 layer %u compresses at ratio %u but reads layer %d, compressed at %u",
+                                            il, r, last_kv, hparams.dsv4_compress_ratios[last_kv]));
+                            }
+                            if (has_comp && !has_gate && r != 1) {
+                                throw std::runtime_error(format("DeepSeek-V4.1 layer %u pools %u tokens per row but has no pooling gate", il, r));
+                            }
+                            hparams.dsv41_kv_source[il]        = last_kv;
+                            hparams.dsv41_index_key_source[il] = last_key;
+                            hparams.dsv41_topk_source[il]      = last_idx;
+                            if (r == csa_ratio || r == hca_ratio) continue;
+                            if      (csa_ratio == 0) csa_ratio = r;
+                            else if (hca_ratio == 0) hca_ratio = r;
+                            else throw std::runtime_error("DeepSeek-V4.1 supports at most two compression ratios");
+                        }
+                        // a file with no compressed layers is pure sliding window attention; the
+                        // ratios only have to stay non-zero for the size arithmetic
+                        if (csa_ratio == 0) csa_ratio = 1;
+                        if (hca_ratio == 0) hca_ratio = csa_ratio;
+                        // V4 splits the two streams by role -- the indexed one at CSA_RATIO, the
+                        // other at HCA_RATIO. V4.1 does not: both of its streams carry index
+                        // sources (indexer.attn_q_b on layers 2, 8, 14 at ratio 2 and on 20, 24,
+                        // 28, 32, 36 at ratio 1 in the released Flash file), so these two hold the
+                        // file's compression segments in layer order and nothing reads them as
+                        // roles -- the cache arithmetic and the graph both go through the ratio.
+                        hparams.dsv4_csa_ratio = csa_ratio;
+                        hparams.dsv4_hca_ratio = hca_ratio;
+                        hparams.dsv4_csa_overlap = false;
+                        hparams.dsv4_hca_overlap = false;
+                        hparams.dsv4_hc_lag = true;
+                        hparams.dsv4_q_head_norm = false;
+                        LLAMA_LOG_INFO("%s: DeepSeek-V4.1 compressed streams: csa ratio %u, hca ratio %u, shared from source layers\n", __func__, csa_ratio, hca_ratio);
+                    }
                     if (hparams.dsv4_hc_mult == 0) {
                         throw std::runtime_error("DeepSeek-V4 hyper_connection.count is missing and could not be inferred");
                     }
