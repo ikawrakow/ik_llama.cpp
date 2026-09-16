@@ -198,7 +198,7 @@ ggml_cgraph * llm_build_context::build_k_shift() {
             ggml_view_3d(ctx0, kv_self.k_l[il],
                     n_embd_head_k_l, n_head_kv, n_ctx,
                     ggml_row_size(kv_self.k_l[il]->type, n_embd_head_k_l),
-                    ggml_row_size(kv_self.k_l[il]->type, n_embd_k_gqa),
+                    n_head_kv*ggml_row_size(kv_self.k_l[il]->type, n_embd_head_k_l),
                     0);
 
         struct ggml_tensor * tmp;
