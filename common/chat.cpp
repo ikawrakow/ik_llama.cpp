@@ -2418,19 +2418,46 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
             return generation_prompt + reasoning + p.content(p.rest()) + end;
         }
 
-        // Tools + content — model generates:
-        //   <ifm|tool_calls><ifm|tool_call>NAME\n{json_args}</ifm|tool_call>...
-        // JSON args (not XML arg_key/arg_value), closing tags optional.
+        // Tools + content — model generates (XML format, default):
+        //   <ifm|tool_call>NAME\n<ifm|arg_key>PARAM</ifm|arg_key>\n<ifm|arg_value>VALUE</ifm|arg_value>\n</ifm|tool_call>
         auto tool_choice = p.choice();
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
-            const auto & schema   = function.at("parameters");
+            auto params = function.contains("parameters") ? function.at("parameters") : json::object();
+            const auto & props = params.contains("properties") ? params.at("properties") : json::object();
 
-            // Match: <ifm|tool_call>NAME\n{json_args}</ifm|tool_call>
+            auto schema_info = common_schema_info();
+            schema_info.resolve_refs(params);
+
+            // Build per-parameter arg rules matching XML arg_key/arg_value tags
+            std::vector<common_peg_parser> arg_rules;
+            for (const auto & [param_name, param_schema] : props.items()) {
+                bool is_string = schema_info.resolves_to_string(param_schema);
+
+                auto value_parser = is_string
+                    ? p.tool_arg_string_value(p.until("</ifm|arg_value>"))
+                    : p.tool_arg_json_value(
+                        p.schema(p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false));
+
+                auto arg = p.tool_arg(
+                    p.tool_arg_open(p.literal("<ifm|arg_key>") + p.tool_arg_name(p.literal(param_name)) + p.literal("</ifm|arg_key>\n")) +
+                    p.literal("<ifm|arg_value>") +
+                    value_parser +
+                    p.tool_arg_close(p.literal("</ifm|arg_value>\n")));
+
+                arg_rules.push_back(p.rule("tool-" + name + "-arg-" + param_name, arg));
+            }
+
+            auto args = p.eps();
+            if (!arg_rules.empty()) {
+                args = p.zero_or_more(p.choice(arg_rules));
+            }
+
+            // Match: <ifm|tool_call>NAME\nargs...</ifm|tool_call>
             auto func_parser = p.tool(
                 p.tool_open(p.literal(TOOL_CALL_BEGIN) + p.tool_name(p.literal(name)) + p.literal("\n")) +
-                p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)) +
+                p.tool_args(args) +
                 p.tool_close(p.optional(p.literal(TOOL_CALL_END))));
 
             tool_choice |= p.rule("tool-" + name, func_parser);
