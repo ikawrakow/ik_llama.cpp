@@ -24,7 +24,9 @@ set(TARGET_SRCS
     server-context.h
 )
 set(PUBLIC_ASSETS
-    index.html.gz
+    index.html
+    bundle.js
+    bundle.css
 
 )
 

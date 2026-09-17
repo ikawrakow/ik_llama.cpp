@@ -43,8 +43,9 @@ static void llama_log_tee_callback(enum ggml_log_level level, const char * text,
 #endif
 
 #include <nlohmann/json.hpp>
-#include "index.html.gz.hpp"
-#include "index_llamacpp.html.gz.hpp"
+#include "index.html.hpp"
+#include "bundle.js.hpp"
+#include "bundle.css.hpp"
 #include "loading.html.hpp"
 
 #include <atomic>
@@ -2135,25 +2136,19 @@ int main(int argc, char ** argv) {
             else {
 
                 // using embedded static index.html
-                svr->Get("/", [params](const httplib::Request& req, httplib::Response& res) {
-                    if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
-                        res.set_content("Error: gzip is not supported by this browser", "text/plain");
-                    }
-                    else {
-                        res.set_header("Content-Encoding", "gzip");
-                        // COEP and COOP headers, required by pyodide (python interpreter)
-                        res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                        if (params.webui == COMMON_WEBUI_AUTO) {
-                            res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
-                        }
-                        else if (params.webui == COMMON_WEBUI_LLAMACPP) {
-                            res.set_content(reinterpret_cast<const char*>(index_llamacpp_html_gz), index_llamacpp_html_gz_len, "text/html; charset=utf-8");
-                        }
-                        else {
-                            res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
-                        }
-                    }
+            svr->Get(params.api_prefix + "/", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                // COEP and COOP headers, required by pyodide (python interpreter)
+                res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                res.set_content(reinterpret_cast<const char*>(index_html), index_html_len, "text/html; charset=utf-8");
+                return false;
+            });
+            svr->Get(params.api_prefix + "/bundle.js", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                res.set_content(reinterpret_cast<const char*>(bundle_js), bundle_js_len, "application/javascript; charset=utf-8");
+                return false;
+            });
+            svr->Get(params.api_prefix + "/bundle.css", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                res.set_content(reinterpret_cast<const char*>(bundle_css), bundle_css_len, "text/css; charset=utf-8");
                     return false;
                     });
             }
