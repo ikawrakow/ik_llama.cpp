@@ -39,7 +39,7 @@ static bool server_speculative_multimodal_supported(const common_params_speculat
 // full reprocessing (status quo). Spill victims are picked by the same
 // variance-eviction rule create_checkpoint uses for cap eviction.
 #include <cstdio>
-#include <dirent.h>
+#include <filesystem>
 
 static std::list<server_prompt_checkpoint>::iterator drop_checkpoint_entry(
         std::list<server_prompt_checkpoint> & ckpts,
@@ -456,23 +456,14 @@ void server_context::init() {
         // checkpoint spill: fresh session owns the dir; drop stale files
         // from crashed runs so orphans can never accumulate
         fs_create_directory_with_parents(params_base.ctx_checkpoint_spill_dir);
-        DIR * dp = opendir(params_base.ctx_checkpoint_spill_dir.c_str());
-        if (dp) {
-            struct dirent * de;
-            int wiped = 0;
-            while ((de = readdir(dp)) != nullptr) {
-                std::string nm = de->d_name;
-                if (nm.rfind("ckpt-s", 0) == 0) {
-                    std::string full = params_base.ctx_checkpoint_spill_dir + "/" + nm;
-                    if (remove(full.c_str()) == 0) {
-                        wiped++;
-                    }
-                }
+        int wiped = 0;
+        for (const auto & entry : std::filesystem::directory_iterator(params_base.ctx_checkpoint_spill_dir)) {
+            if (entry.path().filename().string().rfind("ckpt-s", 0) == 0 && std::filesystem::remove(entry.path())) {
+                wiped++;
             }
-            closedir(dp);
-            LLAMA_LOG_INFO("checkpoint spill dir %s ready (%d stale files wiped)\n",
-                params_base.ctx_checkpoint_spill_dir.c_str(), wiped);
         }
+        LLAMA_LOG_INFO("checkpoint spill dir %s ready (%d stale files wiped)\n",
+            params_base.ctx_checkpoint_spill_dir.c_str(), wiped);
     }
 
     // populate chat template params
@@ -3926,11 +3917,17 @@ static size_t count_resident_ckpts(const std::list<server_prompt_checkpoint> & c
 // enforce: total entries <= cap_total; resident entries <= ram_live.
 // victim choice uses the same variance-eviction rule as cap eviction;
 // with spill disabled this reduces to today's total-cap eviction.
-static void enforce_checkpoint_memory(server_slot & slot, int cap_total, int ram_live, const std::string & dir) {
+static void enforce_checkpoint_memory(server_slot & slot, int cap_total, int ram_live,
+        const std::string & dir, common_checkpoint_eviction eviction) {
     auto & ckpts = slot.server_cached_prompt.checkpoints;
+    const bool use_variance = eviction == COMMON_CHECKPOINT_EVICTION_VARIANCE ||
+                              eviction == COMMON_CHECKPOINT_EVICTION_AUTO;
     if (!dir.empty() && ram_live >= 0) {
         while ((int) count_resident_ckpts(ckpts) > ram_live && !ckpts.empty()) {
-            auto it = evict_checkpoint_by_variance(slot, ckpts);
+            auto it = ckpts.begin();
+            if (use_variance) {
+                it = evict_checkpoint_by_variance(slot, ckpts);
+            }
             if (it->data.empty()) {
                 // already spilled; nothing to offload, drop it to make progress
                 it = drop_checkpoint_entry(ckpts, it);
@@ -3943,7 +3940,10 @@ static void enforce_checkpoint_memory(server_slot & slot, int cap_total, int ram
         }
     }
     while ((int) ckpts.size() > cap_total && cap_total >= 0 && !ckpts.empty()) {
-        auto it = evict_checkpoint_by_variance(slot, ckpts);
+        auto it = ckpts.begin();
+        if (use_variance) {
+            it = evict_checkpoint_by_variance(slot, ckpts);
+        }
         it = drop_checkpoint_entry(ckpts, it);
     }
 }
@@ -3981,7 +3981,8 @@ bool server_context::create_checkpoint(server_slot & slot) {
             (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,
             (ggml_time_us() - t_start) / 1000.0);
         enforce_checkpoint_memory(slot, params_base.ctx_checkpoints_n,
-            params_base.ctx_checkpoint_ram_live, params_base.ctx_checkpoint_spill_dir);
+            params_base.ctx_checkpoint_ram_live, params_base.ctx_checkpoint_spill_dir,
+            params_base.ctx_checkpoint_eviction);
     }
     return do_checkpoint;
 }
