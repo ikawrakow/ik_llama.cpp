@@ -74,6 +74,9 @@ struct llama_kv_cache {
     static uint32_t get_padding(bool flash_attn) { return flash_attn ? 256u : 32u; }
 
     bool has_shift = false;
+    // cell-index order no longer matches position order; index-based SWA attention
+    // windowing must not be used
+    bool cells_disordered = false;
     bool do_defrag = false;
     bool do_copy   = false;
     bool recurrent = false; // with recurrent state models, a cell can hold the state for more than one past token

@@ -2633,7 +2633,9 @@ bool llama_model_is_split_mode_graph(const struct llama_model * model) {
 
 bool llama_model_supports_ctx_shift(const struct llama_model * model) {
     // openPangu and DeepSeek4 keep position-dependent private state outside the generic KV cache.
-    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_DEEPSEEK4;
+    // Gemma3 and Cohere2 vary rope geometry per layer without recording it in hparams.swa_layers.
+    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_DEEPSEEK4
+        && model->arch != LLM_ARCH_GEMMA3 && model->arch != LLM_ARCH_COHERE2;
 }
 
 bool llama_model_supports_partial_kv_reuse(const struct llama_model * model) {

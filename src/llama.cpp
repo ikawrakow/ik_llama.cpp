@@ -1753,6 +1753,11 @@ static bool llama_kv_cache_find_slot(
         return false;
     }
 
+    if (cache.used == 0) {
+        // an empty cache refills in append order, restoring index-order == position-order
+        cache.cells_disordered = false;
+    }
+
     uint32_t n_tested = 0;
 
     while (true) {
@@ -2451,6 +2456,7 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     }
     cache.head = 0;
     cache.used = 0;
+    cache.cells_disordered = false;
     cache.head_swa     = cache.sink_rows;
     cache.pos_base_swa = 0;
 
@@ -2670,6 +2676,7 @@ static void llama_kv_cache_seq_add(
     for (uint32_t i = 0; i < cache.size; ++i) {
         if (cache.cells[i].has_seq_id(seq_id) && cache.cells[i].pos >= p0 && cache.cells[i].pos < p1) {
             cache.has_shift = true;
+            cache.cells_disordered = true;
             cache.cells[i].pos   += delta;
             cache.cells[i].delta += delta;
 
@@ -7782,6 +7789,9 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     // the pooled block keys must be rebuilt from the moved indexer keys
     lctx.qsa_pooled_stale = !kv_self.kp_l.empty();
 
+    // defrag moves cells from the end of the cache into earlier holes
+    kv_self.cells_disordered = true;
+
     //LLAMA_LOG_INFO("(tmp log) KV defrag cell moves: %u\n", n_moves);
 
     //LLAMA_LOG_INFO("expected gf nodes: %u\n", 6*n_moves*n_layer);
@@ -11013,6 +11023,7 @@ struct llama_data_read {
 
             llama_batch batch = llama_batch_init(cell_count, 0, 1);
             batch.n_tokens = cell_count;
+            bool disordered = false;
             for (uint32_t i = 0; i < cell_count; ++i) {
                 llama_pos pos;
                 uint32_t n_seq_id;
@@ -11026,6 +11037,9 @@ struct llama_data_read {
                     return false;
                 }
 
+                if (i > 0 && pos < batch.pos[i - 1]) {
+                    disordered = true;
+                }
                 batch.pos[i] = pos;
                 batch.n_seq_id[i] = 1;
                 batch.seq_id[i][0] = dest_seq_id;
@@ -11034,6 +11048,9 @@ struct llama_data_read {
                 llama_batch_free(batch);
                 LLAMA_LOG_ERROR("%s: failed to find available cells in kv cache\n", __func__);
                 return false;
+            }
+            if (disordered) {
+                kv_self.cells_disordered = true;
             }
 
             // DEBUG CHECK: kv_self.head should be our first cell, kv_self.head + cell_count - 1 should be our last cell (verify seq_id and pos values)
@@ -11057,6 +11074,8 @@ struct llama_data_read {
 
             llama_kv_cache_clear(kv_self);
 
+            llama_pos prev_pos = -1;
+
             for (uint32_t i = 0; i < cell_count; ++i) {
                 llama_kv_cell & cell = kv_self.cells[i];
 
@@ -11067,6 +11086,11 @@ struct llama_data_read {
                 read_to(&n_seq_id, sizeof(n_seq_id));
 
                 cell.pos = pos;
+
+                if (pos < prev_pos) {
+                    kv_self.cells_disordered = true;
+                }
+                prev_pos = pos;
 
                 for (uint32_t j = 0; j < n_seq_id; ++j) {
                     llama_seq_id seq_id;

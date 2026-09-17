@@ -3324,9 +3324,7 @@ void server_context::discard_n_kv_and_cache_tokens(llama_context* ctx, server_sl
     if (slot.spec) {
         common_speculative_context_shift(slot.spec, slot.id, kv_keep, kv_discard, kv_past);
     }
-    if (slot.params.cache_prompt) {
-        slot.cache_tokens.discard_n_tokens(n_keep, n_discard);
-    }
+    slot.cache_tokens.discard_n_tokens(n_keep, n_discard);
 }
 
 
