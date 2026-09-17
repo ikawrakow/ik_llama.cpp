@@ -1269,7 +1269,7 @@ static bool llama_kv_cache_init(
         replicate_mla = true;
     }
 
-    if (cache.any_compacted() && replicate_mla) {
+    if (cache.any_compacted() && ((split_cache && model.arch != LLM_ARCH_GEMMA4) || replicate_mla)) {
         LLAMA_LOG_ERROR("%s: --swa-compress is not supported with a replicated KV cache "
                         "(split mode graph/attn); run without --swa-compress or with a single device\n", __func__);
         return false;
