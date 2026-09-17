@@ -4626,7 +4626,7 @@ void dequantize_row_mxfp4_r8(const block_mxfp4_r8 * x, float * y, int64_t k) {
     constexpr int kBlockSize = QK_MXFP4;
     int n_per_row = k/8;
     GGML_ASSERT(n_per_row%kBlockSize == 0);
-    int nblock = k/kBlockSize;
+    int nblock = n_per_row/kBlockSize;
     float d[8];
     uint32_t aux32[2];
     const uint8_t * aux8 = (const uint8_t *)aux32;
