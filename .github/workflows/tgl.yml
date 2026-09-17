@@ -1,0 +1,84 @@
+name: tgl
+
+on:
+  workflow_dispatch: # allows manual triggering
+
+permissions:
+  contents: write
+
+env:
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+
+jobs:
+  ubuntu-cpu:
+    strategy:
+      matrix:
+        include:
+          - build: 'x86_64'
+            os: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-cpu-${{ matrix.build }}
+
+      - name: Toolchain workaround (GCC 13)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-13-x86-64-linux-gnu g++-13-x86-64-linux-gnu patchelf
+          echo "CC=x86_64-linux-gnu-gcc-13 -march=tigerlake" >> "$GITHUB_ENV"
+          echo "CXX=x86_64-linux-gnu-g++-13 -march=tigerlake" >> "$GITHUB_ENV"
+      - name: Swap Endianness
+        id: endianness
+        if: ${{ matrix.build == 's390x' }}
+        run: |
+          for f in models/*.gguf; do
+            echo YES | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
+          done
+      - name: Build
+        id: cmake_build
+        run: |
+          x86_64-linux-gnu-g++-13 --version
+          x86_64-linux-gnu-gcc-13 --version
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX512=ON \
+            -DGGML_AVX512_VBMI=ON \
+            -DGGML_AVX512_VNNI=ON \
+            -DGGML_AVX512_BF16=OFF \
+            -DGGML_RPC=OFF
+          cat build/CMakeFiles/*/CMakeSystem.cmake
+          sed -i 's/aarch64/x86_64/' build/CMakeFiles/*/CMakeSystem.cmake
+          echo after
+          cat build/CMakeFiles/*/CMakeSystem.cmake
+          time cmake --build build --config Release -j $(nproc)
+          mv build/examples/mtmd/libmtmd.so \
+           build/src/libllama.so \
+           build/ggml/src/libggml.so build/bin/
+          mkdir build2/
+          mv build/bin/ build2/llama-latest/
+          for f in build2/llama-latest/llama-*; do
+            patchelf --set-rpath '$ORIGIN' $f
+          done
+          cd build2
+          zip -r9XD /tmp/llama-latest-bin-ubuntu-tgl.zip *
+      - name: Create Release
+        run: |
+          TAG="tgl-${{ github.run_number }}-${RANDOM}"
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" /tmp/llama-latest-bin-ubuntu-tgl.zip --title "Release $TAG"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
