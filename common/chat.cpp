@@ -2482,7 +2482,9 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        // Always use lazy grammar for K2-Horizon: the model reasons before tool calls,
+        // and the grammar trigger <ifm|tool_calls> only activates after that tag appears.
+        data.grammar_lazy = true;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
