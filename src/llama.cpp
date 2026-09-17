@@ -4152,7 +4152,6 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_SEED_OSS,
         LLM_ARCH_STEP35,
         LLM_ARCH_LAGUNA,
-        LLM_ARCH_K2_HORIZON,
         //LLM_ARCH_QWEN3NEXT,
         LLM_ARCH_QWEN35,
         LLM_ARCH_QWEN35MOE,

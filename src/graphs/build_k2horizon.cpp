@@ -9,8 +9,7 @@ static ggml_tensor * k2_horizon_group_rms_norm(
     ggml_tensor * cur,
     ggml_tensor * weight,
     int64_t n_groups,
-    float eps)
-{
+    float eps) {
     GGML_ASSERT(n_groups > 0);
     GGML_ASSERT(cur->ne[0] % n_groups == 0);
 
@@ -42,8 +41,7 @@ static ggml_tensor * k2_horizon_routed_value(
     ggml_tensor * cur,
     int il,
     const llama_hparams & hparams,
-    const llm_build_cb & cb)
-{
+    const llm_build_cb & cb) {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
