@@ -185,7 +185,6 @@ ggml_cgraph * llm_build_context::build_k_shift() {
             continue;
         }
         const int64_t n_head_kv = hparams.n_head_kv(il);
-        const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
         const int64_t n_embd_head_k_l = hparams.n_embd_head_k(il);
         const int     n_rot_l = hparams.rope_n_rot(il);
         float freq_base_l  = hparams.swa_layers[il] ? hparams.rope_freq_base_train_swa  : freq_base;
