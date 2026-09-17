@@ -993,11 +993,11 @@ inline void prepare_q4_0_quants_avx2(const uint8_t * qs, __m256i * v, const __m2
 }
 
 inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
+#ifdef HAVE_VNNI256
     auto y4l = _mm_loadu_si128((const __m128i*)qs+0);
     auto y4h = _mm_loadu_si128((const __m128i*)qs+1);
     auto yl  = MM256_SET1_M128I(y4l);
     auto yh  = MM256_SET1_M128I(y4h);
-#ifdef HAVE_VNNI256
     auto sumi = _mm256_setzero_si256();
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[0], _mm256_shuffle_epi32(yl, 0x00));
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[1], _mm256_shuffle_epi32(yl, 0x55));
@@ -1008,14 +1008,14 @@ inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[6], _mm256_shuffle_epi32(yh, 0xaa));
     sumi = ggml_mm256_dpbusd_epi32(sumi, v[7], _mm256_shuffle_epi32(yh, 0xff));
 #else
-    auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(v[0], _mm256_shuffle_epi32(yl, 0x00)),
-                                  _mm256_maddubs_epi16(v[1], _mm256_shuffle_epi32(yl, 0x55)));
-    auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(v[2], _mm256_shuffle_epi32(yl, 0xaa)),
-                                  _mm256_maddubs_epi16(v[3], _mm256_shuffle_epi32(yl, 0xff)));
-    auto sumi3 = _mm256_add_epi16(_mm256_maddubs_epi16(v[4], _mm256_shuffle_epi32(yh, 0x00)),
-                                  _mm256_maddubs_epi16(v[5], _mm256_shuffle_epi32(yh, 0x55)));
-    auto sumi4 = _mm256_add_epi16(_mm256_maddubs_epi16(v[6], _mm256_shuffle_epi32(yh, 0xaa)),
-                                  _mm256_maddubs_epi16(v[7], _mm256_shuffle_epi32(yh, 0xff)));
+    auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(v[0], _mm256_set1_epi32(*((const int32_t *)(qs +  0)))),
+                                  _mm256_maddubs_epi16(v[1], _mm256_set1_epi32(*((const int32_t *)(qs +  4)))));
+    auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(v[2], _mm256_set1_epi32(*((const int32_t *)(qs +  8)))),
+                                  _mm256_maddubs_epi16(v[3], _mm256_set1_epi32(*((const int32_t *)(qs + 12)))));
+    auto sumi3 = _mm256_add_epi16(_mm256_maddubs_epi16(v[4], _mm256_set1_epi32(*((const int32_t *)(qs + 16)))),
+                                  _mm256_maddubs_epi16(v[5], _mm256_set1_epi32(*((const int32_t *)(qs + 20)))));
+    auto sumi4 = _mm256_add_epi16(_mm256_maddubs_epi16(v[6], _mm256_set1_epi32(*((const int32_t *)(qs + 24)))),
+                                  _mm256_maddubs_epi16(v[7], _mm256_set1_epi32(*((const int32_t *)(qs + 28)))));
     auto sumi = _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_add_epi16(_mm256_add_epi16(sumi1, sumi2), _mm256_add_epi16(sumi3, sumi4)));
 #endif
     return sumi;
