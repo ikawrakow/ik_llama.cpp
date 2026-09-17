@@ -1251,9 +1251,12 @@ bool common_speculative_is_compat(llama_context * ctx_tgt) {
     bool res = true;
 
     const llama_model * model = llama_get_model(ctx_tgt);
-    if (model != nullptr && std::string(llama_model_arch_string(model)) == "lfm2") {
-        LOG_WRN("%s: speculative decoding is not supported for LFM2 models (shortconv recurrent state is not rolled back)\n", __func__);
-        return false;
+    if (model != nullptr) {
+        const std::string arch = llama_model_arch_string(model);
+        if (arch == "lfm2" || arch == "lfm2moe") {
+            LOG_WRN("%s: speculative decoding is not supported for LFM2 models (shortconv recurrent state is not rolled back)\n", __func__);
+            return false;
+        }
     }
 
     llama_kv_cache_clear(ctx_tgt);

@@ -1664,6 +1664,9 @@ bool create_tensors_helper::create_mellum_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_lfm2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
+    const bool is_moe = model.arch == LLM_ARCH_LFM2MOE;
+    const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff;
+
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
     model.tok_norm = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd});
     model.output_norm = nullptr;
@@ -1676,10 +1679,18 @@ bool create_tensors_helper::create_lfm2_tensors(const LLM_TN & tn) {
         auto & layer = model.layers[i];
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
-        // Both block types use the same pre-norm and SwiGLU FFN.
+        // Both block types use the same pre-norm and (MoE or dense) FFN.
         layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
         layer.ffn_norm  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM,  "weight", i), {n_embd});
-        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+
+        if (is_moe && i >= (int) hparams.n_layer_dense_lead) {
+            layer.ffn_gate_inp    = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert});
+            layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff_exp);
+        } else {
+            create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        }
 
         if (hparams.is_recurrent(i)) {
             // shortconv reuses the recurrent tensor slots; GGUF names stay arch-specific
@@ -5799,6 +5810,7 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_MELLUM:
             use_mmap_buffer = create_mellum_tensors(tn); break;
         case LLM_ARCH_LFM2:
+        case LLM_ARCH_LFM2MOE:
             use_mmap_buffer = create_lfm2_tensors(tn); break;
         case LLM_ARCH_QWEN3NEXT:
             use_mmap_buffer = create_qwen3next_tensors(tn); break;
@@ -6030,7 +6042,9 @@ bool create_tensors_helper::create_tensors() {
                 prepare_split_tensors(-1, ctx_split, layer.rope_freqs, layer.split_rope_freqs, split, mem_used);
             }
             if (hparams.is_recurrent(il)) {
-                if (model.arch == LLM_ARCH_BAILINGMOE3) {
+                if (model.arch == LLM_ARCH_LFM2 || model.arch == LLM_ARCH_LFM2MOE) {
+                    LLAMA_LOG_DEBUG("%s: keeping LFM2 shortconv tensors whole for layer %d\n", __func__, il);
+                } else if (model.arch == LLM_ARCH_BAILINGMOE3) {
                     split_bailingmoe3_kda_tensors(hparams, layer, cur_splits, mem_used, ctx_split);
                 } else {
                     split_recurrent_tensors(hparams, layer, cur_splits, mem_used, ctx_split, il);
