@@ -5997,61 +5997,6 @@ size_t quantize_iq4_ks_r16(const float * src, void * dst, int64_t nrows, int64_t
     GGML_ABORT("Not implemented");
 }
 
-#ifdef z__AVX512F__
-void dequantize_row_iq4_ks_r16(const block_iq4_ks_r16 * x, float * y, int64_t k) {
-    auto n_per_row = k/16;
-    auto table128 = _mm_loadu_si128((const __m128i *)iq4k_values);
-    auto table256 = MM256_SET1_M128I(table128);
-    auto table = _mm512_inserti32x8(_mm512_castsi256_si512(table256), table256, 1);
-    auto m4 = _mm512_set1_epi8(0xf);
-    float * y16[16];
-    for (int k = 0; k < 16; ++k) y16[k] = y + n_per_row*k;
-    int nblock = n_per_row/QK8_0;
-    const float * dptr = (const float *)x;
-    //auto d4 = _mm512_loadu_ps(dptr);
-    x = (const block_iq4_ks_r16 *)(dptr + 16);
-    //float aux[16];
-    int32_t iaux[16];
-    for (int ib = 0; ib < nblock; ++ib) {
-        auto iscales = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)x[ib].scales));
-        //auto ishifts = _mm512_slli_epi32(_mm512_and_si512(iscales, _mm512_set1_epi32(1)), 2);
-        auto ishifts = _mm512_setzero_si512();
-        iscales      = _mm512_sub_epi32(_mm512_and_si512(iscales, _mm512_set1_epi32(254)), _mm512_set1_epi32(127));
-        //auto scales  = _mm512_mul_ps(d4, _mm512_cvtepi32_ps(iscales));
-        //_mm512_storeu_ps(aux, scales);
-        //int nbad = 0;
-        //for (int k = 0; k < 16; ++k) {
-        //    float dl = dptr[k] * ((x[ib].scales[k] & 254) - 127);
-        //    if (fabsf(dl - aux[k]) > 1e-6f) {
-        //        printf("Oops: block %d, k = %d, %g vs %g\n", ib, k, dl, aux[k]);
-        //        ++nbad;
-        //    }
-        //}
-        //if (nbad > 0) exit(1);
-        auto convert_and_store = [y16, dptr, &iaux, &ishifts] (__m128i q, int ib, int k0, int iq0) {
-            auto ival = _mm512_add_epi32(_mm512_cvtepi8_epi32(q), ishifts);
-            _mm512_storeu_si512(iaux, ival);
-            for (int k = 0; k < 4; ++k) for (int i = 0; i < 4; ++i) y16[k0+k][QK8_0*ib+iq0+i] = dptr[k0+k]*iaux[4*k+i];
-            //auto fval = _mm512_mul_ps(scales, _mm512_cvtepi32_ps(ival));
-            //_mm512_storeu_ps(aux, fval);
-            //for (int k = 0; k < 4; ++k) for (int i = 0; i < 4; ++i) y16[k0+k][QK8_0*ib+iq0+i] = aux[4*k+i];
-        };
-        for (int l = 0; l < 4; ++l) {
-            auto bits = _mm512_loadu_si512(x[ib].qs + 64*l);
-            auto ql = _mm512_shuffle_epi8(table, _mm512_and_si512(bits, m4));
-            auto qh = _mm512_shuffle_epi8(table, _mm512_and_si512(_mm512_srli_epi16(bits, 4), m4));
-            convert_and_store(_mm512_extracti32x4_epi32(ql, 0), ib,  0, 4*l + 0);
-            convert_and_store(_mm512_extracti32x4_epi32(ql, 1), ib,  4, 4*l + 0);
-            convert_and_store(_mm512_extracti32x4_epi32(ql, 2), ib,  8, 4*l + 0);
-            convert_and_store(_mm512_extracti32x4_epi32(ql, 3), ib, 12, 4*l + 0);
-            convert_and_store(_mm512_extracti32x4_epi32(qh, 0), ib,  0, 4*l + 16);
-            convert_and_store(_mm512_extracti32x4_epi32(qh, 1), ib,  4, 4*l + 16);
-            convert_and_store(_mm512_extracti32x4_epi32(qh, 2), ib,  8, 4*l + 16);
-            convert_and_store(_mm512_extracti32x4_epi32(qh, 3), ib, 12, 4*l + 16);
-        }
-    }
-}
-#else
 void dequantize_row_iq4_ks_r16(const block_iq4_ks_r16 * x, float * y, int64_t k) {
     auto n_per_row = k/16;
     float * y16[16];
@@ -6077,7 +6022,6 @@ void dequantize_row_iq4_ks_r16(const block_iq4_ks_r16 * x, float * y, int64_t k)
         }
     }
 }
-#endif
 
 void vec_dot_iq4_ks_r16_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
