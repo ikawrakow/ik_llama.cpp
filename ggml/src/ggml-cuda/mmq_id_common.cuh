@@ -3456,11 +3456,13 @@ struct mmq_type_traits_id<mmq_x, mmq_y, need_check, GGML_TYPE_IQ4_XS> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
+#include "mmq_kt_tail.cuh"
+
 template <ggml_type type, int mmq_x, bool need_check, bool fixup>
 static __device__ __forceinline__ void mul_mat_q_process_tile_id(
         const char * __restrict__ x, const int * __restrict__ y,
         const int * __restrict__ ids_dst, float * __restrict__ dst, float * __restrict__ tmp_fixup,
-        const int stride_row_x, const int ncols_y, const int stride_col_dst,
+        const int ncols_x, const int stride_row_x, const int ncols_y, const int stride_col_dst,
         const int tile_x_max_i, const int tile_y_max_j, const int kb0_start, const int kb0_stop) {
 
     constexpr int              warp_size  = ggml_cuda_get_physical_warp_size();
@@ -3486,7 +3488,15 @@ static __device__ __forceinline__ void mul_mat_q_process_tile_id(
     float sum[mmq_x*mmq_y / (nwarps*warp_size)] = {0.0f};
 
     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-        load_tiles(x, tile_x, kb0, tile_x_max_i, stride_row_x);
+        if constexpr (mmq_kt_tail<type>::value) {
+            if (kb0 == ncols_x/qk) {
+                mmq_kt_tail<type>::template load<mmq_y, nwarps, need_check>(x, tile_x, kb0, tile_x_max_i, stride_row_x, (ncols_x % qk)/32);
+            } else {
+                load_tiles(x, tile_x, kb0, tile_x_max_i, stride_row_x);
+            }
+        } else {
+            load_tiles(x, tile_x, kb0, tile_x_max_i, stride_row_x);
+        }
 
         {
             const int * by0 = y + ncols_y*(kb0*(qk*sizeof(block_q8_1_mmq) / (4*QK8_1*sizeof(int))) + 0*sizeof(block_q8_1_mmq)/sizeof(int));
@@ -3634,13 +3644,13 @@ static __global__ void mul_mat_q_id(
 
         constexpr bool fixup = false;
         mul_mat_q_process_tile_id<type, mmq_x, need_check, fixup>
-            (x + offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
-             tile_x_max_i, tile_y_max_j, 0, ncols_x/qk);
+            (x + offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, ncols_x, stride_row_x, ncols_y, stride_col_dst,
+             tile_x_max_i, tile_y_max_j, 0, (ncols_x + qk - 1)/qk);
         return;
     }
 #endif // (defined(GGML_USE_HIP) && !defined(CDNA3)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
 
-    const     int64_t blocks_per_ne00 = ncols_x / qk;
+    const     int64_t blocks_per_ne00 = (ncols_x + qk - 1) / qk;
     constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
 
     // kbc == k block continuous, current index in continuous ijk space.
@@ -3713,7 +3723,7 @@ static __global__ void mul_mat_q_id(
 
         constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
         mul_mat_q_process_tile_id<type, mmq_x, need_check, fixup>
-            (x + offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
+            (x + offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, ncols_x, stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
 
         kbc += blocks_per_ne00;
@@ -3781,7 +3791,7 @@ static __global__ void mul_mat_q_id(
 
     constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
     mul_mat_q_process_tile_id<type, mmq_x, need_check, fixup>
-        (x + offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
+        (x + offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, ncols_x, stride_row_x, ncols_y, stride_col_dst,
          tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
 }
 
@@ -3795,7 +3805,7 @@ static __global__ void mul_mat_q_stream_k_fixup_id(
     constexpr int     mmq_y           = get_mmq_y_device();
     constexpr int     qk              = ggml_cuda_type_traits<type>::qk;
     constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
-    const     int64_t blocks_per_ne00 = ncols_x / qk;
+    const     int64_t blocks_per_ne00 = (ncols_x + qk - 1) / qk;
 
     constexpr int nwarps = mmq_get_nwarps_device();
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
