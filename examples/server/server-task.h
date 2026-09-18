@@ -363,6 +363,9 @@ struct server_prompt_checkpoint {
 
     std::vector<uint8_t> data;
 
+    // disk-spill location when data was offloaded (empty = resident / no spill)
+    std::string spill_path;
+
     size_t size() const {
         return data.size();
     }
