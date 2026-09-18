@@ -46,14 +46,6 @@ class common_chat_peg_minimax_m3_mapper : public common_chat_peg_mapper {
     virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
 };
 
-class common_chat_peg_k2horizon_mapper : public common_chat_peg_mapper {
-  public:
-    common_chat_peg_k2horizon_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
-    virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
-  private:
-    static std::string strip_leaked_ifm_tags(const std::string & s);
-};
-
 struct content_structure;
 struct tool_call_structure;
 
