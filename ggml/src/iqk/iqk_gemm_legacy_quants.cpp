@@ -2009,6 +2009,100 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
 }
 #endif
 
+template <int nrc_y>
+static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x % 16 == 0);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
+    int nb = n / QK8_0;
+    auto table = load_iq4nl_values_512();
+    auto m4 = _mm512_set1_epi8(0xf);
+    //if constexpr (nrc_y == 1) {
+    //    __m256 acc[2] = {};
+    //    __m256i qx[8];
+    //    float d8[8];
+    //    for (int ix = 0; ix < nrc_x; ix += 8) {
+    //        const block_q8_0_r8 * iq8 = (const block_q8_0_r8 *)((const char *)vx + ix*bx);
+    //        for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+    //            _mm256_storeu_ps(d8, convert_scales((const uint16_t *)q8.y[0][ib4].d));
+    //            for (int k = 0; k < 4; ++k) {
+    //                auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq8[4*ib4+k].d));
+    //                auto sumi = q8_0_r8_dot_product((const uint8_t *)iq8[4*ib4+k].qs, q8.y[0][ib4].qs+32*k, qx);
+    //                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8[k]));
+    //                acc[0] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[0]);
+    //                acc[1] = _mm256_fmadd_ps(scales, _mm256_set1_ps(d8[k+4]), acc[1]);
+    //            }
+    //        }
+    //        if (4*(nb/4) < nb) {
+    //            auto qy = (const block_q8_2 *)q8.y[0];
+    //            for (int ib = 4*(nb/4); ib < nb; ++ib) {
+    //                auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq8[ib].d));
+    //                auto sumi = q8_0_r8_dot_product((const uint8_t *)iq8[ib].qs, qy[ib].qs, qx);
+    //                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+    //                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
+    //                acc[0] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[0]);
+    //                acc[1] = _mm256_fmadd_ps(scales, _mm256_set1_ps(m8), acc[1]);
+    //            }
+    //        }
+    //        info.store(ix, 0, _mm256_fmadd_ps(_mm256_set1_ps(-127.f), acc[1], acc[0]));
+    //        acc[0] = acc[1] = _mm256_setzero_ps();
+    //    }
+    //} else {
+        __m512  acc[2*nrc_y] = {};
+        __m512i qx[8];
+        float d8[8*nrc_y];
+        auto prepare_block = [&] (const block_iq4_ks_r16 & b, const __m512 & d4, __m512 & scales, __m512 & mins) {
+            auto iscales = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)b.scales));
+            auto ishifts = _mm512_and_si512(iscales, _mm512_set1_epi32(1));
+            auto imins   = _mm512_add_epi32(_mm512_set1_epi32(-128), _mm512_slli_epi32(ishifts, 2));
+            iscales      = _mm512_sub_epi32(_mm512_and_si512(iscales, _mm512_set1_epi32(254)), _mm512_set1_epi32(127));
+            scales  = _mm512_mul_ps(d4, _mm512_cvtepi32_ps(iscales));
+            mins    = _mm512_mul_ps(d4, _mm512_cvtepi32_ps(imins));
+            for (int j = 0; j < 4; ++j) {
+                auto bits = _mm512_loadu_si512(b.qs + 64*j);
+                qx[j+0] = _mm512_shuffle_epi8(table, _mm512_and_si512(bits, m4));
+                qx[j+4] = _mm512_shuffle_epi8(table, _mm512_and_si512(_mm512_srli_epi16(bits, 4), m4));
+            }
+        };
+        for (int ix = 0; ix < nrc_x; ix += 16) {
+            auto dptr = (const float *)((const char *)vx + ix*bx);
+            auto d4   = _mm512_loadu_ps(dptr);
+            auto iq4  = (const block_iq4_ks_r16 *)(dptr + 16);
+            __m512 scales, mins;
+            for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
+                }
+                for (int k = 0; k < 4; ++k) {
+                    prepare_block(iq4[4*ib4+k], d4, scales, mins);
+                    _Pragma("GCC unroll 8")
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto sumi = qx_r8_q8_dot_product(qx, q8.y[iy][ib4].qs+32*k);
+                        auto dy = _mm512_set1_ps(d8[8*iy+k]);
+                        acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
+                        acc[2*iy+1] = _mm512_fmadd_ps(mins, _mm512_set1_ps(d8[8*iy+k+4]), acc[2*iy+1]);
+                    }
+                }
+            }
+            for (int ib = 4*(nb/4); ib < nb; ++ib) {
+                prepare_block(iq4[ib], d4, scales, mins);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto qy = (const block_q8_2 *)q8.y[iy];
+                    auto sumi = qx_r8_q8_dot_product(qx, qy[ib].qs);
+                    auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                    auto dy = _mm512_set1_ps(d8);
+                    acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
+                    acc[2*iy+1] = _mm512_fmadd_ps(mins, _mm512_set1_ps(m8), acc[2*iy+1]);
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto sum512 = _mm512_add_ps(acc[2*iy+1], acc[2*iy+0]);
+                info.store(ix, iy, sum512);
+                acc[2*iy+0] = acc[2*iy+1] = _mm512_setzero_ps();
+            }
+        }
+    //}
+}
+
 typedef struct {
     ggml_half d[16];
     uint8_t   qs[256];
@@ -2533,9 +2627,6 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             break;
         case GGML_TYPE_MXFP4_R8:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_mxfp4_r8_q8_2, kernels)
-//#ifdef HAVE_FANCY_SIMD
-//            func16 = mul_mat_mxfp4_r8_q8_2<16>;
-//#endif
             break;
         case GGML_TYPE_Q5_0_R4:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q5_0_r4_q8_2, kernels)
@@ -2551,6 +2642,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             break;
         case GGML_TYPE_Q8_1: // Note: we are misusing the Q8_1 type for Q8_1_R8
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_1_r8_q8_2, kernels)
+            break;
+        case GGML_TYPE_IQ4_KS_R16:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq4_ks_r16_q8_2, kernels)
             break;
         default:
             return false;
