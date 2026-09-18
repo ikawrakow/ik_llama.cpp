@@ -2405,11 +2405,12 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
         auto THINK_FASTER_START = "<ifm|think_faster>";
         auto THINK_FASTER_END   = "</ifm|think_faster>";
 
+        auto nl = p.optional(p.literal("\n"));
         auto reasoning = extract_reasoning ? p.optional(
-            (THINK_START + p.reasoning(p.until_one_of({ THINK_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_END))) |
-            (THINK_FAST_START + p.reasoning(p.until_one_of({ THINK_FAST_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_FAST_END))) |
-            (THINK_FASTER_START + p.reasoning(p.until_one_of({ THINK_FASTER_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_FASTER_END)))
-        ) : p.eps();
+            (THINK_START + nl + p.reasoning(p.until_one_of({ THINK_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_END))) |
+            (THINK_FAST_START + nl + p.reasoning(p.until_one_of({ THINK_FAST_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_FAST_END))) |
+            (THINK_FASTER_START + nl + p.reasoning(p.until_one_of({ THINK_FASTER_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_FASTER_END)))
+        ) + p.space() : p.eps();
 
         auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
 
@@ -2464,17 +2465,14 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
         });
 
         auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
-        auto max_calls  = inputs.parallel_tool_calls ? 5 : 1;
-        // Outer wrapper: <ifm|tool_calls> ... </ifm|tool_calls> (end tag optional — model often omits it)
-        auto additional_calls = max_calls > 0 ? p.repeat(p.space() + tool_choice, 0, max_calls - 1) :
-                               p.repeat(p.space() + tool_choice, 0, -1);
+        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
         auto tool_calls = p.trigger_rule("tool-call",
-            p.literal(TOOL_CALLS_BEGIN) + tool_choice +
-            additional_calls +
+            p.literal(TOOL_CALLS_BEGIN) + p.space() +
+            p.repeat(tool_choice + p.space(), 1, max_calls) +
             p.optional(p.literal(TOOL_CALLS_END)));
 
         auto content_or_tools = p.content(p.until_one_of({ TOOL_CALLS_BEGIN })) +
-            p.optional(tool_calls) + p.content(p.rest());
+            (min_calls > 0 ? tool_calls : p.optional(tool_calls)) + p.content(p.rest());
 
         return generation_prompt + reasoning + content_or_tools + end;
     });
@@ -2482,9 +2480,7 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
     data.parser = parser.save();
 
     if (include_grammar) {
-        // Always use lazy grammar for K2-Horizon: the model reasons before tool calls,
-        // and the grammar trigger <ifm|tool_calls> only activates after that tag appears.
-        data.grammar_lazy = true;
+        data.grammar_lazy = !(has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED);
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
@@ -3200,8 +3196,6 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
                 mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
             } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3) {
                 mapper = std::make_unique<common_chat_peg_minimax_m3_mapper>(msg);
-            } else if (params.format == COMMON_CHAT_FORMAT_PEG_K2_HORIZON) {
-                mapper = std::make_unique<common_chat_peg_k2horizon_mapper>(msg);
             } else {
                 mapper = std::make_unique<common_chat_peg_mapper>(msg);
             }
@@ -3225,8 +3219,6 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
     } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3) {
         mapper = std::make_unique<common_chat_peg_minimax_m3_mapper>(msg);
-    } else if (params.format == COMMON_CHAT_FORMAT_PEG_K2_HORIZON) {
-        mapper = std::make_unique<common_chat_peg_k2horizon_mapper>(msg);
     } else {
         mapper = std::make_unique<common_chat_peg_mapper>(msg);
     }
