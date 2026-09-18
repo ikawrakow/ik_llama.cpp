@@ -2067,7 +2067,8 @@ static ggml_tensor * llm_build_kqv(
                                   || model.arch == LLM_ARCH_GLM4
                                   || model.arch == LLM_ARCH_GLM4_MOE
                                   || model.arch == LLM_ARCH_LAGUNA
-                                  || model.arch == LLM_ARCH_MIMO2;
+                                  || model.arch == LLM_ARCH_MIMO2
+                                  || model.arch == LLM_ARCH_K2_HORIZON;
                                // || (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8);
 
     struct ggml_tensor * cur;
@@ -2744,7 +2745,6 @@ ggml_cgraph * llm_build_context::llama_build_graph(
     llm.init();
 
     switch (model.arch) {
-        case LLM_ARCH_K2_HORIZON:   // dense K2: same tensors + graph as llama
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_GRANITE:
@@ -3072,6 +3072,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_laguna();
             } break;
+        case LLM_ARCH_K2_HORIZON:
+            {
+                result = llm.build_k2horizon();
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -3138,7 +3142,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                                   || model.arch == LLM_ARCH_COMMAND_R
                                   || model.arch == LLM_ARCH_GLM4
                                //   || model.arch == LLM_ARCH_GLM4_MOE
-                                  || model.arch == LLM_ARCH_MIMO2;
+                                  || model.arch == LLM_ARCH_MIMO2
+                                  || model.arch == LLM_ARCH_K2_HORIZON;
                                // || (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8);
 
     if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&

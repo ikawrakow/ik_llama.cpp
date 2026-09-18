@@ -260,7 +260,47 @@ void llm_load_hparams(
 
     // arch-specific KVs
     switch (model.arch) {
-        case LLM_ARCH_K2_HORIZON:   // dense K2: same tensors + graph as llama
+        case LLM_ARCH_K2_HORIZON:
+            {
+                // Common attention
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // MoVA (Mixture-of-Values Attention) — optional for dense models
+                ml.get_key(LLM_KV_ATTENTION_GROUPNORM_GROUPS,   hparams.n_norm_groups);
+                ml.get_key(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      hparams.n_value_expert, false);
+                ml.get_key(LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT, hparams.n_value_expert_used, false);
+                if (hparams.n_value_expert > 0) {
+                    hparams.f_norm_group_eps = hparams.f_norm_rms_eps;
+                }
+
+                // MoE expert FFN params
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared, false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+
+                // Dense/MoE layer split
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT, hparams.n_layer_dense_lead, false);
+
+                // Model type detection
+                if (hparams.n_expert > 0) {
+                    // MoE variant
+                    switch (hparams.n_layer) {
+                        case 48: model.type = e_model::MODEL_36B_A4B; break;
+                        default: model.type = e_model::MODEL_UNKNOWN;
+                    }
+                } else {
+                    // Dense variant
+                    switch (hparams.n_layer) {
+                        case 24: model.type = e_model::MODEL_1B; break;
+                        case 36: model.type = e_model::MODEL_4B; break;
+                        case 28: model.type = e_model::MODEL_7B; break;
+                        default: model.type = e_model::MODEL_UNKNOWN;
+                    }
+                }
+            } break;
         case LLM_ARCH_LLAMA:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);

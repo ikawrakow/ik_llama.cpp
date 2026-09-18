@@ -152,6 +152,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_EXPERT_WEIGHTS_SCALE,              "%s.expert_weights_scale"              },
     { LLM_KV_EXPERT_WEIGHTS_NORM,               "%s.expert_weights_norm"               },
     { LLM_KV_EXPERT_GATING_FUNC,                "%s.expert_gating_func"                },
+    // K2 Horizon MoVA
+    { LLM_KV_ATTENTION_GROUPNORM_GROUPS,       "%s.attention.group_norm_groups"        },
+    { LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,     "%s.attention.value_expert_count"       },
+    { LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT,"%s.attention.value_expert_used_count"  },
+    
     { LLM_KV_NEXTN_PREDICT_LAYERS,              "%s.nextn_predict_layers"              },
     { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                },
     { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                      },
