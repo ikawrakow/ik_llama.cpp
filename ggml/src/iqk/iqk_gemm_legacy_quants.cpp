@@ -2009,64 +2009,7 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
 }
 #endif
 
-//template <int nrc_y>
-//static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-//    GGML_ASSERT(nrc_x % 16 == 0);
-//    Q8<nrc_y, block_q8_2_x4> q8(info);
-//    int nb = n / QK8_0;
-//    auto table = load_iq4nl_values_512();
-//    auto m4 = _mm512_set1_epi8(0xf);
-//    __m512i qx[8];
-//    auto prepare_block = [&] (const block_iq4_ks_r16 & b, const __m512 & d4, __m512 & scales) {
-//        auto iscales = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)b.scales));
-//        iscales      = _mm512_sub_epi32(_mm512_and_si512(iscales, _mm512_set1_epi32(254)), _mm512_set1_epi32(127));
-//        scales  = _mm512_mul_ps(d4, _mm512_cvtepi32_ps(iscales));
-//        for (int j = 0; j < 4; ++j) {
-//            auto bits = _mm512_loadu_si512(b.qs + 64*j);
-//            qx[j+0] = _mm512_shuffle_epi8(table, _mm512_and_si512(bits, m4));
-//            qx[j+4] = _mm512_shuffle_epi8(table, _mm512_and_si512(_mm512_srli_epi16(bits, 4), m4));
-//        }
-//    };
-//    __m512 acc[2*nrc_y] = {};
-//    float d8[8*nrc_y];
-//    for (int ix = 0; ix < nrc_x; ix += 16) {
-//        auto dptr = (const float *)((const char *)vx + ix*bx);
-//        auto d4   = _mm512_loadu_ps(dptr);
-//        auto iq4  = (const block_iq4_ks_r16 *)(dptr + 16);
-//        __m512 scales;
-//        for (int ib4 = 0; ib4 < nb/4; ++ib4) {
-//            for (int iy = 0; iy < nrc_y; ++iy) {
-//                _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
-//            }
-//            for (int k = 0; k < 4; ++k) {
-//                prepare_block(iq4[4*ib4+k], d4, scales);
-//                _Pragma("GCC unroll 8")
-//                for (int iy = 0; iy < nrc_y; ++iy) {
-//                    auto sumi = qx_r8_q8_dot_product(qx, q8.y[iy][ib4].qs+32*k);
-//                    auto dy = _mm512_set1_ps(d8[8*iy+k]);
-//                    acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-//                    acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(d8[8*iy+k+4]), acc[2*iy+1]);
-//                }
-//            }
-//        }
-//        for (int ib = 4*(nb/4); ib < nb; ++ib) {
-//            prepare_block(iq4[ib], d4, scales);
-//            for (int iy = 0; iy < nrc_y; ++iy) {
-//                auto qy = (const block_q8_2 *)q8.y[iy];
-//                auto sumi = qx_r8_q8_dot_product(qx, qy[ib].qs);
-//                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
-//                auto dy = _mm512_set1_ps(d8);
-//                acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-//                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(m8), acc[2*iy+1]);
-//            }
-//        }
-//        for (int iy = 0; iy < nrc_y; ++iy) {
-//            auto sum512 = _mm512_fmadd_ps(_mm512_set1_ps(-128.f), acc[2*iy+1], acc[2*iy+0]);
-//            info.store(ix, iy, sum512);
-//            acc[2*iy+0] = acc[2*iy+1] = _mm512_setzero_ps();
-//        }
-//    }
-//}
+#ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x % 16 == 0);
@@ -2128,6 +2071,87 @@ static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const Dat
         }
     }
 }
+#else
+template <int nrc_y>
+static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x % 16 == 0);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
+    int nb = n / QK8_0;
+    auto table128 = _mm_loadu_si128((const __m128i *)iq4k_values);
+    auto table = MM256_SET1_M128I(table128);
+    auto m4 = _mm256_set1_epi8(0xf);
+    auto m1 = _mm256_set1_epi16(1);
+    __m256i qx[8];
+    __m256  d4, scales, shifts;
+    auto prepare_block = [&d4, &scales, &shifts, &table, &m4, &qx] (const block_iq4_ks_r16 & b, int ip) {
+        auto iscales = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(b.scales+8*ip)));
+        auto ishifts = _mm256_slli_epi32(_mm256_and_si256(iscales, _mm256_set1_epi32(1)), 2);
+        scales = _mm256_mul_ps(d4, _mm256_cvtepi32_ps(_mm256_add_epi32(_mm256_and_si256(iscales, _mm256_set1_epi32(254)), _mm256_set1_epi32(-127))));
+        shifts = _mm256_mul_ps(scales, _mm256_cvtepi32_ps(ishifts));
+        for (int j = 0; j < 4; ++j) {
+            auto bits = _mm256_loadu_si256((const __m256i *)(b.qs + 64*j + 32*ip));
+            qx[j+0] = _mm256_shuffle_epi8(table, _mm256_and_si256(bits, m4));
+            qx[j+4] = _mm256_shuffle_epi8(table, _mm256_and_si256(_mm256_srli_epi16(bits, 4), m4));
+        }
+    };
+    auto dot = [&m1, &qx] (const int8_t * y) {
+        auto s0 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[0], qx[0]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y +  0))), qx[0]));
+        auto s1 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[1], qx[1]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y +  4))), qx[1]));
+        auto sumi1 = _mm256_add_epi32(_mm256_madd_epi16(m1, s0), _mm256_madd_epi16(m1, s1));
+        s0 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[2], qx[2]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y +  8))), qx[2]));
+        s1 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[3], qx[3]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y + 12))), qx[3]));
+        auto sumi2 = _mm256_add_epi32(_mm256_madd_epi16(m1, s0), _mm256_madd_epi16(m1, s1));
+        s0 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[4], qx[4]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y + 16))), qx[4]));
+        s1 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[5], qx[5]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y + 20))), qx[5]));
+        auto sumi3 = _mm256_add_epi32(_mm256_madd_epi16(m1, s0), _mm256_madd_epi16(m1, s1));
+        s0 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[6], qx[6]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y + 24))), qx[6]));
+        s1 = _mm256_maddubs_epi16(_mm256_sign_epi8(qx[7], qx[7]), _mm256_sign_epi8(_mm256_set1_epi32(*((const int32_t *)(y + 28))), qx[7]));
+        auto sumi4 = _mm256_add_epi32(_mm256_madd_epi16(m1, s0), _mm256_madd_epi16(m1, s1));
+        sumi1 = _mm256_add_epi32(sumi1, sumi2);
+        sumi3 = _mm256_add_epi32(sumi3, sumi4);
+        return _mm256_add_epi32(sumi1, sumi3);
+    };
+    __m256 acc[nrc_y] = {};
+    float d8[8*nrc_y];
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        auto dptr = (const float *)((const char *)vx + ix*bx);
+        auto iq4 = (const block_iq4_ks_r16 *)(dptr + 16);
+        for (int ip = 0; ip < 2; ++ip) {
+            d4 = _mm256_loadu_ps(dptr+8*ip);
+            for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
+                }
+                for (int k = 0; k < 4; ++k) {
+                    prepare_block(iq4[4*ib4+k], ip);
+                    _Pragma("GCC unroll 8")
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto sumi = dot(q8.y[iy][ib4].qs+32*k);
+                        auto dy = _mm256_set1_ps(d8[8*iy+k]);
+                        acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(scales, dy), _mm256_cvtepi32_ps(sumi), acc[iy]);
+                        acc[iy] = _mm256_fmadd_ps(shifts, _mm256_set1_ps(d8[8*iy+k+4]), acc[iy]);
+                    }
+                }
+            }
+            for (int ib = 4*(nb/4); ib < nb; ++ib) {
+                prepare_block(iq4[ib], ip);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto qy = (const block_q8_2 *)q8.y[iy];
+                    auto sumi = dot(qy[ib].qs);
+                    auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                    auto dy = _mm256_set1_ps(d8);
+                    acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(scales, dy), _mm256_cvtepi32_ps(sumi), acc[iy]);
+                    acc[iy] = _mm256_fmadd_ps(shifts, _mm256_set1_ps(m8), acc[iy]);
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                info.store(ix + 8*ip, iy, acc[iy]);
+                acc[iy] = _mm256_setzero_ps();
+            }
+        }
+    }
+}
+#endif
 
 typedef struct {
     ggml_half d[16];
