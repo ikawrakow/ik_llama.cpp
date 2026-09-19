@@ -67,17 +67,18 @@ static ggml_tensor * k2_horizon_routed_value(
             GGML_ABORT("Unsupported K2 Horizon value-router gating function");
     }
 
-    // optional bias
-    if (layer.attn_v_gate_b != nullptr) {
-        probs = ggml_add(ctx, probs, layer.attn_v_gate_b);
-        cb(probs, "v_moe_probs_biased", il);
-    }
-
     cb(logits, "v_moe_logits", il);
     cb(probs, "v_moe_probs", il);
 
+    // the bias selects the experts; the weights come from the unbiased probs
+    ggml_tensor * choice_probs = probs;
+    if (layer.attn_v_gate_b != nullptr) {
+        choice_probs = ggml_add(ctx, probs, layer.attn_v_gate_b);
+        cb(choice_probs, "v_moe_probs_biased", il);
+    }
+
     // top-k selection
-    ggml_tensor * selected_experts = ggml_top_k(ctx, probs, n_used); // [n_used, n_tokens]
+    ggml_tensor * selected_experts = ggml_top_k(ctx, choice_probs, n_used); // [n_used, n_tokens]
 
     // extract selected weights via argsort-style indexing
     ggml_tensor * selection_probs = ggml_reshape_3d(ctx, probs, 1, n_values, n_tokens);
