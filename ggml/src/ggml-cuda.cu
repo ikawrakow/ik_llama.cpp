@@ -1074,7 +1074,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
                 ggml_cuda_set_device(i);
                 GGML_ASSERT(split->type == tensor->type);
                 GGML_ASSERT((int)ggml_nrows(split) == nrows);
-                GGML_ASSERT(split->ne[0] % bs == 0);
+                GGML_ASSERT(ne % bs == 0);
                 auto source_offset = n_interleave*(tt.row_meta_size + (ne / bs) * ts);
                 auto split_row_size = ggml_row_size(split->type, split->ne[0]);
                 if (host_buffer.size() < nrows*split_row_size) host_buffer.resize(nrows*split_row_size);
