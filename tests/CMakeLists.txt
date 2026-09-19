@@ -189,6 +189,15 @@ endif()
 llama_build_and_test(test-jinja.cpp)
 llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
 llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+if (LLAMA_BUILD_EXAMPLES AND LLAMA_BUILD_SERVER AND NOT EMSCRIPTEN)
+    llama_build_and_test(test-server-chat.cpp ../examples/server/server-context-chat.cpp)
+    target_include_directories(test-server-chat PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/examples/server
+        ${PROJECT_SOURCE_DIR}/examples/mtmd
+    )
+    target_link_libraries(test-server-chat PRIVATE mtmd)
+endif()
 llama_build_and_test(test-chat-template.cpp )
 llama_build_and_test(test-json-partial.cpp )
 #llama_build_and_test(test-log.cpp)
