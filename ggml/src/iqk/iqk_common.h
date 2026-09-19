@@ -595,9 +595,22 @@ static inline float convert_to_q8_k_r8(int k, float d0, const __m256i * qx, cons
     if (dnew < 1.f) {
         dnew = 1.f; needs_scaling = false;
     }
-    auto scale = _mm256_set1_ps(std::abs(dnew) > 1e-9f ? 1/dnew : 0.f);
+    const float inv_dnew = std::abs(dnew) > 1e-9f ? 1/dnew : 0.f;
+#ifdef HAVE_FANCY_SIMD
+    auto scale = _mm512_set1_ps(inv_dnew);
+#else
+    auto scale = _mm256_set1_ps(inv_dnew);
+#endif
     for (int ib32 = 0; ib32 < 8; ++ib32) {
         if (needs_scaling) {
+#ifdef HAVE_FANCY_SIMD
+            auto w0 = _mm512_cvt_roundps_epi32(_mm512_mul_ps(scale, _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(qs[2*ib32+0]))), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+            auto w1 = _mm512_cvt_roundps_epi32(_mm512_mul_ps(scale, _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(qs[2*ib32+1]))), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+            auto i0 = _mm512_castsi512_si256(w0);
+            auto i1 = _mm512_extracti64x4_epi64(w0, 1);
+            auto i2 = _mm512_castsi512_si256(w1);
+            auto i3 = _mm512_extracti64x4_epi64(w1, 1);
+#else
             auto i0 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(qs[2*ib32+0]));
             auto i1 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(qs[2*ib32+0], 1));
             auto i2 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(qs[2*ib32+1]));
@@ -606,6 +619,7 @@ static inline float convert_to_q8_k_r8(int k, float d0, const __m256i * qx, cons
             i1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i1)), _MM_ROUND_NEAREST));
             i2 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i2)), _MM_ROUND_NEAREST));
             i3 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i3)), _MM_ROUND_NEAREST));
+#endif
             i0 = _mm256_packs_epi32(i0, i1);
             i2 = _mm256_packs_epi32(i2, i3);
             i0 = _mm256_packs_epi16(i0, i2);
