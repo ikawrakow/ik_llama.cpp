@@ -2091,6 +2091,42 @@ static void launch_fattn_new_mma(
     CUDA_CHECK(cudaGetLastError());
 }
 
+template <int DKQ, int DV, int ncols1, int ncols2>
+static inline size_t get_shmem_size(ggml_backend_cuda_context & ctx) {
+    typedef fattn_mma_f16_config<DKQ, DV> c;
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    const int nstages = cp_async_available(cc) ? c::nstages_target : 0;
+    constexpr int ncols         = ncols1 * ncols2;
+    //constexpr int ntiles        = DKQ == 512 ? 2 : ncols <= 8 && DKQ < 576 ? 1 : 2; // Number of tiles per warp.
+    constexpr int ntiles        = ncols <= 8 && DKQ < 512 ? 1 : 2; // Number of tiles per warp.
+    constexpr int cols_per_warp = ntiles * tile_B::I;
+    constexpr int nwarps_max_x  = (ncols + cols_per_warp - 1) / cols_per_warp;
+    constexpr int nwarps_max_y  = c::nbatch_fa / tile_A::I;
+    constexpr int nwarps        = nwarps_max_x*nwarps_max_y <= c::nwarps_max ? nwarps_max_x*nwarps_max_y : c::nwarps_max;
+
+    const int nbatch_K2      = c::get_nbatch_K2_host     (cc, ncols);
+    const int nbatch_V2      = c::get_nbatch_K2_host     (cc, ncols);
+    const int nbatch_combine = c::get_nbatch_combine_host(cc, ncols);
+
+    static_assert(DKQ   % tile_B::J     == 0, "bad DKQ");
+    static_assert(DV    % tile_A::J     == 0, "bad DV");
+    static_assert(ncols % cols_per_warp == 0, "bad ncols");
+
+    const size_t nbytes_shared_KV_1stage = c::nbatch_fa         * std::max(nbatch_K2 + 4,  nbatch_V2 + 4) * sizeof(half2);
+    const size_t nbytes_shared_KV_2stage = c::nbatch_fa         *         (nbatch_K2 + 4 + nbatch_V2 + 4) * sizeof(half2);
+    const size_t nbytes_shared_Q         = ncols                * (DKQ/2 + 4)                             * sizeof(half2);
+    const size_t nbytes_shared_mask      = ncols1               * (c::nbatch_fa/2 + 4)                    * sizeof(half2);
+    const size_t nbytes_shared_combine   = nwarps*cols_per_warp * (nbatch_combine + 4)                    * sizeof(half2);
+
+    const size_t nbytes_shared_KV = nstages <= 1 ? nbytes_shared_KV_1stage : nbytes_shared_KV_2stage;
+
+    const size_t nbytes_shared_total = std::max(nbytes_shared_combine, c::Q_in_reg ?
+        std::max(nbytes_shared_Q,  nbytes_shared_KV + nbytes_shared_mask) :
+                 nbytes_shared_Q + nbytes_shared_KV + nbytes_shared_mask);
+
+    return nbytes_shared_total;
+}
+
 
 template <int DKQ, int DV, int ncols1, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -2196,7 +2232,15 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
         return;
     }
 
-    if (Q->ne[1] <= 32/ncols2 || (DKQ == 512 && ncols2 == 16)) {
+    bool can_use_64 = true;
+    if (Q->ne[1] > 32/ncols2 && !(DKQ == 512 && ncols2 == 16) && DKQ != 512) {
+        auto shmem = get_shmem_size<DKQ, DV, 64/ncols2, ncols2>(ctx);
+        if (shmem > ggml_cuda_info().devices[ctx.device].smpbo) {
+            can_use_64 = false;
+        }
+    }
+
+    if (Q->ne[1] <= 32/ncols2 || (DKQ == 512 && ncols2 == 16) || !can_use_64) {
         ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 32/ncols2, ncols2>(ctx, dst);
         return;
     }
