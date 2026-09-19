@@ -2459,7 +2459,7 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
             auto func_parser = p.tool(
                 p.tool_open(p.literal(TOOL_CALL_BEGIN) + p.tool_name(p.literal(name)) + p.literal("\n")) +
                 p.tool_args(args) +
-                p.tool_close(p.optional(p.literal(TOOL_CALL_END))));
+                p.tool_close(p.literal(TOOL_CALL_END)));
 
             tool_choice |= p.rule("tool-" + name, func_parser);
         });
