@@ -3844,7 +3844,6 @@ void iqk_quantize_row_q8_K_T(const float * x, void * vy, int64_t k) {
         xx = xb;
         int8_t * q8 = y[i].qs;
         int block_sum_i32 = 0;
-        float block_sum_f32 = 0;
         for (int ib = 0; ib < QK_K/32; ++ib) {
             __m256 v0 = _mm256_mul_ps(mul, _mm256_loadu_ps(xx)); xx += 8;
             __m256 v1 = _mm256_mul_ps(mul, _mm256_loadu_ps(xx)); xx += 8;
@@ -3862,7 +3861,7 @@ void iqk_quantize_row_q8_K_T(const float * x, void * vy, int64_t k) {
                 int bsum = hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)));
                 auto bs = (float *)y[i].bsums;
                 bs[ib] = d*bsum;
-                block_sum_f32 += bs[ib];
+                block_sum_i32 += bsum;
             } else {
                 y[i].bsums[2*ib+0] = hsum_i32_8(_mm256_add_epi32(i0, i1));
                 y[i].bsums[2*ib+1] = hsum_i32_8(_mm256_add_epi32(i2, i3));
@@ -3875,11 +3874,7 @@ void iqk_quantize_row_q8_K_T(const float * x, void * vy, int64_t k) {
             _mm256_storeu_si256((__m256i *)q8, i0);
             q8 += 32;
         }
-        if constexpr (q8_type == 1) {
-            y[i].sum = block_sum_f32;
-        } else {
-            y[i].sum = d*block_sum_i32;
-        }
+        y[i].sum = d*block_sum_i32;
         //if constexpr (q8_type == 2) {
         //    auto bs = (float *)y[i].bsums;
         //    float sum = 0;
@@ -3914,16 +3909,16 @@ void iqk_quantize_row_q8_K_T(const float * x, void * vy, int64_t k) {
         float d = 1/iscale;
         if constexpr (q8_type == 1) {
             auto bs = (float *)y[i].bsums;
-            float sum = 0;
+            int tot = 0;
             for (int j = 0; j < QK_K/32; ++j) {
                 int sum = 0;
                 for (int ii = 0; ii < 32; ++ii) {
                     sum += y[i].qs[j*32 + ii];
                 }
                 bs[j] = d*sum;
-                sum += bs[j];
+                tot += sum;
             }
-            y[i].sum = sum;
+            y[i].sum = d*tot;
         } else {
             int tot = 0;
             for (int j = 0; j < QK_K/16; ++j) {

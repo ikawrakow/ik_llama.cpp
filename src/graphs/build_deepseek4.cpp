@@ -4,6 +4,7 @@
 #include "../llama-dsv4.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -778,7 +779,7 @@ static ggml_tensor * dsv4_build_lid_top_k_shared(
                 indexer_mask->ne[0], n_tokens, indexer_mask->nb[1],
                 s*n_tokens*indexer_mask->nb[1]);
 
-        ggml_tensor * cur = ggml_indexer_topk(ctx0, k, q, w, mask,
+        ggml_tensor * cur = ggml_indexer_topk(ctx0, k, q, w, mask, nullptr,
                 GGML_UNARY_OP_RELU, n_top_k);
         if (selected) {
             selected = ggml_concat(ctx0, selected, cur, 1);
@@ -1386,10 +1387,21 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             //        "merged DSV4 MoE gate tensors use an unsupported layout");
             ggml_tensor * selected_experts = nullptr;
             ggml_tensor * exp_probs_b = model.layers[il].ffn_exp_probs_b;
-            if ((uint32_t) il < hparams.dsv4_hash_layer_count) {
+            const bool is_media = lctx.inp_embd != nullptr;
+            if (is_media && model.layers[il].ffn_exp_probs_b_vl != nullptr) {
+                // image tokens route through the vision bias instead of the hash path
+                exp_probs_b = model.layers[il].ffn_exp_probs_b_vl;
+            } else if ((uint32_t) il < hparams.dsv4_hash_layer_count && lctx.inp_tokens != nullptr) {
                 selected_experts = ggml_get_rows(ctx0, model.layers[il].ffn_gate_tid2eid, lctx.inp_tokens);
                 cb(selected_experts, "hashed_exps", il);
                 exp_probs_b = nullptr;
+            } else if (is_media && (uint32_t) il < hparams.dsv4_hash_layer_count) {
+                // media batch without the vision bias: no token ids for the hash-layer gather; fall back to generic expert routing (degraded, but valid).
+                static std::atomic_bool warned_media_hash_fallback{false};
+                bool expect = false;
+                if (warned_media_hash_fallback.compare_exchange_strong(expect, true)) {
+                    LLAMA_LOG_WARN("%s: hash layers lack the vision expert-routing bias (exp_probs_b_vl); image tokens fall back to generic expert routing there. Re-export the model with blk.N.exp_probs_b_vl.bias to restore vision expert routing on hash layers\n", __func__);
+                }
             }
 
             // Hash layers carry an explicit fixed-width expert map. During

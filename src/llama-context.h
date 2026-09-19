@@ -74,6 +74,9 @@ struct llama_kv_cache {
     static uint32_t get_padding(bool flash_attn) { return flash_attn ? 256u : 32u; }
 
     bool has_shift = false;
+    // cell-index order no longer matches position order; index-based SWA attention
+    // windowing must not be used
+    bool cells_disordered = false;
     bool do_defrag = false;
     bool do_copy   = false;
     bool recurrent = false; // with recurrent state models, a cell can hold the state for more than one past token
@@ -174,6 +177,10 @@ struct llama_kv_cache {
         // One tensor per recurrent layer, each sized [conv_dim * max_tokens].
         //std::vector<std::vector<ggml_tensor *>> per_step_qkv;
         std::vector<std::vector<ggml_tensor *>> per_step_conv;
+        // Qwen4Exp PLE checkpoint state
+        std::vector<std::vector<ggml_tensor *>> per_step_ple;
+        std::vector<int64_t> per_step_ple_dim;
+        std::vector<int64_t> per_step_ple_offset;
 
         int32_t per_step_n_tokens = 0;
         int32_t per_step_max_allocated = 0;
@@ -229,6 +236,28 @@ struct llama_kv_cache {
         void release_dsv4_per_step();
         void release_dsv4_snapshot();
 
+        void release_per_step() {
+            for (struct ggml_context * ctx : per_step_ctxs) {
+                ggml_free(ctx);
+            }
+            for (ggml_backend_buffer_t buf : per_step_bufs) {
+                ggml_backend_buffer_free(buf);
+            }
+            per_step_ctxs.clear();
+            per_step_bufs.clear();
+            per_step_ssm.clear();
+            per_step_conv.clear();
+            per_step_ple.clear();
+            per_step_ple_dim.clear();
+            per_step_ple_offset.clear();
+            per_step_n_tokens = 0;
+            per_step_max_allocated = 0;
+            per_step_ssm_state_size = 0;
+            per_step_conv_state_dim = 0;
+            per_step_conv_dim = 0;
+            per_step_d_conv = 0;
+        }
+
         void release() {
             release_dsv4_per_step();
             release_dsv4_snapshot();
@@ -246,17 +275,7 @@ struct llama_kv_cache {
             allocated = false;
             saved = false;
 
-            for (struct ggml_context * ctx : per_step_ctxs) {
-                ggml_free(ctx);
-            }
-            per_step_ctxs.clear();
-            for (ggml_backend_buffer_t buf : per_step_bufs) {
-                ggml_backend_buffer_free(buf);
-            }
-            per_step_bufs.clear();
-            per_step_ssm.clear();
-            per_step_conv.clear();
-            per_step_max_allocated = 0;
+            release_per_step();
         }
 
         ~gpu_checkpoint() {
@@ -274,7 +293,7 @@ struct llama_kv_cache {
 
     // Per-step checkpoint: allocate, restore step k's full state (SSM + conv) to cache
     bool per_step_alloc(const llama_model & model, int max_tokens);
-    bool per_step_restore(const llama_model & model, ggml_backend_sched_t sched, int step);
+    bool per_step_restore(ggml_backend_sched_t sched, int step, uint32_t slot);
 
     ~llama_kv_cache() {
         for (struct ggml_context * ctx : ctxs) {
@@ -637,6 +656,10 @@ struct llama_context {
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
+    struct ggml_tensor * inp_kpool_cells     = nullptr; // I32 [kpool*n_pool] cell index of each pool member (pool b, member j at [b*kpool+j])
+    struct ggml_tensor * inp_kpool_bias      = nullptr; // F32 [n_pool, n_tokens] 0 if pool complete & visible to query, else -inf
+    struct ggml_tensor * inp_kpool_tail      = nullptr; // I32 [kpool-1, n_tokens] trailing incomplete pool cells (null when kpool==1)
+    struct ggml_tensor * inp_kpool_ape_slots = nullptr; // I32 [kpool] identity [0..kpool-1], gathers the ape rows in order
 
     // Qwen sparse attention: everything that depends on cache layout is computed on the host,
     // so the graph only gathers, pools and scores. One entry per distinct compress ratio.
@@ -656,13 +679,8 @@ struct llama_context {
     // pool every block; set on state restore and defrag, cleared by that graph's host fill
     bool qsa_pooled_stale = false;
 
-    // each sequence's recent tokens, read by the n-gram hash when a ubatch does not carry its
-    // first tokens' predecessors; trusted only while contiguous with the incoming position
-    struct ple_history {
-        llama_pos next_pos = -1;
-        std::vector<llama_token> toks;
-    };
-    std::map<llama_seq_id, ple_history> ple_hist;
+    // token at each position of a sequence, read by the PLE n-gram hash
+    std::map<llama_seq_id, std::vector<llama_token>> ple_hist;
 
     struct swa_window_view_state {
         bool active       = false;

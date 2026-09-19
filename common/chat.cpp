@@ -703,6 +703,8 @@ const char * common_chat_format_name(common_chat_format format) {
             return "peg-gemma4";
         case COMMON_CHAT_FORMAT_PEG_MINIMAX_M3:
             return "peg-minimax-m3";
+        case COMMON_CHAT_FORMAT_PEG_K2_HORIZON:
+            return "peg-k2-horizon";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -782,6 +784,9 @@ static std::string common_chat_template_direct_apply_impl(
         {"bos_token", tmpl.bos_token()},
         {"eos_token", tmpl.eos_token()},
         {"enable_thinking", inputs.enable_thinking},
+        // LFM2.5: whether previous assistant reasoning is kept in the prompt
+        // (separate from enable_thinking; can be overridden via chat_template_kwargs)
+        {"preserve_thinking", false},
     };
     // openPangu's chat template gates reasoning on a `thinking` variable rather than the
     // ecosystem-standard `enable_thinking`, so the normal toggle never reaches it. Bridge the
@@ -1648,12 +1653,11 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     return data;
 }
 
-// LFM2.5 format: uses plain "List of tools: [...]" in system prompt, no wrapper tokens.
-// Tool calls are bare [name(arg="val")], though model may optionally emit <|tool_call_start|>.
-// - Reasoning: <think>{reasoning}</think> (optional)
+// LFM2.5 format: "List of tools: [...]" in the system prompt, no wrapper tokens.
+// - Reasoning: <think>{reasoning}</think> (the template opens the generation turn with <think>)
 // - Content: text before a tool call (optional)
-// - Tool calls: Python-style, e.g. [function_name(arg1="value1", arg2="value2")]
-//   Tool calls can appear multiple times (parallel tool calls supported)
+// - Tool calls: [name(arg="val")], bare (legacy) or wrapped in
+//   <|tool_call_start|>...<|tool_call_end|>; can appear multiple times (parallel).
 static common_chat_params common_chat_params_init_lfm2_5(const common_chat_template &    tmpl,
                                                          const autoparser::generation_params & inputs) {
     common_chat_params data;
@@ -1683,7 +1687,9 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
         auto end = p.end();
 
         auto reasoning = p.eps();
-        if (extract_reasoning && inputs.enable_thinking) {
+        // the template opens the generation turn with <think>, so extract the
+        // reasoning even when enable_thinking was not supplied
+        if (extract_reasoning) {
             reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
         }
 
@@ -1699,7 +1705,8 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
 
         auto content = p.content(p.until_one_of({"<|tool_call_start|>", "["}));
         auto maybe_start = p.optional(p.literal("<|tool_call_start|>"));
-        return generation_prompt + reasoning + content + maybe_start + tool_calls + end;
+        auto maybe_end   = p.optional(p.literal("<|tool_call_end|>"));
+        return generation_prompt + reasoning + content + maybe_start + tool_calls + maybe_end + end;
     });
 
     data.parser = parser.save();
@@ -2356,6 +2363,140 @@ static common_chat_params common_chat_params_init_cohere2moe(const common_chat_t
     return data;
 }
 
+// K2 Horizon (abenzerps/IFM template) — uses <ifm|think> tags and <ifm|tool_calls> format.
+// Detection: template has "<ifm|think>" and "<ifm|tool_calls>" markers.
+static common_chat_params common_chat_params_init_k2_horizon(const common_chat_template &    tmpl,
+                                                            const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.format             = COMMON_CHAT_FORMAT_PEG_K2_HORIZON;
+    data.supports_thinking  = true;
+
+    const std::string THINK_START     = "<ifm|think>";
+    const std::string THINK_END       = "</ifm|think>";
+    const std::string TOOL_CALLS_BEGIN = "<ifm|tool_calls>";
+    const std::string TOOL_CALLS_END   = "</ifm|tool_calls>";
+    const std::string TOOL_CALL_BEGIN  = "<ifm|tool_call>";
+    const std::string TOOL_CALL_END    = "</ifm|tool_call>";
+
+    data.thinking_start_tag = THINK_START;
+    data.thinking_end_tag   = THINK_END;
+    data.preserved_tokens   = {
+        THINK_START, THINK_END,
+        "<ifm|think_fast>", "</ifm|think_fast>",
+        "<ifm|think_faster>", "</ifm|think_faster>",
+        TOOL_CALLS_BEGIN, TOOL_CALLS_END,
+        TOOL_CALL_BEGIN, TOOL_CALL_END,
+        "<ifm|arg_key>", "</ifm|arg_key>",
+        "<ifm|arg_value>", "</ifm|arg_value>",
+        "<ifm|arg_type>", "</ifm|arg_type>",
+    };
+
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto end = p.end();
+
+        auto THINK_FAST_START   = "<ifm|think_fast>";
+        auto THINK_FAST_END     = "</ifm|think_fast>";
+        auto THINK_FASTER_START = "<ifm|think_faster>";
+        auto THINK_FASTER_END   = "</ifm|think_faster>";
+
+        auto nl = p.optional(p.literal("\n"));
+        auto reasoning = extract_reasoning ? p.optional(
+            (THINK_START + nl + p.reasoning(p.until_one_of({ THINK_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_END))) |
+            (THINK_FAST_START + nl + p.reasoning(p.until_one_of({ THINK_FAST_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_FAST_END))) |
+            (THINK_FASTER_START + nl + p.reasoning(p.until_one_of({ THINK_FASTER_END, TOOL_CALLS_BEGIN })) + p.optional(p.literal(THINK_FASTER_END)))
+        ) + p.space() : p.eps();
+
+        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+
+        // Content only (no tools)
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return generation_prompt + reasoning + p.content(p.rest()) + end;
+        }
+
+        // Tools + content — model generates (XML format, default):
+        //   <ifm|tool_call>NAME\n<ifm|arg_key>PARAM</ifm|arg_key>\n<ifm|arg_value>VALUE</ifm|arg_value>\n</ifm|tool_call>
+        auto tool_choice = p.choice();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            std::string  name     = function.at("name");
+            auto params = function.contains("parameters") ? function.at("parameters") : json::object();
+            const auto & props = params.contains("properties") ? params.at("properties") : json::object();
+
+            auto schema_info = common_schema_info();
+            schema_info.resolve_refs(params);
+
+            // Build per-parameter arg rules matching XML arg_key/arg_value tags
+            std::vector<common_peg_parser> arg_rules;
+            for (const auto & [param_name, param_schema] : props.items()) {
+                bool is_string = schema_info.resolves_to_string(param_schema);
+
+                auto value_parser = is_string
+                    ? p.tool_arg_string_value(p.until("</ifm|arg_value>"))
+                    : p.tool_arg_json_value(
+                        p.schema(p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false));
+
+                auto arg = p.tool_arg(
+                    p.tool_arg_open(p.literal("<ifm|arg_key>") + p.tool_arg_name(p.literal(param_name)) + p.literal("</ifm|arg_key>\n")) +
+                    p.literal("<ifm|arg_value>") +
+                    value_parser +
+                    p.tool_arg_close(p.literal("</ifm|arg_value>\n")));
+
+                arg_rules.push_back(p.rule("tool-" + name + "-arg-" + param_name, arg));
+            }
+
+            auto args = p.eps();
+            if (!arg_rules.empty()) {
+                args = p.zero_or_more(p.choice(arg_rules));
+            }
+
+            // Match: <ifm|tool_call>NAME\nargs...</ifm|tool_call>
+            auto func_parser = p.tool(
+                p.tool_open(p.literal(TOOL_CALL_BEGIN) + p.tool_name(p.literal(name)) + p.literal("\n")) +
+                p.tool_args(args) +
+                p.tool_close(p.optional(p.literal(TOOL_CALL_END))));
+
+            tool_choice |= p.rule("tool-" + name, func_parser);
+        });
+
+        auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
+        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
+        auto tool_calls = p.trigger_rule("tool-call",
+            p.literal(TOOL_CALLS_BEGIN) + p.space() +
+            p.repeat(tool_choice + p.space(), 1, max_calls) +
+            p.optional(p.literal(TOOL_CALLS_END)));
+
+        auto content_or_tools = p.content(p.until_one_of({ TOOL_CALLS_BEGIN })) +
+            (min_calls > 0 ? tool_calls : p.optional(tool_calls)) + p.content(p.rest());
+
+        return generation_prompt + reasoning + content_or_tools + end;
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = !(has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED);
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, TOOL_CALLS_BEGIN }
+        };
+    }
+
+    return data;
+}
+
 namespace workaround {
 
 static void map_developer_role_to_system(json & messages) {
@@ -2571,6 +2712,131 @@ static json common_chat_extra_context() {
     return ctx;
 }
 
+// MiniCPM5 - XML tool calls with <function name="..."><param name="...">...</param></function>
+// Port of ggml-org/llama.cpp common/parsers/minicpm5.cpp, adapted to this tree:
+// - no message_delimiters / continuation block (no such concepts here)
+// - per-arg rules use this tree's schema idiom (common_schema_info +
+//   p.rule("tool-<name>-arg-<param>")) instead of p.ac()
+// - reasoning is optional so thinking-disabled servers still parse
+static common_chat_params common_chat_params_init_minicpm5(const common_chat_template &          tmpl,
+                                                           const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking = true;
+    data.preserved_tokens  = {
+        "<function",
+        "<param",
+        "</function>",
+        "</param>",
+        "<think>",
+        "</think>",
+    };
+
+    data.thinking_start_tag = "<think>";
+    data.thinking_end_tag   = "</think>";
+
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto generation_prompt = p.prefix(inputs.generation_prompt, "<think>");
+
+        auto reasoning = p.eps();
+        if (extract_reasoning) {
+            reasoning = p.optional(p.literal("<think>") + p.reasoning(p.until("</think>")) + p.literal("</think>")) + p.space();
+        }
+
+        // Response format parser
+        if (has_response_format) {
+            return generation_prompt + reasoning + p.content(p.schema(p.json(), "response-format", inputs.json_schema));
+        }
+
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return generation_prompt + reasoning + p.content(p.rest()) + p.end();
+        }
+
+        // CDATA lets a value carry characters that would otherwise close the tag (e.g.
+        // </param>); capture the inner text only, excluding the CDATA markers.
+        auto tool_choice = p.choice();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto &      function = tool.at("function");
+            const std::string name     = function.at("name");
+            auto params = function.contains("parameters") ? function.at("parameters") : json::object();
+            const auto & props = params.contains("properties") ? params.at("properties") : json::object();
+
+            auto schema_info = common_schema_info();
+            schema_info.resolve_refs(params);
+
+            std::vector<common_peg_parser> arg_rules;
+            for (const auto & [param_name, param_schema] : props.items()) {
+                bool is_string = schema_info.resolves_to_string(param_schema);
+
+                common_peg_parser value_parser = is_string
+                    ? p.choice({
+                        p.literal("<![CDATA[") + p.tool_arg_string_value(p.until("]]>")) + p.literal("]]>") + p.tool_arg_close(p.literal("</param>")),
+                        p.negate(p.literal("<![CDATA[")) + p.tool_arg_string_value(p.until("</param>")) + p.tool_arg_close(p.literal("</param>")),
+                    })
+                    : p.tool_arg_json_value(
+                            p.schema(p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
+                        p.tool_arg_close(p.literal("</param>"));
+
+                auto arg = p.tool_arg(
+                    p.tool_arg_open(p.literal("<param name=\"") + p.tool_arg_name(p.literal(param_name)) + p.literal("\">")) +
+                    value_parser);
+
+                arg_rules.push_back(p.rule("tool-" + name + "-arg-" + param_name, arg));
+            }
+
+            auto args = p.eps();
+            if (!arg_rules.empty()) {
+                args = p.zero_or_more(p.choice(arg_rules) + p.space());
+            }
+
+            auto tool_parser = p.tool(
+                p.tool_open(p.literal("<function name=\"") + p.tool_name(p.literal(name)) + p.literal("\">")) +
+                p.tool_args(args) +
+                p.tool_close(p.literal("</function>")));
+
+            tool_choice |= p.rule("tool-" + name, tool_parser);
+        });
+
+        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
+        auto tool_calls = p.trigger_rule("tool-call", p.repeat(tool_choice + p.space(), 1, max_calls));
+
+        auto content = p.content(p.until("<function"));
+
+        return generation_prompt + reasoning + content + tool_calls + p.end();
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
+                builder.resolve_refs(schema);
+            });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function" },
+        };
+    }
+
+    return data;
+}
+
 std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
@@ -2675,6 +2941,21 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_gemma4(tmpl, params);
     }
 
+    // MiniCPM5 - XML tool calls with <function name="..."><param name="...">...</param></function>
+    if (src.find("Tool usage guidelines:") != std::string::npos &&
+        src.find("<function name=\"") != std::string::npos &&
+        src.find("<param name=\"") != std::string::npos) {
+        LOG_DBG("Using specialized template: MiniCPM5\n");
+        return common_chat_params_init_minicpm5(tmpl, params);
+    }
+
+
+    // K2 Horizon — uses <ifm|think> and <ifm|tool_calls> markers (abenzerps template)
+    if (src.find("<ifm|think>") != std::string::npos &&
+        src.find("<ifm|tool_calls>") != std::string::npos) {
+        LOG_DBG("Using specialized template: K2 Horizon\n");
+        return common_chat_params_init_k2_horizon(tmpl, params);
+    }
     return std::nullopt;
 }
 

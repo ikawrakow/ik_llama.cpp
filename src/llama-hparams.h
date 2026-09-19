@@ -33,6 +33,7 @@ struct llama_hparams {
     uint32_t n_rot_swa;
     uint32_t n_swa = 0; // sliding window attention (SWA)
     uint32_t n_swa_pattern = 1; // by default, all layers use non-sliding-window attention
+    bool     swa_full_non_causal = false; // DSV4 vision: in a non-causal (image) span, window only clips older tokens
     uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
     uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head
     uint32_t n_embd_head_k_swa;
@@ -52,6 +53,10 @@ struct llama_hparams {
     uint32_t n_ff_exp           = 0;
     uint32_t n_ff_shexp         = 0;
     uint32_t n_expert_shared    = 0;
+    // K2 Horizon MoVA
+    uint32_t n_value_expert      = 0;
+    uint32_t n_value_expert_used = 0;
+
     uint32_t n_norm_groups      = 0;
     uint32_t n_expert_groups    = 0;
     uint32_t n_group_used       = 0;
@@ -91,6 +96,9 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> rope_dim_per_layer;
 
     // for State Space Models
+    // LFM2 short-convolution state length (including the current token).
+    uint32_t n_shortconv_l_cache = 0;
+
     uint32_t ssm_d_conv  = 0;
     uint32_t ssm_d_inner = 0;
     uint32_t ssm_d_state = 0;
@@ -129,9 +137,11 @@ struct llama_hparams {
     float    f_attn_temp_scale       = 0.1;
 
     // DSA (deepseek sparse attention)
-    uint32_t indexer_n_head    = 0;
-    uint32_t indexer_head_size = 0;
-    uint32_t indexer_top_k     = 0;
+    uint32_t indexer_n_head     = 0;
+    uint32_t indexer_head_size  = 0;
+    uint32_t indexer_top_k      = 0;
+    // k-pool indexer: tokens per compressed key cell (GGUF attention.indexer.kpool); 0 = plain per-token DSA (as in GLM-5.2)
+    uint32_t indexer_block_size = 0;
     // GLM-5.2 IndexShare: per-layer full/shared indexer map. "full" layers compute their own lightning-
     // indexer top-k; "shared" layers reuse the previous full layer's top-k. Populated from GGUF
     // indexer_types metadata if present, else derived from the GLM-5.2 config rule at load time.
@@ -244,10 +254,13 @@ struct llama_hparams {
         if (this->n_ff_exp           != other.n_ff_exp)           return true;
         if (this->n_ff_shexp         != other.n_ff_shexp)         return true;
         if (this->n_expert_shared    != other.n_expert_shared)    return true;
+        if (this->n_value_expert      != other.n_value_expert)      return true;
+        if (this->n_value_expert_used != other.n_value_expert_used) return true;
 
         if (this->rope_finetuned  != other.rope_finetuned)  return true;
         if (this->n_ctx_orig_yarn != other.n_ctx_orig_yarn) return true;
 
+        if (this->n_shortconv_l_cache != other.n_shortconv_l_cache) return true;
         if (this->ssm_d_conv  != other.ssm_d_conv)  return true;
         if (this->ssm_d_inner != other.ssm_d_inner) return true;
         if (this->ssm_d_state != other.ssm_d_state) return true;
@@ -352,6 +365,9 @@ struct llama_hparams {
     }
 
     uint32_t n_embd_v_s() const { // dimension of the recurrent state embeddings
+        if (n_shortconv_l_cache > 0) {
+            return (n_shortconv_l_cache - 1) * n_embd;
+        }
         if (ssm_n_group > 0) {
             // qwen3next recurrent state packs:
             // 1) conv state: (d_conv - 1) * (2 * key_dim + value_dim)
@@ -413,6 +429,31 @@ struct llama_hparams {
 
     uint32_t ple_conv_state() const {
         return ple_conv_kernel > 0 ? (ple_conv_kernel - 1) * ple_ngram_size : 0;
+    }
+
+    struct recurrent_state_layout {
+        uint32_t conv_width;
+        uint32_t conv_feature_width;
+        uint32_t ssm_width;
+        uint32_t ple_offset;
+        uint32_t ple_width;
+        uint32_t row_width;
+        bool has_ple;
+    };
+
+    recurrent_state_layout recurrent_state_layout_for(uint32_t il) const {
+        const auto [conv_dim, ssm_width] = n_embd_v_s_dims(ssm_dt_rank);
+        const uint32_t conv_width = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * conv_dim;
+        const uint32_t ple_width = n_embd_ple_conv(il);
+        return {
+            conv_width,
+            conv_dim,
+            ssm_width,
+            conv_width + ssm_width,
+            ple_width,
+            conv_width + ssm_width + ple_width,
+            ple_width > 0,
+        };
     }
 
     static bool is_float_close(float a, float b, float abs_tol) {

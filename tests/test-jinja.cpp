@@ -2020,7 +2020,10 @@ env.globals["raise_exception"] = raise_exception
 
 template = env.from_string(tmpl)
 result = template.render(**vars_json)
-print(result, end='')
+# Write raw UTF-8 bytes rather than print(): on Windows sys.stdout is a text
+# stream, so print() would translate every \n into \r\n and also encode with
+# the console code page. Both corrupt the comparison against the C++ engine.
+sys.stdout.buffer.write(result.encode('utf-8'))
 )";
 
 static void test_template_py(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {

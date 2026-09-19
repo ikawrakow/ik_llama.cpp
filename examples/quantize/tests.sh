@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -euo pipefail
 
 if [ $# -lt 1 ]
 then
@@ -61,5 +61,28 @@ $MAIN --model $WORK_PATH/ggml-model-requant-merge.gguf --n-predict 32
 echo PASS
 echo
 
+# 5. Warn when custom quantization rules are ignored for an unquantized default type
+CUSTOM_Q_LOG=$WORK_PATH/custom-q-unquantized.log
+$QUANTIZE --allow-requantize --dry-run --custom-q 'blk.*=q4_K' \
+    $WORK_PATH/gemma-1.1-2b-it.Q8_0.gguf $WORK_PATH/ggml-model-custom-q.gguf F16 2>&1 | tee "$CUSTOM_Q_LOG"
+grep -F "ignoring --custom-q rules because default type f16 is not quantized" "$CUSTOM_Q_LOG"
+if grep -F "Using custom type" "$CUSTOM_Q_LOG"; then
+    echo "custom quantization unexpectedly applied for an unquantized default type" >&2
+    exit 1
+fi
+echo PASS
+
+# 6. Apply custom quantization rules when the default type is quantized
+CUSTOM_Q_APPLY_LOG=$WORK_PATH/custom-q-quantized.log
+$QUANTIZE --allow-requantize --dry-run --custom-q '.*=q4_K' \
+    $WORK_PATH/gemma-1.1-2b-it.Q8_0.gguf $WORK_PATH/ggml-model-custom-q-quantized.gguf Q4_K 2>&1 | tee "$CUSTOM_Q_APPLY_LOG"
+if grep -F "ignoring --custom-q rules" "$CUSTOM_Q_APPLY_LOG"; then
+    echo "custom quantization unexpectedly ignored for a quantized default type" >&2
+    exit 1
+fi
+grep -F "Using custom type q4_K for tensor" "$CUSTOM_Q_APPLY_LOG"
+echo PASS
+
 # Clean up
-rm -f $WORK_PATH/ggml-model-split*.gguf $WORK_PATH/ggml-model-requant*.gguf
+rm -f $WORK_PATH/ggml-model-split*.gguf $WORK_PATH/ggml-model-requant*.gguf \
+    $WORK_PATH/custom-q-unquantized.log $WORK_PATH/custom-q-quantized.log

@@ -249,6 +249,8 @@ struct llm_build_context {
     ggml_cgraph * build_qwen3next();
     ggml_cgraph * build_qwen4exp();
 
+    ggml_cgraph * build_lfm2();
+
     ggml_cgraph * build_qwen35moe();
 
     ggml_cgraph * build_qwen35();
@@ -431,6 +433,7 @@ struct llm_build_context {
 
     ggml_cgraph * build_bailingmoe2();
     ggml_cgraph * build_bailingmoe3();
+    ggml_cgraph * build_glm5next();
 
     ggml_cgraph * build_minimaxm2();
     ggml_cgraph * build_minimaxm3();
@@ -444,6 +447,8 @@ struct llm_build_context {
     ggml_cgraph * build_laguna();
 
     ggml_cgraph * build_step35();
+    
+    ggml_cgraph * build_k2horizon();
 
     ggml_tensor * build_step35_mtp(
             const llama_layer & mtp_layer,

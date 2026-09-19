@@ -312,6 +312,10 @@ struct server_task_result_error : server_task_result {
 
     virtual json to_json() override {
         json res = format_error_response(err_msg, err_type);
+        if (err_type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
+            res["n_prompt_tokens"] = n_prompt_tokens;
+            res["n_ctx"]           = n_ctx;
+        }
         return res;
     }
 };
@@ -354,12 +358,13 @@ using server_task_result_ptr = std::unique_ptr<server_task_result>;
 struct server_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
-    llama_pos pos_min_prompt;
-    llama_pos pos_max_prompt;
 
     int64_t n_tokens;
 
     std::vector<uint8_t> data;
+
+    // disk-spill location when data was offloaded (empty = resident / no spill)
+    std::string spill_path;
 
     size_t size() const {
         return data.size();
@@ -369,8 +374,6 @@ struct server_prompt_checkpoint {
         json j;
         j["pos_min"] = pos_min;
         j["pos_max"] = pos_max;
-        j["pos_min_prompt"] = pos_min_prompt;
-        j["pos_max_prompt"] = pos_max_prompt;
         j["n_tokens"] = n_tokens;
         return j;
     }
@@ -378,8 +381,6 @@ struct server_prompt_checkpoint {
     void from_json(const json & j) {
         pos_min = j.value<llama_pos>("pos_min", 0);
         pos_max = j.value<llama_pos>("pos_max", 0);
-        pos_min_prompt = j.value<llama_pos>("pos_min_prompt", 0);
-        pos_max_prompt = j.value<llama_pos>("pos_max_prompt", 0);
         n_tokens = j.value<int64_t>("n_tokens", 0);
     }
 };

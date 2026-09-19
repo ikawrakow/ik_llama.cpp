@@ -60,9 +60,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
 
 bool common_speculative_needs_checkpoint(const llama_model * model) {
     return model != nullptr &&
-        (llama_model_has_recurrent(model) ||
-         llama_model_is_openpangu(model) ||
-         llama_model_is_deepseek4(model));
+        llama_model_has_recurrent(model);
 }
 
 void common_speculative_checkpoint::clear() {
@@ -1252,6 +1250,12 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 bool common_speculative_is_compat(llama_context * ctx_tgt) {
     bool res = true;
 
+    const llama_model * model = llama_get_model(ctx_tgt);
+    if (model != nullptr && std::string(llama_model_arch_string(model)) == "lfm2") {
+        LOG_WRN("%s: speculative decoding is not supported for LFM2 models (shortconv recurrent state is not rolled back)\n", __func__);
+        return false;
+    }
+
     llama_kv_cache_clear(ctx_tgt);
 
     // eval 2 tokens to check if the context is compatible
@@ -1365,6 +1369,12 @@ common_speculative * common_speculative_init(
 
             cparams_dft.n_ctx = (uint32_t) effective_draft_ctx;
             cparams_dft.dflash_query_capacity = query_capacity;
+        }
+
+        if (!has_dflash_stage && !llama_model_share_qwen4exp_mtp_tensors(
+                    params.model_dft, llama_get_model(ctx_tgt))) {
+            LOG_ERR("%s: failed to share target IO tensors with the qwen4exp shared MTP companion\n", __func__);
+            return nullptr;
         }
 
         ctx_dft = llama_init_from_model(params.model_dft, cparams_dft);
