@@ -438,6 +438,9 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         const json & tc = body.at("tool_choice");
         if (tc.is_object()) {
             std::string type = json_value(tc, "type", std::string());
+            if (json_value(tc, "disable_parallel_tool_use", false)) {
+                oai_body["parallel_tool_calls"] = false;
+            }
             if (type == "auto") {
                 oai_body["tool_choice"] = "auto";
             } else if (type == "any" || type == "tool") {

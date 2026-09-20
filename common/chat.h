@@ -274,6 +274,7 @@ nlohmann::ordered_json common_chat_tools_to_json_oaicompat(const std::vector<com
 
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
+bool common_chat_templates_support_parallel_tool_calls(const common_chat_templates * chat_templates, bool with_tools);
 
 std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,

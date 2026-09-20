@@ -3240,3 +3240,9 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
+
+bool common_chat_templates_support_parallel_tool_calls(const common_chat_templates * chat_templates, bool with_tools) {
+    GGML_ASSERT(chat_templates != nullptr);
+    const auto & tmpl = with_tools && chat_templates->template_tool_use ? *chat_templates->template_tool_use : *chat_templates->template_default;
+    return tmpl.original_caps().supports_parallel_tool_calls;
+}
