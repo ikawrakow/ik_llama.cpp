@@ -3889,7 +3889,11 @@ static std::list<server_prompt_checkpoint>::iterator evict_checkpoint_by_varianc
     }
     std::vector<int64_t> tokens;
     tokens.reserve(ckpts.size());
+    size_t pinned = ckpts.size();
     for (const auto & ckpt : ckpts) {
+        if (ckpt.prompt_end) {
+            pinned = tokens.size();
+        }
         tokens.push_back(int64_t(ckpt.pos_max));
     }
     // Remove the checkpoint that makes the distribution most even after removal.
@@ -3908,12 +3912,13 @@ static std::list<server_prompt_checkpoint>::iterator evict_checkpoint_by_varianc
     // Variance of the gap after removing i_th checkpoint is:
     // x1^2+..+(x_n-1)^2+2*x_i*x_(i+1) - average^2
     // Find the minimum variance is finding min { x_i*x_(i+1) }
-    double diff = (tokens[start] - tokens[start - 1]);
-    double diff2 = (tokens[start + 1] - tokens[start]);
-    double best_variance = diff * (diff2 / max_pos); 
-    for (size_t i = start+1; i < end; i++) {
-        diff = tokens[i] - tokens[i - 1];
-        diff2 = tokens[i + 1] - tokens[i];
+    double best_variance = INFINITY;
+    for (size_t i = start; i < end; i++) {
+        if (i == pinned) {
+            continue;
+        }
+        double diff = tokens[i] - tokens[i - 1];
+        double diff2 = tokens[i + 1] - tokens[i];
         double variance = diff  * (diff2 / max_pos);
         if (variance < best_variance) {
             best_variance = variance;
@@ -3921,6 +3926,16 @@ static std::list<server_prompt_checkpoint>::iterator evict_checkpoint_by_varianc
         }
     }
     std::advance(it, best_idx);
+    return it;
+}
+
+// FIFO and lists under four entries: keep the prompt-end checkpoint while another entry exists
+static std::list<server_prompt_checkpoint>::iterator skip_prompt_end(
+        std::list<server_prompt_checkpoint> & ckpts,
+        std::list<server_prompt_checkpoint>::iterator it) {
+    if (it->prompt_end && std::next(it) != ckpts.end()) {
+        ++it;
+    }
     return it;
 }
 
@@ -3948,6 +3963,7 @@ static void enforce_checkpoint_memory(server_slot & slot, int cap_total, int ram
             if (use_variance) {
                 it = evict_checkpoint_by_variance(slot, ckpts);
             }
+            it = skip_prompt_end(ckpts, it);
             if (it->data.empty()) {
                 // already spilled; nothing to offload, drop it to make progress
                 it = drop_checkpoint_entry(ckpts, it);
@@ -3964,11 +3980,11 @@ static void enforce_checkpoint_memory(server_slot & slot, int cap_total, int ram
         if (use_variance) {
             it = evict_checkpoint_by_variance(slot, ckpts);
         }
-        it = drop_checkpoint_entry(ckpts, it);
+        it = drop_checkpoint_entry(ckpts, skip_prompt_end(ckpts, it));
     }
 }
 
-bool server_context::create_checkpoint(server_slot & slot) {
+bool server_context::create_checkpoint(server_slot & slot, bool prompt_end) {
     bool do_checkpoint = !slot.image_just_processed;
     int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
     const auto pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
@@ -3981,6 +3997,11 @@ bool server_context::create_checkpoint(server_slot & slot) {
 
     if (do_checkpoint) {
         const int64_t t_start = ggml_time_us();
+        if (prompt_end) {
+            for (auto & ckpt : slot.server_cached_prompt.checkpoints) {
+                ckpt.prompt_end = false;
+            }
+        }
         while (slot.server_cached_prompt.checkpoints.size() >= (size_t)params_base.ctx_checkpoints_n) {
             // make room for the new checkpoint, if needed
             auto it = slot.server_cached_prompt.checkpoints.begin();
@@ -3988,6 +4009,7 @@ bool server_context::create_checkpoint(server_slot & slot) {
                 params_base.ctx_checkpoint_eviction == COMMON_CHECKPOINT_EVICTION_AUTO) {
                 it = evict_checkpoint_by_variance(slot, slot.server_cached_prompt.checkpoints);
             } 
+            it = skip_prompt_end(slot.server_cached_prompt.checkpoints, it);
             const auto & cur = *it;
             SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                 cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024);
@@ -3996,6 +4018,7 @@ bool server_context::create_checkpoint(server_slot & slot) {
 
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();
         server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), pos_min, pos_max);
+        cur.prompt_end = prompt_end;
 
         SLT_WRN(slot, "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
             (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,
@@ -4926,7 +4949,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 // save checkpoint during prompt processing
                 if (slot.command == SLOT_COMMAND_LOAD_PROMPT) {
                     if (slot.do_checkpoint) {
-                        create_checkpoint(slot);
+                        create_checkpoint(slot, true);
                     } else {
                         create_checkpoint_at_interval(slot);
                     }
@@ -5002,7 +5025,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 metrics.on_prompt_eval(slot);
                 // create checkpoint after prompt processing ends
                 if (params_base.ctx_checkpoints_tolerance<=0 && params_base.do_checkpoint) {
-                    create_checkpoint(slot);
+                    create_checkpoint(slot, true);
                 }
             }
 
