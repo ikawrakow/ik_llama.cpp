@@ -768,7 +768,7 @@ const common_chat_msg& server_slot::update_chat_msg(bool is_partial, std::vector
     auto msg_prv_copy = chat_msg;
     auto new_msg = common_chat_parse(
         generated_text,
-        /* is_partial= */ stop != STOP_TYPE_EOS,
+        is_partial,
         params.chat_parser_params);
     if (!new_msg.empty()) {
         //new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
@@ -2579,7 +2579,12 @@ void server_context::send_final_response(server_slot& slot) {
     res->oaicompat = slot.params.oaicompat;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
     if (server_response_needs_chat_parse(slot.params.oaicompat)) {
-        res->oaicompat_msg = slot.update_chat_msg(false, res->oaicompat_msg_diffs);
+        try {
+            res->oaicompat_msg = slot.update_chat_msg(false, res->oaicompat_msg_diffs);
+        } catch (const std::exception & e) {
+            send_error(slot, e.what(), ERROR_TYPE_SERVER);
+            return;
+        }
     }
     res->oai_resp_id = slot.oai_resp_id;
     res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
