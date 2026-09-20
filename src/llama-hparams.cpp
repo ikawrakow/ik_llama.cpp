@@ -294,9 +294,8 @@ void llm_load_hparams(
                 } else {
                     // Dense variant
                     switch (hparams.n_layer) {
-                        case 24: model.type = e_model::MODEL_1B; break;
-                        case 36: model.type = e_model::MODEL_4B; break;
-                        case 28: model.type = e_model::MODEL_7B; break;
+                        case 28: model.type = e_model::MODEL_1B; break;
+                        case 36: model.type = hparams.n_embd == 2560 ? e_model::MODEL_4B : e_model::MODEL_7B; break;
                         default: model.type = e_model::MODEL_UNKNOWN;
                     }
                 }

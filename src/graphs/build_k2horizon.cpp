@@ -67,17 +67,18 @@ static ggml_tensor * k2_horizon_routed_value(
             GGML_ABORT("Unsupported K2 Horizon value-router gating function");
     }
 
-    // optional bias
-    if (layer.attn_v_gate_b != nullptr) {
-        probs = ggml_add(ctx, probs, layer.attn_v_gate_b);
-        cb(probs, "v_moe_probs_biased", il);
-    }
-
     cb(logits, "v_moe_logits", il);
     cb(probs, "v_moe_probs", il);
 
+    // the bias selects the experts; the weights come from the unbiased probs
+    ggml_tensor * choice_probs = probs;
+    if (layer.attn_v_gate_b != nullptr) {
+        choice_probs = ggml_add(ctx, probs, layer.attn_v_gate_b);
+        cb(choice_probs, "v_moe_probs_biased", il);
+    }
+
     // top-k selection
-    ggml_tensor * selected_experts = ggml_top_k(ctx, probs, n_used); // [n_used, n_tokens]
+    ggml_tensor * selected_experts = ggml_top_k(ctx, choice_probs, n_used); // [n_used, n_tokens]
 
     // extract selected weights via argsort-style indexing
     ggml_tensor * selection_probs = ggml_reshape_3d(ctx, probs, 1, n_values, n_tokens);
@@ -154,8 +155,7 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
     if (cparams.rope_cache && (hparams.rope_type == LLAMA_ROPE_TYPE_NEOX || hparams.rope_type == LLAMA_ROPE_TYPE_NORM)) {
         const int64_t n_rot = hparams.n_embd_head_k(0);
         rope_cache = ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, hparams.rope_type,
-                hparams.n_ctx_orig_yarn, hparams.rope_freq_base_train, hparams.rope_freq_scale_train,
-                hparams.yarn_ext_factor, hparams.rope_attn_factor, hparams.yarn_beta_fast, hparams.yarn_beta_slow);
+                n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
     }
 
     // 7. Layer loop
@@ -206,11 +206,9 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
             Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
         } else {
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, hparams.rope_n_rot(il), hparams.rope_type,
-                    hparams.n_ctx_orig_yarn, hparams.rope_freq_base_train, hparams.rope_freq_scale_train,
-                    hparams.yarn_ext_factor, hparams.rope_attn_factor, hparams.yarn_beta_fast, hparams.yarn_beta_slow);
+                    n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
             Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, hparams.rope_n_rot(il), hparams.rope_type,
-                    hparams.n_ctx_orig_yarn, hparams.rope_freq_base_train, hparams.rope_freq_scale_train,
-                    hparams.yarn_ext_factor, hparams.rope_attn_factor, hparams.yarn_beta_fast, hparams.yarn_beta_slow);
+                    n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
         }
 
         cb(Qcur, "Qcur", il);
