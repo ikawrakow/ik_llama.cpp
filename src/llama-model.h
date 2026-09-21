@@ -444,6 +444,13 @@ struct llama_layer {
     struct ggml_tensor * attn_comp_ape     = nullptr;
     struct ggml_tensor * attn_comp_norm    = nullptr;
 
+    // n-gram keyed table, a few rows read per token. Only ever touched through get_rows,
+    // so it must never be copied, repacked or offloaded.
+    struct ggml_tensor * engram_embd = nullptr;
+    struct ggml_tensor * engram_k    = nullptr;
+    struct ggml_tensor * engram_q    = nullptr;
+    struct ggml_tensor * engram_wkv  = nullptr;
+
     // long rope factors
     struct ggml_tensor * rope_long  = nullptr;
     struct ggml_tensor * rope_short = nullptr;
@@ -550,6 +557,14 @@ struct llama_model {
     struct ggml_tensor * hc_head_fn = nullptr;
     struct ggml_tensor * hc_head_scale = nullptr;
 
+    // engram hash constants, indexed [engram layer][ngram] and [engram layer][(ngram-1)*n_head
+    // + head]. They index straight into engram_embd, so the loader validates their counts.
+    std::vector<uint64_t> engram_multipliers;
+    std::vector<uint64_t> engram_primes;
+    std::vector<uint64_t> engram_offsets;
+    std::vector<uint32_t> engram_token_map;
+    uint32_t              engram_pad_id = 0;
+
     // qwen4exp: final low-rank hyper-connection mix, plus the n-gram embedding table
     struct ggml_tensor * hc_head_norm = nullptr;
     struct ggml_tensor * hc_head_down = nullptr;
@@ -654,7 +669,7 @@ struct llama_model {
     }
 
     float swiglu_limit(uint32_t il, bool shared) const {
-        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_GLM5NEXT) {
+        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && !llm_arch_is_dsv4(arch) && arch != LLM_ARCH_GLM5NEXT) {
             return 0.0f;
         }
         return shared ? hparams.swiglu_limits_shared[il] : hparams.swiglu_limits[il];
@@ -682,7 +697,7 @@ struct llama_model {
     }
 
     bool supports_swa_compress() const {
-        return arch == LLM_ARCH_OPENPANGU || arch == LLM_ARCH_DEEPSEEK4
+        return arch == LLM_ARCH_OPENPANGU || llm_arch_is_dsv4(arch)
             || arch == LLM_ARCH_LAGUNA    || arch == LLM_ARCH_GEMMA4
             || supports_dflash_swa_compress() ;
     }
