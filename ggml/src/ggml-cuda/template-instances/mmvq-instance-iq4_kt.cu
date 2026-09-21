@@ -52,5 +52,9 @@ __device__ __forceinline__ void vec_dot_iq4_kt_q8_1_tail(
 }
 
 void mul_mat_vec_iq4_kt_q8_1_cuda(const mmvq_args & args, cudaStream_t stream) {
-    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ4_KT, VDR_IQ4_KS_Q8_1_MMVQ, vec_dot_iq4_kt_q8_1, 1, vec_dot_iq4_kt_q8_1_tail>(args, stream);
+    if (args.ncols_x % QK_K == 0) {
+        iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ4_KT, VDR_IQ4_KS_Q8_1_MMVQ, vec_dot_iq4_kt_q8_1, 1, nullptr>(args, stream);
+    } else {
+        iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ4_KT, VDR_IQ4_KS_Q8_1_MMVQ, vec_dot_iq4_kt_q8_1, 1, vec_dot_iq4_kt_q8_1_tail>(args, stream);
+    }
 }

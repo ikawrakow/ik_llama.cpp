@@ -3848,7 +3848,7 @@ struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ5_KS_R4> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
 };
 
-template <ggml_type type, int mmq_x, int nwarps, bool need_check, bool fixup>
+template <ggml_type type, int mmq_x, int nwarps, bool need_check, bool fixup, bool has_tail>
 static __device__ void mul_mat_q_process_tile(
     const char * __restrict__ x, const char * __restrict__ yc, float * __restrict__ dst, float * __restrict__ tmp_fixup,
     const int & ne00, const int & ne01, const int & stride01, const int & ne10, const int & ne11, const int & stride11, const int & ne0,
@@ -3880,7 +3880,7 @@ static __device__ void mul_mat_q_process_tile(
     const int * y = (const int *) yc + jt*(mmq_x*sizeof(block_q8_1_mmq)/sizeof(int));
 
     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-        if constexpr (mmq_kt_tail<type>::value) {
+        if constexpr (has_tail && mmq_kt_tail<type>::value) {
             if (kb0 == ne00/qk) {
                 mmq_kt_tail<type>::template load<mmq_y, nwarps, need_check>(x + int64_t(stride01)*it*mmq_y, tile_x, kb0, tile_x_max_i, stride01, (ne00 % qk)/32);
             } else {
@@ -3933,7 +3933,7 @@ static __device__ void mul_mat_q_process_tile(
 
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
 
-template <ggml_type type, int mmq_x, int nwarps, bool need_check>
+template <ggml_type type, int mmq_x, int nwarps, bool need_check, bool has_tail>
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*nwarps, 2)
@@ -3958,18 +3958,19 @@ static __global__ void mul_mat_q(
     constexpr int qk    = ggml_cuda_type_traits<type>::qk;
     constexpr int mmq_y = get_mmq_y_device();
 
+    const     int64_t blocks_per_ne00 = (ne00 + qk - 1) / qk;
+
     // On AMD or old CUDA the performance with stream-k was worse, use conventional tiling instead:
 #if (defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) || __CUDA_ARCH__ < CC_VOLTA
     {
         constexpr bool fixup = false;
-        mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
-            (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
-                blockIdx.x, blockIdx.y, 0, (ne00 + qk - 1)/qk);
+        mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup, false, has_tail>
+                (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
+                 blockIdx.x, blockIdx.y, 0, (ne00 + qk - 1)/qk);
         return;
     }
 #endif // (defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) || __CUDA_ARCH__ < CC_VOLTA
 
-    const     int64_t blocks_per_ne00 = (ne00 + qk - 1) / qk;
     constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
 
     const int ntx = (ne11 + mmq_x - 1) / mmq_x; // Number of tiles x
@@ -3990,7 +3991,7 @@ static __global__ void mul_mat_q(
         const int it = (kbc - jt*(blocks_per_ne00*nty)) / blocks_per_ne00; // i index of current tile.
 
         constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
-        mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
+        mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup, has_tail>
             (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
              it, jt, kb0_start, kb0_stop);
 
@@ -4009,7 +4010,7 @@ static __global__ void mul_mat_q(
     const int it = (kbc - jt*(blocks_per_ne00*nty)) / blocks_per_ne00;
 
     constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
-    mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
+    mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup, has_tail>
         (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
             it, jt, kb0_start, kb0_stop);
 }
@@ -4132,8 +4133,14 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
     static bool shmem_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
     if (!shmem_limit_raised[id]) {
-        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, false>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
-        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, true>,  cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
+        if constexpr (mmq_kt_tail<type>::value) {
+            CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, false, true>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
+        }
+        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, false, false>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
+        if constexpr (mmq_kt_tail<type>::value) {
+            CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, true,  true>,  cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
+        }
+        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, true,  false>,  cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
         shmem_limit_raised[id] = true;
     }
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
@@ -4143,15 +4150,27 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const dim3 block_nums_xy_tiling(nty, ntx, 1);
 
     const bool use_stream_k = cc >= CC_VOLTA && cc < CC_OFFSET_AMD;
+    constexpr int qk    = ggml_cuda_type_traits<type>::qk;
+    const bool has_tail = args.ne00 % qk != 0 && mmq_kt_tail<type>::value;
     if (!use_stream_k) {
         if (args.ne01 % mmq_y == 0) {
             constexpr bool need_check = false;
-            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
-                (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+            if (has_tail) {
+                mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, true><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
+                    (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+            } else {
+                mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, false><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
+                    (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+            }
         } else {
             constexpr bool need_check = true;
-            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
-                (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+            if (has_tail) {
+                mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, true><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
+                    (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+            } else {
+                mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, false><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
+                    (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+            }
         }
         return;
     }
@@ -4164,17 +4183,27 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     if (args.ne01 % mmq_y == 0) {
         constexpr bool need_check = false;
 
-        mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_mmq, block_dims, shmem, stream>>>
-            (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+        if (has_tail) {
+            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, true><<<block_nums_mmq, block_dims, shmem, stream>>>
+                (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+        } else {
+            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, false><<<block_nums_mmq, block_dims, shmem, stream>>>
+                (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+        }
 
         mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, 0, stream>>>
-            (args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.ne11, args.ne0, block_nums_mmq.x);
+                (args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.ne11, args.ne0, block_nums_mmq.x);
 
     } else {
         constexpr bool need_check = true;
 
-        mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_mmq, block_dims, shmem, stream>>>
-            (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+        if (has_tail) {
+            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, true><<<block_nums_mmq, block_dims, shmem, stream>>>
+                (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+        } else {
+            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, false><<<block_nums_mmq, block_dims, shmem, stream>>>
+                (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
+        }
 
         mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, 0, stream>>>
             (args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.ne11, args.ne0, block_nums_mmq.x);
