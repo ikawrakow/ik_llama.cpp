@@ -1,6 +1,7 @@
 #include "set-rows.cuh"
 #include "cpy-utils.cuh"
 #include "convert.cuh"
+#include "kv-quants.cuh"
 
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
@@ -249,6 +250,36 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
     } else if (dst->type == GGML_TYPE_IQ4_NL) {
         set_rows_cuda_quant<idx_t, block_iq4_nl, QK4_NL, quantize_f32_iq4_nl_block>(
             src0_d, src1_d, (block_iq4_nl*)dst->data,
+            ne00, ne01, ne02, ne03,
+            ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03,
+            nb10, nb11, nb12,
+            nb1, nb2, nb3,
+            stream
+        );
+    } else if (dst->type == GGML_TYPE_FP4_B16_E4M3) {
+        set_rows_cuda_quant<idx_t, block_fp4_b16_e4m3, QK_FP4_B16, quantize_f32_fp4_b16_e4m3_block>(
+            src0_d, src1_d, (block_fp4_b16_e4m3*)dst->data,
+            ne00, ne01, ne02, ne03,
+            ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03,
+            nb10, nb11, nb12,
+            nb1, nb2, nb3,
+            stream
+        );
+    } else if (dst->type == GGML_TYPE_FP4_B32_E8M0) {
+        set_rows_cuda_quant<idx_t, block_fp4_b32_e8m0, QK_FP4_B32, quantize_f32_fp4_b32_e8m0_block>(
+            src0_d, src1_d, (block_fp4_b32_e8m0*)dst->data,
+            ne00, ne01, ne02, ne03,
+            ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03,
+            nb10, nb11, nb12,
+            nb1, nb2, nb3,
+            stream
+        );
+    } else if (dst->type == GGML_TYPE_FP8_B32_E8M0) {
+        set_rows_cuda_quant<idx_t, block_fp8_b32_e8m0, QK_FP8_B32, quantize_f32_fp8_b32_e8m0_block>(
+            src0_d, src1_d, (block_fp8_b32_e8m0*)dst->data,
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
