@@ -44,7 +44,6 @@ static ggml_tensor * k2_horizon_routed_value(
     const llm_build_cb & cb) {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
-    const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
     const int64_t n_values = hparams.n_value_expert;
     const int64_t n_used   = hparams.n_value_expert_used;
 
@@ -108,19 +107,8 @@ static ggml_tensor * k2_horizon_routed_value(
     ggml_tensor * values = llm_build_context::llm_build_lora_mm_id(lctx, ctx, layer.attn_v_exps, value_inp, selected_experts);
     // values: (n_embd_v_gqa, n_used, n_tokens)
     values = ggml_silu(ctx, values);
-    values = ggml_mul(ctx, values, selected_weights);
 
-    ggml_tensor * value_out = nullptr;
-    auto value_first = ggml_view_2d(ctx, values, n_embd_v_gqa, n_tokens, values->nb[2], 0);
-    if (n_used == 1) {
-        value_out = ggml_cont(ctx, value_first);
-    }
-    else if (n_used == 2) {
-        value_out = ggml_add(ctx, value_first, ggml_view_2d(ctx, values, n_embd_v_gqa, n_tokens, values->nb[2], values->nb[1]));
-    }
-    else {
-        value_out = ggml_multi_add(ctx, value_first, n_used);
-    }
+    auto value_out = ggml_mul_multi_add(ctx, values, selected_weights);
 
     cb(value_out, "Vcur_routed", il);
     return value_out;
