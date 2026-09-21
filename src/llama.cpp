@@ -3350,8 +3350,11 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                         if (n_head_local <= 0) continue;
 
                         const size_t slice_bytes = (size_t)n_head_local * head_block_bytes;
+                        ggml_tensor rep_shape = *source; // padded size, as in the non-split branch below
+                        rep_shape.ne[2] = n_head_local;
+                        rep_shape.nb[3] = rep_shape.nb[2]*(size_t)n_head_local;
                         auto dev_buft = ggml_backend_buffer_get_type(wo_split->splits[id]->buffer);
-                        auto dev_buf  = ggml_backend_buft_alloc_buffer(dev_buft, slice_bytes);
+                        auto dev_buf  = ggml_backend_buft_alloc_buffer(dev_buft, ggml_backend_buft_get_alloc_size(dev_buft, &rep_shape));
                         if (!dev_buf) {
                             throw std::runtime_error("Failed to allocate per-rank buffer for " + tname);
                         }
@@ -3375,6 +3378,8 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                         rep->extra = nullptr;
                         ggml_set_name(rep, (tname + "." + std::to_string(id)).c_str());
 
+                        ggml_backend_buffer_init_tensor(rep->buffer, rep);
+
                         const uint8_t * src_bytes = (const uint8_t *)source->data + (size_t)head_offset * head_block_bytes;
                         ggml_backend_tensor_set(rep, src_bytes, 0, slice_bytes);
                         if (ggml_backend_buffer_is_host(rep->buffer)) {
@@ -3393,13 +3398,18 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                             ggml_type_name(source->type), n_device);
                 } else {
                     computed = std::make_unique<ggml_tensor>(*source);
-                    computed->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(source));
+                    // A quantized tensor needs the buffer type's padded size, not ggml_nbytes():
+                    // MMQ consumes MMQ_ITER_K values per row and reads past the last row when
+                    // ne[0] % MATRIX_ROW_PADDING != 0, as it is for attn_k_b (ne[0] = 128).
+                    auto buft = ggml_backend_buffer_get_type(l.wkv_b->buffer);
+                    computed->buffer = ggml_backend_buft_alloc_buffer(buft, ggml_backend_buft_get_alloc_size(buft, source));
                     computed->data   = ggml_backend_buffer_get_base(computed->buffer);
                     // GGML_OP_NONE so the backend doesn't try to find the (now-freed) parents of source.
                     computed->op = GGML_OP_NONE;
                     for (int j = 0; j < GGML_MAX_SRC; ++j) computed->src[j] = nullptr;
                     ggml_set_name(computed.get(), tname.c_str());
                     ggml_backend_buffer_set_usage(computed->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                    ggml_backend_buffer_init_tensor(computed->buffer, computed.get()); // zeroes the padding
                     ggml_backend_tensor_set(computed.get(), source->data, 0, ggml_nbytes(source));
                     if (ggml_backend_buffer_is_host(computed->buffer)) {
                         iqk_modify_tensor(computed.get());
