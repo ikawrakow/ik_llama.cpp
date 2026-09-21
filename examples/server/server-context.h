@@ -389,7 +389,7 @@ struct server_context {
     // Re-aggregates all active vectors and updates the model state
     bool apply_control_vectors_internal();
 
-    bool create_checkpoint(server_slot & slot);
+    bool create_checkpoint(server_slot & slot, bool prompt_end = false);
 
     void apply_checkpoint(server_slot & slot);
 

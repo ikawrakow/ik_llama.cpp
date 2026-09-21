@@ -361,6 +361,9 @@ struct server_prompt_checkpoint {
 
     int64_t n_tokens;
 
+    // the checkpoint taken at the end of the prompt; kept while another entry can be evicted instead
+    bool prompt_end = false;
+
     std::vector<uint8_t> data;
 
     // disk-spill location when data was offloaded (empty = resident / no spill)
