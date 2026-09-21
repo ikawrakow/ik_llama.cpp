@@ -11030,8 +11030,10 @@ struct llama_data_write {
                 // pooling state, which this per-layer layout does not describe yet. Save nothing
                 // for the compressed streams; the raw window still round-trips.
                 if (ctx->model.hparams.dsv4_shared_streams) {
-                    if (il == 0) {
+                    static bool did_warn = false;
+                    if (il == 0 && !did_warn) {
                         LLAMA_LOG_WARN("%s: DeepSeek-V4.1 compressed-stream state is not saved; a restored session re-derives it from the prompt\n", __func__);
+                        did_warn = true;
                     }
                     write(&layer_type, sizeof(layer_type));
                     continue;
