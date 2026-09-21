@@ -110,15 +110,17 @@ static ggml_tensor * k2_horizon_routed_value(
     values = ggml_silu(ctx, values);
     values = ggml_mul(ctx, values, selected_weights);
 
-    // sum across selected experts
-    ggml_tensor * value_out = ggml_view_2d(ctx, values, n_embd_v_gqa, n_tokens, values->nb[2], 0);
-    for (int64_t i = 1; i < n_used; ++i) {
-        ggml_tensor * part = ggml_view_2d(ctx, values, n_embd_v_gqa, n_tokens, values->nb[2], i * values->nb[1]);
-        value_out = ggml_add(ctx, value_out, part);
+    ggml_tensor * value_out = nullptr;
+    auto value_first = ggml_view_2d(ctx, values, n_embd_v_gqa, n_tokens, values->nb[2], 0);
+    if (n_used == 1) {
+        value_out = ggml_cont(ctx, value_first);
     }
-
-    // making it contiguous in case it isn't (for one expert only)
-    if (n_used == 1) value_out = ggml_cont(ctx, value_out);
+    else if (n_used == 2) {
+        value_out = ggml_add(ctx, value_first, ggml_view_2d(ctx, values, n_embd_v_gqa, n_tokens, values->nb[2], values->nb[1]));
+    }
+    else {
+        value_out = ggml_multi_add(ctx, value_first, n_used);
+    }
 
     cb(value_out, "Vcur_routed", il);
     return value_out;

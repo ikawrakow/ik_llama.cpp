@@ -57,6 +57,25 @@ static __global__ void k_sum_rows_div_f32(const float * __restrict__ x, float * 
     //}
 }
 
+static __global__ void k_sum_rows_clamp_div_f32(const float * __restrict__ x, float * __restrict__ dst, const int ncols, float pmin, float pmax) {
+    const int row = blockIdx.x;
+    const int col = threadIdx.x;
+
+    float sum = 0.0f;
+    for (int i = col; i < ncols; i += blockDim.x) {
+        sum += x[row * ncols + i];
+    }
+
+    sum = warp_reduce_sum(sum);
+    sum = max(sum, pmin);
+    sum = min(sum, pmax);
+
+    float norm = sum > 0 ? 1/sum : 0.0f;
+    for (int i = col; i < ncols; i += blockDim.x) {
+        dst[row * ncols + i] = x[row * ncols + i] * norm;
+    }
+}
+
 void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
     const dim3 block_dims(WARP_SIZE, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
@@ -73,6 +92,12 @@ static void sum_rows_div_f32_cuda(const float * x, float * dst, const int ncols,
     const dim3 block_dims(WARP_SIZE, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
     k_sum_rows_div_f32<<<block_nums, block_dims, 0, stream>>>(x, dst, ncols, s, b);
+}
+
+static void sum_rows_clamp_div_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, float pmin, float pmax, cudaStream_t stream) {
+    const dim3 block_dims(WARP_SIZE, 1, 1);
+    const dim3 block_nums(nrows, 1, 1);
+    k_sum_rows_clamp_div_f32<<<block_nums, block_dims, 0, stream>>>(x, dst, ncols, pmin, pmax);
 }
 
 static __global__ void k_sum_rows_any_f32(const char * x, char * y, const int ncols,
@@ -183,7 +208,7 @@ void ggml_cuda_op_sum_rows_nc(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 void ggml_cuda_op_sum_rows_div(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     float s = 1, b = 0;
     const ggml_tensor * src0 = dst->src[0];
-    GGML_ASSERT(dst->src[1]->op == GGML_OP_SUM_ROWS || dst->src[1]->op == GGML_OP_SCALE);
+    GGML_ASSERT(dst->src[1]->op == GGML_OP_SUM_ROWS || dst->src[1]->op == GGML_OP_SCALE || dst->src[1]->op == GGML_OP_CLAMP);
     if (dst->src[1]->op == GGML_OP_SCALE) {
         GGML_ASSERT(dst->src[1]->src[0]->op == GGML_OP_SUM_ROWS);
         auto params = (const float *)dst->src[1]->op_params;
@@ -202,5 +227,12 @@ void ggml_cuda_op_sum_rows_div(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    sum_rows_div_f32_cuda(src0_d, dst_d, ncols, nrows, s, b, stream);
+    if (dst->src[1]->op == GGML_OP_CLAMP) {
+        auto params = (const float *)dst->src[1]->op_params;
+        float pmin = params[0];
+        float pmax = params[1];
+        sum_rows_clamp_div_f32_cuda(src0_d, dst_d, ncols, nrows, pmin, pmax, stream);
+    } else {
+        sum_rows_div_f32_cuda(src0_d, dst_d, ncols, nrows, s, b, stream);
+    }
 }

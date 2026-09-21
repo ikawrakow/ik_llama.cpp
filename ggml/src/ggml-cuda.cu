@@ -4193,6 +4193,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 cgraph->nodes[i+1]->src[0] == dst->src[0] && ops_are_same_device(cgraph, i, i+1)) {
                 ggml_cuda_op_sum_rows_div(ctx, cgraph->nodes[i+1]);
                 ++i;
+            }
+            else if (fusion && i + 2 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_CLAMP &&
+                    cgraph->nodes[i+2]->op == GGML_OP_DIV &&
+                    cgraph->nodes[i+1]->src[0] == cgraph->nodes[i+0] &&
+                    cgraph->nodes[i+2]->src[1] == cgraph->nodes[i+1] &&
+                    cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+0]->src[0]) {
+                ggml_cuda_op_sum_rows_div(ctx, cgraph->nodes[i+2]);
+                i += 2;
             } else {
                 ggml_cuda_op_sum_rows(ctx, dst);
             }
