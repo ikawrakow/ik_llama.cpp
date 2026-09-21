@@ -906,6 +906,50 @@ void ggml_cuda_op_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_softplus>(ctx, dst);
 }
 
+static __device__ __forceinline__ float op_softplus_scaled(float x, float s_before, float s_after) {
+    x *= s_before;
+    float r = (x > 20.0f) ? x : logf(1.0f + expf(x));
+    return r*s_after;
+}
+
+template <typename T>
+static __global__ void scaled_softplus_kernel(const T * x, T * dst, const int k, float s_before, float s_after) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    dst[i] = (T)op_softplus_scaled((float)x[i], s_before, s_after);
+}
+
+void ggml_cuda_op_scaled_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    GGML_ASSERT(dst->op == GGML_OP_SCALE);
+    auto soft = dst->src[0];
+    GGML_ASSERT(soft->op == GGML_OP_UNARY);
+    auto unary_op = (ggml_unary_op)soft->op_params[0];
+    GGML_ASSERT(unary_op == GGML_UNARY_OP_SOFTPLUS);
+    auto src = soft->src[0];
+    GGML_ASSERT(src->op == GGML_OP_SCALE);
+    auto src0 = src->src[0];
+    float s_before, s_after;
+    memcpy(&s_before, src->op_params, sizeof(float));
+    memcpy(&s_after, dst->op_params, sizeof(float));
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(src0->type == dst->type);
+
+    auto nelem = ggml_nelements(src0);
+    const int num_blocks = (nelem + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
+    if (src0->type == GGML_TYPE_F16) {
+        scaled_softplus_kernel<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>((const half *)src0->data, (half *)dst->data, nelem, s_before, s_after);
+    } else {
+        scaled_softplus_kernel<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>((const float *)src0->data, (float *)dst->data, nelem, s_before, s_after);
+    }
+}
+
 void ggml_cuda_op_sqrt_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_sqrt_softplus>(ctx, dst);
 }
