@@ -237,18 +237,16 @@ static inline int hsum_i32_8(const __m256i a) {
     const __m128i hi32 = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));
     return _mm_cvtsi128_si32(_mm_add_epi32(sum64, hi32));
 }
-static inline float hmax_f32_8(__m256 x) {
-    __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x));
-    max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
-    max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
-    return  _mm_cvtss_f32(max4);
+static inline float hmax_float_4(__m128 x) {
+    x = _mm_max_ps( x, _mm_movehl_ps(x, x));
+    x = _mm_max_ss( x, _mm_movehdup_ps( x));
+    return  _mm_cvtss_f32(x);
 }
 static inline float hmax_float_8(__m256 x) {
-    __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x));
-    max4 = _mm_max_ps( max4, _mm_movehl_ps(max4, max4));
-    max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4));
-    return  _mm_cvtss_f32(max4);
+    return hmax_float_4(_mm_max_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x)));
 }
+static inline float hmax_f32_4(__m128 x) { return hmax_float_4(x); }
+static inline float hmax_f32_8(__m256 x) { return hmax_float_8(x); }
 static inline float hmin_float_8(__m256 x) {
     __m128 min4 = _mm_min_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x));
     min4 = _mm_min_ps( min4, _mm_movehl_ps(min4, min4));
@@ -587,11 +585,8 @@ static inline float convert_to_q8_k_r8(int k, float d0, const __m256i * qx, cons
     }
     auto max_q32 = _mm256_cvtepi16_epi32(_mm_max_epi16(_mm256_castsi256_si128(max_i16), _mm256_extracti128_si256(max_i16, 1)));
     auto imax4 = _mm_max_epi32(_mm256_castsi256_si128(max_q32), _mm256_extracti128_si256(max_q32, 1));
-    auto max4  = _mm_cvtepi32_ps(imax4);
-    max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
-    max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
     bool needs_scaling = true;
-    float dnew = _mm_cvtss_f32(max4) * d0;
+    float dnew = hmax_float_4(_mm_cvtepi32_ps(imax4)) * d0;
     if (dnew < 1.f) {
         dnew = 1.f; needs_scaling = false;
     }

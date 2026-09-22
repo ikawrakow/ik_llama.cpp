@@ -13,6 +13,19 @@
 
 namespace {
 
+struct PackerQ80 {
+    const __m256i perm = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+    inline __m256i convert(const float * values, __m256 id) const {
+        auto i0 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(_mm256_loadu_ps(values +  0), id), _MM_ROUND_NEAREST));
+        auto i1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(_mm256_loadu_ps(values +  8), id), _MM_ROUND_NEAREST));
+        auto i2 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(_mm256_loadu_ps(values + 16), id), _MM_ROUND_NEAREST));
+        auto i3 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(_mm256_loadu_ps(values + 24), id), _MM_ROUND_NEAREST));
+        i0 = _mm256_packs_epi32(i0, i1);
+        i2 = _mm256_packs_epi32(i2, i3);
+        return _mm256_permutevar8x32_epi32(_mm256_packs_epi16(i0, i2), perm);
+    }
+};
+
 // Handles q4_K and q5_K scales/mins
 struct Scales8K {
     template <typename Q8>
@@ -2116,7 +2129,7 @@ void iqk_convert_q2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
 
     auto ml = _mm256_set1_epi8(0x03);
     auto sign_bit = _mm256_set1_ps(-0.0f);
-    auto perm = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+    PackerQ80 packer;
 
     for (int ix = 0; ix < nrc_x; ix += k_nr) {
         for (int k = 0; k < k_nr; ++k) x8[k] = (const block_q2_K *)((const char *)vx + (ix + k)*bx);
@@ -2151,27 +2164,95 @@ void iqk_convert_q2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                         _mm256_storeu_ps(f_values + 128*i128 + 32*l + 24, v3);
                     }
                 }
-                auto max4 = _mm_max_ps(_mm256_extractf128_ps(block_max, 1), _mm256_castps256_ps128(block_max));
-                max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
-                max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
-                float d = _mm_cvtss_f32(max4)/127.f;
+                float d = hmax_float_8(block_max)/127.f;
                 auto id = _mm256_set1_ps(d != 0.0f ? 1/d : 0.0f);
                 y[i].d[k] = GGML_FP32_TO_FP16(d);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
-                    auto v0 = _mm256_loadu_ps(f_values + 32*ib32 +  0);
-                    auto v1 = _mm256_loadu_ps(f_values + 32*ib32 +  8);
-                    auto v2 = _mm256_loadu_ps(f_values + 32*ib32 + 16);
-                    auto v3 = _mm256_loadu_ps(f_values + 32*ib32 + 24);
-                    auto i0 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v0, id), _MM_ROUND_NEAREST));
-                    auto i1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v1, id), _MM_ROUND_NEAREST));
-                    auto i2 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v2, id), _MM_ROUND_NEAREST));
-                    auto i3 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v3, id), _MM_ROUND_NEAREST));
-                    i0 = _mm256_packs_epi32(i0, i1);
-                    i2 = _mm256_packs_epi32(i2, i3);
-                    i0 = _mm256_packs_epi16(i0, i2);
-                    i0 = _mm256_permutevar8x32_epi32(i0, perm);
+                    _mm256_storeu_si256((__m256i *)block, packer.convert(f_values + 32*ib32, id));
+                    auto q8 = (uint32_t *)y[i].qs + 8*k_nr*ib32;
+                    for (int l = 0; l < 8; ++l) {
+                        q8[k_nr*l + k] = block[l];
+                    }
+                }
+            }
+#ifdef HAVE_FANCY_SIMD
+            for (int l = 0; l < 64; ++l) {
+                auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
+                _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
+            }
+#endif
+        }
+        y += nb;
+    }
+}
 
-                    _mm256_storeu_si256((__m256i *)block, i0);
+void iqk_convert_q2_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+#ifdef HAVE_FANCY_SIMD
+    constexpr int k_nr = 16;
+    using block_q8_k_r = block_q8_k_r16;
+#else
+    constexpr int k_nr = 8;
+    using block_q8_k_r = block_q8_k_r8;
+#endif
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%k_nr == 0);
+
+    int nb = n/QK_K;
+
+    const block_q2_k_r4 * x4[k_nr/4];
+
+    block_q8_k_r * y = (block_q8_k_r *)vy;
+
+    float    f_values[QK_K];
+    uint32_t block[8];
+
+    auto ml = _mm256_set1_epi8(0x03);
+    auto sign_bit = _mm256_set1_ps(-0.0f);
+    PackerQ80 packer;
+    auto bcast = _mm256_setr_epi32(0, 0, 0, 0, 1, 1, 1, 1);
+    auto shr   = _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6);
+
+    for (int ix = 0; ix < nrc_x; ix += k_nr) {
+        for (int g = 0; g < k_nr/4; ++g) x4[g] = (const block_q2_k_r4 *)((const char *)vx + (ix + 4*g)*bx);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < k_nr; ++k) {
+                const auto& src = x4[k/4][i];
+                const int kk = k & 3;
+                auto vd = _mm256_set1_ps(GGML_FP16_TO_FP32(src.d[kk+0]));
+                auto vm = _mm256_mul_ps(_mm256_set1_ps(GGML_FP16_TO_FP32(src.d[kk+4])), _mm256_set1_ps(-1.f));
+                auto block_max = _mm256_setzero_ps();
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    const uint8_t * q = src.qs + 32*ib32 + 4*kk;
+                    uint32_t w[2];
+                    std::memcpy(w+0, q + 0, 4); std::memcpy(w+1, q + 16, 4);
+                    auto v = _mm256_permutevar8x32_epi32(
+                                 _mm256_castsi128_si256(_mm_loadl_epi64((const __m128i *)w)), bcast);
+                    v = _mm256_and_si256(_mm256_srlv_epi32(v, shr), ml);
+                    const uint8_t s1 = src.scales[4*(2*ib32+0) + kk];
+                    const uint8_t s2 = src.scales[4*(2*ib32+1) + kk];
+                    auto q1 = _mm256_mullo_epi16(_mm256_cvtepi8_epi16(_mm256_castsi256_si128(v)),
+                                                 _mm256_set1_epi16(s1 & 0xf));
+                    auto q2 = _mm256_mullo_epi16(_mm256_cvtepi8_epi16(_mm256_extracti128_si256(v, 1)),
+                                                 _mm256_set1_epi16(s2 & 0xf));
+                    auto m1 = _mm256_mul_ps(vm, _mm256_set1_ps(s1 >> 4));
+                    auto m2 = _mm256_mul_ps(vm, _mm256_set1_ps(s2 >> 4));
+                    auto v0 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q1))), vd, m1);
+                    auto v1 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q1, 1))), vd, m1);
+                    auto v2 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q2))), vd, m2);
+                    auto v3 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q2, 1))), vd, m2);
+                    auto max = _mm256_max_ps(_mm256_max_ps(_mm256_andnot_ps(sign_bit, v0), _mm256_andnot_ps(sign_bit, v1)),
+                                             _mm256_max_ps(_mm256_andnot_ps(sign_bit, v2), _mm256_andnot_ps(sign_bit, v3)));
+                    block_max = _mm256_max_ps(block_max, max);
+                    _mm256_storeu_ps(f_values + 32*ib32 +  0, v0);
+                    _mm256_storeu_ps(f_values + 32*ib32 +  8, v1);
+                    _mm256_storeu_ps(f_values + 32*ib32 + 16, v2);
+                    _mm256_storeu_ps(f_values + 32*ib32 + 24, v3);
+                }
+                float d = hmax_float_8(block_max)/127.f;
+                auto id = _mm256_set1_ps(d != 0.0f ? 1/d : 0.0f);
+                y[i].d[k] = GGML_FP32_TO_FP16(d);
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    _mm256_storeu_si256((__m256i *)block, packer.convert(f_values + 32*ib32, id));
                     auto q8 = (uint32_t *)y[i].qs + 8*k_nr*ib32;
                     for (int l = 0; l < 8; ++l) {
                         q8[k_nr*l + k] = block[l];
@@ -2254,6 +2335,90 @@ void iqk_convert_q4_k_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int 
     }
 }
 
+void iqk_convert_q4_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+#ifdef HAVE_FANCY_SIMD
+    constexpr int k_nr = 16;
+    using block_q8_k_r = block_q8_k_r16;
+#else
+    constexpr int k_nr = 8;
+    using block_q8_k_r = block_q8_k_r8;
+#endif
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%k_nr == 0);
+
+    int nb = n/QK_K;
+
+    const block_q4_k_r4 * x4[k_nr/4];
+
+    block_q8_k_r * y = (block_q8_k_r *)vy;
+
+    float    f_values[QK_K];
+    uint32_t block[8];
+
+    auto m4   = _mm256_set1_epi8(0xf);
+    auto sign_bit = _mm256_set1_ps(-0.0f);
+    PackerQ80 packer;
+    auto perm  = _mm256_setr_epi32(0, 1, 0, 1, 2, 3, 2, 3);
+
+    for (int ix = 0; ix < nrc_x; ix += k_nr) {
+        for (int g = 0; g < k_nr/4; ++g) x4[g] = (const block_q4_k_r4 *)((const char *)vx + (ix + 4*g)*bx);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < k_nr; ++k) {
+                const auto& src = x4[k/4][i];
+                const int kk = k & 3;
+                auto vd = _mm256_set1_ps(GGML_FP16_TO_FP32(src.d[kk+0]));
+                auto vm = _mm256_mul_ps(_mm256_set1_ps(GGML_FP16_TO_FP32(src.d[kk+4])), _mm256_set1_ps(-1.f));
+                auto block_max = _mm256_setzero_ps();
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    const int j = 4*ib32 + kk;
+                    const int h = (src.scales_h[j%16] >> 4*(j/16)) & 0xf;
+                    const int Ld = (src.scales_l[j] & 0xf) | ((h & 3) << 4);
+                    const int Lm = (src.scales_l[j] >>  4) | (((h >> 2) & 3) << 4);
+                    const uint8_t * q = src.qs + 64*ib32 + 4*kk;
+                    uint32_t w[4];
+                    std::memcpy(w+0, q +  0, 4); std::memcpy(w+1, q + 32, 4);
+                    std::memcpy(w+2, q + 16, 4); std::memcpy(w+3, q + 48, 4);
+                    auto v   = _mm256_permutevar8x32_epi32(
+                                   _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)w)), perm);
+                    auto nib = _mm256_blend_epi32(_mm256_and_si256(v, m4),
+                                                  _mm256_and_si256(_mm256_srli_epi16(v, 4), m4), 0xCC);
+                    auto q1 = _mm256_mullo_epi16(_mm256_cvtepi8_epi16(_mm256_castsi256_si128(nib)),
+                                                 _mm256_set1_epi16(Ld));
+                    auto q2 = _mm256_mullo_epi16(_mm256_cvtepi8_epi16(_mm256_extracti128_si256(nib, 1)),
+                                                 _mm256_set1_epi16(Ld));
+                    auto mm = _mm256_mul_ps(vm, _mm256_set1_ps(Lm));
+                    auto v0 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q1))), vd, mm);
+                    auto v1 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q1, 1))), vd, mm);
+                    auto v2 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q2))), vd, mm);
+                    auto v3 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q2, 1))), vd, mm);
+                    auto mx = _mm256_max_ps(_mm256_max_ps(_mm256_andnot_ps(sign_bit, v0), _mm256_andnot_ps(sign_bit, v1)),
+                                            _mm256_max_ps(_mm256_andnot_ps(sign_bit, v2), _mm256_andnot_ps(sign_bit, v3)));
+                    block_max = _mm256_max_ps(block_max, mx);
+                    _mm256_storeu_ps(f_values + 32*ib32 +  0, v0);
+                    _mm256_storeu_ps(f_values + 32*ib32 +  8, v1);
+                    _mm256_storeu_ps(f_values + 32*ib32 + 16, v2);
+                    _mm256_storeu_ps(f_values + 32*ib32 + 24, v3);
+                }
+                float dq = hmax_float_8(block_max)/127.f;
+                auto id = _mm256_set1_ps(dq != 0.0f ? 1/dq : 0.0f);
+                y[i].d[k] = GGML_FP32_TO_FP16(dq);
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    _mm256_storeu_si256((__m256i *)block, packer.convert(f_values + 32*ib32, id));
+                    auto q8 = (uint32_t *)y[i].qs + 8*k_nr*ib32;
+                    for (int l = 0; l < 8; ++l) q8[k_nr*l + k] = block[l];
+                }
+            }
+#ifdef HAVE_FANCY_SIMD
+            for (int l = 0; l < 64; ++l) {
+                auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
+                _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
+            }
+#endif
+        }
+        y += nb;
+    }
+}
+
 void iqk_convert_q5_k_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
@@ -2323,6 +2488,96 @@ void iqk_convert_q5_k_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int 
     }
 }
 
+void iqk_convert_q5_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+#ifdef HAVE_FANCY_SIMD
+    constexpr int k_nr = 16;
+    using block_q8_k_r = block_q8_k_r16;
+#else
+    constexpr int k_nr = 8;
+    using block_q8_k_r = block_q8_k_r8;
+#endif
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%k_nr == 0);
+
+    int nb = n/QK_K;
+
+    const block_q5_k_r4 * x4[k_nr/4];
+
+    block_q8_k_r * y = (block_q8_k_r *)vy;
+
+    float    f_values[QK_K];
+    uint32_t block[8];
+
+    auto m4   = _mm256_set1_epi8(0xf);
+    auto sign_bit = _mm256_set1_ps(-0.0f);
+    PackerQ80 packer;
+    auto perm  = _mm256_setr_epi32(0, 1, 0, 1, 2, 3, 2, 3);
+    auto m16   = _mm256_set1_epi8(16);
+    auto hmask = _mm256_setr_epi8(1, 1, 1, 1,  4,  4,  4,  4,  2,  2,  2,  2,  8,  8,  8,  8,
+                                  16,16,16,16, 64, 64, 64, 64, 32, 32, 32, 32, -128, -128, -128, -128);
+
+    for (int ix = 0; ix < nrc_x; ix += k_nr) {
+        for (int g = 0; g < k_nr/4; ++g) x4[g] = (const block_q5_k_r4 *)((const char *)vx + (ix + 4*g)*bx);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < k_nr; ++k) {
+                const auto& src = x4[k/4][i];
+                const int kk = k & 3;
+                auto vd = _mm256_set1_ps(GGML_FP16_TO_FP32(src.d[kk+0]));
+                auto vm = _mm256_mul_ps(_mm256_set1_ps(GGML_FP16_TO_FP32(src.d[kk+4])), _mm256_set1_ps(-1.f));
+                auto block_max = _mm256_setzero_ps();
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    const int j = 4*ib32 + kk;
+                    const int h = (src.scales_h[j%16] >> 4*(j/16)) & 0xf;
+                    const int Ld = (src.scales_l[j] & 0xf) | ((h & 3) << 4);
+                    const int Lm = (src.scales_l[j] >>  4) | (((h >> 2) & 3) << 4);
+                    const uint8_t * q = src.qs + 64*ib32 + 4*kk;
+                    uint32_t w[4];
+                    std::memcpy(w+0, q +  0, 4); std::memcpy(w+1, q + 32, 4);
+                    std::memcpy(w+2, q + 16, 4); std::memcpy(w+3, q + 48, 4);
+                    auto v   = _mm256_permutevar8x32_epi32(
+                                   _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)w)), perm);
+                    auto nib = _mm256_blend_epi32(_mm256_and_si256(v, m4),
+                                                  _mm256_and_si256(_mm256_srli_epi16(v, 4), m4), 0xCC);
+                    uint32_t h32; std::memcpy(&h32, src.qh + 16*ib32 + 4*kk, 4);
+                    auto hsel = _mm256_and_si256(_mm256_set1_epi32(h32), hmask);
+                    nib = _mm256_or_si256(nib, _mm256_and_si256(_mm256_cmpeq_epi8(hsel, hmask), m16));
+                    auto q1 = _mm256_mullo_epi16(_mm256_cvtepi8_epi16(_mm256_castsi256_si128(nib)),
+                                                 _mm256_set1_epi16(Ld));
+                    auto q2 = _mm256_mullo_epi16(_mm256_cvtepi8_epi16(_mm256_extracti128_si256(nib, 1)),
+                                                 _mm256_set1_epi16(Ld));
+                    auto mm = _mm256_mul_ps(vm, _mm256_set1_ps(Lm));
+                    auto v0 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q1))), vd, mm);
+                    auto v1 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q1, 1))), vd, mm);
+                    auto v2 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q2))), vd, mm);
+                    auto v3 = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q2, 1))), vd, mm);
+                    auto mx = _mm256_max_ps(_mm256_max_ps(_mm256_andnot_ps(sign_bit, v0), _mm256_andnot_ps(sign_bit, v1)),
+                                            _mm256_max_ps(_mm256_andnot_ps(sign_bit, v2), _mm256_andnot_ps(sign_bit, v3)));
+                    block_max = _mm256_max_ps(block_max, mx);
+                    _mm256_storeu_ps(f_values + 32*ib32 +  0, v0);
+                    _mm256_storeu_ps(f_values + 32*ib32 +  8, v1);
+                    _mm256_storeu_ps(f_values + 32*ib32 + 16, v2);
+                    _mm256_storeu_ps(f_values + 32*ib32 + 24, v3);
+                }
+                float dq = hmax_float_8(block_max)/127.f;
+                auto id = _mm256_set1_ps(dq != 0.0f ? 1/dq : 0.0f);
+                y[i].d[k] = GGML_FP32_TO_FP16(dq);
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    _mm256_storeu_si256((__m256i *)block, packer.convert(f_values + 32*ib32, id));
+                    auto q8 = (uint32_t *)y[i].qs + 8*k_nr*ib32;
+                    for (int l = 0; l < 8; ++l) q8[k_nr*l + k] = block[l];
+                }
+            }
+#ifdef HAVE_FANCY_SIMD
+            for (int l = 0; l < 64; ++l) {
+                auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
+                _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
+            }
+#endif
+        }
+        y += nb;
+    }
+}
+
 void iqk_convert_q6_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
@@ -2369,10 +2624,7 @@ void iqk_convert_q6_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int 
                     auto max_q16 = _mm256_max_epi16(abs_q16_l, abs_q16_h);
                     auto max_q32 = _mm256_cvtepi16_epi32(_mm_max_epi16(_mm256_castsi256_si128(max_q16), _mm256_extracti128_si256(max_q16, 1)));
                     auto imax4 = _mm_max_epi32(_mm256_castsi256_si128(max_q32), _mm256_extracti128_si256(max_q32, 1));
-                    auto max4  = _mm_cvtepi32_ps(imax4);
-                    max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
-                    max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
-                    float max = _mm_cvtss_f32(max4) / 127;
+                    float max = hmax_float_4(_mm_cvtepi32_ps(imax4)) / 127;
                     all_s[8*ib32+k] = d*max;
                     if (max > 1e-9f) {
                         auto scale = _mm256_set1_ps(1/max);
@@ -2404,6 +2656,73 @@ void iqk_convert_q6_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int 
             }
             y += QK_K/32;
         }
+    }
+}
+
+void iqk_convert_q6_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+#ifdef HAVE_FANCY_SIMD
+    constexpr int k_nr = 16;
+    using block_q8_k_r = block_q8_k_r16;
+#else
+    constexpr int k_nr = 8;
+    using block_q8_k_r = block_q8_k_r8;
+#endif
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%k_nr == 0);
+
+    int nb = n/QK_K;
+
+    const block_q6_k_r4 * x4[k_nr/4];
+
+    block_q8_k_r * y = (block_q8_k_r *)vy;
+
+    __m256i  xv[8];
+    uint32_t block[8];
+    int16_t  ls[16];
+
+    auto m4    = _mm256_set1_epi8(0xf);
+    auto m3    = _mm256_set1_epi8(0x3);
+    auto m32   = _mm256_set1_epi8(-32);
+    auto perm  = _mm256_setr_epi32(0, 1, 0, 1, 2, 3, 2, 3);
+    auto bcast = _mm256_setr_epi32(0, 0, 0, 0, 1, 1, 1, 1);
+    auto shr   = _mm256_setr_epi32(0, 4, 2, 6, 0, 4, 2, 6);
+
+    for (int ix = 0; ix < nrc_x; ix += k_nr) {
+        for (int g = 0; g < k_nr/4; ++g) x4[g] = (const block_q6_k_r4 *)((const char *)vx + (ix + 4*g)*bx);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < k_nr; ++k) {
+                const auto& src = x4[k/4][i];
+                const int kk = k & 3;
+                float d = GGML_FP16_TO_FP32(src.d[kk]);
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    ls[2*ib32+0] = src.scales[8*ib32 + kk + 0];
+                    ls[2*ib32+1] = src.scales[8*ib32 + kk + 4];
+                    const uint8_t * ql = src.ql + 64*ib32 + 4*kk;
+                    const uint8_t * qh = src.qh + 32*ib32 + 4*kk;
+                    uint32_t w[4], h[2];
+                    std::memcpy(w+0, ql +  0, 4); std::memcpy(w+1, ql + 32, 4);
+                    std::memcpy(w+2, ql + 16, 4); std::memcpy(w+3, ql + 48, 4);
+                    std::memcpy(h+0, qh +  0, 4); std::memcpy(h+1, qh + 16, 4);
+                    auto v   = _mm256_permutevar8x32_epi32(
+                                   _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)w)), perm);
+                    auto lo  = _mm256_blend_epi32(_mm256_and_si256(v, m4),
+                                                  _mm256_and_si256(_mm256_srli_epi16(v, 4), m4), 0xCC);
+                    auto vh  = _mm256_permutevar8x32_epi32(
+                                   _mm256_castsi128_si256(_mm_loadl_epi64((const __m128i *)h)), bcast);
+                    auto hi  = _mm256_and_si256(_mm256_srlv_epi32(vh, shr), m3);
+                    xv[ib32] = _mm256_add_epi8(_mm256_or_si256(lo, _mm256_slli_epi16(hi, 4)), m32);
+                }
+                float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
+                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+            }
+#ifdef HAVE_FANCY_SIMD
+            for (int l = 0; l < 64; ++l) {
+                auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
+                _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
+            }
+#endif
+        }
+        y += nb;
     }
 }
 
@@ -2460,10 +2779,7 @@ void iqk_convert_q3_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int 
                     auto max_q16 = _mm256_max_epi16(abs_q16_l, abs_q16_h);
                     auto max_q32 = _mm256_cvtepi16_epi32(_mm_max_epi16(_mm256_castsi256_si128(max_q16), _mm256_extracti128_si256(max_q16, 1)));
                     auto imax4 = _mm_max_epi32(_mm256_castsi256_si128(max_q32), _mm256_extracti128_si256(max_q32, 1));
-                    auto max4  = _mm_cvtepi32_ps(imax4);
-                    max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
-                    max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
-                    float max = _mm_cvtss_f32(max4) / 127;
+                    float max = hmax_float_4(_mm_cvtepi32_ps(imax4)) / 127;
                     all_s[8*ib32+k] = d*max;
                     if (max > 1e-9f) {
                         auto scale = _mm256_set1_ps(1/max);
@@ -2559,11 +2875,8 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                 }
                 auto max_q32 = _mm256_cvtepi16_epi32(_mm_max_epi16(_mm256_castsi256_si128(max_i16), _mm256_extracti128_si256(max_i16, 1)));
                 auto imax4 = _mm_max_epi32(_mm256_castsi256_si128(max_q32), _mm256_extracti128_si256(max_q32, 1));
-                auto max4  = _mm_cvtepi32_ps(imax4);
-                max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
-                max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
                 bool needs_scaling = true;
-                float dnew = _mm_cvtss_f32(max4) / 127;
+                float dnew = hmax_float_4(_mm_cvtepi32_ps(imax4)) / 127;
                 if (dnew < 1.f) {
                     dnew = 1.f; needs_scaling = false;
                 }
@@ -2602,6 +2915,74 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                         qs[k_nr*l + k] = block[l];
                     }
                 }
+            }
+#ifdef HAVE_FANCY_SIMD
+            for (int l = 0; l < 64; ++l) {
+                auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
+                _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
+            }
+#endif
+        }
+        y += nb;
+    }
+}
+
+void iqk_convert_q3_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+#ifdef HAVE_FANCY_SIMD
+    constexpr int k_nr = 16;
+    using block_q8_k_r = block_q8_k_r16;
+#else
+    constexpr int k_nr = 8;
+    using block_q8_k_r = block_q8_k_r8;
+#endif
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%k_nr == 0);
+
+    int nb = n/QK_K;
+
+    const block_q3_k_r4 * x4[k_nr/4];
+
+    block_q8_k_r * y = (block_q8_k_r *)vy;
+
+    __m256i  xv[8];
+    uint32_t block[8];
+    int16_t  ls[16];
+
+    auto ml    = _mm256_set1_epi8(0x03);
+    auto mh    = _mm256_set1_epi8(0x04);
+    auto bcast = _mm256_setr_epi32(0, 0, 0, 0, 1, 1, 1, 1);
+    auto shr   = _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6);
+    auto hmask = _mm256_setr_epi8(1, 1, 1, 1,  2,  2,  2,  2,  4,  4,  4,  4,  8,  8,  8,  8,
+                                  16,16,16,16, 32, 32, 32, 32, 64, 64, 64, 64, -128, -128, -128, -128);
+
+    for (int ix = 0; ix < nrc_x; ix += k_nr) {
+        for (int g = 0; g < k_nr/4; ++g) x4[g] = (const block_q3_k_r4 *)((const char *)vx + (ix + 4*g)*bx);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < k_nr; ++k) {
+                const auto& src = x4[k/4][i];
+                const int kk = k & 3;
+                float d = GGML_FP16_TO_FP32(src.d[kk]);
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    const int j1 = 8*ib32 + kk, j2 = j1 + 4;
+                    const int s1 = ((src.scales_l[j1%32] >> 4*(j1/32)) & 0xf)
+                                 | (((src.scales_h[j1%16] >> 2*(j1/16)) & 0x3) << 4);
+                    const int s2 = ((src.scales_l[j2%32] >> 4*(j2/32)) & 0xf)
+                                 | (((src.scales_h[j2%16] >> 2*(j2/16)) & 0x3) << 4);
+                    ls[2*ib32+0] = s1 - 32;
+                    ls[2*ib32+1] = s2 - 32;
+                    const uint8_t * q = src.qs + 32*ib32 + 4*kk;
+                    uint32_t w[2], h32;
+                    std::memcpy(w+0, q + 0, 4); std::memcpy(w+1, q + 16, 4);
+                    std::memcpy(&h32, src.qh + 16*ib32 + 4*kk, 4);
+                    auto v = _mm256_permutevar8x32_epi32(
+                                 _mm256_castsi128_si256(_mm_loadl_epi64((const __m128i *)w)), bcast);
+                    v = _mm256_and_si256(_mm256_srlv_epi32(v, shr), ml);
+                    auto hsel = _mm256_and_si256(_mm256_set1_epi32(h32), hmask);
+                    v = _mm256_or_si256(v, _mm256_and_si256(_mm256_cmpeq_epi8(hsel, hmask), mh));
+                    xv[ib32] = _mm256_sub_epi8(v, mh);
+                }
+                float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
+                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2833,10 +3214,15 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
 bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     switch (ggml_type(type)) {
         case GGML_TYPE_Q2_K: iqk_convert_q2_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q2_K_R4: iqk_convert_q2_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q3_K: iqk_convert_q3_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q3_K_R4: iqk_convert_q3_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q4_K: iqk_convert_q4_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q4_K_R4: iqk_convert_q4_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q5_K: iqk_convert_q5_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q5_K_R4: iqk_convert_q5_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_K: iqk_convert_q6_k_q8_0_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q6_K_R4: iqk_convert_q6_k_r4_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_XS: iqk_convert_iq4_xs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_XS_R8: iqk_convert_iq4_xs_r8_q8_k_r16(n, vx, bx, vy, nrc_x); break;
         default: return false;
