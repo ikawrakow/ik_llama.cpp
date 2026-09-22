@@ -3625,10 +3625,7 @@ void iqk_convert_iq5_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int
                     auto max_q16 = _mm256_max_epi16(abs_q16_l, abs_q16_h);
                     auto max_q32 = _mm256_cvtepi16_epi32(_mm_max_epi16(_mm256_castsi256_si128(max_q16), _mm256_extracti128_si256(max_q16, 1)));
                     auto imax4 = _mm_max_epi32(_mm256_castsi256_si128(max_q32), _mm256_extracti128_si256(max_q32, 1));
-                    auto max4  = _mm_cvtepi32_ps(imax4);
-                    max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
-                    max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
-                    float max = _mm_cvtss_f32(max4) / 127;
+                    float max = hmax_float_4(_mm_cvtepi32_ps(imax4)) / 127;
                     all_s[8*ib32+k] = d*max;
                     if (max > 1e-9f) {
                         auto scale = _mm256_set1_ps(1/max);
