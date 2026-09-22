@@ -1495,7 +1495,6 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     {
 
         const auto preserved_tokens = data.find("preserved_tokens");
-        bool has_multi_token_preserved = false;
         if (preserved_tokens != data.end()) {
             slot.sparams.preserved_tokens.clear();
             for (const auto& t : *preserved_tokens) {
@@ -1505,7 +1504,6 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                     slot.sparams.preserved_tokens.insert(ids[0]);
                 }
                 else {
-                    has_multi_token_preserved = true;
                     // This may happen when using a tool call style meant for a model with special tokens to preserve on a model without said tokens.
                     LOG("Not preserved because more than 1 token: %s\n", t.get<std::string>().c_str());
                 }
@@ -1550,20 +1548,6 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                     slot.sparams.grammar_triggers.emplace_back(std::move(ct.value));
                 }
             }
-        }
-
-        if (has_multi_token_preserved) {
-            // Tool-call markers are not single tokens in this model vocab: grammar
-            // constraints would desync from the native markup and corrupt generation
-            // (token substitutions, truncated arguments). Fall back to unconstrained
-            // generation; the chat content parser still extracts tool calls.
-            if (!slot.sparams.grammar_triggers.empty() || !slot.sparams.preserved_tokens.empty()) {
-                LOG("Disabling grammar constraints: multi-token tool-call markers for this model\n");
-            }
-            slot.sparams.grammar_triggers.clear();
-            slot.sparams.preserved_tokens.clear();
-            slot.sparams.grammar_lazy = false;
-            slot.sparams.grammar = default_sparams.grammar;
         }
 
         if (slot.sparams.grammar_lazy && slot.sparams.grammar_triggers.empty()) {
