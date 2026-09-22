@@ -10690,6 +10690,16 @@ static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint
     const uint64_t n_rows = ((uint64_t) pos_max + 1) / (ratio ? ratio : 1);
     return (uint32_t) std::min<uint64_t>(kv_rows, n_rows);
 }
+// Stream-row capacity of a DSV4 cache tensor list (first live tensor wins).
+static uint32_t dsv4_cache_stream_rows(const std::vector<ggml_tensor *> & vec, uint32_t n_stream) {
+    n_stream = std::max<uint32_t>(1, n_stream);
+    for (const auto * t : vec) {
+        if (t != nullptr && t->ne[1] % n_stream == 0) {
+            return (uint32_t)(t->ne[1] / n_stream);
+        }
+    }
+    return 0;
+}
 
 // Compute per-stream byte offset and size for a DSV4 cache tensor.
 // stream_idx >= 0 gives that stream's portion; use -1 for the full tensor.
@@ -11075,31 +11085,17 @@ struct llama_data_write {
             write(&dsv4_stream_idx, sizeof(dsv4_stream_idx));
             write(&ctx->dsv4.cache.n_stream, sizeof(ctx->dsv4.cache.n_stream));
 
-            // Port PR 25325: store only used K rows per cache. Stream-row
-            // capacity is taken from the live tensors; per-seq saves cap to
-            // (pos_max+1)/ratio, full saves keep everything.
-            auto dsv4_stream_rows_of = [&](const std::vector<ggml_tensor *> & vec) -> uint32_t {
-                const uint32_t n_stream = std::max<uint32_t>(1, ctx->dsv4.cache.n_stream);
-                for (const auto * t : vec) {
-                    if (t != nullptr && n_stream != 0 && t->ne[1] % n_stream == 0) {
-                        return (uint32_t)(t->ne[1] / n_stream);
-                    }
-                }
-                return 0;
-            };
-            const uint32_t cap_csa_stream = dsv4_stream_rows_of(ctx->dsv4.cache.csa_k);
-            const uint32_t cap_hca_stream = dsv4_stream_rows_of(ctx->dsv4.cache.hca_k);
-            const uint32_t cap_lid_stream = dsv4_stream_rows_of(ctx->dsv4.cache.lid_k);
+            // Port PR 25325: per-seq saves store only used K rows per cache.
+            const uint32_t cap_csa_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.csa_k, ctx->dsv4.cache.n_stream);
+            const uint32_t cap_hca_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.hca_k, ctx->dsv4.cache.n_stream);
+            const uint32_t cap_lid_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.lid_k, ctx->dsv4.cache.n_stream);
             const llama_pos dsv4_pos_max = (seq_id != -1) ? llama_kv_cache_seq_pos_max(ctx->kv_self, seq_id) : -1;
-            const uint32_t dsv4_n_rows_csa = (seq_id != -1)
-                ? dsv4_state_n_used_k_rows(dsv4_pos_max, ctx->model.hparams.dsv4_csa_ratio, cap_csa_stream)
-                : cap_csa_stream;
-            const uint32_t dsv4_n_rows_hca = (seq_id != -1)
-                ? dsv4_state_n_used_k_rows(dsv4_pos_max, ctx->model.hparams.dsv4_hca_ratio, cap_hca_stream)
-                : cap_hca_stream;
-            const uint32_t dsv4_n_rows_lid = (seq_id != -1)
-                ? dsv4_state_n_used_k_rows(dsv4_pos_max, ctx->model.hparams.dsv4_csa_ratio, cap_lid_stream)
-                : cap_lid_stream;
+            auto dsv4_used_rows = [&](uint32_t ratio, uint32_t cap) -> uint32_t {
+                return (seq_id != -1) ? dsv4_state_n_used_k_rows(dsv4_pos_max, ratio, cap) : cap;
+            };
+            const uint32_t dsv4_n_rows_csa = dsv4_used_rows(ctx->model.hparams.dsv4_csa_ratio, cap_csa_stream);
+            const uint32_t dsv4_n_rows_hca = dsv4_used_rows(ctx->model.hparams.dsv4_hca_ratio, cap_hca_stream);
+            const uint32_t dsv4_n_rows_lid = dsv4_used_rows(ctx->model.hparams.dsv4_csa_ratio, cap_lid_stream);
             write(&dsv4_n_rows_csa, sizeof(dsv4_n_rows_csa));
             write(&dsv4_n_rows_hca, sizeof(dsv4_n_rows_hca));
             write(&dsv4_n_rows_lid, sizeof(dsv4_n_rows_lid));
@@ -11135,9 +11131,8 @@ struct llama_data_write {
             uint32_t n_rows_csa, uint32_t n_rows_hca, uint32_t n_rows_lid) {
         const auto & cache = ctx->dsv4.cache;
         const uint32_t n_stream = std::max<uint32_t>(1, cache.n_stream);
-        // K caches are truncated to the used-row cap; compressor states keep
-        // their full stream slice (tiny fixed size, not position-scaled).
-        auto write_tensor_stream = [&](const struct ggml_tensor * tensor, int layer_il, uint32_t cap_rows) {
+        // K caches truncate to cap_rows; states default to the full slice.
+        auto write_tensor_stream = [&](const struct ggml_tensor * tensor, int layer_il, uint32_t cap_rows = UINT32_MAX) {
             if (tensor == nullptr) {
                 return;
             }
@@ -11155,32 +11150,17 @@ struct llama_data_write {
             }
             write_tensor_data(tensor, offset, (size_t) wrows * row_size, layer_il);
         };
-        auto write_tensor_stream_full = [&](const struct ggml_tensor * tensor, int layer_il) {
-            if (tensor == nullptr) {
-                return;
-            }
-            if (stream_idx < 0) {
-                write_tensor_data(tensor, 0, ggml_nbytes(tensor), layer_il);
-                return;
-            }
-            size_t offset, size;
-            GGML_ASSERT(dsv4_stream_offset_size(tensor, n_stream, stream_idx, offset, size));
-            if (size == 0) {
-                return;
-            }
-            write_tensor_data(tensor, offset, size, layer_il);
-        };
         if (il < (int)cache.csa_k.size() && cache.csa_k[il] != nullptr) {
             write_tensor_stream(cache.csa_k[il], il, n_rows_csa);
             write_tensor_stream(cache.lid_k[il], il, n_rows_lid);
-            write_tensor_stream_full(cache.csa_state_kv[il], il);
-            write_tensor_stream_full(cache.csa_state_score[il], il);
-            write_tensor_stream_full(cache.lid_state_kv[il], il);
-            write_tensor_stream_full(cache.lid_state_score[il], il);
+            write_tensor_stream(cache.csa_state_kv[il], il);
+            write_tensor_stream(cache.csa_state_score[il], il);
+            write_tensor_stream(cache.lid_state_kv[il], il);
+            write_tensor_stream(cache.lid_state_score[il], il);
         } else if (il < (int)cache.hca_k.size() && cache.hca_k[il] != nullptr) {
             write_tensor_stream(cache.hca_k[il], il, n_rows_hca);
-            write_tensor_stream_full(cache.hca_state_kv[il], il);
-            write_tensor_stream_full(cache.hca_state_score[il], il);
+            write_tensor_stream(cache.hca_state_kv[il], il);
+            write_tensor_stream(cache.hca_state_score[il], il);
         }
     }
 
@@ -11970,18 +11950,9 @@ struct llama_data_read {
                 read_to(&dsv4_n_rows_csa, sizeof(dsv4_n_rows_csa));
                 read_to(&dsv4_n_rows_hca, sizeof(dsv4_n_rows_hca));
                 read_to(&dsv4_n_rows_lid, sizeof(dsv4_n_rows_lid));
-                auto dsv4_live_stream_rows = [&](const std::vector<ggml_tensor *> & vec) -> uint32_t {
-                    const uint32_t ns = std::max<uint32_t>(1, cache.n_stream);
-                    for (const auto * t : vec) {
-                        if (t != nullptr && ns != 0 && t->ne[1] % ns == 0) {
-                            return (uint32_t)(t->ne[1] / ns);
-                        }
-                    }
-                    return 0;
-                };
-                if (dsv4_n_rows_csa > dsv4_live_stream_rows(cache.csa_k) ||
-                    dsv4_n_rows_hca > dsv4_live_stream_rows(cache.hca_k) ||
-                    dsv4_n_rows_lid > dsv4_live_stream_rows(cache.lid_k)) {
+                if (dsv4_n_rows_csa > dsv4_cache_stream_rows(cache.csa_k, cache.n_stream) ||
+                    dsv4_n_rows_hca > dsv4_cache_stream_rows(cache.hca_k, cache.n_stream) ||
+                    dsv4_n_rows_lid > dsv4_cache_stream_rows(cache.lid_k, cache.n_stream)) {
                     LLAMA_LOG_ERROR("%s: DSV4 state row count exceeds cache (csa %u hca %u lid %u)\n",
                             __func__, dsv4_n_rows_csa, dsv4_n_rows_hca, dsv4_n_rows_lid);
                     return false;
@@ -12013,7 +11984,8 @@ struct llama_data_read {
                 read_to(&layer_type, sizeof(layer_type));
 
                 bool set_ok = true;
-                auto set_tensor_stream = [&](struct ggml_tensor * tensor, uint32_t cap_rows) {
+                // Legacy VER 1 files have no row counts: restore the full slice.
+                auto set_tensor_stream = [&](struct ggml_tensor * tensor, uint32_t cap_rows = UINT32_MAX) {
                     if (!set_ok || tensor == nullptr) return;
                     if (dsv4_single_stream) {
                         size_t dst_offset, stream_size;
@@ -12023,7 +11995,6 @@ struct llama_data_read {
                         }
                         const size_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
                         uint32_t stream_rows = row_size ? (uint32_t)(stream_size / row_size) : 0;
-                        // Legacy VER 1 files have no row counts: restore the full slice.
                         uint32_t rrows = dsv4_ver2 ? std::min(stream_rows, cap_rows) : stream_rows;
                         if (rrows == 0) {
                             return;
@@ -12033,34 +12004,18 @@ struct llama_data_read {
                         ggml_backend_tensor_set(tensor, read(ggml_nbytes(tensor)), 0, ggml_nbytes(tensor));
                     }
                 };
-                auto set_tensor_stream_full = [&](struct ggml_tensor * tensor) {
-                    if (!set_ok || tensor == nullptr) return;
-                    if (dsv4_single_stream) {
-                        size_t dst_offset, stream_size;
-                        if (!dsv4_stream_offset_size(tensor, cache.n_stream, dsv4_dst_stream, dst_offset, stream_size)) {
-                            set_ok = false;
-                            return;
-                        }
-                        if (stream_size == 0) {
-                            return;
-                        }
-                        ggml_backend_tensor_set(tensor, read(stream_size), dst_offset, stream_size);
-                    } else {
-                        ggml_backend_tensor_set(tensor, read(ggml_nbytes(tensor)), 0, ggml_nbytes(tensor));
-                    }
-                };
 
                 if (layer_type == 1) {
                     set_tensor_stream(cache.csa_k[il], dsv4_n_rows_csa);
                     set_tensor_stream(cache.lid_k[il], dsv4_n_rows_lid);
-                    set_tensor_stream_full(cache.csa_state_kv[il]);
-                    set_tensor_stream_full(cache.csa_state_score[il]);
-                    set_tensor_stream_full(cache.lid_state_kv[il]);
-                    set_tensor_stream_full(cache.lid_state_score[il]);
+                    set_tensor_stream(cache.csa_state_kv[il]);
+                    set_tensor_stream(cache.csa_state_score[il]);
+                    set_tensor_stream(cache.lid_state_kv[il]);
+                    set_tensor_stream(cache.lid_state_score[il]);
                 } else if (layer_type == 2) {
                     set_tensor_stream(cache.hca_k[il], dsv4_n_rows_hca);
-                    set_tensor_stream_full(cache.hca_state_kv[il]);
-                    set_tensor_stream_full(cache.hca_state_score[il]);
+                    set_tensor_stream(cache.hca_state_kv[il]);
+                    set_tensor_stream(cache.hca_state_score[il]);
                 }
                 if (!set_ok) {
                     return false;
