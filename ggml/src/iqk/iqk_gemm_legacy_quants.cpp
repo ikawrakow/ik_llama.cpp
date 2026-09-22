@@ -2670,22 +2670,22 @@ template <int nrc> struct Q80 {
     }
 
     template <typename Dequantizer>
-    inline void process_scales(int i, Dequantizer& deq, float16x4_t * sc16, float32x4_t * /*acc*/) const {
+    inline void process_scales(int i, Dequantizer& deq, float32x4_t * sc16, float32x4_t * /*acc*/) const {
         auto qx_scales = deq.new_block(i);
         for (int iy = 0; iy < nrc; ++iy) {
             auto q8_scales = load_scales(iy, i);
-            sc16[iy] = vmul_f16(qx_scales, q8_scales);
+            sc16[iy] = vmulq_f32(vcvt_f32_f16(qx_scales), vcvt_f32_f16(q8_scales));
         }
     }
 
     template <typename Dequantizer>
-    inline void process_scales(int i, Dequantizer& deq1, Dequantizer& deq2, float16x4_t * sc16, float32x4_t * /*acc*/) const {
+    inline void process_scales(int i, Dequantizer& deq1, Dequantizer& deq2, float32x4_t * sc16, float32x4_t * /*acc*/) const {
         auto qx_scales_1 = deq1.new_block(i);
         auto qx_scales_2 = deq2.new_block(i);
         for (int iy = 0; iy < nrc; ++iy) {
             auto q8_scales = load_scales(iy, i);
-            sc16[iy      ] = vmul_f16(qx_scales_1, q8_scales);
-            sc16[iy+nrc_y] = vmul_f16(qx_scales_2, q8_scales);
+            sc16[iy      ] = vmulq_f32(vcvt_f32_f16(qx_scales_1), vcvt_f32_f16(q8_scales));
+            sc16[iy+nrc_y] = vmulq_f32(vcvt_f32_f16(qx_scales_2), vcvt_f32_f16(q8_scales));
         }
     }
 
@@ -2722,30 +2722,30 @@ template <int nrc> struct Q81 {
     }
 
     template <typename Dequantizer>
-    inline void process_scales(int i, Dequantizer& deq, float16x4_t * sc16, float32x4_t * acc) const {
+    inline void process_scales(int i, Dequantizer& deq, float32x4_t * sc16, float32x4_t * acc) const {
         auto qx_scales = deq.new_block(i);
         for (int iy = 0; iy < nrc; ++iy) {
             auto q8_scales = load_scales(iy, i);
-            auto m = vmul_f16(vget_high_f16(qx_scales), vget_high_f16(q8_scales));
-            acc[iy] = vaddq_f32(acc[iy], vcvt_f32_f16(m));
-            sc16[iy] = vmul_f16(vget_low_f16(qx_scales), vget_low_f16(q8_scales));
+            auto m = vmulq_f32(vcvt_f32_f16(vget_high_f16(qx_scales)), vcvt_f32_f16(vget_high_f16(q8_scales)));
+            acc[iy] = vaddq_f32(acc[iy], m);
+            sc16[iy] = vmulq_f32(vcvt_f32_f16(vget_low_f16(qx_scales)), vcvt_f32_f16(vget_low_f16(q8_scales)));
         }
     }
 
     template <typename Dequantizer>
-    inline void process_scales(int i, Dequantizer& deq1, Dequantizer& deq2, float16x4_t * sc16, float32x4_t * acc) const {
+    inline void process_scales(int i, Dequantizer& deq1, Dequantizer& deq2, float32x4_t * sc16, float32x4_t * acc) const {
         auto qx_scales_1 = deq1.new_block(i);
         auto qx_scales_2 = deq2.new_block(i);
         for (int iy = 0; iy < nrc; ++iy) {
             auto q8_scales = load_scales(iy, i);
             auto q8_scales_l = vget_low_f16(q8_scales);
             auto q8_scales_h = vget_high_f16(q8_scales);
-            auto m1 = vmul_f16(vget_high_f16(qx_scales_1), q8_scales_h);
-            auto m2 = vmul_f16(vget_high_f16(qx_scales_2), q8_scales_h);
-            acc[iy       ] = vaddq_f32(acc[iy      ], vcvt_f32_f16(m1));
-            acc[iy+nrc_y ] = vaddq_f32(acc[iy+nrc_y], vcvt_f32_f16(m2));
-            sc16[iy      ] = vmul_f16(vget_low_f16(qx_scales_1), q8_scales_l);
-            sc16[iy+nrc_y] = vmul_f16(vget_low_f16(qx_scales_2), q8_scales_l);
+            auto m1 = vmulq_f32(vcvt_f32_f16(vget_high_f16(qx_scales_1)), vcvt_f32_f16(q8_scales_h));
+            auto m2 = vmulq_f32(vcvt_f32_f16(vget_high_f16(qx_scales_2)), vcvt_f32_f16(q8_scales_h));
+            acc[iy       ] = vaddq_f32(acc[iy      ], m1);
+            acc[iy+nrc_y ] = vaddq_f32(acc[iy+nrc_y], m2);
+            sc16[iy      ] = vmulq_f32(vcvt_f32_f16(vget_low_f16(qx_scales_1)), vcvt_f32_f16(q8_scales_l));
+            sc16[iy+nrc_y] = vmulq_f32(vcvt_f32_f16(vget_low_f16(qx_scales_2)), vcvt_f32_f16(q8_scales_l));
         }
     }
 
@@ -3049,20 +3049,20 @@ struct DequantizerQ51 final : public BaseLegacyDequantizer<block_q5_1> {
 };
 
 template <typename Dequantizer, typename Q8>
-inline void sum_4(int i, Dequantizer& deq, const Q8& q8, const float16x4_t * sc16, float32x4_t * acc) {
+inline void sum_4(int i, Dequantizer& deq, const Q8& q8, const float32x4_t * sc16, float32x4_t * acc) {
     for (int iy = 0; iy < Q8::nrc_y; ++iy) {
         auto pall = sum_4_blocks(deq.bits.b, q8.quant_data(iy, i));
-        auto scale = vcvt_f32_f16(sc16[iy]);
+        auto scale = sc16[iy];
         acc[iy] = vmlaq_f32(acc[iy], scale, vcvtq_f32_s32(pall));
     }
 }
 
 template <typename Dequantizer, typename Q8>
-inline void sum_4(int i, Dequantizer& deq1, Dequantizer& deq2, const Q8& q8, const float16x4_t * sc16, float32x4_t * acc) {
+inline void sum_4(int i, Dequantizer& deq1, Dequantizer& deq2, const Q8& q8, const float32x4_t * sc16, float32x4_t * acc) {
     for (int iy = 0; iy < Q8::nrc_y; ++iy) {
         auto pall = sum_4_blocks(deq1.bits.b, deq2.bits.b, q8.quant_data(iy, i));
-        auto scale1 = vcvt_f32_f16(sc16[iy]);
-        auto scale2 = vcvt_f32_f16(sc16[iy+Q8::nrc_y]);
+        auto scale1 = sc16[iy];
+        auto scale2 = sc16[iy+Q8::nrc_y];
         acc[iy] = vmlaq_f32(acc[iy], scale1, vcvtq_f32_s32(pall.val[0]));
         acc[iy+Q8::nrc_y] = vmlaq_f32(acc[iy+Q8::nrc_y], scale2, vcvtq_f32_s32(pall.val[1]));
     }
@@ -3072,7 +3072,7 @@ template <typename Dequantizer, typename Q8>
 inline void mul_mat_qX_Y_q8_Y(int n, Dequantizer& deq, Q8& q8, const DataInfo& info, int nrc_x) {
     const int nb = n / QK4_1;
 
-    float16x4_t sc16[Q8::nrc_y];
+    float32x4_t sc16[Q8::nrc_y];
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
@@ -3099,7 +3099,7 @@ template <typename Dequantizer, typename Q8>
 inline void mul_mat_qX_Y_q8_Y_IK(int n, Dequantizer& deq1, Dequantizer& deq2, Q8& q8, const DataInfo& info, int nrc_x) {
     const int nb = n / QK4_1;
 
-    float16x4_t sc16[2*Q8::nrc_y];
+    float32x4_t sc16[2*Q8::nrc_y];
     float32x4_t acc[2*Q8::nrc_y];
 
     for (int ix = 0; ix < nrc_x; ix += 2) {
@@ -3128,7 +3128,7 @@ template <typename Dequantizer, typename Q8>
 inline void mul_mat_qX_Y_q8_Y_1(int n, Dequantizer& deq1, Dequantizer& deq2, Q8& q8, const DataInfo& info, int nrc_x) {
     const int nb = n / QK4_1;
 
-    float16x4_t sc16[2];
+    float32x4_t sc16[2];
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
