@@ -275,6 +275,7 @@ class MODEL_ARCH(IntEnum):
     ARCTIC       = auto()
     DEEPSEEK2    = auto()
     DEEPSEEK4    = auto()
+    DEEPSEEK41   = auto()
     GLM4_MOE     = auto()
     OPENPANGU    = auto()
     CHATGLM      = auto()
@@ -408,6 +409,20 @@ class MODEL_TENSOR(IntEnum):
     INDEXER_PROJ         = auto()
     INDEXER_ATTN_K       = auto()
     INDEXER_ATTN_Q_B     = auto()
+    ENGRAM_EMBD          = auto()  # DeepSeek-V4.1 engram embedding table
+    ENGRAM_K             = auto()  # DeepSeek-V4.1 engram key projection
+    ENGRAM_Q             = auto()  # DeepSeek-V4.1 engram query projection
+    ENGRAM_WKV           = auto()  # DeepSeek-V4.1 engram wkv projection
+    ATTN_COMPRESSOR_APE  = auto()  # DeepSeek-V4 main-attention KV compressor
+    ATTN_COMPRESSOR_WKV  = auto()
+    ATTN_COMPRESSOR_WGATE = auto()
+    ATTN_COMPRESSOR_NORM = auto()
+    INDEXER_COMPRESSOR_APE = auto()  # DeepSeek-V4 indexer KV compressor
+    INDEXER_COMPRESSOR_WKV = auto()
+    INDEXER_COMPRESSOR_WGATE = auto()
+    INDEXER_COMPRESSOR_NORM = auto()
+    FFN_EXP_PROBS_B_VL   = auto()  # DeepSeek-V4 modality-specific router bias
+    FFN_GATE_TID2EID     = auto()  # DeepSeek-V4 hash-routing table
     MTP_PRE_PROJ         = auto()
     MTP_POST_PROJ        = auto()
     MTP_TOKEN_ORDERING   = auto()
@@ -508,6 +523,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ARCTIC:         "arctic",
     MODEL_ARCH.DEEPSEEK2:      "deepseek2",
     MODEL_ARCH.DEEPSEEK4:      "deepseek4",
+    MODEL_ARCH.DEEPSEEK41:     "deepseek41",
     MODEL_ARCH.CHATGLM:        "chatglm",
     MODEL_ARCH.GLM4_MOE:       "glm4moe",
     MODEL_ARCH.OPENPANGU:      "openpangu",
@@ -652,6 +668,20 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.INDEXER_PROJ:              "blk.{bid}.indexer.proj",
     MODEL_TENSOR.INDEXER_ATTN_K:            "blk.{bid}.indexer.attn_k",
     MODEL_TENSOR.INDEXER_ATTN_Q_B:          "blk.{bid}.indexer.attn_q_b",
+    MODEL_TENSOR.ENGRAM_EMBD:               "blk.{bid}.engram_embd",
+    MODEL_TENSOR.ENGRAM_K:                  "blk.{bid}.engram_k",
+    MODEL_TENSOR.ENGRAM_Q:                  "blk.{bid}.engram_q",
+    MODEL_TENSOR.ENGRAM_WKV:                "blk.{bid}.engram_wkv",
+    MODEL_TENSOR.ATTN_COMPRESSOR_APE:       "blk.{bid}.attn_compressor_ape",
+    MODEL_TENSOR.ATTN_COMPRESSOR_WKV:       "blk.{bid}.attn_compressor_kv",
+    MODEL_TENSOR.ATTN_COMPRESSOR_WGATE:     "blk.{bid}.attn_compressor_gate",
+    MODEL_TENSOR.ATTN_COMPRESSOR_NORM:      "blk.{bid}.attn_compressor_norm",
+    MODEL_TENSOR.INDEXER_COMPRESSOR_APE:    "blk.{bid}.indexer_compressor_ape",
+    MODEL_TENSOR.INDEXER_COMPRESSOR_WKV:    "blk.{bid}.indexer_compressor_kv",
+    MODEL_TENSOR.INDEXER_COMPRESSOR_WGATE:  "blk.{bid}.indexer_compressor_gate",
+    MODEL_TENSOR.INDEXER_COMPRESSOR_NORM:   "blk.{bid}.indexer_compressor_norm",
+    MODEL_TENSOR.FFN_EXP_PROBS_B_VL:        "blk.{bid}.exp_probs_b_vl",
+    MODEL_TENSOR.FFN_GATE_TID2EID:          "blk.{bid}.ffn_gate_tid2eid",
     MODEL_TENSOR.MTP_PRE_PROJ:              "mtp_pre_proj",
     MODEL_TENSOR.MTP_POST_PROJ:             "mtp_post_proj",
     MODEL_TENSOR.MTP_TOKEN_ORDERING:        "mtp_token_ordering",
@@ -1464,6 +1494,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.INDEXER_PROJ,
         MODEL_TENSOR.INDEXER_ATTN_K,
         MODEL_TENSOR.INDEXER_ATTN_Q_B,
+        MODEL_TENSOR.ATTN_COMPRESSOR_APE,
+        MODEL_TENSOR.ATTN_COMPRESSOR_WKV,
+        MODEL_TENSOR.ATTN_COMPRESSOR_WGATE,
+        MODEL_TENSOR.ATTN_COMPRESSOR_NORM,
+        MODEL_TENSOR.INDEXER_COMPRESSOR_APE,
+        MODEL_TENSOR.INDEXER_COMPRESSOR_WKV,
+        MODEL_TENSOR.INDEXER_COMPRESSOR_WGATE,
+        MODEL_TENSOR.INDEXER_COMPRESSOR_NORM,
+        MODEL_TENSOR.FFN_EXP_PROBS_B_VL,
+        MODEL_TENSOR.FFN_GATE_TID2EID,
+        MODEL_TENSOR.ENGRAM_EMBD,
+        MODEL_TENSOR.ENGRAM_K,
+        MODEL_TENSOR.ENGRAM_Q,
+        MODEL_TENSOR.ENGRAM_WKV,
         MODEL_TENSOR.NEXTN_EH_PROJ,
         MODEL_TENSOR.NEXTN_EMBED_TOKENS,
         MODEL_TENSOR.NEXTN_ENORM,
@@ -1907,6 +1951,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     # TODO
 }
 
+MODEL_TENSORS[MODEL_ARCH.DEEPSEEK41] = MODEL_TENSORS[MODEL_ARCH.DEEPSEEK4]
+
 # tensors that will not be serialized
 MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.LLAMA: [
@@ -1946,6 +1992,10 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
     MODEL_ARCH.DEEPSEEK4: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+    ],
+    MODEL_ARCH.DEEPSEEK41: [
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
