@@ -10675,14 +10675,8 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
     return kv;
 }
 
-// Port PR 25325: DSV4 state now stores only used K rows (per-seq saves).
-// Layout: MAGIC + VER(2) + legacy fields + n_rows_csa/hca/lid, then layer
-// data with truncated K slices. Legacy files (no MAGIC) read as VER 1 full.
-static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u; // "DSV4", same as upstream
+static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u;
 static constexpr uint32_t DSV4_STATE_VER_USED_ROWS = 2;
-// Number of K rows actually used for a seq with max raw pos pos_max.
-// FIXME: conflates token positions with cache rows, wrong for multi-modal
-// (see upstream PR 25325 review); should use host-side cell tracking.
 static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint32_t kv_rows) {
     if (pos_max < 0) {
         return 0;
@@ -10690,7 +10684,6 @@ static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint
     const uint64_t n_rows = ((uint64_t) pos_max + 1) / (ratio ? ratio : 1);
     return (uint32_t) std::min<uint64_t>(kv_rows, n_rows);
 }
-// Stream-row capacity of a DSV4 cache tensor list (first live tensor wins).
 static uint32_t dsv4_cache_stream_rows(const std::vector<ggml_tensor *> & vec, uint32_t n_stream) {
     n_stream = std::max<uint32_t>(1, n_stream);
     for (const auto * t : vec) {
@@ -11085,7 +11078,6 @@ struct llama_data_write {
             write(&dsv4_stream_idx, sizeof(dsv4_stream_idx));
             write(&ctx->dsv4.cache.n_stream, sizeof(ctx->dsv4.cache.n_stream));
 
-            // Port PR 25325: per-seq saves store only used K rows per cache.
             const uint32_t cap_csa_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.csa_k, ctx->dsv4.cache.n_stream);
             const uint32_t cap_hca_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.hca_k, ctx->dsv4.cache.n_stream);
             const uint32_t cap_lid_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.lid_k, ctx->dsv4.cache.n_stream);
@@ -11131,7 +11123,6 @@ struct llama_data_write {
             uint32_t n_rows_csa, uint32_t n_rows_hca, uint32_t n_rows_lid) {
         const auto & cache = ctx->dsv4.cache;
         const uint32_t n_stream = std::max<uint32_t>(1, cache.n_stream);
-        // K caches truncate to cap_rows; states default to the full slice.
         auto write_tensor_stream = [&](const struct ggml_tensor * tensor, int layer_il, uint32_t cap_rows = UINT32_MAX) {
             if (tensor == nullptr) {
                 return;
@@ -11912,8 +11903,6 @@ struct llama_data_read {
 
             uint32_t dsv4_first;
             read_to(&dsv4_first, sizeof(dsv4_first));
-            // Port PR 25325: VER 2 files start with MAGIC; legacy files start
-            // with dsv4_n_layer directly (full rows, no row counts).
             const bool dsv4_ver2 = (dsv4_first == DSV4_STATE_MAGIC);
             uint32_t dsv4_ver = 1;
             uint32_t dsv4_n_layer = 0;
@@ -11972,9 +11961,6 @@ struct llama_data_read {
             // Destination stream: when restoring per-stream, write to seq_id's slot
             const int32_t dsv4_dst_stream = dsv4_single_stream ? (int32_t)seq_id : -1;
 
-            // Port PR 25325: truncated VER 2 reads leave tail rows untouched,
-            // so clear the destination first (K caches zeroed, states fully
-            // overwritten right after).
             if (dsv4_ver2) {
                 llama_reset_dsv4_state(ctx, dsv4_dst_stream);
             }
@@ -11984,7 +11970,6 @@ struct llama_data_read {
                 read_to(&layer_type, sizeof(layer_type));
 
                 bool set_ok = true;
-                // Legacy VER 1 files have no row counts: restore the full slice.
                 auto set_tensor_stream = [&](struct ggml_tensor * tensor, uint32_t cap_rows = UINT32_MAX) {
                     if (!set_ok || tensor == nullptr) return;
                     if (dsv4_single_stream) {
