@@ -10677,6 +10677,7 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
 
 static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u;
 static constexpr uint32_t DSV4_STATE_VER_USED_ROWS = 2;
+
 static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint32_t kv_rows) {
     if (pos_max < 0) {
         return 0;
@@ -10684,6 +10685,7 @@ static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint
     const uint64_t n_rows = ((uint64_t) pos_max + 1) / (ratio ? ratio : 1);
     return (uint32_t) std::min<uint64_t>(kv_rows, n_rows);
 }
+
 static uint32_t dsv4_cache_stream_rows(const std::vector<ggml_tensor *> & vec, uint32_t n_stream) {
     n_stream = std::max<uint32_t>(1, n_stream);
     for (const auto * t : vec) {
@@ -11901,9 +11903,9 @@ struct llama_data_read {
                 return false;
             }
 
-            uint32_t dsv4_first;
-            read_to(&dsv4_first, sizeof(dsv4_first));
-            const bool dsv4_ver2 = (dsv4_first == DSV4_STATE_MAGIC);
+            uint32_t dsv4_magic_or_n_layer;
+            read_to(&dsv4_magic_or_n_layer, sizeof(dsv4_magic_or_n_layer));
+            const bool dsv4_ver2 = (dsv4_magic_or_n_layer == DSV4_STATE_MAGIC);
             uint32_t dsv4_ver = 1;
             uint32_t dsv4_n_layer = 0;
             if (dsv4_ver2) {
@@ -11914,7 +11916,7 @@ struct llama_data_read {
                 }
                 read_to(&dsv4_n_layer, sizeof(dsv4_n_layer));
             } else {
-                dsv4_n_layer = dsv4_first;
+                dsv4_n_layer = dsv4_magic_or_n_layer;
             }
             if (dsv4_n_layer != n_layer) {
                 LLAMA_LOG_ERROR("%s: DSV4 cache layer count mismatch (%u != %u)\n", __func__, dsv4_n_layer, n_layer);
@@ -11979,8 +11981,8 @@ struct llama_data_read {
                             return;
                         }
                         const size_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
-                        uint32_t stream_rows = row_size ? (uint32_t)(stream_size / row_size) : 0;
-                        uint32_t rrows = dsv4_ver2 ? std::min(stream_rows, cap_rows) : stream_rows;
+                        const uint32_t stream_rows = row_size ? (uint32_t)(stream_size / row_size) : 0;
+                        const uint32_t rrows = dsv4_ver2 ? std::min(stream_rows, cap_rows) : stream_rows;
                         if (rrows == 0) {
                             return;
                         }
