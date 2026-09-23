@@ -884,6 +884,7 @@ struct ggml_backend_cuda_context {
     int   offload_batch_size_per_byte = -1;
     int   mmq_id_thresh = 32;
     float fa_offset = 0.6931f; // ln(2)
+    bool  fabsum = false;      // opt-in: bound the fp16 accumulation error in the tile FA kernel
 #ifdef USE_CUDA_GRAPH
     bool use_cuda_graph = true;
 

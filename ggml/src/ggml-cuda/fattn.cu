@@ -104,6 +104,8 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
                 } else {
                     ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
                 }
+            } else if (ctx.fabsum) {
+                ggml_cuda_flash_attn_ext_tile_f16_fabsum(ctx, dst);
             } else {
                 ggml_cuda_flash_attn_ext_tile_f16(ctx, dst);
             }
