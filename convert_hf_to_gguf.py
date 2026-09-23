@@ -5343,7 +5343,9 @@ class DeepseekV4Model(DeepseekV2Model):
             self.gguf_writer.add_attention_indexer_key_length(indexer_dim)
         if (indexer_top_k := self.hparams.get("indexer_topk", self.hparams.get("index_topk"))) is not None:
             self.gguf_writer.add_attention_indexer_top_k(indexer_top_k)
-        if (nextn_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+        # the key describes an MTP tail stored in this file: only claim it when block_count includes the tail
+        if (nextn_layers := self.hparams.get("num_nextn_predict_layers")) is not None and \
+                self.block_count == int(self.hparams["num_hidden_layers"]) + nextn_layers:
             self.gguf_writer.add_nextn_predict_layers(nextn_layers)
 
 
@@ -5432,6 +5434,8 @@ class DeepseekV41Model(DeepseekV4Model):
                 self._v41_block_rows, self._v41_block_cols,
             )
 
+        # backbone-only: the MTP layers go to the separate DSpark draft (see _v41_skip_tensor),
+        # so block_count excludes them and the file must not claim a nextn tail
         self.block_count = int(self.hparams["num_hidden_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
         self._v41_engram_layers = [int(b) for b in (self.hparams.get("engram_layer_ids") or [])]
