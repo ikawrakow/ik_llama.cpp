@@ -5434,8 +5434,6 @@ class DeepseekV41Model(DeepseekV4Model):
                 self._v41_block_rows, self._v41_block_cols,
             )
 
-        # backbone-only: the MTP layers go to the separate DSpark draft (see _v41_skip_tensor),
-        # so block_count excludes them and the file must not claim a nextn tail
         self.block_count = int(self.hparams["num_hidden_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
         self._v41_engram_layers = [int(b) for b in (self.hparams.get("engram_layer_ids") or [])]
