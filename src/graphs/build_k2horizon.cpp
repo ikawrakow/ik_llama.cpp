@@ -9,7 +9,8 @@ static ggml_tensor * k2_horizon_group_rms_norm(
     ggml_tensor * cur,
     ggml_tensor * weight,
     int64_t n_groups,
-    float eps) {
+    float eps,
+    int il, const llm_build_cb & cb) {
     GGML_ASSERT(n_groups > 0);
     GGML_ASSERT(cur->ne[0] % n_groups == 0);
 
@@ -17,10 +18,11 @@ static ggml_tensor * k2_horizon_group_rms_norm(
     const int64_t n_tokens = cur->ne[1];
 
     // reshape: (n_embd, n_tokens) -> (n_embd/n_groups, n_groups, n_tokens)
-    cur = ggml_reshape_3d(ctx, cur, n_embd / n_groups, n_groups, n_tokens);
+    cur = ggml_reshape_2d(ctx, cur, n_embd / n_groups, n_groups * n_tokens);
 
     // RMS norm per group
     cur = ggml_rms_norm(ctx, cur, eps);
+    cb(cur, "k2_rms", il);
 
     // reshape back: (n_embd, n_tokens)
     cur = ggml_reshape_2d(ctx, cur, n_embd, n_tokens);
@@ -28,6 +30,7 @@ static ggml_tensor * k2_horizon_group_rms_norm(
     // apply learned weights
     if (weight != nullptr) {
         cur = ggml_mul(ctx, cur, weight);
+        cb(cur, "k2_mul", il);
     }
 
     return cur;
@@ -78,18 +81,23 @@ static ggml_tensor * k2_horizon_routed_value(
 
     // top-k selection
     ggml_tensor * selected_experts = ggml_top_k(ctx, choice_probs, n_used); // [n_used, n_tokens]
+    cb(selected_experts, "v_topk", il);
 
     // extract selected weights via argsort-style indexing
     ggml_tensor * selection_probs = ggml_reshape_3d(ctx, probs, 1, n_values, n_tokens);
     ggml_tensor * selected_weights = ggml_get_rows(ctx, selection_probs, selected_experts);
+    cb(selected_weights, "v_weights", il);
     // [1, n_used, n_tokens]
 
     // normalize weights (conditional on expert_weights_norm, matching upstream)
     if (hparams.expert_weights_norm) {
         selected_weights = ggml_reshape_2d(ctx, selected_weights, n_used, n_tokens);
         ggml_tensor * wsum = ggml_sum_rows(ctx, selected_weights);
+        cb(wsum, "v_sum_rows", il);
         wsum = ggml_clamp(ctx, wsum, 6.103515625e-5f, INFINITY);
+        cb(wsum, "v_clamp", il);
         selected_weights = ggml_div(ctx, selected_weights, wsum);
+        cb(wsum, "v_div", il);
         selected_weights = ggml_reshape_3d(ctx, selected_weights, 1, n_used, n_tokens);
         cb(selected_weights, "v_moe_weights_norm", il);
     }
@@ -105,8 +113,10 @@ static ggml_tensor * k2_horizon_routed_value(
     // value_inp:   (n_embd, 1, n_tokens)
     ggml_tensor * value_inp = ggml_reshape_3d(ctx, cur, n_embd, 1, n_tokens);
     ggml_tensor * values = llm_build_context::llm_build_lora_mm_id(lctx, ctx, layer.attn_v_exps, value_inp, selected_experts);
+    cb(values, "v_values", il);
     // values: (n_embd_v_gqa, n_used, n_tokens)
     values = ggml_silu(ctx, values);
+    cb(values, "v_silu", il);
 
     auto value_out = ggml_mul_multi_add(ctx, values, selected_weights);
 
@@ -158,23 +168,25 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
 
         // === grouped RMS norm before attention ===
         cur = k2_horizon_group_rms_norm(ctx0, inpL, model.layers[il].attn_norm,
-                hparams.n_norm_groups, hparams.f_norm_rms_eps);
+                hparams.n_norm_groups, hparams.f_norm_rms_eps, il, cb);
         cb(cur, "attn_norm", il);
 
         ggml_tensor * attn_inp = cur;
 
         // === Q ===
         ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+        cb(Qcur, "Qcur", il);
         if (model.layers[il].attn_q_norm != nullptr) {
             Qcur = k2_horizon_group_rms_norm(ctx0, Qcur, model.layers[il].attn_q_norm,
-                    hparams.n_head(il), hparams.f_norm_rms_eps);
+                    hparams.n_head(il), hparams.f_norm_rms_eps, il, cb);
         }
 
         // === K ===
         ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
+        cb(Kcur, "Kcur", il);
         if (model.layers[il].attn_k_norm != nullptr) {
             Kcur = k2_horizon_group_rms_norm(ctx0, Kcur, model.layers[il].attn_k_norm,
-                    hparams.n_head_kv(il), hparams.f_norm_rms_eps);
+                    hparams.n_head_kv(il), hparams.f_norm_rms_eps, il, cb);
         }
 
         // === V: standard or MoVA routed ===
@@ -183,6 +195,7 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
             Vcur = k2_horizon_routed_value(ctx0, lctx, model.layers[il], cur, il, hparams, cb);
         } else {
             Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
+            cb(Kcur, "Vcur", il);
         }
 
         // reshape Q/K/V
@@ -197,8 +210,10 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
         } else {
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, hparams.rope_n_rot(il), hparams.rope_type,
                     n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+            cb(Qcur, "Qcur_roped", il);
             Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, hparams.rope_n_rot(il), hparams.rope_type,
                     n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+            cb(Kcur, "Kcur_roped", il);
         }
 
         cb(Qcur, "Qcur", il);
@@ -230,14 +245,21 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
             constexpr float ONE_OVER_LN2 = 1.4426950408889634f;
 
             ggml_tensor * gate = llm_build_lora_mm(lctx, ctx0, model.layers[il].wqkv_gate, attn_inp);
+            cb(gate, "attn_gate", il);
             gate = ggml_scale(ctx0, gate, LN2);
+            cb(gate, "gate_scale_b", il);
             gate = ggml_softplus(ctx0, gate);
+            cb(gate, "gate_softplus", il);
             gate = ggml_scale(ctx0, gate, ONE_OVER_LN2);
+            cb(gate, "gate_scale_a", il);
 
             cur = ggml_mul(ctx0, cur, gate);
+            cb(gate, "gate", il);
             cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
+            cb(cur, "attn_wo", il);
             if (model.layers[il].wo_b != nullptr) {
                 cur = ggml_add(ctx0, cur, model.layers[il].wo_b);
+                cb(cur, "attn_wb", il);
             }
         }
 
@@ -254,7 +276,7 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
 
         // === grouped RMS norm before FFN ===
         cur = k2_horizon_group_rms_norm(ctx0, ffn_inp, model.layers[il].ffn_norm,
-                hparams.n_norm_groups, hparams.f_norm_rms_eps);
+                hparams.n_norm_groups, hparams.f_norm_rms_eps, il, cb);
         cb(cur, "ffn_norm", il);
 
         // === FFN (dense or MoE) ===
@@ -302,7 +324,7 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
 
     // === Final grouped RMS norm ===
     cur = k2_horizon_group_rms_norm(ctx0, inpL, model.output_norm,
-            hparams.n_norm_groups, hparams.f_norm_rms_eps);
+            hparams.n_norm_groups, hparams.f_norm_rms_eps, -1, cb);
     cb(cur, "result_norm", -1);
 
     // === Vocab projection ===

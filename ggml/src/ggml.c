@@ -16369,6 +16369,18 @@ static void ggml_compute_forward_softplus_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
+        const int64_t block_size = 1024;
+        int64_t nelem = ggml_nelements(dst);
+        int64_t nblock = (nelem + block_size - 1)/block_size;
+        for (int ib = ith; ib < nblock; ib += nth) {
+            int64_t offs = block_size*ib;
+            int n = offs + block_size <= nelem ? block_size : nelem - offs;
+            ggml_vec_softplus_f32(n, (float *)dst->data + offs, (const float *)src0->data + offs);
+        }
+        return;
+    }
+
     const int nc = src0->ne[0];
     const int nr = ggml_nrows(src0);
 
