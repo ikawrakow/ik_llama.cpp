@@ -7893,6 +7893,42 @@ struct ggml_tensor * ggml_fused_rms_norm_inplace(
     return ggml_fused_rms_norm_impl(ctx, a, b, eps, true);
 }
 
+struct ggml_tensor * ggml_fused_grouped_rms_norm(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        float                 eps,
+        int                   ngroups) {
+    if (ngroups == 1) {
+        return ggml_fused_rms_norm(ctx, a, b, eps);
+    }
+    GGML_ASSERT(b);
+    GGML_ASSERT(b->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16 || a->type == GGML_TYPE_BF16 || a->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(b->ne[0] == a->ne[0]);
+    GGML_ASSERT(ggml_nrows(b) == 1);
+    GGML_ASSERT(ngroups > 1);
+    GGML_ASSERT(a->ne[0] % ngroups == 0);
+    GGML_ASSERT(ggml_is_contiguous(a));
+
+    struct ggml_tensor * result;
+    if (a->type == GGML_TYPE_F32) {
+        result = ggml_dup_tensor(ctx, a);
+    } else {
+        result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, a->ne[0], a->ne[1], a->ne[2], a->ne[3]);
+    }
+
+    ggml_set_op_params(result, &eps, sizeof(eps));
+    result->op_params[1] = ngroups;
+
+    result->op   = GGML_OP_FUSED_RMS_NORM;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
+
 static struct ggml_tensor * ggml_fused_norm_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -17710,8 +17746,35 @@ static void ggml_compute_forward_fused_rms_norm_f32(
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
+    int ngroups = dst->op_params[1];
 
     GGML_ASSERT(eps > 0.0f);
+
+    if (ngroups > 1) {
+        GGML_ASSERT(ggml_is_contiguous(src0));
+        GGML_ASSERT(ggml_is_contiguous(dst));
+        GGML_ASSERT(ne00 % ngroups == 0);
+        int nrows = ne03*ne02*ne01*ngroups;
+        int ne00_g = ne00 / ngroups;
+        int nrows_per_thread = (nrows + nth - 1)/nth;
+        int first = ith*nrows_per_thread;
+        int last  = MIN(nrows, first + nrows_per_thread);
+        const float * x = (const float *)src0->data + ne00_g * first;
+        const float * c = (const float *)src1->data;
+        float * y = (float *)dst->data + ne00_g * first;
+        for (int ir = first; ir < last; ++ir) {
+            float sum = 0;
+            for (int j = 0; j < ne00_g; ++j) sum += x[j]*x[j];
+            float mean = sum/ne00_g;
+            float scale = 1.0f/sqrtf(mean + eps);
+            int ig = ir % ngroups;
+            const float * this_c = c + ne00_g * ig;
+            for (int j = 0; j < ne00_g; ++j) y[j] = scale * this_c[j] * x[j];
+            x += ne00_g;
+            y += ne00_g;
+        }
+        return;
+    }
 
     int nrows = ne03*ne02*ne01;
     int nrows_per_thread = (nrows + nth - 1)/nth;

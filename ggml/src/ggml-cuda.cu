@@ -3741,6 +3741,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             if (fusion && i + 2 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_ADD &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
+                cgraph->nodes[i+2]->op_params[0] < 2 &&
                 ggml_is_contiguous(dst->src[0]) &&
                 ggml_is_contiguous(dst->src[1]) &&
                 dst->src[0]->type == GGML_TYPE_F32 &&               // with split mode "attn" we can end up having f16
@@ -3766,6 +3767,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             }
             else if (false && fusion && i + 1 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_FUSED_RMS_NORM &&
+                cgraph->nodes[i+1]->op_params[0] < 2 &&
                 ggml_is_contiguous(dst->src[0]) &&
                 ggml_is_contiguous(dst->src[1]) &&
                 ggml_are_same_shape(dst->src[0], dst->src[1]) &&
@@ -3964,6 +3966,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             if (false && fusion && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
+                cgraph->nodes[i+2]->op_params[1] < 2 &&
                 cgraph->nodes[i+3]->op == GGML_OP_ROPE_FAST &&
                 cgraph->nodes[i+4]->op == GGML_OP_ROPE_FAST &&
                 ggml_cuda_op_fused_rms_rope_fast(ctx, cgraph->nodes[i+3], cgraph->nodes[i+4])) {
@@ -3973,6 +3976,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 cgraph->nodes[i+1]->op == GGML_OP_ROPE_FAST &&
                 cgraph->nodes[i+2]->op == GGML_OP_RESHAPE &&
                 cgraph->nodes[i+3]->op == GGML_OP_FUSED_RMS_NORM &&
+                cgraph->nodes[i+3]->op_params[1] < 2 &&
                 cgraph->nodes[i+4]->op == GGML_OP_ROPE_FAST &&
                 ggml_cuda_op_fused_rms_rope_fast(ctx, cgraph->nodes[i+1], cgraph->nodes[i+4])) {
                 i += 4;
@@ -3980,6 +3984,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             else if (fusion && i + 2 < cgraph->n_nodes &&
                 (cgraph->nodes[i+1]->op == GGML_OP_VIEW || cgraph->nodes[i+1]->op == GGML_OP_RESHAPE) &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
+                cgraph->nodes[i+2]->op_params[1] < 2 &&
                 dst->ne[2] == 1 && cgraph->nodes[i+2]->ne[2] == 1) {
                 ggml_cuda_op_fused_rms_rms_norm(ctx, dst, cgraph->nodes[i+2]);
                 i += 2;
@@ -3996,7 +4001,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     dst->src[0]->type != GGML_TYPE_Q8_0 && // In case someone has decided to use Q8_0 as the graph reduce type
                     cgraph->nodes[i+1]->src[0] == dst &&
                     cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
-                    ggml_are_same_shape(dst, cgraph->nodes[i+1]->src[1])) {
+                    ggml_are_same_shape(dst, cgraph->nodes[i+1]->src[1]) &&
+                    cgraph->nodes[i+0]->op_params[1] < 2 &&
+                    cgraph->nodes[i+2]->op_params[1] < 2) {
                     auto src0 = (const char *)dst->src[0]->data;
                     auto src0_end = src0 + ggml_nbytes(dst->src[0]);
                     auto add1 = (const char *)cgraph->nodes[i+1]->data;
@@ -4015,6 +4022,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 }
                 // If that did not work, try rms -> add
                 if (fusion && inow == i && i + 1 < cgraph->n_nodes &&
+                    cgraph->nodes[i+0]->op_params[1] < 2 &&
                     dst->src[0]->type != GGML_TYPE_Q8_0 && // In case someone has decided to use Q8_0 as the graph reduce type
                     cgraph->nodes[i+1]->op == GGML_OP_ADD &&
                     cgraph->nodes[i+1]->src[0] == dst &&

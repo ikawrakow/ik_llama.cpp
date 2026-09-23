@@ -365,6 +365,67 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
 }
 
 template <int block_size, typename src_t>
+static __global__ void fused_grouped_rms_norm_f32(const src_t * x, const float * y, float * dst, const int ncols, int ngroups, const float eps) {
+    const int row = blockIdx.x*blockDim.y + threadIdx.y;
+    const int tid = threadIdx.x;
+
+    float tmp = 0.0f; // partial sum for thread in warp
+
+    if constexpr (std::is_same_v<src_t, block_q8_0>) {
+        static_assert(block_size % QK8_0 == 0);
+        auto xr = x + (row*ncols)/QK8_0;
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
+            tmp += xi * xi;
+        }
+    } else if constexpr (std::is_same_v<src_t, nv_bfloat16>) {
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = __bfloat162float(x[row*ncols + col]);
+            tmp += xi * xi;
+        }
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = (float)x[row*ncols + col];
+            tmp += xi * xi;
+        }
+    }
+
+    // sum up partial sums
+    tmp = warp_reduce_sum(tmp);
+    if (block_size > WARP_SIZE) {
+        __shared__ float s_sum[32];
+        int warp_id = threadIdx.x / WARP_SIZE;
+        int lane_id = threadIdx.x % WARP_SIZE;
+        if (lane_id == 0) {
+            s_sum[warp_id] = tmp;
+        }
+        __syncthreads();
+        tmp = lane_id < block_size/WARP_SIZE ? s_sum[lane_id] : 0.0f;
+        tmp = warp_reduce_sum(tmp);
+    }
+
+    const float mean = tmp / ncols;
+    const float scale = rsqrtf(mean + eps);
+
+    y += ncols * (row % ngroups);
+
+    if constexpr (std::is_same_v<src_t, block_q8_0>) {
+        auto xr = x + (row*ncols)/QK8_0;
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
+        }
+    } else if constexpr (std::is_same_v<src_t, nv_bfloat16>) {
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * __bfloat162float(x[row*ncols + col]);
+        }
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * (float)x[row*ncols + col];
+        }
+    }
+}
+
+template <int block_size, typename src_t>
 static __global__ void fused_rms_norm_f32_nc(
         const src_t * x, const float * y, float * dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps) {
@@ -535,6 +596,31 @@ static void fused_rms_norm_f32_cuda(const src_t * x, const float * y, float * ds
 }
 
 template <typename src_t>
+static void fused_grouped_rms_norm_f32_cuda(const src_t * x, const float * y, float * dst,
+        const int ncols, const int nrows, const float eps, int ngroups, cudaStream_t stream) {
+    constexpr int kBlockSize = 256;
+    GGML_ASSERT(ncols % WARP_SIZE == 0);
+    if (ncols < kBlockSize) {
+        switch (ncols) {
+            case  32: fused_grouped_rms_norm_f32< 32><<<nrows,  32, 0, stream>>>(x, y, dst, ncols, ngroups, eps); break;
+            case  64: fused_grouped_rms_norm_f32< 64><<<nrows,  64, 0, stream>>>(x, y, dst, ncols, ngroups, eps); break;
+            case  96: fused_grouped_rms_norm_f32< 96><<<nrows,  96, 0, stream>>>(x, y, dst, ncols, ngroups, eps); break;
+            case 128: fused_grouped_rms_norm_f32<128><<<nrows, 128, 0, stream>>>(x, y, dst, ncols, ngroups, eps); break;
+            case 160: fused_grouped_rms_norm_f32<160><<<nrows, 160, 0, stream>>>(x, y, dst, ncols, ngroups, eps); break;
+            case 192: fused_grouped_rms_norm_f32<192><<<nrows, 192, 0, stream>>>(x, y, dst, ncols, ngroups, eps); break;
+            default : fused_grouped_rms_norm_f32<224><<<nrows, 224, 0, stream>>>(x, y, dst, ncols, ngroups, eps); break;
+        }
+    }
+    else if (ncols < 1024) {
+        const dim3 block_dims(kBlockSize, 1, 1);
+        fused_grouped_rms_norm_f32<kBlockSize><<<nrows, block_dims, 0, stream>>>(x, y, dst, ncols, ngroups, eps);
+    } else {
+        const dim3 block_dims(1024, 1, 1);
+        fused_grouped_rms_norm_f32<1024><<<nrows, block_dims, 0, stream>>>(x, y, dst, ncols, ngroups, eps);
+    }
+}
+
+template <typename src_t>
 static void fused_rms_norm_f32_nc_cuda(
         const src_t * x, const float * y, float * dst, const int ncols, const int nrows, const int nchannels, const int nsamples,
         const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, cudaStream_t stream) {
@@ -675,8 +761,28 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
+    int ngroups = dst->op_params[1];
 
     const int64_t ne00 = src0->ne[0];
+
+    if (ngroups > 1) {
+        GGML_ASSERT(!is_norm);
+        GGML_ASSERT(ggml_is_contiguous(src0));
+        GGML_ASSERT(ne00 % ngroups == 0);
+        const int64_t ne00_g = ne00 / ngroups;
+        const int64_t nrows = ggml_nrows(src0) * ngroups;
+        //printf("%s(%s): using %d groups\n", __func__, dst->name, ngroups);
+        if (src0->type == GGML_TYPE_F32) {
+            fused_grouped_rms_norm_f32_cuda(src0_d, src1_d, dst_d, ne00_g, nrows, eps, ngroups, stream);
+        } else if (src0->type == GGML_TYPE_F16) {
+            fused_grouped_rms_norm_f32_cuda((const half *)src0_d, src1_d, dst_d, ne00_g, nrows, eps, ngroups, stream);
+        } else if (src0->type == GGML_TYPE_Q8_0) {
+            fused_grouped_rms_norm_f32_cuda((const block_q8_0 *)src0_d, src1_d, dst_d, ne00_g, nrows, eps, ngroups, stream);
+        } else {
+            fused_grouped_rms_norm_f32_cuda((const nv_bfloat16 *)src0_d, src1_d, dst_d, ne00_g, nrows, eps, ngroups, stream);
+        }
+        return;
+    }
 
     if (ggml_is_contiguous(src0)) {
         const int64_t nrows = ggml_nrows(src0);
