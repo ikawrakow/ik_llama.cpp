@@ -628,6 +628,12 @@ typedef struct {
 static_assert(sizeof(block_iq4_ks_r4) == 4*sizeof(block_iq4_ks), "wrong iq4_ks_r4 block size/padding");
 
 typedef struct {
+    uint8_t  scales[16];
+    uint8_t  qs[8*QK8_0];
+} block_iq4_ks_r16;
+static_assert(sizeof(block_iq4_ks_r16) == 16 + 8*QK8_0, "wrong iq4_ks_r16 block size/padding");
+
+typedef struct {
     uint32_t qs[QK_K/8];
 } block_iq4_kss;
 static_assert(sizeof(block_iq4_kss) == QK_K/8*sizeof(uint32_t), "wrong iq4_kss block size/padding");
