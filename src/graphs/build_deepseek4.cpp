@@ -722,7 +722,7 @@ static ggml_tensor * build_compressed_kv_from_state(
     }
 
     comp = ggml_reshape_3d(ctx0, comp, n_embd_head, 1, n_blocks);
-    comp = ggml_rope_ext_inplace(ctx0, comp, comp_pos, nullptr, n_embd_head_rope, llm.rope_type, llm.n_ctx_orig,
+    comp = ggml_rope_ext(ctx0, comp, comp_pos, nullptr, n_embd_head_rope, llm.rope_type, llm.n_ctx_orig,
             llm.hparams.dsv4_compress_rope_base, llm.freq_scale, llm.ext_factor,
             dsv4_rope_attn_factor(llm.freq_scale, llm.ext_factor), llm.beta_fast, llm.beta_slow);
     comp->op_params[15] = 1;
