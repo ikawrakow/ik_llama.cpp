@@ -28,8 +28,9 @@ __device__ __forceinline__ void vec_dot_iq4_kt_q8_1(
 }
 
 __device__ __forceinline__ void vec_dot_iq4_kt_q8_1_tail(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, const int & nt, float * result) {
+    const void * __restrict__ vbq, const void * __restrict__ bq8_1_v, const int & kbx, const int & iqs, const int & nt, float * result) {
 
+    const block_q8_1 * __restrict__ bq8_1 = (const block_q8_1 *) bq8_1_v;
     const int ib32 = iqs/4;
     if (ib32 >= nt) return;
 
