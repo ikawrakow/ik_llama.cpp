@@ -1944,7 +1944,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
         auto log_ppl_base = mean_and_uncertainty(kld.sum_nll_base, kld.sum_nll_base2, kld.count);
         const double log_ppl_cov = covariance(kld.sum_nll, kld.sum_nll_base, kld.sum_nll_nll_base, kld.count);
         const double log_ppl_ratio_val = log_ppl.first - log_ppl_base.first;
-        const double log_ppl_ratio_unc = sqrt(log_ppl.second*log_ppl.second + log_ppl_base.second*log_ppl_base.second - 2.0*log_ppl_cov);
+        const double log_ppl_ratio_unc = sqrt(std::max(0.0, log_ppl.second*log_ppl.second + log_ppl_base.second*log_ppl_base.second - 2.0*log_ppl_cov));
         printf("    %10.5lf ± %10.5lf", log_ppl_ratio_val, log_ppl_ratio_unc);
 
         auto kl_div = mean_and_uncertainty(kld.sum_kld, kld.sum_kld2, kld.count);
@@ -1990,7 +1990,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
     printf("Cor(ln(PPL(Q)), ln(PPL(base))): %6.2lf%%\n", 100.0*log_ppl_cor);
 
     const double log_ppl_ratio_val = log_ppl.first - log_ppl_base.first;
-    const double log_ppl_ratio_unc = sqrt(log_ppl.second*log_ppl.second + log_ppl_base.second*log_ppl_base.second - 2.0*log_ppl_cov);
+    const double log_ppl_ratio_unc = sqrt(std::max(0.0, log_ppl.second*log_ppl.second + log_ppl_base.second*log_ppl_base.second - 2.0*log_ppl_cov));
     printf("Mean ln(PPL(Q)/PPL(base))     : %10.6lf ± %10.6lf\n", log_ppl_ratio_val, log_ppl_ratio_unc);
 
     const double ppl_ratio_val = exp(log_ppl_ratio_val);
@@ -1999,7 +1999,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
 
     const double ppl_cov = ppl_val * ppl_base_val * log_ppl_cov;
     const double ppl_diff_val = ppl_val - ppl_base_val;
-    const double ppl_diff_unc = sqrt(ppl_unc*ppl_unc + ppl_base_unc*ppl_base_unc - 2.0*ppl_cov);
+    const double ppl_diff_unc = sqrt(std::max(0.0, ppl_unc*ppl_unc + ppl_base_unc*ppl_base_unc - 2.0*ppl_cov));
     printf("Mean PPL(Q)-PPL(base)         : %10.6lf ± %10.6lf\n", ppl_diff_val, ppl_diff_unc);
 
     printf("\n");
