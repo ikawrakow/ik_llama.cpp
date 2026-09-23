@@ -771,7 +771,6 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
         GGML_ASSERT(ne00 % ngroups == 0);
         const int64_t ne00_g = ne00 / ngroups;
         const int64_t nrows = ggml_nrows(src0) * ngroups;
-        //printf("%s(%s): using %d groups\n", __func__, dst->name, ngroups);
         if (src0->type == GGML_TYPE_F32) {
             fused_grouped_rms_norm_f32_cuda(src0_d, src1_d, dst_d, ne00_g, nrows, eps, ngroups, stream);
         } else if (src0->type == GGML_TYPE_F16) {
