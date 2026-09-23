@@ -403,21 +403,36 @@ template<typename dst_t>
 static __global__ void dequantize_block_iq3_kt(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
 
     int64_t ii  = blockIdx.x;
-    int64_t row = (QK_K * ii) / n_per_row;
+    const int64_t bpr = (n_per_row + QK_K - 1)/QK_K;
+    int64_t row = ii / bpr;
     const char * cx = (const char *)vx + row * row_size;
     float scale = *(const float *)cx;
     const block_iq3_kt * x = (const block_iq3_kt *)(cx + sizeof(float));
-    const int64_t i = ii - (row*n_per_row)/QK_K;
+    const int64_t i = ii % bpr;
 
     const int64_t tid = threadIdx.x;
     const int64_t ib = tid; // 0...31
-    dst_t * y = yy + ii*QK_K + 8*ib;
-    const uint16_t * ql = (const uint16_t *)x[i].ql;
-    uint32_t idx = ql[ib] + 4096;
-    const float dl = scale * ((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf) * 1.01f; //1.015f;
-    uint8_t mask = 1 << (ib/4);
+    dst_t * y = yy + row*n_per_row + i*QK_K + 8*ib;
+    if (i < n_per_row/QK_K) {
+        const uint16_t * ql = (const uint16_t *)x[i].ql;
+        uint32_t idx = ql[ib] + 4096;
+        const float dl = scale * ((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf) * 1.01f; //1.015f;
+        uint8_t mask = 1 << (ib/4);
+        for (int j = 0; j < 8; ++j) {
+            y[j] = dl * std::abs(trellis_next_int(idx)) * (x[i].qh[(8*ib+j)%32] & mask ? -1.f : 1.f);
+        }
+        return;
+    }
+    const int nt = (n_per_row % QK_K)/32;
+    if (ib/4 >= nt) return;
+    const uint8_t * ql = (const uint8_t *)(x + i);
+    const uint8_t * qh = ql + 8*nt;
+    const uint8_t * scales = qh + 4*nt;
+    uint32_t idx = (ql[2*ib] | (ql[2*ib+1] << 8)) + 4096;
+    const float dl = scale * ((scales[ib/8] >> 4*((ib/4)&1)) & 0xf) * 1.01f;
+    const uint32_t sgn = qh[ib];
     for (int j = 0; j < 8; ++j) {
-        y[j] = dl * std::abs(trellis_next_int(idx)) * (x[i].qh[(8*ib+j)%32] & mask ? -1.f : 1.f);
+        y[j] = dl * std::abs(trellis_next_int(idx)) * (sgn & (1 << j) ? -1.f : 1.f);
     }
 }
 
@@ -425,27 +440,49 @@ template<typename dst_t>
 static __global__ void dequantize_block_iq4_kt(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
 
     int64_t ii  = blockIdx.x;
-    int64_t row = (QK_K * ii) / n_per_row;
+    const int64_t bpr = (n_per_row + QK_K - 1)/QK_K;
+    int64_t row = ii / bpr;
     const float * dptr = (const float *)((const char *)vx + row * row_size);
     float scale = dptr[0] * 1.00f;
     const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 1);
-    const int64_t i = ii - (row*n_per_row)/QK_K;
+    const int64_t i = ii % bpr;
 
     constexpr int kNumGroups = 64;
 
     const int64_t tid = threadIdx.x;
     const int64_t ib = tid; // 0...31
-    dst_t * y = yy + ii*QK_K + 8*ib;
-    const uint32_t * shb = x[i].qs;
-    const uint8_t * ql = (const uint8_t *)(shb + 8); //Q::kNblock;
-    const uint8_t * qh = ql + kNumGroups;
+    dst_t * y = yy + row*n_per_row + i*QK_K + 8*ib;
     const int ib32 = ib/4;
     const int ig = ib%4;
     const int jj = ib32*8 + 2*ig;
-    uint32_t offset = shb[ib32] & 1 ? 4096 + 32768 : 4096;
-    uint32_t idx1 = ql[jj+0] + ((qh[(jj+0)%(kNumGroups/2)] << (8 - 4*((jj+0)/(kNumGroups/2)))) & 0xf00) + (((shb[ib32] >> (8 + 6*ig+0)) & 7) << 12) + offset;
-    uint32_t idx2 = ql[jj+1] + ((qh[(jj+1)%(kNumGroups/2)] << (8 - 4*((jj+1)/(kNumGroups/2)))) & 0xf00) + (((shb[ib32] >> (8 + 6*ig+3)) & 7) << 12) + offset;
-    int ls = ((shb[ib32] & 0xff) >> 1) - 64;
+    const uint32_t * shb;
+    const uint8_t * ql;
+    uint32_t qh1, qh2, sh;
+    int qj;
+    if (i < n_per_row/QK_K) {
+        shb = x[i].qs;
+        ql = (const uint8_t *)(shb + 8); //Q::kNblock;
+        const uint8_t * qh = ql + kNumGroups;
+        qj = jj;
+        qh1 = (qh[(jj+0)%(kNumGroups/2)] << (8 - 4*((jj+0)/(kNumGroups/2)))) & 0xf00;
+        qh2 = (qh[(jj+1)%(kNumGroups/2)] << (8 - 4*((jj+1)/(kNumGroups/2)))) & 0xf00;
+        sh = shb[ib32];
+    } else {
+        const int nt = (n_per_row % QK_K)/32;
+        if (ib32 >= nt) return;
+        const uint8_t * tail = (const uint8_t *)(x + i);
+        shb = (const uint32_t *)tail;
+        ql = tail + 16*ib32 + 4;
+        const uint8_t * qh = tail + 16*ib32 + 12;
+        qj = 2*ig;
+        qh1 = (qh[qj/2] & 0x0f) << 8;
+        qh2 = (qh[qj/2] & 0xf0) << 4;
+        sh = shb[4*ib32];
+    }
+    uint32_t offset = sh & 1 ? 4096 + 32768 : 4096;
+    uint32_t idx1 = ql[qj+0] + qh1 + (((sh >> (8 + 6*ig+0)) & 7) << 12) + offset;
+    uint32_t idx2 = ql[qj+1] + qh2 + (((sh >> (8 + 6*ig+3)) & 7) << 12) + offset;
+    int ls = ((sh & 0xff) >> 1) - 64;
     const float dl = scale * ls;
     for (int j = 0; j < 4; ++j) {
         y[j+0] = dl * trellis_next_int(idx1);
@@ -1562,15 +1599,13 @@ static void dequantize_row_iq2_kt_cuda(const void * vx, dst_t * y, const int64_t
 
 template<typename dst_t>
 static void dequantize_row_iq3_kt_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
-    const int64_t k = nrows * n_per_row;
-    const int nb = k / QK_K;
+    const int nb = nrows * ((n_per_row + QK_K - 1)/QK_K);
     dequantize_block_iq3_kt<<<nb, 32, 0, stream>>>(vx, y, n_per_row, ggml_row_size(GGML_TYPE_IQ3_KT, n_per_row));
 }
 
 template<typename dst_t>
 static void dequantize_row_iq4_kt_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
-    const int64_t k = nrows * n_per_row;
-    const int nb = k / QK_K;
+    const int nb = nrows * ((n_per_row + QK_K - 1)/QK_K);
     dequantize_block_iq4_kt<<<nb, 32, 0, stream>>>(vx, y, n_per_row, ggml_row_size(GGML_TYPE_IQ4_KT, n_per_row));
 }
 

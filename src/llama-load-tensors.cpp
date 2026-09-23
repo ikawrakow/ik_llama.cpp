@@ -403,7 +403,6 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 
 static std::vector<int> create_split(int nr, int granularity, const std::vector<float> & splits, const std::vector<size_t> & mem_used,
         bool verbose = false) {
-    GGML_ASSERT(nr % granularity == 0);
     GGML_ASSERT(!splits.empty());
     if (granularity < 0) return std::vector<int>(splits.size(), nr);
     GGML_ASSERT(mem_used.size() == splits.size());
@@ -463,6 +462,9 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
         ++sum;
     }
     for (auto & r : result) r *= granularity;
+    int last = int(result.size()) - 1;
+    while (last > 0 && result[last] == 0) --last;
+    result[last] += nr - nchunk*granularity;
     return result;
 }
 

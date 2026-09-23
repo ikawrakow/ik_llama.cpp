@@ -11,17 +11,39 @@ from .lazy import LazyNumpyTensor
 import numpy as np
 
 
-def quant_shape_to_byte_shape(shape: Sequence[int], quant_type: GGMLQuantizationType) -> tuple[int, ...]:
+_KT_TAIL_BYTES = {
+    GGMLQuantizationType.IQ3_KT: lambda nt: (nt + 1) // 2 + 12 * nt,
+    GGMLQuantizationType.IQ4_KT: lambda nt: 16 * nt,
+}
+
+
+def quant_row_bytes(n: int, quant_type: GGMLQuantizationType) -> int:
     block_size, type_size = GGML_QUANT_SIZES[quant_type]
     row_meta_size = GGML_ROW_META_SIZES.get(quant_type, 0)
-    if shape[-1] % block_size != 0:
-        raise ValueError(f"Quantized tensor row size ({shape[-1]}) is not a multiple of {quant_type.name} block size ({block_size})")
-    return (*shape[:-1], row_meta_size + shape[-1] // block_size * type_size)
+    if quant_type in _KT_TAIL_BYTES:
+        if n % 32 != 0:
+            raise ValueError(f"Quantized tensor row size ({n}) is not a multiple of {quant_type.name} block size (32)")
+        row = row_meta_size + n // block_size * type_size + _KT_TAIL_BYTES[quant_type]((n % block_size) // 32)
+        return (row + 3) // 4 * 4
+    if n % block_size != 0:
+        raise ValueError(f"Quantized tensor row size ({n}) is not a multiple of {quant_type.name} block size ({block_size})")
+    return row_meta_size + n // block_size * type_size
+
+
+def quant_shape_to_byte_shape(shape: Sequence[int], quant_type: GGMLQuantizationType) -> tuple[int, ...]:
+    return (*shape[:-1], quant_row_bytes(shape[-1], quant_type))
 
 
 def quant_shape_from_byte_shape(shape: Sequence[int], quant_type: GGMLQuantizationType) -> tuple[int, ...]:
     block_size, type_size = GGML_QUANT_SIZES[quant_type]
     row_meta_size = GGML_ROW_META_SIZES.get(quant_type, 0)
+    if quant_type in _KT_TAIL_BYTES:
+        if shape[-1] >= row_meta_size:
+            n = (shape[-1] - row_meta_size) // type_size * block_size
+            for tail in range(0, block_size, 32):
+                if quant_row_bytes(n + tail, quant_type) == shape[-1]:
+                    return (*shape[:-1], n + tail)
+        raise ValueError(f"Quantized tensor bytes per row ({shape[-1]}) is not a valid {quant_type.name} row size")
     if shape[-1] < row_meta_size or (shape[-1] - row_meta_size) % type_size != 0:
         raise ValueError(f"Quantized tensor bytes per row ({shape[-1]}) minus the {quant_type.name} row metadata ({row_meta_size}) is not a multiple of its type size ({type_size})")
     return (*shape[:-1], (shape[-1] - row_meta_size) // type_size * block_size)

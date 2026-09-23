@@ -4991,7 +4991,21 @@ GGML_CALL size_t ggml_type_size(enum ggml_type type) {
     return type_traits[type].type_size;
 }
 
+static bool ggml_is_kt_tail_type(enum ggml_type type) {
+    return type == GGML_TYPE_IQ3_KT || type == GGML_TYPE_IQ4_KT;
+}
+
+GGML_CALL int64_t ggml_row_blck_size(enum ggml_type type) {
+    return ggml_is_kt_tail_type(type) ? 32 : type_traits[type].blck_size;
+}
+
 GGML_CALL size_t ggml_row_size(enum ggml_type type, int64_t ne) {
+    if (ggml_is_kt_tail_type(type)) {
+        assert(ne % 32 == 0);
+        const int nt = (ne % QK_K)/32;
+        const size_t tail = type == GGML_TYPE_IQ3_KT ? (nt + 1)/2 + 12*nt : 16*nt;
+        return GGML_PAD(type_traits[type].row_meta_size + ggml_type_size(type)*(ne/QK_K) + tail, 4);
+    }
     assert(ne % ggml_blck_size(type) == 0);
     return type_traits[type].row_meta_size + ggml_type_size(type)*ne/ggml_blck_size(type);
 }
@@ -5190,7 +5204,7 @@ size_t ggml_tensor_overhead(void) {
 }
 
 GGML_CALL bool ggml_is_transposed(const struct ggml_tensor * tensor) {
-    return tensor->nb[0] > tensor->nb[1];
+    return tensor->nb[0] > tensor->nb[1] && (!ggml_is_kt_tail_type(tensor->type) || tensor->nb[1] >= ggml_type_size(tensor->type));
 }
 
 static bool ggml_is_contiguous_n(const struct ggml_tensor * tensor, int n) {
@@ -31080,7 +31094,7 @@ size_t ggml_quantize_chunk(
         GGML_ASSERT(imatrix != NULL);
     }
 
-    GGML_ASSERT(start % type_traits[type].blck_size == 0);
+    GGML_ASSERT(start % ggml_row_blck_size(type) == 0);
     GGML_ASSERT(start % n_per_row == 0);
 
     ggml_quantize_init(type); // this is noop if already initialized
@@ -31631,15 +31645,16 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
                 (int64_t) info->ne[2] *
                 (int64_t) info->ne[3];
 
-            if (ne % ggml_blck_size(info->type) != 0) {
-                fprintf(stderr, "%s: tensor '%s' of type %d (%s) number of elements (%" PRId64 ") is not a multiple of block size (%" PRId64 ")\n",
-                        __func__, info->name.data, (int) info->type, ggml_type_name(info->type), ne, ggml_blck_size(info->type));
+            const int64_t blck = ggml_row_blck_size(info->type);
+            if (info->ne[0] % blck != 0) {
+                fprintf(stderr, "%s: tensor '%s' of type %d (%s) row length (%" PRId64 ") is not a multiple of block size (%" PRId64 ")\n",
+                        __func__, info->name.data, (int) info->type, ggml_type_name(info->type), info->ne[0], blck);
                 fclose(file);
                 gguf_free(ctx);
                 return NULL;
             }
 
-            const size_t size_cur = ggml_row_size(info->type, ne);
+            const size_t size_cur = ggml_row_size(info->type, info->ne[0]) * (ne / info->ne[0]);
 
             ctx->size += GGML_PAD(size_cur, ctx->alignment);
         }

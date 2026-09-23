@@ -935,6 +935,7 @@ extern "C" {
 
     // TODO: remove the following from the public API to avoid unnecessary assumptions about data layout
     GGML_API GGML_CALL int64_t ggml_blck_size(enum ggml_type type);
+    GGML_API GGML_CALL int64_t ggml_row_blck_size(enum ggml_type type);
     GGML_API GGML_CALL size_t  ggml_type_size(enum ggml_type type);             // size in bytes for all elements in a block
     GGML_API GGML_CALL size_t  ggml_row_size (enum ggml_type type, int64_t ne); // size in bytes for all elements in a row
 
