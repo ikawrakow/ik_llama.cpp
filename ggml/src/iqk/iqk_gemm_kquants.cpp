@@ -1914,7 +1914,7 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
     for (int ix = 0; ix < nrc_x; ix += 16) {
         const block_q8_k_r16 * iq16 = (const block_q8_k_r16 *)((const char *)vx + ix*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
-            auto d4 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)iq16[ibl].d));
+            auto d4 = _mm512_loadu_ps(iq16[ibl].d);
             _Pragma("GCC unroll 2")
             for (int ib = 0; ib < QK_K/16; ++ib) {
                 qx[0] = _mm512_loadu_si512((const __m512i *)iq16[ibl].qs+4*ib+0);
@@ -2166,7 +2166,7 @@ void iqk_convert_q2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                 }
                 float d = hmax_float_8(block_max)/127.f;
                 auto id = _mm256_set1_ps(d != 0.0f ? 1/d : 0.0f);
-                y[i].d[k] = GGML_FP32_TO_FP16(d);
+                set_scale(y[i].d, k, d);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
                     _mm256_storeu_si256((__m256i *)block, packer.convert(f_values + 32*ib32, id));
                     auto q8 = (uint32_t *)y[i].qs + 8*k_nr*ib32;
@@ -2250,7 +2250,7 @@ void iqk_convert_q2_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, 
                 }
                 float d = hmax_float_8(block_max)/127.f;
                 auto id = _mm256_set1_ps(d != 0.0f ? 1/d : 0.0f);
-                y[i].d[k] = GGML_FP32_TO_FP16(d);
+                set_scale(y[i].d, k, d);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
                     _mm256_storeu_si256((__m256i *)block, packer.convert(f_values + 32*ib32, id));
                     auto q8 = (uint32_t *)y[i].qs + 8*k_nr*ib32;
@@ -2401,7 +2401,7 @@ void iqk_convert_q4_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, 
                 }
                 float dq = hmax_float_8(block_max)/127.f;
                 auto id = _mm256_set1_ps(dq != 0.0f ? 1/dq : 0.0f);
-                y[i].d[k] = GGML_FP32_TO_FP16(dq);
+                set_scale(y[i].d, k, dq);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
                     _mm256_storeu_si256((__m256i *)block, packer.convert(f_values + 32*ib32, id));
                     auto q8 = (uint32_t *)y[i].qs + 8*k_nr*ib32;
@@ -2560,7 +2560,7 @@ void iqk_convert_q5_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, 
                 }
                 float dq = hmax_float_8(block_max)/127.f;
                 auto id = _mm256_set1_ps(dq != 0.0f ? 1/dq : 0.0f);
-                y[i].d[k] = GGML_FP32_TO_FP16(dq);
+                set_scale(y[i].d, k, dq);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
                     _mm256_storeu_si256((__m256i *)block, packer.convert(f_values + 32*ib32, id));
                     auto q8 = (uint32_t *)y[i].qs + 8*k_nr*ib32;
@@ -2713,7 +2713,7 @@ void iqk_convert_q6_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, 
                     xv[ib32] = _mm256_add_epi8(_mm256_or_si256(lo, _mm256_slli_epi16(hi, 4)), m32);
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2881,7 +2881,7 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                     dnew = 1.f; needs_scaling = false;
                 }
                 d *= dnew;
-                y[i].d[k] = GGML_FP32_TO_FP16(d);
+                set_scale(y[i].d, k, d);
                 auto scale = _mm256_set1_ps(std::abs(dnew) > 1e-9f ? 1/dnew : 0.f);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
                     auto q16_l = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(values[ib32]));
@@ -2982,7 +2982,7 @@ void iqk_convert_q3_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy, 
                     xv[ib32] = _mm256_sub_epi8(v, mh);
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -3053,7 +3053,7 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
                 dnew[k] = d * convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
             }
 #ifdef HAVE_FANCY_SIMD
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_loadu_ps(dnew), _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, _mm512_loadu_ps(dnew));
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -3106,7 +3106,7 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 dnew[k] = d * convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
             }
 #ifdef HAVE_FANCY_SIMD
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_loadu_ps(dnew), _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, _mm512_loadu_ps(dnew));
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -4343,7 +4343,7 @@ void iqk_convert_q2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                 auto max = vmaxvq_f32(block_max);
                 float d = max / 127.f;
                 auto id = vdupq_n_f32(d != 0.0f ? 1/d : 0.0f);
-                y[i].d[k] = GGML_FP32_TO_FP16(d);
+                set_scale(y[i].d, k, d);
                 int16x8x4_t i16;
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
                     auto v1 = vld1q_f32_x4(f_values + 32*ib32 +  0);
@@ -4433,7 +4433,7 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                     dnew = 1.f; needs_scaling = false;
                 }
                 d *= dnew;
-                y[i].d[k] = GGML_FP32_TO_FP16(d);
+                set_scale(y[i].d, k, d);
                 auto scale = vdupq_n_f32(std::abs(dnew) > 1e-9f ? 1/dnew : 0.f);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
                     auto s1 = vdup_n_s8(helper.val[2*ib32+0]);

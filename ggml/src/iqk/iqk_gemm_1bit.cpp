@@ -1772,7 +1772,7 @@ void iqk_convert_iq1_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     qs += 4;
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/126, qx, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -1842,7 +1842,7 @@ void iqk_convert_iq1_m_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     qh += 2;
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/126, qx, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {

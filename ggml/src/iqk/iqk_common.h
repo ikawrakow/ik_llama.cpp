@@ -26,6 +26,9 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 
+static inline void set_scale(ggml_half * d, int k, float v) { d[k] = GGML_FP32_TO_FP16(v); }
+static inline void set_scale(float     * d, int k, float v) { d[k] = v; }
+
 #define FA_TIMING 0
 
 #include <utility>
