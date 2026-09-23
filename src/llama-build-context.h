@@ -303,6 +303,7 @@ struct llm_build_context {
 
     ggml_cgraph * build_deepseek2();
     ggml_cgraph * build_deepseek4();
+    ggml_cgraph * build_deepseek41();
     ggml_cgraph * build_openpangu();
 
     // openPangu attention sublayer body (shared by base layers and the NextN/MTP head):

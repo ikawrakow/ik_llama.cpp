@@ -249,6 +249,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ENGRAM_OFFSETS,         "%s.engram.offsets" },
     { LLM_KV_ENGRAM_TOKEN_MAP,       "%s.engram.token_map" },
     { LLM_KV_ENGRAM_PAD_ID,          "%s.engram.pad_id" },
+    { LLM_KV_CANDIDATE_SOURCE_LAYER,         "%s.attention.candidate_source_layer_id" },
+    { LLM_KV_CANDIDATE_BLOCK_SIZE,           "%s.attention.candidate_block_size"      },
+    { LLM_KV_CANDIDATE_TOPK_BLOCKS,          "%s.attention.candidate_topk_blocks"     },
 
     { LLM_KV_ROPE_DIMENSION_COUNT,          "%s.rope.dimension_count"                 },
     { LLM_KV_ROPE_DIMENSION_COUNT_SWA,      "%s.rope.dimension_count_swa"             },

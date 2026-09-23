@@ -2960,9 +2960,14 @@ ggml_cgraph * llm_build_context::llama_build_graph(
                 result = llm.build_deepseek2();
             } break;
         case LLM_ARCH_DEEPSEEK4:
-        case LLM_ARCH_DEEPSEEK41:
             {
                 result = llm.build_deepseek4();
+            } break;
+        case LLM_ARCH_DEEPSEEK41:
+            {
+                // select the separate-arch implementation instead of the in-threaded one
+                static const bool v41_separate = getenv("V41_SEPARATE") != nullptr;
+                result = v41_separate ? llm.build_deepseek41() : llm.build_deepseek4();
             } break;
         case LLM_ARCH_OPENPANGU:
             {
