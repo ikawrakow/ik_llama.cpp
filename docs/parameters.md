@@ -89,7 +89,8 @@ Some often used terms.
 | `--dsa, -dsa` |  | off | Enable GLM DSA sparse attention [PR 2045](https://github.com/ikawrakow/ik_llama.cpp/pull/2045) |
 | `--dsa-top-k, -dsatk` | DSA top-k override | -1 | `<0` uses the model's configured `indexer_top_k` [PR 2045](https://github.com/ikawrakow/ik_llama.cpp/pull/2045) |
 | `--indexer-cache-type-k type, -ictk` | Indexer K-cache data type | off | Use quantized indexer cache [PR 2075](https://github.com/ikawrakow/ik_llama.cpp/pull/2075) |
-| `--fused-indexer-topk, -fidx` | Enable the fused indexer topk op | disabled | Use a dedicated op for computing the DSA indexer top_k KV cache entries [PR 2098](https://github.com/ikawrakow/ik_llama.cpp/pull/2098) |
+| `--fused-indexer-topk, -fidx` | Enable the fused indexer topk op | enabled | Use a dedicated op for computing the DSA indexer top_k KV cache entries [PR 2098](https://github.com/ikawrakow/ik_llama.cpp/pull/2098) |
+| `--no-fused-indexer-topk, -no-fidx` | Disable the fused indexer topk op | enabled | See `--fused-indexer-topk` |
 | `--swa-compress` | Allocate sliding-window layers at window size instead of `n_ctx` | disabled | [PR 2266](https://github.com/ikawrakow/ik_llama.cpp/pull/2266) |
 | `-amb, --attention-max-batch` | Max batch size for attention computations | 256 | Specifies the maximum K*Q size in MB we want to tolerate. Default changed from 0 to 256 in [PR 2312](https://github.com/ikawrakow/ik_llama.cpp/pull/2312) to avoid very large temporary compute buffers on MLA models. [PR 237](https://github.com/ikawrakow/ik_llama.cpp/pull/237) |
 | `-fmoe or --fused-moe` | Fused MoE ffn_up and ffn_gate | - | Speedup for MoE models. [PR 229](https://github.com/ikawrakow/ik_llama.cpp/pull/229) |
