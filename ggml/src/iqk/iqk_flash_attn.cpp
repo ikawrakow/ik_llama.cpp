@@ -222,7 +222,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 auto this_qkv = qkv + first*nb1/sizeof(float);
                 if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
                          Dk, Dv, neq2_this_thread, this_nkv, nbq2, row_size_k, row_size_v, 0, Dv,
-                         (const float *)this_q, work_k, k == v ? work_k : work_v, work_m, (const float *)sinks, 1,
+                         (const float *)this_q, work_k, k == v ? work_k : work_v, work_m, sinks ? (const float *)sinks + first : nullptr, 1,
                          scale, softcap,
                          this_qkv, nullptr, nullptr)) return false;
                 return true;
