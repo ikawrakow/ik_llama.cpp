@@ -2311,7 +2311,7 @@ const std::unordered_set<uint32_t> unicode_set_whitespace = {
 0x003000,
 };
 
-const std::unordered_map<uint32_t, uint32_t> unicode_map_lowercase = {
+const std::initializer_list<std::pair<uint32_t, uint32_t>> unicode_map_lowercase = {
 {0x000041, 0x000061},
 {0x000042, 0x000062},
 {0x000043, 0x000063},
@@ -3747,7 +3747,7 @@ const std::unordered_map<uint32_t, uint32_t> unicode_map_lowercase = {
 {0x01E921, 0x01E943},
 };
 
-const std::unordered_map<uint32_t, uint32_t> unicode_map_uppercase = {
+const std::initializer_list<std::pair<uint32_t, uint32_t>> unicode_map_uppercase = {
 {0x000061, 0x000041},
 {0x000062, 0x000042},
 {0x000063, 0x000043},
