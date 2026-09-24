@@ -1925,8 +1925,6 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
 
 
 // ---- V4.1 separate-arch implementation: selected at runtime by V41_SEPARATE, alongside the in-threaded path ----
-static constexpr int64_t DSV4_IDX_SCORE_CHUNK = 256;
-static constexpr int64_t DSV4_IDX_KQ_MAX_MIB  = 512;
 
 
 static ggml_tensor * dsv4_build_candidate_mask(
@@ -2659,12 +2657,8 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
     // Unfused score: relu(KQ) weighted per head, summed over heads, plus the group mask. Computed in token chunks when the
     // batch is large: the per-head KQ [n_lid, n_tokens, n_head] is the largest intermediate, and past 2^31 elements the CUDA
     // cpy kernels' int32 element count overflows. Per-chunk scores concatenate along the token dim; the result is exact.
-    int64_t idx_chunk = DSV4_IDX_SCORE_CHUNK;
     const int64_t n_tok_dim = indexer_q->ne[1];
-    while (idx_chunk > 32 &&
-            n_lid*idx_chunk*n_indexer_head*n_stream*(int64_t) sizeof(float) > (DSV4_IDX_KQ_MAX_MIB << 20)) {
-        idx_chunk >>= 1;
-    }
+    const int64_t idx_chunk = llama_dsv4_idx_score_chunk(n_lid, n_indexer_head, n_stream);
     auto dsv4_build_score_chunk = [&](int64_t c0, int64_t tc) {
         auto q_c = ggml_cont(ctx0, ggml_view_4d(ctx0, indexer_q,
                 indexer_q->ne[0], tc, indexer_q->ne[2], indexer_q->ne[3],

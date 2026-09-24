@@ -19,6 +19,34 @@
 #include <type_traits>
 #include <unordered_set>
 
+// V4.1 lightning-indexer score chunking. The graph splits the per-head KQ over the token dim to keep
+// one chunk's intermediate under DSV4_IDX_KQ_MAX_MIB; the scheduler budget needs the same chunk size
+// and the same per-chunk node count, so both call these two functions.
+static constexpr int64_t DSV4_IDX_SCORE_CHUNK       = 256;
+static constexpr int64_t DSV4_IDX_KQ_MAX_MIB        = 512;
+static constexpr int64_t DSV4_IDX_CHUNK_GRAPH_NODES = 12;
+
+int64_t llama_dsv4_idx_score_chunk(int64_t n_lid, int64_t n_indexer_head, int64_t n_stream) {
+    int64_t chunk = DSV4_IDX_SCORE_CHUNK;
+    while (chunk > 32 &&
+            n_lid*chunk*n_indexer_head*n_stream*(int64_t) sizeof(float) > (DSV4_IDX_KQ_MAX_MIB << 20)) {
+        chunk >>= 1;
+    }
+    return chunk;
+}
+
+int64_t llama_dsv4_idx_chunk_nodes(int64_t n_tokens, int64_t n_lid, int64_t n_indexer_head, int64_t n_stream, int64_t n_unfused) {
+    if (n_tokens <= 0 || n_unfused <= 0) {
+        return 0;
+    }
+    const int64_t chunk = llama_dsv4_idx_score_chunk(n_lid, n_indexer_head, n_stream);
+    if (chunk <= 0 || n_tokens <= chunk) {
+        return 0;
+    }
+    const int64_t n_chunks = (n_tokens + chunk - 1)/chunk;
+    return n_unfused*n_chunks*DSV4_IDX_CHUNK_GRAPH_NODES;
+}
+
 static bool dsv4_cache_type_supported(ggml_type type) {
     return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
 }
