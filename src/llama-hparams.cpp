@@ -2276,9 +2276,6 @@ void llm_load_hparams(
                         hparams.dsv4_q_head_norm = false;
                         LLAMA_LOG_INFO("%s: DeepSeek-V4.1 compressed streams: csa ratio %u, hca ratio %u, shared from source layers\n", __func__, csa_ratio, hca_ratio);
                     }
-                    // V4.1 hierarchical sparse indexer candidate pool: the decoder's first Full layer
-                    // publishes a block-level candidate selection that every later index source folds
-                    // into its group mask. GGUF keys win; the tech-report constants are the fallback.
                     if (std::getenv("V41_SEPARATE") != nullptr) {
                         {
                             uint32_t src = 0;

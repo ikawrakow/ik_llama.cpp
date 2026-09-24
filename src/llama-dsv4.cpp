@@ -19,9 +19,6 @@
 #include <type_traits>
 #include <unordered_set>
 
-// V4.1 lightning-indexer score chunking. The graph splits the per-head KQ over the token dim to keep
-// one chunk's intermediate under DSV4_IDX_KQ_MAX_MIB; the scheduler budget needs the same chunk size
-// and the same per-chunk node count, so both call these two functions.
 static constexpr int64_t DSV4_IDX_SCORE_CHUNK       = 256;
 static constexpr int64_t DSV4_IDX_KQ_MAX_MIB        = 512;
 static constexpr int64_t DSV4_IDX_CHUNK_GRAPH_NODES = 12;
@@ -918,8 +915,6 @@ static void dsv4_set_mask_tensor(
     }
 }
 
-// V4.1 hierarchical indexer: fill the candidate block pin. One row per query token: +inf on the block holding
-// the query's newest visible compressed position, 0 elsewhere; a query that sees nothing yet pins nothing.
 static void dsv4_set_cand_pin(
         ggml_tensor * tensor,
         const llama_context::dsv4_runtime::comp_plan & plan,
@@ -956,7 +951,6 @@ bool llama_context::ensure_dsv4_cache_tensors() {
     const uint32_t hca_ratio = hp.dsv4_hca_ratio;
     const uint32_t csa_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, csa_ratio), 256u);
     const uint32_t hca_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, hca_ratio), 256u);
-    // The shared LID cache holds index keys from both groups, so it is sized by the smallest ratio (largest block count).
     const bool     v41_separate = getenv("V41_SEPARATE") != nullptr;
     const uint32_t lid_ratio    = std::min(csa_ratio, hca_ratio);
     const uint32_t lid_kv       = v41_separate ? GGML_PAD(dsv4_comp_size(cparams.n_ctx, lid_ratio), 256u) : csa_kv;
@@ -1036,7 +1030,6 @@ bool llama_context::ensure_dsv4_cache_tensors() {
                 const uint32_t n_rows = v41_separate ? lid_kv : (ratio == csa_ratio ? csa_kv : hca_kv);
                 cache.lid_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, cparams.idx_type_k, n_indexer_head, n_rows*n_stream, 1);
                 if (v41_separate) {
-                    // the separate-arch path compresses the indexer state too; the in-threaded path has no lid state
                     const int width = hp.dsv4_csa_overlap ? 2 : 1;
                     cache.lid_state_kv[(size_t) il]    = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, width*n_indexer_head, width*csa_ratio*n_stream);
                     cache.lid_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, width*n_indexer_head, width*csa_ratio*n_stream);
@@ -1884,8 +1877,6 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
     const bool v41_separate = getenv("V41_SEPARATE") != nullptr;
     lctx.dsv4.csa_plan = build_plan(csa_ratio, csa_overlap, csa_state_size, csa_kv_size, cache_n_stream, v41_separate ? lid_kv_size : 0);
     lctx.dsv4.hca_plan = build_plan(hca_ratio, hca_overlap, hca_state_size, hca_kv_size, cache_n_stream, v41_separate ? lid_kv_size : 0);
-    // Index keys come from the pooled latent, so they follow the stream plans; the separate-arch path lays them
-    // on the min-ratio grid, which needs a lid plan of its own (the in-threaded path aliases it to the csa plan).
     lctx.dsv4.lid_plan = (hp.dsv4_shared_streams && !v41_separate) ? lctx.dsv4.csa_plan
                        : build_plan(v41_separate ? std::min(csa_ratio, hca_ratio) : csa_ratio,
                                     csa_overlap, lid_state_size, lid_kv_size, cache_n_stream,

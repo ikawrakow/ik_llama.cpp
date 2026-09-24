@@ -187,8 +187,6 @@ struct llama_hparams {
     std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_index_key_source = {};
     std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_topk_source      = {};
 
-    // V4.1 separate-arch implementation: hierarchical sparse indexer candidate-pool geometry, read from the GGUF
-    // (the tech-report constants are the fallback when the keys are absent).
     int32_t  dsv4_candidate_source_layer = -1;
     uint32_t dsv4_candidate_block_size   = 0;
     uint32_t dsv4_candidate_topk_blocks  = 0;

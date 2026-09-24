@@ -892,11 +892,6 @@ int llama_context::max_nodes(int n_tokens, int n_kv) const {
     int max_nodes = model.max_nodes(n_tokens);
     max_nodes += llama_openpangu_chunked_graph_nodes(model, cparams, n_tokens, n_kv);
     if (model.arch == LLM_ARCH_DEEPSEEK41 && n_tokens > 0 && n_kv > 0) {
-        // The separate V4.1 path chunks the lightning-indexer score over the token dim, so the graph's
-        // node count scales with ceil(n_tokens/chunk). The default 65536 budget covers the fused case;
-        // with the fused op off every index source takes the unfused chunked path, so mirror the chunk
-        // math here. n_kv is the context size, an upper bound on the score's position count, and +512
-        // covers the plan's padding.
         const llama_hparams & hp = model.hparams;
         int64_t n_unfused = 0;
         if (hp.dsv4_candidate_source_layer >= 0 && hp.dsv4_candidate_block_size > 0 &&

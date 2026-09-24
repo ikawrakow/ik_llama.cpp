@@ -104,7 +104,6 @@ static void dsv4_build_plan_inputs(
     dsv4_new_i64_input(ctx, &inputs.state_write_idxs, (int64_t) plan.state_write_idxs.size(), (std::string(tag) + "_state_write").c_str());
     inputs.state_write_idxs_lid = nullptr;
     if (!plan.state_write_idxs_lid.empty()) {
-        // V4.1 min-ratio index-key cache: the write indices are their own vector
         dsv4_new_i64_input(ctx, &inputs.state_write_idxs_lid, (int64_t) plan.state_write_idxs_lid.size(), (std::string(tag) + "_state_write_lid").c_str());
     }
     dsv4_new_i32_input(ctx, &inputs.state_write_pos, (int64_t) plan.state_write_pos.size(), (std::string(tag) + "_write_pos").c_str());
@@ -117,7 +116,6 @@ static void dsv4_build_plan_inputs(
     inputs.cand_pin = nullptr;
     if (create_mask && cand_block > 0 && plan.n_kv > 0 &&
             plan.n_kv % cand_block == 0 && plan.n_kv/cand_block > cand_topk) {
-        // The block pin is only built when the selection can bite (with every block inside the top-k the mask is the identity).
         const int64_t n_stream = std::max<int64_t>(1, plan.n_stream);
         inputs.cand_pin = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
                 plan.n_kv/cand_block, std::max<int64_t>(1, n_tokens/n_stream), 1, n_stream);
@@ -2039,7 +2037,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
         auto q = llm.llm_build_lora_mm(llm.lctx, ctx0, wq, qin);
         cb(q, (tag + "_b").c_str(), il);
         q = ggml_reshape_2d(ctx0, q, n_embd_head, nhead * n_tokens);
-        // V4.1 does not per-head-normalize q after wq_b (its norm tensor is null); the kv latent is normed on both arches.
         if (model.arch == LLM_ARCH_DEEPSEEK4 || tag == "kv") {
             q = llm.llm_build_norm(ctx0, q, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(q, (tag + "_norm").c_str(), il);
@@ -2066,7 +2063,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
     }
     const float kq_scale = 1.0f / std::sqrt(float(n_embd_head));
 
-    // Only a KV-source layer owns a compressor; Reuse/Reindex layers read the source's cache.
     const bool is_csa_kv_source = model.arch != LLM_ARCH_DEEPSEEK41 || hparams.dsv41_is_kv_source(il);
     if (ratio == hparams.dsv4_csa_ratio && is_csa_kv_source &&
             lctx.dsv4.inputs.csa.state_pos != nullptr &&
@@ -2081,7 +2077,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
                 n_embd_head, il, false, "csa", gf, false, &csa_latent);
 
         if (model.arch == LLM_ARCH_DEEPSEEK41) {
-            // V4.1 index keys come from the pooled main-KV latent; the write idxs are the group's state_write_idxs_lid.
             if (layer.indexer_attn_k != nullptr &&
                     lctx.dsv4.inputs.csa.state_write_idxs_lid != nullptr &&
                     lctx.dsv4.csa_plan.state_write_idxs_lid.size() > 0) {
@@ -2102,7 +2097,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
 
     }
 
-    // Reuse/Reindex decoder layers read the source's hca cache.
     const bool is_hca_kv_source = model.arch != LLM_ARCH_DEEPSEEK41 || hparams.dsv41_is_kv_source(il);
     if (ratio == hparams.dsv4_hca_ratio && is_hca_kv_source &&
             lctx.dsv4.inputs.hca.state_pos != nullptr &&
@@ -2116,7 +2110,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
                 nullptr, nullptr,
                 n_embd_head, il, false, "hca", gf, true, &hca_latent);
 
-        // V4.1 decoder index keys come from this hca compressor's latent (layers 20 and 24/28/32/36); the write idxs are the hca plan's state_write_idxs_lid.
         if (model.arch == LLM_ARCH_DEEPSEEK41 && layer.indexer_attn_k != nullptr &&
                 lctx.dsv4.inputs.hca.state_write_idxs_lid != nullptr &&
                 lctx.dsv4.hca_plan.state_write_idxs_lid.size() > 0) {
@@ -2130,7 +2123,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
     }
 
     const bool raw_compacted = kv_self.is_compacted((int) il);
-    // a dense layer in a compacted context (an MTP NextN layer) is cell-addressed, bypassing the raw plan
     const bool plan_addressed = !kv_self.any_compacted() || raw_compacted;
 
     ggml_tensor * raw_k_write = nullptr;
@@ -2153,7 +2145,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
     ggml_tensor * raw_k = nullptr;
     ggml_tensor * raw_mask = nullptr;
     if (raw_compacted) {
-        // live window rows [win_off, win_off + w_view); KQ_mask_swa_win is that view's column-exact mask
         GGML_ASSERT(hparams.n_head_kv(il) == 1 && KQ_mask_swa_win != nullptr && lctx.swa_window_view.active);
         raw_k = dsv4_raw_get_k_window(ctx0, kv_self.k_l[il],
                 lctx.swa_window_view.win_off, lctx.swa_window_view.w_view, n_embd_head);
@@ -2195,8 +2186,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
         int ntokens = std::max(k_fa_chunk, int(q->ne[2]));
         int nton = k_fa_chunk*((ntokens + n_swa + k_fa_chunk - 1)/k_fa_chunk);
         int first = raw_k->ne[2] - nton;
-        // The raw K tensor is padded to a multiple of 256 rows; anchoring the window to the padded end can start it
-        // after the batch's own first row (every column masked -> all -inf -> NaN softmax), so pull the start back when needed.
         const int64_t n_valid = lctx.dsv4.raw.n_kv > 0 ? lctx.dsv4.raw.n_kv : raw_k->ne[2];
 
         const int64_t first_min = std::max<int64_t>(0, n_valid - (int64_t) q->ne[2] - (int64_t) n_swa);
@@ -2229,7 +2218,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
             raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
         }
         if (!cparams.flash_attn && raw_compacted && raw_mask->ne[1] != n_tokens) {
-            // non-FA masks are unpadded; drop the win mask's token padding before the concat
             raw_mask = ggml_view_2d(ctx0, raw_mask, raw_mask->ne[0], n_tokens, raw_mask->nb[1], 0);
         }
         if (cparams.flash_attn && extra_mask->type != GGML_TYPE_F16) {
@@ -2264,14 +2252,12 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
             lctx.dsv4.lid_plan.n_kv > 0 &&
             !cparams.k_cache_hadamard) {
         auto csa_mask = lctx.dsv4.inputs.csa.kq_mask;
-        // A Reuse/Reindex layer reads the compressed K of its kv_src_layer, not its own.
         const int32_t csa_src_il = model.arch == LLM_ARCH_DEEPSEEK41
                 ? hparams.dsv41_kv_source[il] : il;
         auto csa_kv   = csa_src_il >= 0 ? lctx.dsv4.cache.csa_k[csa_src_il] : nullptr;
         if (hparams.indexer_top_k < lctx.dsv4.inputs.csa.kq_mask->ne[0]) {
             ggml_tensor * top_k = nullptr;
             if (model.arch == LLM_ARCH_DEEPSEEK41 && !hparams.dsv41_is_index_source(il)) {
-                // Reuse layer: consume the top-k carried from the last index source.
                 GGML_ASSERT(topk_carry && *topk_carry && "DSV4: layer reuses a top-k no index source produced");
                 top_k = *topk_carry;
             } else {
@@ -2280,9 +2266,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
                 if (topk_carry) { *topk_carry = top_k; }
             }
             if (n_tokens == 1) {
-                // When we are dealing with a single token, we can just use ggml_get_rows_ext to get the
-                // selected rows from the CSA cache and setup the corresponding mask. This makes the
-                // raw_kv and csa_kv concetenation much less expensive for long context.
                 csa_kv = ggml_get_rows_ext(ctx0, csa_kv, top_k, true, false);
                 csa_kv = ggml_reshape_3d(ctx0, csa_kv, csa_kv->ne[0], 1, csa_kv->ne[1]);
                 cb(csa_kv, "csa_kv_getrows", il);
@@ -2306,7 +2289,6 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
                 lctx.dsv4.hca_plan.n_kv, n_tokens, num_streams(lctx.dsv4.hca_ctx), cb, il);
         ggml_tensor * hca_kv = lctx.dsv4.cache.hca_k[il];
         if (model.arch == LLM_ARCH_DEEPSEEK41) {
-            // The V4.1 decoder group uses the indexer path too (no dense HCA): index sources publish top-k, Reuse layers consume the carry.
             const int32_t hca_src_il = hparams.dsv41_kv_source[il];
             if (hca_src_il >= 0) { hca_kv = lctx.dsv4.cache.hca_k[hca_src_il]; }
             if (hparams.indexer_top_k < lctx.dsv4.inputs.hca.kq_mask->ne[0]) {
@@ -2398,8 +2380,6 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
     const int64_t n_tokens = cur->ne[1];
     const int hadamard_block = llama_model::hadamard_size((int) n_embd_indexer_head);
 
-    // Resolve the GROUP's mask first: the encoder group scores its ratio-2 blocks against the csa plan's mask,
-    // the decoder group its ratio-1 blocks against the hca plan's mask. The mask's row count IS the group's block count (n_lid).
     if (kq_mask == nullptr) { kq_mask = llm.lctx.dsv4.inputs.csa.kq_mask; }
     GGML_ASSERT(kq_mask != nullptr);
     const int64_t n_lid = kq_mask->ne[0];
@@ -2420,13 +2400,11 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
     indexer_q->op_params[15] = 1;
     llm.cb(indexer_q, "indexer_q", il);
 
-    // V4.1 cross-layer sharing: the index keys are read from the layer's kv_src_layer, not from itself.
     const int32_t lid_src_il = llm.model.arch == LLM_ARCH_DEEPSEEK41
             ? llm.hparams.dsv41_kv_source[il] : il;
     GGML_ASSERT(lid_src_il >= 0 && "DSV4: layer reads index keys with no source");
     ggml_tensor * lid_cache = llm.lctx.dsv4.cache.lid_k[lid_src_il];
 
-    // V4.1 has no shared k_rot rotation on the 128-dim indexer (that is V4-only).
     if (llm.model.arch == LLM_ARCH_DEEPSEEK4) {
         GGML_ASSERT(indexer_q->ne[0] % hadamard_block == 0);
         indexer_q = ggml_hadamard(ctx0, indexer_q, hadamard_block);
@@ -2451,7 +2429,6 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
         n_lid_use = indexer_k->ne[2];
     }
     if (n_lid_use < indexer_k->ne[2]) {
-        // View the lid-cache read down to the group's block count (the ratio-2 keys occupy the first csa_plan.n_kv rows).
         indexer_k = ggml_view_4d(ctx0, indexer_k,
                 indexer_k->ne[0], indexer_k->ne[1], n_lid_use, indexer_k->ne[3],
                 indexer_k->nb[1], indexer_k->nb[2], indexer_k->nb[3], 0);
@@ -2474,13 +2451,9 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
     ggml_tensor * lid_mask = dsv4_build_raw_mask_view(ctx0,
             kq_mask, nullptr, n_lid, n_tokens, n_stream, cb, il);
 
-    // V4.1 hierarchical indexer: the candidate source layer publishes a block-level candidate mask pooled from its own
-    // masked scores; later index sources fold the carried mask into their group mask. The publisher takes the unfused path.
     const bool is_cand_source = cand_carry != nullptr && cand_pin != nullptr &&
             hparams.dsv4_candidate_source_layer >= 0 && il == hparams.dsv4_candidate_source_layer;
     if (cand_carry != nullptr && *cand_carry != nullptr && !is_cand_source) {
-        // The carry is published at block resolution: expand it to positions here, so it is only materialised where
-        // this layer needs it instead of living across the whole graph.
         lid_mask = ggml_add(ctx0, lid_mask, dsv4_expand_cand_keep(ctx0, *cand_carry, n_lid, cb, il));
         llm.cb(lid_mask, "lid_mask_cand", il);
     }
@@ -2497,14 +2470,6 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
         }
     }
 
-    // Unfused score: relu(KQ) weighted per head, summed over heads, plus the group mask. Computed in token chunks when the
-    // batch is large: the per-head KQ [n_lid, n_tokens, n_head] is the largest intermediate, and past 2^31 elements the CUDA
-    // cpy kernels' int32 element count overflows. Per-chunk scores concatenate along the token dim; the result is exact.
-    //
-    // Both consumers of the score work per token chunk too, so the full [n_lid, n_tokens] score is never materialised:
-    //   - this layer's own top-k (the k best positions of each token), and
-    //   - the publisher's block pool (one score per block).
-    // A chunk spans the full position range, so selecting or pooling inside it is exact.
     const int64_t n_tok_dim = indexer_q->ne[1];
     const int64_t idx_chunk = llama_dsv4_idx_score_chunk(n_lid, n_indexer_head, n_stream);
     const int64_t tok_chunk = idx_chunk > 0 && n_tok_dim > idx_chunk ? idx_chunk : n_tok_dim;
@@ -2539,7 +2504,6 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
         auto sc_c = dsv4_build_score_chunk(c0, tc);
         llm.cb(sc_c, "lid_score_chunk", il);
         if (is_cand_source) {
-            // one score per block: its best position (pooling over positions is per-token, so the chunks compose)
             auto bs_c = ggml_pool_2d(ctx0, sc_c, GGML_OP_POOL_MAX, (int) cand_block, 1, (int) cand_block, 1, 0, 0);
             cand_block_score = cand_block_score == nullptr ? bs_c : ggml_concat(ctx0, cand_block_score, bs_c, 1);
         }
@@ -2548,7 +2512,6 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
     }
 
     if (is_cand_source) {
-        // publish the block-level candidate selection for every later index source
         *cand_carry = dsv4_build_candidate_mask(ctx0, cand_block_score, cand_pin,
                 hparams.dsv4_candidate_topk_blocks, cb, il);
     }
@@ -2627,7 +2590,6 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(0));
     GGML_ASSERT(n_embd_head_nope > 0);
 
-    // Wire the dsv4 compressed-KV plan inputs (raw K write/read idxs + csa/hca/lid state/plan idxs + kq masks).
     dsv4_new_i32_input(ctx0, &lctx.dsv4.inputs.raw_k_write_src_idxs, (int64_t) lctx.dsv4.raw.write_src_idxs.size(), "dsv4_raw_k_write_src_idxs");
     dsv4_new_i32_input(ctx0, &lctx.dsv4.inputs.raw_k_write_idxs, (int64_t) lctx.dsv4.raw.write_dst_idxs.size(), "dsv4_raw_k_write_idxs");
     dsv4_new_i32_input(ctx0, &lctx.dsv4.inputs.raw_k_read_idxs, (int64_t) lctx.dsv4.raw.read_dst_idxs.size(), "dsv4_raw_k_read_idxs");
@@ -2642,8 +2604,6 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
 
     const int n_layer_end = n_layer - hparams.nextn_predict_layers;
 
-    // With --swa-compress every V4.1 layer is a compacted SWA layer, so pass the column-exact compacted mask
-    // and set lctx.swa_window_view.
     ggml_tensor * KQ_mask = nullptr;
     ggml_tensor * KQ_mask_swa_win = nullptr;
     if (kv_self.any_compacted()) {
@@ -2674,17 +2634,11 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
     inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
     cb(inpL, "hc_init", -1);
 
-    // V4.1 cross-layer top-k carry: an index-source layer publishes its top-k; Reuse layers consume it.
     ggml_tensor * topk_carry = nullptr;
 
-    // V4.1 hierarchical indexer: the candidate source layer (20) publishes a block-level candidate mask;
-    // every later index source folds it into its group mask.
     ggml_tensor * cand_carry_v = nullptr;
     ggml_tensor ** cand_carry = &cand_carry_v;
 
-    // V4.1 hyper-connection mix threading: each sublayer's pre mix feeds the next; the final head
-    // collapses with the last FFN's mix, so the mix must outlive the layer loop. The chain starts
-    // from a one-hot on stream 0, which is what the first sublayer collapses with.
     ggml_tensor * hc_pre_mix = ggml_concat(ctx0,
             ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens), 1.0f),
             ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hc - 1, n_tokens), 0.0f), 0);
@@ -2694,17 +2648,12 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
     for (int il = 0; il < n_layer_end; ++il) {
         auto & layer = model.layers[il];
 
-        // ---- V4.1 engram conditional memory (layers 1/14): the host-side gather
-        //      (llama-engram.cpp) produced the lookup input; project it to
-        //      key/value and gate the value into the residual, BEFORE attention.
         if (layer.engram_embd != nullptr) {
             const int eg = hparams.engram_index(il);
             GGML_ASSERT(eg >= 0 && "engram tensor on a layer the metadata does not list");
             inpL = ds4_build_engram(ctx0, *this, inpL, il, eg);
         }
 
-        // ---- DSpark target-feature capture. V4.1 reads the ATTENTION INPUT of its target
-        //      layers (reference model.py), not their output: l_out-<il> is the post-engram h.
         if (lctx.dflash.capture) {
             ggml_tensor * capture = dsv4_hc_mean_for_capture(ctx0, inpL);
             cb(capture, "l_out", il);
@@ -2713,9 +2662,6 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
             cb(inpL, "l_out", il);
         }
 
-        // ---- CSA2 attention (reuses the V4 ds4_attention machinery: MLA latent +
-        //      pooled compressed K + LID indexer top-k selection). For V4.1 both
-        //      nonzero-ratio groups route through the indexer path (no dense HCA).
         ggml_tensor * hc_attn_pre = nullptr;
         inpL = ds4_attention_v41(gf, ctx0, *this, inpL,
                 &append_csa_state, &append_csa_score,
@@ -2734,7 +2680,7 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
 
         const bool is_media = lctx.inp_embd != nullptr;
         ggml_tensor * exp_probs_b = (is_media && layer.ffn_exp_probs_b_vl != nullptr)
-            ? layer.ffn_exp_probs_b_vl  // image tokens route through the vision bias
+            ? layer.ffn_exp_probs_b_vl
             : layer.ffn_exp_probs_b;
         ggml_tensor * selected_experts = nullptr;
         ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, cur,
@@ -2759,9 +2705,6 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
         inpL = build_mhc_post(cur, post, residual, comb, n_embd, hc, true);
         cb(inpL, "hc_ffn_post", il);
     }
-    // ---- Head: collapse hc stream (no hc_head in V4.1) -> output_norm -> output ----
-    // If fewer output rows than tokens (n_outputs != n_tokens), select the rows
-    // via inp_out_ids so the assert at llama.cpp:5551 is satisfied.
     ggml_tensor * inp_out_ids = nullptr;
     if (n_outputs != n_tokens) {
         inp_out_ids = build_inp_out_ids();
@@ -2770,7 +2713,6 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
         inpL = ggml_reshape_3d(ctx0, flat, n_embd, hc, n_outputs);
     }
 
-    // V4.1 has no dedicated head weights: collapse with the carried mix (row-selected when the output rows were).
     GGML_ASSERT(hc_pre_mix != nullptr && "DEEPSEEK41 hc: no mix carried to the final collapse");
     ggml_tensor * head_mix = hc_pre_mix;
     if (head_mix->ne[1] != inpL->ne[2]) {
@@ -2790,8 +2732,6 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
     return gf;
 }
 
-// block_score already holds one score per block: the caller pools each token chunk (the full [n_pos, n_tokens] score is
-// never materialised). Unreachable positions arrive at -inf, so an unreachable block pools to -inf too.
 static ggml_tensor * dsv4_build_candidate_mask(
         ggml_context * ctx0,
         ggml_tensor * block_score,
@@ -2809,8 +2749,6 @@ static ggml_tensor * dsv4_build_candidate_mask(
     ggml_tensor * bs = block_score;
     cb(bs, "cand_block_score", il);
 
-    // the block holding the newest position is only half full and could be
-    // outscored by an older, full one, so it is pinned in
     bs = ggml_add(ctx0, bs, cand_pin);
     cb(bs, "cand_block_score_pin", il);
 
@@ -2818,7 +2756,6 @@ static ggml_tensor * dsv4_build_candidate_mask(
     ggml_tensor * top = ggml_cont(ctx0, ggml_top_k(ctx0, bs, (int) k));
     cb(top, "cand_block_top_k", il);
 
-    // -inf everywhere, 0 on the blocks that were kept
     ggml_tensor * keep = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, n_blocks, bs->ne[1], bs->ne[3]);
     keep = ggml_fill(ctx0, keep, -INFINITY);
 
@@ -2833,7 +2770,6 @@ static ggml_tensor * dsv4_build_candidate_mask(
             keep->nb[2], keep->nb[3], keep->nb[3], 0);
     cb(keep, "cand_keep", il);
 
-    // published at block resolution: the consumer expands it to positions where it is consumed
     return keep;
 }
 
@@ -2846,7 +2782,6 @@ static ggml_tensor * dsv4_expand_cand_keep(
     GGML_ASSERT(n_blocks > 0 && n_pos % n_blocks == 0);
     const int64_t block = n_pos/n_blocks;
 
-    // every position inherits its block's verdict
     ggml_tensor * keep = ggml_reshape_4d(ctx0, block_keep, 1, n_blocks, block_keep->ne[1], block_keep->ne[3]);
     keep = ggml_repeat_4d(ctx0, keep, block, n_blocks, keep->ne[2], keep->ne[3]);
     keep = ggml_reshape_4d(ctx0, keep, n_pos, keep->ne[2], 1, keep->ne[3]);

@@ -579,7 +579,7 @@ struct llama_context {
             std::vector<int32_t> state_persist_dst_idxs;
             std::vector<int32_t> state_read_idxs;
             std::vector<int64_t> state_write_idxs;
-            std::vector<int64_t> state_write_idxs_lid; // index-key write idxs (into the lid cache)
+            std::vector<int64_t> state_write_idxs_lid;
             std::vector<int32_t> state_write_pos;
             std::vector<int32_t> n_visible;
             int64_t n_stream = 1;

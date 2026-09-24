@@ -17,9 +17,5 @@ void llama_dsv4_spec_ckpt_discard(llama_context * ctx);
 ggml_tensor * llama_dsv4_spec_ckpt_delta(llama_context * ctx, ggml_tensor * state_tensor);
 void llama_dsv4_spec_ckpt_record_plan(llama_context * ctx);
 
-// DeepSeek-V4.1 lightning-indexer score: the graph splits the per-head KQ over the token dimension,
-// so its node count scales with ceil(n_tokens/chunk). The chunk size and the per-chunk node estimate
-// live in one place so the graph builder (build_deepseek4.cpp) and the scheduler budget
-// (llama_context::max_nodes) cannot drift apart. `n_lid` is the number of score positions.
 int64_t llama_dsv4_idx_score_chunk(int64_t n_lid, int64_t n_indexer_head, int64_t n_stream);
 int64_t llama_dsv4_idx_chunk_nodes(int64_t n_tokens, int64_t n_lid, int64_t n_indexer_head, int64_t n_stream, int64_t n_unfused);
