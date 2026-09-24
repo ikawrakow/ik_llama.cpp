@@ -1351,7 +1351,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         }
         int n_eff = hparams.n_swa + (int) slot_plan.n_kv;
         if (shared_top_k) {
-            if (have_new_top_k) {
+            if (have_new_top_k || hparams.dsv41_kv_source[il] != hparams.dsv41_kv_source[hparams.dsv41_topk_source[il]]) {
                 if (n_tokens == 1) {
                     comp_kv = ggml_get_rows_ext(ctx0, comp_kv, shared_top_k, true, false);
                     comp_kv = ggml_reshape_3d(ctx0, comp_kv, comp_kv->ne[0], 1, comp_kv->ne[1]);
