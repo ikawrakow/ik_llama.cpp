@@ -427,11 +427,15 @@ typedef struct {
 } block_q8_k_r8;
 static_assert(sizeof(block_q8_k_r8) == 8*sizeof(ggml_half) + 8*QK_K, "wrong q8_k_r8 block size/padding");
 
+#define GGML_Q8_K_R16_ALIGN 64
+
 typedef struct {
-    ggml_half d[16];         // delta
+    float     d[16];         // delta
     int8_t    qs[16*QK_K];   // quants, stored as unsigned ints
 } block_q8_k_r16;
-static_assert(sizeof(block_q8_k_r16) == 16*sizeof(ggml_half) + 16*QK_K, "wrong q8_k_r16 block size/padding");
+static_assert(16*sizeof(float) == GGML_Q8_K_R16_ALIGN, "q8_k_r16 header must be exactly one alignment unit");
+static_assert(sizeof(block_q8_k_r16) == GGML_Q8_K_R16_ALIGN + 16*QK_K, "wrong q8_k_r16 block size/padding");
+static_assert(sizeof(block_q8_k_r16) % GGML_Q8_K_R16_ALIGN == 0, "q8_k_r16 block stride must keep qs aligned");
 
 // (Almost) "true" 2-bit quantization.
 // Due to the need to use blocks as per ggml design, it ends up using

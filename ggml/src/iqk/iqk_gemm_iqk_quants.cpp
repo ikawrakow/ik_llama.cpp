@@ -2370,7 +2370,7 @@ void iqk_convert_iq2_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
             }
 #ifdef HAVE_FANCY_SIMD
             auto vd = _mm512_mul_ps(_mm512_loadu_ps(dnew), _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)dh)));
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(vd, _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, vd);
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -2447,7 +2447,7 @@ void iqk_convert_iq2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     extra >>= 8;
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/120, xv, helper.val, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2510,7 +2510,7 @@ void iqk_convert_iq2_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy,
                     xv[ib32] = _mm256_shuffle_epi8(values, v);
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/120, xv, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2613,7 +2613,7 @@ void iqk_convert_iq2_kl_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
             }
 #ifdef HAVE_FANCY_SIMD
             auto vd = _mm512_mul_ps(_mm512_loadu_ps(dnew), _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)dh)));
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(vd, _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, vd);
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -2692,7 +2692,7 @@ void iqk_convert_iq3_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 dnew[k] = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
             }
 #ifdef HAVE_FANCY_SIMD
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_mul_ps(vd, _mm512_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, _mm512_mul_ps(vd, _mm512_loadu_ps(dnew)));
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -2780,7 +2780,7 @@ void iqk_convert_iq3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     extra >>= 8;
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, helper.val, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2853,7 +2853,7 @@ void iqk_convert_iq3_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy,
                     xv[ib32] = _mm256_shuffle_epi8(values, v);
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2926,7 +2926,7 @@ void iqk_convert_iq4_kss_q8_k_r8(int n, const void * vx, size_t bx, void * vy, i
                 dnew[k] = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
             }
 #ifdef HAVE_FANCY_SIMD
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_mul_ps(vd, _mm512_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, _mm512_mul_ps(vd, _mm512_loadu_ps(dnew)));
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -2994,7 +2994,7 @@ void iqk_convert_iq4_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 dnew[k] = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
             }
 #ifdef HAVE_FANCY_SIMD
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_mul_ps(vd, _mm512_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, _mm512_mul_ps(vd, _mm512_loadu_ps(dnew)));
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -3070,7 +3070,7 @@ void iqk_convert_iq4_ks_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy
                 dnew[k] = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
             }
 #ifdef HAVE_FANCY_SIMD
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_mul_ps(vd, _mm512_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, _mm512_mul_ps(vd, _mm512_loadu_ps(dnew)));
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -3142,7 +3142,7 @@ void iqk_convert_iq4_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                 }
                 //float dnew = convert_to_q8_k_r8(k, 1.f/127, xv, helper.val, block, y[i].qs);
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -3216,7 +3216,7 @@ void iqk_convert_iq4_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy,
                     xv[ib32] = _mm256_shuffle_epi8(values[extra], nib);
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -3302,7 +3302,7 @@ void iqk_convert_iq5_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 dnew[k] = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
             }
 #ifdef HAVE_FANCY_SIMD
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_mul_ps(vd, _mm512_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, _mm512_mul_ps(vd, _mm512_loadu_ps(dnew)));
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -3388,7 +3388,7 @@ void iqk_convert_iq5_ks_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy
                 dnew[k] = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
             }
 #ifdef HAVE_FANCY_SIMD
-            _mm256_storeu_si256((__m256i *)y[i].d, _mm512_cvtps_ph(_mm512_mul_ps(vd, _mm512_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+            _mm512_storeu_ps(y[i].d, _mm512_mul_ps(vd, _mm512_loadu_ps(dnew)));
             for (int l = 0; l < 64; ++l) {
                 auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
                 _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
@@ -3463,7 +3463,7 @@ void iqk_convert_iq5_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     extra >>= 4;
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -3545,7 +3545,7 @@ void iqk_convert_iq5_k_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy,
                                    MM256_SET_M128I(_mm_set1_epi8(e1 << 1), _mm_set1_epi8(e0 << 1)));
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -3734,7 +3734,7 @@ void iqk_convert_iq6_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     extra >>= 8;
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, helper.val, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {

@@ -1948,7 +1948,7 @@ void iqk_convert_iq2_xxs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, i
                     esh.sign_value(aux32[1], values[ib32]);
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/124, values, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2009,7 +2009,7 @@ void iqk_convert_iq2_xxs_r4_q8_k_r16(int n, const void * vx, size_t bx, void * v
                                        _mm256_or_si256(neg, _mm256_set1_epi8(1)));
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/124, values, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2066,7 +2066,7 @@ void iqk_convert_iq2_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                 DequantizerIQ2XS::sign_values_helper(q2h, sign_helper, qx+4);
 #endif
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/124, qx, helper.val, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2129,7 +2129,7 @@ void iqk_convert_iq2_xs_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy
                     qx[ib32] = _mm256_sign_epi8(qx[ib32], _mm256_or_si256(neg, _mm256_set1_epi8(1)));
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/124, qx, helper.val, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2449,7 +2449,7 @@ void iqk_convert_iq2_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                 DequantizerIQ2S::prepare(x8[k][i].qs+ 0, x8[k][i].qh+0, (const uint16_t *)(x8[k][i].qs + QK_K/8) + 0, sh, qx+0);
                 DequantizerIQ2S::prepare(x8[k][i].qs+16, x8[k][i].qh+4, (const uint16_t *)(x8[k][i].qs + QK_K/8) + 8, sh, qx+4);
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/124, qx, helper.val, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2511,7 +2511,7 @@ void iqk_convert_iq2_s_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy,
                     qx[ib32] = _mm256_sign_epi8(qx[ib32], _mm256_or_si256(neg, _mm256_set1_epi8(1)));
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/124, qx, helper.val, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2684,7 +2684,7 @@ void iqk_convert_iq3_xxs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, i
                     qs += 8;
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/124, values, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2747,7 +2747,7 @@ void iqk_convert_iq3_xxs_r4_q8_k_r16(int n, const void * vx, size_t bx, void * v
                                        _mm256_or_si256(neg, _mm256_set1_epi8(1)));
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/124, values, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2855,7 +2855,7 @@ void iqk_convert_iq3_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
                     ls[2*ib32 + 1] = ls[2*ib32 + 0];
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, values, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
@@ -2918,7 +2918,7 @@ void iqk_convert_iq3_s_r4_q8_k_r16(int n, const void * vx, size_t bx, void * vy,
                     ls[2*ib32+0] = ls[2*ib32+1] = 2*s + 1;
                 }
                 float dnew = convert_to_q8_k_r8<k_nr>(k, 1.f/127, values, ls, block, y[i].qs);
-                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+                set_scale(y[i].d, k, d*dnew);
             }
 #ifdef HAVE_FANCY_SIMD
             for (int l = 0; l < 64; ++l) {
