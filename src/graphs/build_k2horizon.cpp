@@ -2,40 +2,6 @@
 #include "../llama-model.h"
 #include "../llama-context.h"
 
-// K2 Horizon grouped RMS norm: splits embedding into n_groups groups,
-// applies RMS norm to each group independently, then reassembles.
-static ggml_tensor * k2_horizon_group_rms_norm(
-    ggml_context * ctx,
-    ggml_tensor * cur,
-    ggml_tensor * weight,
-    int64_t n_groups,
-    float eps,
-    int il, const llm_build_cb & cb) {
-    GGML_ASSERT(n_groups > 0);
-    GGML_ASSERT(cur->ne[0] % n_groups == 0);
-
-    const int64_t n_embd   = cur->ne[0];
-    const int64_t n_tokens = cur->ne[1];
-
-    // reshape: (n_embd, n_tokens) -> (n_embd/n_groups, n_groups, n_tokens)
-    cur = ggml_reshape_2d(ctx, cur, n_embd / n_groups, n_groups * n_tokens);
-
-    // RMS norm per group
-    cur = ggml_rms_norm(ctx, cur, eps);
-    cb(cur, "k2_rms", il);
-
-    // reshape back: (n_embd, n_tokens)
-    cur = ggml_reshape_2d(ctx, cur, n_embd, n_tokens);
-
-    // apply learned weights
-    if (weight != nullptr) {
-        cur = ggml_mul(ctx, cur, weight);
-        cb(cur, "k2_mul", il);
-    }
-
-    return cur;
-}
-
 // K2 Horizon MoVA: Mixture of Value Attention
 static ggml_tensor * k2_horizon_routed_value(
     ggml_context * ctx,
@@ -167,8 +133,7 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
         const bool is_mova_layer = is_moe_layer && hparams.n_value_expert > 0;
 
         // === grouped RMS norm before attention ===
-        cur = k2_horizon_group_rms_norm(ctx0, inpL, model.layers[il].attn_norm,
-                hparams.n_norm_groups, hparams.f_norm_rms_eps, il, cb);
+        cur = ggml_fused_grouped_rms_norm(ctx0, inpL, model.layers[il].attn_norm, hparams.f_norm_rms_eps, hparams.n_norm_groups);
         cb(cur, "attn_norm", il);
 
         ggml_tensor * attn_inp = cur;
@@ -177,16 +142,14 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
         ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
         cb(Qcur, "Qcur", il);
         if (model.layers[il].attn_q_norm != nullptr) {
-            Qcur = k2_horizon_group_rms_norm(ctx0, Qcur, model.layers[il].attn_q_norm,
-                    hparams.n_head(il), hparams.f_norm_rms_eps, il, cb);
+            Qcur = ggml_fused_grouped_rms_norm(ctx0, Qcur, model.layers[il].attn_q_norm, hparams.f_norm_rms_eps, hparams.n_head(il));
         }
 
         // === K ===
         ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
         cb(Kcur, "Kcur", il);
         if (model.layers[il].attn_k_norm != nullptr) {
-            Kcur = k2_horizon_group_rms_norm(ctx0, Kcur, model.layers[il].attn_k_norm,
-                    hparams.n_head_kv(il), hparams.f_norm_rms_eps, il, cb);
+            Kcur = ggml_fused_grouped_rms_norm(ctx0, Kcur, model.layers[il].attn_k_norm, hparams.f_norm_rms_eps, hparams.n_head_kv(il));
         }
 
         // === V: standard or MoVA routed ===
@@ -275,8 +238,7 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
         cb(ffn_inp, "ffn_inp", il);
 
         // === grouped RMS norm before FFN ===
-        cur = k2_horizon_group_rms_norm(ctx0, ffn_inp, model.layers[il].ffn_norm,
-                hparams.n_norm_groups, hparams.f_norm_rms_eps, il, cb);
+        cur = ggml_fused_grouped_rms_norm(ctx0, ffn_inp, model.layers[il].ffn_norm, hparams.f_norm_rms_eps, hparams.n_norm_groups);
         cb(cur, "ffn_norm", il);
 
         // === FFN (dense or MoE) ===
@@ -323,8 +285,7 @@ ggml_cgraph * llm_build_context::build_k2horizon() {
     }
 
     // === Final grouped RMS norm ===
-    cur = k2_horizon_group_rms_norm(ctx0, inpL, model.output_norm,
-            hparams.n_norm_groups, hparams.f_norm_rms_eps, -1, cb);
+    cur = ggml_fused_grouped_rms_norm(ctx0, inpL, model.output_norm, hparams.f_norm_rms_eps, hparams.n_norm_groups);
     cb(cur, "result_norm", -1);
 
     // === Vocab projection ===
