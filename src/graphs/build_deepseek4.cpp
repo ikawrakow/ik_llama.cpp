@@ -1929,8 +1929,9 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
 
 static ggml_tensor * dsv4_build_candidate_mask(
         ggml_context * ctx0,
-        ggml_tensor * index_score,
+        ggml_tensor * block_score,
         ggml_tensor * cand_pin,
+        int64_t block,
         uint32_t cand_topk_blocks,
         const llm_build_cb & cb, int il);
 static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, llm_build_context & llm, ggml_tensor * inpL,
@@ -2657,8 +2658,19 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
     // Unfused score: relu(KQ) weighted per head, summed over heads, plus the group mask. Computed in token chunks when the
     // batch is large: the per-head KQ [n_lid, n_tokens, n_head] is the largest intermediate, and past 2^31 elements the CUDA
     // cpy kernels' int32 element count overflows. Per-chunk scores concatenate along the token dim; the result is exact.
+    //
+    // Both consumers of the score work per token chunk too, so the full [n_lid, n_tokens] score is never materialised:
+    //   - this layer's own top-k (the k best positions of each token), and
+    //   - the publisher's block pool (one score per block).
+    // A chunk spans the full position range, so selecting or pooling inside it is exact.
     const int64_t n_tok_dim = indexer_q->ne[1];
     const int64_t idx_chunk = llama_dsv4_idx_score_chunk(n_lid, n_indexer_head, n_stream);
+    const int64_t tok_chunk = idx_chunk > 0 && n_tok_dim > idx_chunk ? idx_chunk : n_tok_dim;
+
+    const int64_t n_cand_blocks = is_cand_source ? cand_pin->ne[0] : 0;
+    const int64_t cand_block    = n_cand_blocks > 0 ? n_lid/n_cand_blocks : 0;
+    GGML_ASSERT(!is_cand_source || (n_cand_blocks > 0 && n_lid % n_cand_blocks == 0));
+
     auto dsv4_build_score_chunk = [&](int64_t c0, int64_t tc) {
         auto q_c = ggml_cont(ctx0, ggml_view_4d(ctx0, indexer_q,
                 indexer_q->ne[0], tc, indexer_q->ne[2], indexer_q->ne[3],
@@ -2678,28 +2690,27 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
                 lid_mask->nb[1], lid_mask->nb[2], lid_mask->nb[3], (size_t) c0*lid_mask->nb[1]);
         return ggml_add(ctx0, sc_c, m_c);
     };
-    ggml_tensor * indexer_score = nullptr;
-    if (idx_chunk <= 0 || n_tok_dim <= idx_chunk) {
-        // small batch (decode or short prefill): one shot, no concat
-        indexer_score = dsv4_build_score_chunk(0, n_tok_dim);
-        llm.cb(indexer_score, "lid_score_masked", il);
-    } else {
-        for (int64_t c0 = 0; c0 < n_tok_dim; c0 += idx_chunk) {
-            const int64_t tc = std::min(idx_chunk, n_tok_dim - c0);
-            auto sc_c = dsv4_build_score_chunk(c0, tc);
-            llm.cb(sc_c, "lid_score_chunk", il);
-            indexer_score = indexer_score == nullptr ? sc_c : ggml_concat(ctx0, indexer_score, sc_c, 1);
+    ggml_tensor * top_k = nullptr;
+    ggml_tensor * cand_block_score = nullptr;
+    for (int64_t c0 = 0; c0 < n_tok_dim; c0 += tok_chunk) {
+        const int64_t tc = std::min(tok_chunk, n_tok_dim - c0);
+        auto sc_c = dsv4_build_score_chunk(c0, tc);
+        llm.cb(sc_c, "lid_score_chunk", il);
+        if (is_cand_source) {
+            // one score per block: its best position (pooling over positions is per-token, so the chunks compose)
+            auto bs_c = ggml_pool_2d(ctx0, sc_c, GGML_OP_POOL_MAX, (int) cand_block, 1, (int) cand_block, 1, 0, 0);
+            cand_block_score = cand_block_score == nullptr ? bs_c : ggml_concat(ctx0, cand_block_score, bs_c, 1);
         }
-        llm.cb(indexer_score, "lid_score_masked", il);
+        auto tk_c = ggml_cont(ctx0, ggml_top_k(ctx0, sc_c, (int) n_top_k));
+        top_k = top_k == nullptr ? tk_c : ggml_concat(ctx0, top_k, tk_c, 1);
     }
 
     if (is_cand_source) {
         // publish the block-level candidate selection for every later index source
-        *cand_carry = dsv4_build_candidate_mask(ctx0, indexer_score, cand_pin,
+        *cand_carry = dsv4_build_candidate_mask(ctx0, cand_block_score, cand_pin, cand_block,
                 hparams.dsv4_candidate_topk_blocks, cb, il);
     }
 
-    ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
     llm.cb(top_k, "lid_top_k", il);
 
     return top_k;
@@ -3119,25 +3130,24 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
     return gf;
 }
 
+// block_score already holds one score per block: the caller pools each token chunk (the full [n_pos, n_tokens] score is
+// never materialised). Unreachable positions arrive at -inf, so an unreachable block pools to -inf too.
 static ggml_tensor * dsv4_build_candidate_mask(
         ggml_context * ctx0,
-        ggml_tensor * index_score,
+        ggml_tensor * block_score,
         ggml_tensor * cand_pin,
+        int64_t block,
         uint32_t cand_topk_blocks,
         const llm_build_cb & cb, int il) {
-    if (cand_pin == nullptr) {
+    if (cand_pin == nullptr || block_score == nullptr) {
         return nullptr;
     }
 
-    const int64_t n_pos    = index_score->ne[0];
     const int64_t n_blocks = cand_pin->ne[0];
 
-    GGML_ASSERT(n_blocks > 0 && n_pos % n_blocks == 0);
-    const int64_t block = n_pos/n_blocks;
+    GGML_ASSERT(n_blocks > 0 && block > 0 && block_score->ne[0] == n_blocks);
 
-    // one score per block: its best position. Unreachable positions arrive at -inf.
-    ggml_tensor * bs = ggml_cont(ctx0, index_score);
-    bs = ggml_pool_2d(ctx0, bs, GGML_OP_POOL_MAX, (int) block, 1, (int) block, 1, 0, 0);
+    ggml_tensor * bs = block_score;
     cb(bs, "cand_block_score", il);
 
     // the block holding the newest position is only half full and could be
@@ -3167,7 +3177,7 @@ static ggml_tensor * dsv4_build_candidate_mask(
     // back from blocks to positions: every position inherits its block's verdict
     keep = ggml_reshape_4d(ctx0, keep, 1, n_blocks, keep->ne[1], keep->ne[3]);
     keep = ggml_repeat_4d(ctx0, keep, block, n_blocks, keep->ne[2], keep->ne[3]);
-    keep = ggml_reshape_4d(ctx0, keep, n_pos, keep->ne[2], 1, keep->ne[3]);
+    keep = ggml_reshape_4d(ctx0, keep, block*n_blocks, keep->ne[2], 1, keep->ne[3]);
     cb(keep, "cand_mask", il);
 
     return keep;
