@@ -260,26 +260,26 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ2_S_R4:
             case GGML_TYPE_IQ3_XXS:
             case GGML_TYPE_IQ3_XXS_R4:
-            case GGML_TYPE_IQ3_S:
-            case GGML_TYPE_IQ3_S_R4:
             case GGML_TYPE_IQ1_S:
             case GGML_TYPE_IQ1_M:
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q2_K_R4:
-            case GGML_TYPE_Q3_K:
-            case GGML_TYPE_Q3_K_R4:
             case GGML_TYPE_IQ2_K:
             case GGML_TYPE_IQ2_K_R4:
             case GGML_TYPE_IQ2_KL:
+            case GGML_TYPE_IQ1_KT:
+            case GGML_TYPE_IQ2_KT: new_type = GGML_TYPE_IQ3_KT; break;
+            case GGML_TYPE_IQ3_S:
+            case GGML_TYPE_IQ3_S_R4:
+            case GGML_TYPE_Q3_K:
+            case GGML_TYPE_Q3_K_R4:
             case GGML_TYPE_IQ3_KS:
             case GGML_TYPE_IQ3_K:
-            case GGML_TYPE_IQ3_K_R4:
+            case GGML_TYPE_IQ3_K_R4: new_type = GGML_TYPE_IQ4_KT; break;
             case GGML_TYPE_IQ4_KSS:
             case GGML_TYPE_IQ4_KS:
             case GGML_TYPE_IQ4_KS_R4:
             case GGML_TYPE_IQ4_XS_R8:
-            case GGML_TYPE_IQ1_KT:
-            case GGML_TYPE_IQ2_KT:
             case GGML_TYPE_IQ3_KT:
             case GGML_TYPE_IQ4_KT:
             case GGML_TYPE_IQ4_XS: new_type = ny % 16 == 0 ? GGML_TYPE_IQ4_KS_R16 : GGML_TYPE_IQ4_NL; break;
