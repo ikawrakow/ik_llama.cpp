@@ -1336,7 +1336,7 @@ endif()
 
 # ggml
 
-add_library(ggml
+add_library(noml
             ../include/ggml.h
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
@@ -1364,32 +1364,32 @@ add_library(ggml
             )
 
 if (EMSCRIPTEN)
-    set_target_properties(ggml PROPERTIES COMPILE_FLAGS "-msimd128")
+    set_target_properties(noml PROPERTIES COMPILE_FLAGS "-msimd128")
 endif()
 
-target_compile_definitions(ggml PUBLIC  ${GGML_CDEF_PUBLIC})
-target_compile_definitions(ggml PRIVATE $<$<CONFIG:Release>:NDEBUG>)
-target_include_directories(ggml PUBLIC ../include)
-target_include_directories(ggml PRIVATE . ${GGML_EXTRA_INCLUDES})
-target_link_directories(ggml PRIVATE ${GGML_EXTRA_LIBDIRS})
+target_compile_definitions(noml PUBLIC  ${GGML_CDEF_PUBLIC})
+target_compile_definitions(noml PRIVATE $<$<CONFIG:Release>:NDEBUG>)
+target_include_directories(noml PUBLIC ../include)
+target_include_directories(noml PRIVATE . ${GGML_EXTRA_INCLUDES})
+target_link_directories(noml PRIVATE ${GGML_EXTRA_LIBDIRS})
 if(MSVC)
-    set_target_properties(ggml PROPERTIES
+    set_target_properties(noml PROPERTIES
 	CUDA_STANDARD 17
     CUDA_STANDARD_REQUIRED ON
 )
 endif()
-target_compile_features   (ggml PRIVATE c_std_11) # don't bump
+target_compile_features   (noml PRIVATE c_std_11) # don't bump
 
-target_link_libraries(ggml PRIVATE Threads::Threads ${GGML_EXTRA_LIBS})
+target_link_libraries(noml PRIVATE Threads::Threads ${GGML_EXTRA_LIBS})
 
 find_library(MATH_LIBRARY m)
 if (MATH_LIBRARY)
     if (NOT WIN32 OR NOT GGML_SYCL)
-        target_link_libraries(ggml PRIVATE ${MATH_LIBRARY})
+        target_link_libraries(noml PRIVATE ${MATH_LIBRARY})
     endif()
 endif()
 
 if (BUILD_SHARED_LIBS)
-    set_target_properties(ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_compile_definitions(ggml PRIVATE GGML_SHARED GGML_BUILD)
+    set_target_properties(noml PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(noml PRIVATE GGML_SHARED GGML_BUILD)
 endif()

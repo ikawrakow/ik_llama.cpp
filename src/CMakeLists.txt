@@ -37,7 +37,7 @@ if (LLAMA_ALL_WARNINGS)
 endif()
 
 
-add_library(llama
+add_library(ik_llama
             ../include/llama.h
             llama.cpp
             llama-spec-features.cpp
@@ -140,15 +140,15 @@ add_library(llama
             graphs/build_smollm3.cpp
             )
 
-target_include_directories(llama PUBLIC . ../include)
-target_include_directories(llama PRIVATE ../ggml/src)
-target_compile_features   (llama PUBLIC cxx_std_17)
+target_include_directories(ik_llama PUBLIC . ../include)
+target_include_directories(ik_llama PRIVATE ../ggml/src)
+target_compile_features   (ik_llama PUBLIC cxx_std_17)
 
-target_link_libraries(llama PUBLIC ggml)
+target_link_libraries(ik_llama PUBLIC noml)
 
 if (BUILD_SHARED_LIBS)
-    set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_compile_definitions(llama PRIVATE LLAMA_SHARED LLAMA_BUILD)
+    set_target_properties(ik_llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(ik_llama PRIVATE LLAMA_SHARED LLAMA_BUILD)
 endif()
 
 if (GGML_MAX_CONTEXTS)

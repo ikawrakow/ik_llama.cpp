@@ -226,14 +226,14 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-sycl.h
     include/ggml-vulkan.h)
 
-set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
+set_target_properties(noml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
 #if (GGML_METAL)
 #    set_target_properties(ggml PROPERTIES RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/ggml-metal.metal")
 #endif()
-install(TARGETS ggml PUBLIC_HEADER)
+install(TARGETS noml PUBLIC_HEADER)
 
 if (BUILD_SHARED_LIBS)
-    install(TARGETS ggml LIBRARY)
+    install(TARGETS noml LIBRARY)
 endif()
 
 if (GGML_METAL)
