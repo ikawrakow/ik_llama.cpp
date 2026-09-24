@@ -282,7 +282,9 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ4_XS_R8:
             case GGML_TYPE_IQ3_KT:
             case GGML_TYPE_IQ4_KT:
-            case GGML_TYPE_IQ4_XS: new_type = ny % 16 == 0 ? GGML_TYPE_IQ4_KS_R16 : GGML_TYPE_IQ4_NL; break;
+            // Disable GGML_TYPE_IQ4_KS_R16 until we have CUDA implementation for it
+            //case GGML_TYPE_IQ4_XS: new_type = ny % 16 == 0 ? GGML_TYPE_IQ4_KS_R16 : GGML_TYPE_IQ4_NL; break;
+            case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
             case GGML_TYPE_IQ4_K:
             case GGML_TYPE_IQ4_K_R4:
             case GGML_TYPE_Q4_K_R4:
