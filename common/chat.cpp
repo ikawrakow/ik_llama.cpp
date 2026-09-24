@@ -784,9 +784,6 @@ static std::string common_chat_template_direct_apply_impl(
         {"bos_token", tmpl.bos_token()},
         {"eos_token", tmpl.eos_token()},
         {"enable_thinking", inputs.enable_thinking},
-        // LFM2.5: whether previous assistant reasoning is kept in the prompt
-        // (separate from enable_thinking; can be overridden via chat_template_kwargs)
-        {"preserve_thinking", false},
     };
     // openPangu's chat template gates reasoning on a `thinking` variable rather than the
     // ecosystem-standard `enable_thinking`, so the normal toggle never reaches it. Bridge the
