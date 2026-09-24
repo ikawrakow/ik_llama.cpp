@@ -1931,8 +1931,10 @@ static ggml_tensor * dsv4_build_candidate_mask(
         ggml_context * ctx0,
         ggml_tensor * block_score,
         ggml_tensor * cand_pin,
-        int64_t block,
         uint32_t cand_topk_blocks,
+        const llm_build_cb & cb, int il);
+static ggml_tensor * dsv4_expand_cand_keep(
+        ggml_context * ctx0, ggml_tensor * block_keep, int64_t n_pos,
         const llm_build_cb & cb, int il);
 static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, llm_build_context & llm, ggml_tensor * inpL,
         ggml_tensor ** append_csa_state, ggml_tensor ** append_csa_score,
@@ -2639,7 +2641,9 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
     const bool is_cand_source = cand_carry != nullptr && cand_pin != nullptr &&
             hparams.dsv4_candidate_source_layer >= 0 && il == hparams.dsv4_candidate_source_layer;
     if (cand_carry != nullptr && *cand_carry != nullptr && !is_cand_source) {
-        lid_mask = ggml_add(ctx0, lid_mask, *cand_carry);
+        // The carry is published at block resolution: expand it to positions here, so it is only materialised where
+        // this layer needs it instead of living across the whole graph.
+        lid_mask = ggml_add(ctx0, lid_mask, dsv4_expand_cand_keep(ctx0, *cand_carry, n_lid, cb, il));
         llm.cb(lid_mask, "lid_mask_cand", il);
     }
 
@@ -2707,7 +2711,7 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
 
     if (is_cand_source) {
         // publish the block-level candidate selection for every later index source
-        *cand_carry = dsv4_build_candidate_mask(ctx0, cand_block_score, cand_pin, cand_block,
+        *cand_carry = dsv4_build_candidate_mask(ctx0, cand_block_score, cand_pin,
                 hparams.dsv4_candidate_topk_blocks, cb, il);
     }
 
@@ -3136,7 +3140,6 @@ static ggml_tensor * dsv4_build_candidate_mask(
         ggml_context * ctx0,
         ggml_tensor * block_score,
         ggml_tensor * cand_pin,
-        int64_t block,
         uint32_t cand_topk_blocks,
         const llm_build_cb & cb, int il) {
     if (cand_pin == nullptr || block_score == nullptr) {
@@ -3145,7 +3148,7 @@ static ggml_tensor * dsv4_build_candidate_mask(
 
     const int64_t n_blocks = cand_pin->ne[0];
 
-    GGML_ASSERT(n_blocks > 0 && block > 0 && block_score->ne[0] == n_blocks);
+    GGML_ASSERT(n_blocks > 0 && block_score->ne[0] == n_blocks);
 
     ggml_tensor * bs = block_score;
     cb(bs, "cand_block_score", il);
@@ -3174,10 +3177,23 @@ static ggml_tensor * dsv4_build_candidate_mask(
             keep->nb[2], keep->nb[3], keep->nb[3], 0);
     cb(keep, "cand_keep", il);
 
-    // back from blocks to positions: every position inherits its block's verdict
-    keep = ggml_reshape_4d(ctx0, keep, 1, n_blocks, keep->ne[1], keep->ne[3]);
+    // published at block resolution: the consumer expands it to positions where it is consumed
+    return keep;
+}
+
+static ggml_tensor * dsv4_expand_cand_keep(
+        ggml_context * ctx0,
+        ggml_tensor * block_keep,
+        int64_t n_pos,
+        const llm_build_cb & cb, int il) {
+    const int64_t n_blocks = block_keep->ne[0];
+    GGML_ASSERT(n_blocks > 0 && n_pos % n_blocks == 0);
+    const int64_t block = n_pos/n_blocks;
+
+    // every position inherits its block's verdict
+    ggml_tensor * keep = ggml_reshape_4d(ctx0, block_keep, 1, n_blocks, block_keep->ne[1], block_keep->ne[3]);
     keep = ggml_repeat_4d(ctx0, keep, block, n_blocks, keep->ne[2], keep->ne[3]);
-    keep = ggml_reshape_4d(ctx0, keep, block*n_blocks, keep->ne[2], 1, keep->ne[3]);
+    keep = ggml_reshape_4d(ctx0, keep, n_pos, keep->ne[2], 1, keep->ne[3]);
     cb(keep, "cand_mask", il);
 
     return keep;
