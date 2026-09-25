@@ -13,7 +13,7 @@ add_library(mtmd
             mtmd-helper.h
             )
 
-target_link_libraries     (mtmd PUBLIC ggml llama)
+target_link_libraries     (mtmd PUBLIC noml ik_llama)
 target_link_libraries     (mtmd PRIVATE Threads::Threads)
 target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
