@@ -613,7 +613,8 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask_swa_win(int64_t n_kv_win, boo
     return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa_win, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa_win;
 }
 
-ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed) {
+ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed,
+        const llama_kv_cache * kv) {
     if (windowed) *windowed = false;
     lctx.swa_window_view = {};
 
@@ -621,12 +622,15 @@ ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool 
         return nullptr;
     }
 
+    const llama_kv_cache & cache = kv ? *kv : kv_self;
+    const int32_t cache_n_kv = kv ? (int32_t) kv->n : n_kv;
+
     const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
-    const int64_t live = compacted
-        ? (int64_t) swa_head - (int64_t) kv_self.sink_rows + n_tokens : 0;
+    const int64_t live = !compacted ? 0 : kv ? (int64_t) kv->live_swa()
+        : (int64_t) swa_head - (int64_t) kv_self.sink_rows + n_tokens;
     const llama_swa_window_view view = compacted
-        ? llama_swa_calc_window_view_compact(live, kv_self.sink_rows, n_tokens, window, pad)
-        : llama_swa_calc_window_view(n_kv, n_tokens, window, pad);
+        ? llama_swa_calc_window_view_compact(live, cache.sink_rows, n_tokens, window, pad)
+        : llama_swa_calc_window_view(cache_n_kv, n_tokens, window, pad);
 
     if (!view.engaged) {
         return build_inp_KQ_mask_swa();
@@ -635,7 +639,7 @@ ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool 
     lctx.swa_window_view = {
         true,
         compacted,
-        n_kv,
+        cache_n_kv,
         n_tokens,
         window,
         pad,
@@ -2307,7 +2311,7 @@ ggml_tensor * llm_build_context::llm_build_kv(
         ggml_build_forward_expand(graph, v_cur);
     }
 
-    const bool compacted = kv.is_compacted(il);
+    const bool compacted = kv.is_compacted(kv_il >= 0 ? kv_il : il);
     const bool use_swa_window = compacted && lctx.swa_window_view.active;
     const int32_t store_head = compacted ? swa_head : kv_head;
     const int32_t n_kv_view = use_swa_window ? (int32_t) lctx.swa_window_view.w_view : n_kv;
