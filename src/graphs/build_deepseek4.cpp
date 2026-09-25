@@ -1764,7 +1764,9 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
     GGML_ASSERT(hparams.n_head_kv() == 1);
     GGML_ASSERT(model.dflash_fc != nullptr);
     GGML_ASSERT(model.dflash_hidden_norm != nullptr);
-    GGML_ASSERT(model.hc_head_fn != nullptr && model.hc_head_base != nullptr && model.hc_head_scale != nullptr);
+    // like the body: no learned output head, and the hyper-connection mixes lag by one sublayer
+    const bool hc_lag = hparams.dflash_dsv41;
+    GGML_ASSERT((model.hc_head_fn != nullptr && model.hc_head_base != nullptr && model.hc_head_scale != nullptr) || hc_lag);
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes((int) std::max<int64_t>(n_tokens, ctx_len)) + 48 * n_layer, false);
 
@@ -1791,8 +1793,10 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
         ggml_tensor * qr = llm_build_lora_mm(lctx, ctx0, layer.wq_a, input);
         qr = llm_build_norm(ctx0, qr, hparams, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, cb, il);
         ggml_tensor * q = llm_build_lora_mm(lctx, ctx0, layer.wq_b, qr);
-        q = ggml_reshape_2d(ctx0, q, n_embd_head, n_head * n_tokens);
-        q = ggml_rms_norm(ctx0, q, hparams.f_norm_rms_eps);
+        if (!hc_lag) {
+            q = ggml_reshape_2d(ctx0, q, n_embd_head, n_head * n_tokens);
+            q = ggml_rms_norm(ctx0, q, hparams.f_norm_rms_eps);
+        }
         q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
         q = ggml_rope_ext_inplace(ctx0, q, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
                 freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
@@ -1860,20 +1864,31 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
     };
 
     ggml_tensor * inp_pos = build_inp_pos();
+    ggml_tensor * hc_pre_mix = nullptr;
+    if (hc_lag) {
+        // layer 0 collapses with a one-hot selecting the first copy
+        hc_pre_mix = ggml_concat(ctx0,
+                ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens), 1.0f),
+                ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.dsv4_hc_mult - 1, n_tokens), 0.0f), 0);
+        cb(hc_pre_mix, "dsv4_dflash_hc_pre_init", -1);
+    }
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
         ggml_tensor * residual = inpL;
         ggml_tensor * post = nullptr;
         ggml_tensor * comb = nullptr;
+        ggml_tensor * hc_attn_pre = nullptr;
         ggml_tensor * cur = build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps, inpL,
-                layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &post, &comb, cb, il);
+                layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &post, &comb, cb, il,
+                hc_pre_mix, hc_lag ? &hc_attn_pre : nullptr);
         cur = llm_build_norm(ctx0, cur, hparams, layer.attn_norm, nullptr, LLM_NORM_RMS, cb, il);
         cur = build_attention(il, cur, inp_pos);
         inpL = build_mhc_post(cur, post, residual, comb, n_embd, hparams.dsv4_hc_mult, true);
 
         residual = inpL;
         cur = build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps, inpL,
-                layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, cb, il);
+                layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, cb, il,
+                hc_attn_pre, hc_lag ? &hc_pre_mix : nullptr);
         cur = llm_build_norm(ctx0, cur, hparams, layer.ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
         ggml_tensor * moe = llm_build_moe_ffn(ctx0, lctx, cur,
                 layer.ffn_gate_inp, nullptr,
@@ -1894,8 +1909,14 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
         inpL = build_mhc_post(cur, post, residual, comb, n_embd, hparams.dsv4_hc_mult, true);
     }
 
-    ggml_tensor * out = build_hc_head(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps,
-            inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
+    ggml_tensor * out = nullptr;
+    if (hc_lag) {
+        out = build_mhc_weighted_sum(inpL, hc_pre_mix, n_embd, hparams.dsv4_hc_mult);
+        cb(out, "dsv4_dflash_hc_out", -1);
+    } else {
+        out = build_hc_head(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps,
+                inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
+    }
     out = llm_build_norm(ctx0, out, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
     out = build_output(lctx, ctx0, out, model.output, nullptr, cb);
     if (lctx.dflash.dspark) {
