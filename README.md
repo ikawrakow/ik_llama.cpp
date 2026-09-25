@@ -260,7 +260,7 @@ Contributions in form of pull requests, issue submissions (bug reports, feature 
 ## License
 
 - [subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
-- [server](example/server/README.md)
+- [server](examples/server/README.md)
 - [GBNF grammars](grammars/README.md)
 
 #### Development documentation
