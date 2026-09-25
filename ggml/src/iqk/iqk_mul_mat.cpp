@@ -304,6 +304,7 @@ struct MulMat {
             case GGML_TYPE_IQ2_KT : return nrc_y >= 16 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_IQ3_KT : return nrc_y >= 16 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_IQ4_KT : return nrc_y >= 24 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_F16    : return nrc_y >= 32 ? GGML_TYPE_F32_R8  : type;
             default: break;
         }
 #else
@@ -377,6 +378,7 @@ struct MulMat {
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q8_KV:
             case GGML_TYPE_Q8_KV_R8:
+            case GGML_TYPE_F32_R8:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
@@ -418,6 +420,7 @@ struct MulMat {
             case GGML_TYPE_Q8_KV_R8:
             case GGML_TYPE_Q8_1:
             case GGML_TYPE_MXFP4_R8:
+            case GGML_TYPE_F32_R8:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_IQ4_KS_R16:
@@ -528,6 +531,8 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
         //case GGML_TYPE_IQ2_BN:
         //case GGML_TYPE_IQ2_BN_R4:
             return iqk_convert_1bit_q80_r8(typeA, n, vx, bx, vy, nrc_x);
+        case GGML_TYPE_F16:
+            return iqk_convert_floats(typeA, n, vx, bx, vy, nrc_x);
 
         default:
             break;
@@ -576,6 +581,10 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     int npt = (Nx + nth - 1)/nth;
 
     auto etypeA = ggml_type(typeA);
+    //if (ith == 0 && etypeA == GGML_TYPE_F16) {
+    //    auto dequant_type = MulMat::is_dequant_better(etypeA, Ny);
+    //    printf("%s(Nx = %d, Ny = %d): dequant_type = %s\n", __func__, (int)Nx, (int)Ny, ggml_type_name(dequant_type));
+    //}
     if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); npt >= 16 &&
              dequant_type != etypeA && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny) &&
              Nx%MulMat::num_rows(ggml_type(dequant_type)) == 0) {
@@ -911,6 +920,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_F32:
         case GGML_TYPE_BF16:
         case GGML_TYPE_BF16_R16:
+        case GGML_TYPE_F32_R8:
             return iqk_set_kernels_float(ne00, typeA, typeB, mm.funcs);
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
