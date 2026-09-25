@@ -10679,10 +10679,7 @@ static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u;
 static constexpr uint32_t DSV4_STATE_VER_USED_ROWS = 2;
 
 static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint32_t kv_rows) {
-    if (pos_max < 0) {
-        return 0;
-    }
-    const uint64_t n_rows = ((uint64_t) pos_max + 1) / (ratio ? ratio : 1);
+    const uint64_t n_rows = ((uint64_t) std::max<llama_pos>(0, pos_max) + 1) / (ratio ? ratio : 1);
     return (uint32_t) std::min<uint64_t>(kv_rows, n_rows);
 }
 
