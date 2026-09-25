@@ -719,7 +719,7 @@ bool llama_prepare_dflash_graph_inputs(
                     const int32_t block_k = k - cross_ctx;
                     // Follow the draft model's attention contract. DFlash2 proposal blocks are
                     // non-causal unless the model metadata explicitly requests causal attention.
-                    if ((bidir || !lctx.cparams.causal_attn || block_k <= (int32_t) j) &&
+                    if ((!lctx.cparams.causal_attn || block_k <= (int32_t) j || bidir) &&
                             ((int32_t) j - block_k) < swa_window) {
                         row[k] = h_zero;
                     }
@@ -749,7 +749,7 @@ bool llama_prepare_dflash_graph_inputs(
                     // Intra-block draft tokens are contiguous from draft_pos_base, so the
                     // SWA distance is (j - block_k); apply the model's causal setting and
                     // the same window bound as the cross-context section above.
-                    if ((bidir || !lctx.cparams.causal_attn || block_k <= (int32_t) j) &&
+                    if ((!lctx.cparams.causal_attn || block_k <= (int32_t) j || bidir) &&
                             ((int32_t) j - block_k) < swa_window) {
                         row[k] = 0.0f;
                     }

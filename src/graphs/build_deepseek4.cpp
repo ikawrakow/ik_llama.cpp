@@ -1745,7 +1745,7 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
     GGML_ASSERT(model.dflash_hidden_norm != nullptr);
     // like the body: no learned output head, and the hyper-connection mixes lag by one sublayer
     const bool hc_lag = hparams.dflash_dsv41;
-    GGML_ASSERT(hc_lag || (model.hc_head_fn != nullptr && model.hc_head_base != nullptr && model.hc_head_scale != nullptr));
+    GGML_ASSERT((model.hc_head_fn != nullptr && model.hc_head_base != nullptr && model.hc_head_scale != nullptr) || hc_lag);
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes((int) std::max<int64_t>(n_tokens, ctx_len)) + 48 * n_layer, false);
 
