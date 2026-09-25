@@ -561,6 +561,14 @@ typedef struct {
 } block_q1_0_g128;
 static_assert(sizeof(block_q1_0_g128) == sizeof(ggml_half) + QK1_0_G128 / 8, "wrong q1_0_g128 block size/padding");
 
+// 8-row repack: qs[32*tile + 4*row + byte] holds the 8 rows of one 32-element tile.
+#define QK1_0_G128_R8_ROWS 8
+typedef struct {
+    ggml_half d[QK1_0_G128_R8_ROWS];
+    uint8_t   qs[QK1_0_G128];
+} block_q1_0_g128_r8;
+static_assert(sizeof(block_q1_0_g128_r8) == QK1_0_G128_R8_ROWS*sizeof(ggml_half) + QK1_0_G128, "wrong q1_0_g128_r8 block size/padding");
+
 //
 // Bitnet and TriLM - implemented as 1.625 bpw
 //

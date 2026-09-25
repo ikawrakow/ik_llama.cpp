@@ -1505,6 +1505,65 @@ static void mul_mat_q1_0_g128_q8_0(int n, const void * vx, size_t bx, const Data
     }
 }
 
+// Q1_0_G128_R8: set-bit sums corrected with the q8 bsums (2*sum_set - sum_all).
+template <int nrc_y>
+static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%QK1_0_G128_R8_ROWS == 0);
+    Q8<nrc_y, block_q8_K128> q8(info);
+    constexpr int n_rows = QK1_0_G128_R8_ROWS;
+    constexpr int n_tile = QK1_0_G128/32;
+    const int nb = n/QK1_0_G128;
+    const __m256i bitmask = _mm256_set1_epi64x(0x8040201008040201);
+    const __m256i shuffle = _mm256_setr_epi8(
+        0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1,1,
+        2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3);
+    const __m256i one = _mm256_set1_epi8(1);
+    const __m256i m1  = _mm256_set1_epi16(1);
+    for (int ix = 0; ix < nrc_x; ix += n_rows) {
+        auto x = (const block_q1_0_g128_r8 *)((const char *)vx + ix*bx);
+        __m256 acc[n_rows][nrc_y];
+        float corr[n_rows][nrc_y];
+        for (int r = 0; r < n_rows; ++r) {
+            for (int iy = 0; iy < nrc_y; ++iy) { acc[r][iy] = _mm256_setzero_ps(); corr[r][iy] = 0.f; }
+        }
+        for (int ib = 0; ib < nb; ++ib) {
+            float dw[n_rows];
+            _mm256_storeu_ps(dw, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)x[ib].d)));
+            // Expand the 8 rows' bits once per block, reuse across all activation rows.
+            __m256i qx[n_tile][n_rows];
+            for (int it = 0; it < n_tile; ++it) {
+                for (int r = 0; r < n_rows; ++r) {
+                    uint32_t bits;
+                    std::memcpy(&bits, x[ib].qs + 32*it + 4*r, 4);
+                    auto q = _mm256_shuffle_epi8(_mm256_set1_epi32((int)bits), shuffle);
+                    qx[it][r] = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(q, bitmask), bitmask), one);
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const float qd = q8.y[iy][ib].d;
+                const int bt = q8.y[iy][ib].bsums[0] + q8.y[iy][ib].bsums[1] + q8.y[iy][ib].bsums[2] + q8.y[iy][ib].bsums[3];
+                __m256i isum[n_rows] = {};
+                for (int it = 0; it < n_tile; ++it) {
+                    auto y = _mm256_loadu_si256((const __m256i *)(q8.y[iy][ib].qs + 32*it));
+                    for (int r = 0; r < n_rows; ++r) {
+                        isum[r] = _mm256_add_epi16(isum[r], _mm256_maddubs_epi16(qx[it][r], y));
+                    }
+                }
+                for (int r = 0; r < n_rows; ++r) {
+                    auto si = _mm256_madd_epi16(m1, isum[r]);
+                    acc[r][iy] = _mm256_fmadd_ps(_mm256_set1_ps(dw[r]*qd), _mm256_cvtepi32_ps(si), acc[r][iy]);
+                    corr[r][iy] += dw[r]*qd*bt;
+                }
+            }
+        }
+        for (int r = 0; r < n_rows; ++r) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                info.store(ix + r, iy, 2.f*hsum_float_8(acc[r][iy]) - corr[r][iy]);
+            }
+        }
+    }
+}
+
 template <int nrc_y>
 static void mul_mat_iq2_bn_r4_q8_k16_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     if (nrc_x%4) {
@@ -1968,6 +2027,11 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
             expected_typeB = GGML_TYPE_Q8_2_X4;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q1_0_g128_q8_0, funcs);
             break;
+        case GGML_TYPE_Q1_0_G128_R8:
+            if (ne00 % QK1_0_G128 != 0) return false;
+            expected_typeB = GGML_TYPE_Q8_K128;
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q1_0_g128_r8_q8_k, funcs);
+            break;
 
         default:
             return false;
@@ -2393,6 +2457,53 @@ static void mul_mat_q1_0_g128_q8_0(int n, const void * vx, size_t bx, const Data
         //    vec_dot_q1_0_g128_q8_0(n, &s, 0, x, bx, q8.y[iy], 0, 1);
         //    info.store(ix, iy, s);
         //}
+    }
+}
+
+// Q1_0_G128_R8 (NEON): set-bit sums corrected with the q8 bsums (2*sum_set - sum_all).
+template <int nrc_y>
+static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%QK1_0_G128_R8_ROWS == 0);
+    Q8<nrc_y, block_q8_K128> q8(info);
+    constexpr int n_rows = QK1_0_G128_R8_ROWS;
+    constexpr int n_tile = QK1_0_G128/32;
+    const int nb = n/QK1_0_G128;
+    const uint8x16_t sh01 = vcombine_u8(vdup_n_u8(0), vdup_n_u8(1));
+    const uint8x16_t sh23 = vcombine_u8(vdup_n_u8(2), vdup_n_u8(3));
+    const uint8x16_t mask = vreinterpretq_u8_u64(vdupq_n_u64(0x8040201008040201));
+    const uint8x16_t one  = vdupq_n_u8(1);
+    for (int ix = 0; ix < nrc_x; ix += n_rows) {
+        auto x = (const block_q1_0_g128_r8 *)((const char *)vx + ix*bx);
+        float acc[n_rows][nrc_y] = {};
+        uint8x16_t qx[n_tile][n_rows][2];
+        for (int ib = 0; ib < nb; ++ib) {
+            float dw[n_rows];
+            for (int r = 0; r < n_rows; ++r) dw[r] = GGML_FP16_TO_FP32(x[ib].d[r]);
+            for (int it = 0; it < n_tile; ++it) {
+                for (int r = 0; r < n_rows; ++r) {
+                    uint32_t bits;
+                    std::memcpy(&bits, x[ib].qs + 32*it + 4*r, 4);
+                    auto b = vreinterpretq_u8_u32(vdupq_n_u32(bits));
+                    qx[it][r][0] = vandq_u8(vceqq_u8(vandq_u8(vqtbl1q_u8(b, sh01), mask), mask), one);
+                    qx[it][r][1] = vandq_u8(vceqq_u8(vandq_u8(vqtbl1q_u8(b, sh23), mask), mask), one);
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const float qd = q8.y[iy][ib].d;
+                const int bt = q8.y[iy][ib].bsums[0] + q8.y[iy][ib].bsums[1] + q8.y[iy][ib].bsums[2] + q8.y[iy][ib].bsums[3];
+                for (int r = 0; r < n_rows; ++r) {
+                    int32x4_t s = vdupq_n_s32(0);
+                    for (int it = 0; it < n_tile; ++it) {
+                        s = ggml_vdotq_s32(s, vreinterpretq_s8_u8(qx[it][r][0]), vld1q_s8(q8.y[iy][ib].qs + 32*it));
+                        s = ggml_vdotq_s32(s, vreinterpretq_s8_u8(qx[it][r][1]), vld1q_s8(q8.y[iy][ib].qs + 32*it + 16));
+                    }
+                    acc[r][iy] += dw[r]*qd*(2.f*vaddvq_s32(s) - bt);
+                }
+            }
+        }
+        for (int r = 0; r < n_rows; ++r) {
+            for (int iy = 0; iy < nrc_y; ++iy) info.store(ix + r, iy, acc[r][iy]);
+        }
     }
 }
 
@@ -2952,6 +3063,11 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
             if (ne00 % QK1_0_G128 != 0) return false;
             expected_Btype = GGML_TYPE_Q8_0_X4;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q1_0_g128_q8_0, funcs);
+            break;
+        case GGML_TYPE_Q1_0_G128_R8:
+            if (ne00 % QK1_0_G128 != 0) return false;
+            expected_Btype = GGML_TYPE_Q8_K128;
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q1_0_g128_r8_q8_k, funcs);
             break;
         default:
             return false;

@@ -8670,6 +8670,7 @@ const Repack * get_repack_info(ggml_type type) {
         { GGML_TYPE_Q8_K,   { GGML_TYPE_Q8_K_R8,   8,  (Repack::repack_func)repack_q8_k}    },
         { GGML_TYPE_Q8_KV,  { GGML_TYPE_Q8_KV_R8,  8,  (Repack::repack_func)repack_q8_KV}   },
         { GGML_TYPE_MXFP4,  { GGML_TYPE_MXFP4_R8,  8,  (Repack::repack_func)repack_mxfp4}   },
+        { GGML_TYPE_Q1_0_G128, { GGML_TYPE_Q1_0_G128_R8, QK1_0_G128_R8_ROWS, (Repack::repack_func)repack_q1_0_g128_r8} },
 #ifdef __AVX512BF16__
         { GGML_TYPE_BF16,   { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_bf16_t>}},
         { GGML_TYPE_F16,    { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_half>}  },
@@ -10675,6 +10676,81 @@ void vec_dot_q1_0_g128_q8_0(int n, float * s, size_t bs, const void * vx, size_t
         }
     }
     *s = sumf;
+}
+
+// q1_0_g128_r8: qs[32*tile + 4*row + byte] = base[4*tile + byte] of that row.
+void repack_q1_0_g128_r8(int nrows, int n_per_row, const block_q1_0_g128 * x, block_q1_0_g128_r8 * y, [[maybe_unused]] bool online) {
+    GGML_ASSERT(nrows % QK1_0_G128_R8_ROWS == 0);
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    constexpr int n_tile = QK1_0_G128/32;
+    const int nblock = n_per_row/QK1_0_G128;
+    for (int row = 0; row < nrows; row += QK1_0_G128_R8_ROWS) {
+        const block_q1_0_g128 * xr[QK1_0_G128_R8_ROWS];
+        for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) xr[k] = x + nblock*k;
+        for (int ib = 0; ib < nblock; ++ib) {
+            for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) y[ib].d[k] = xr[k][ib].d;
+            for (int it = 0; it < n_tile; ++it) {
+                for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) {
+                    for (int b = 0; b < 4; ++b) y[ib].qs[32*it + 4*k + b] = xr[k][ib].qs[4*it + b];
+                }
+            }
+        }
+        x += QK1_0_G128_R8_ROWS*nblock;
+        y += nblock;
+    }
+}
+
+void dequantize_row_q1_0_g128_r8(const block_q1_0_g128_r8 * x, float * y, int64_t n) {
+    const int n_per_row = (int)(n/QK1_0_G128_R8_ROWS);
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    const int nblock = n_per_row/QK1_0_G128;
+    for (int r = 0; r < QK1_0_G128_R8_ROWS; ++r) {
+        float * yr = y + (int64_t)r*n_per_row;
+        for (int ib = 0; ib < nblock; ++ib) {
+            const float d = GGML_FP16_TO_FP32(x[ib].d[r]);
+            for (int e = 0; e < QK1_0_G128; ++e) {
+                const uint8_t q = x[ib].qs[32*(e/32) + 4*r + (e%32)/8];
+                yr[(int64_t)ib*QK1_0_G128 + e] = (q >> (e%8)) & 1 ? d : -d;
+            }
+        }
+    }
+}
+
+void quantize_row_q1_0_g128_r8(const float * x, void * vy, int64_t n) {
+    auto y = (block_q1_0_g128_r8 *)vy;
+    const int n_per_row = (int)(n/QK1_0_G128_R8_ROWS);
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    constexpr int n_tile = QK1_0_G128/32;
+    const int nblock = n_per_row/QK1_0_G128;
+    std::vector<block_q1_0_g128> tmp((size_t)QK1_0_G128_R8_ROWS*nblock);
+    for (int r = 0; r < QK1_0_G128_R8_ROWS; ++r) {
+        quantize_row_q1_0_g128(x + (int64_t)r*n_per_row, tmp.data() + (size_t)r*nblock, n_per_row);
+    }
+    for (int ib = 0; ib < nblock; ++ib) {
+        for (int r = 0; r < QK1_0_G128_R8_ROWS; ++r) y[ib].d[r] = tmp[(size_t)r*nblock + ib].d;
+        for (int it = 0; it < n_tile; ++it) {
+            for (int r = 0; r < QK1_0_G128_R8_ROWS; ++r) {
+                for (int b = 0; b < 4; ++b) y[ib].qs[32*it + 4*r + b] = tmp[(size_t)r*nblock + ib].qs[4*it + b];
+            }
+        }
+    }
+}
+
+void quantize_row_q1_0_g128_r8_ref(const float * x, block_q1_0_g128_r8 * y, int64_t n) {
+    quantize_row_q1_0_g128_r8(x, (void *)y, n);
+}
+
+void vec_dot_q1_0_g128_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q1_0_G128_R8, vx, 0, GGML_TYPE_Q8_K128, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n % QK1_0_G128 == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
 }
 
 namespace {
