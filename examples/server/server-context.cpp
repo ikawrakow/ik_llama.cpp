@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "server-sampling.h"
 #include "server-chat.h"
 #include "server-common.h"
 #include "server-task.h"
@@ -1159,6 +1160,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     // Sampling parameter defaults are loaded from the global server context (but individual requests can still override them)
     common_params_sampling default_sparams = params_base.sparams;
+    const auto previous_elb_params = server_apply_sampling_defaults(slot.sparams, default_sparams);
     auto& data = task.data;
     const llama_vocab* vocab = llama_model_get_vocab(model);
     if (data.count("__oaicompat") != 0) {
@@ -1937,8 +1939,6 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     do  // populate expiring logit bias
     {
-        const auto prev_elb_params = slot.sparams.elb_params;
-
         const auto& expiring_logit_bias = data.find("expiring_logit_bias");
         if (expiring_logit_bias != data.end() && expiring_logit_bias->is_array()) {
             // has new params from api
@@ -1963,7 +1963,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             break;
         }
 
-        if (!slot.prev_elb_states.empty() && (elb_params == prev_elb_params)) {
+        if (!slot.prev_elb_states.empty() && (elb_params == previous_elb_params)) {
             // reset and reuse previous states
             slot.ctx_sampling->elb_states = slot.prev_elb_states;
             for (auto& elb_state: slot.ctx_sampling->elb_states) {
