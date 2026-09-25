@@ -223,6 +223,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml.h
     include/ggml-metal.h
     include/ggml-rpc.h
+    src/ggml-rpc-transport.h
     include/ggml-sycl.h
     include/ggml-vulkan.h)
 
