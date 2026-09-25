@@ -561,6 +561,16 @@ typedef struct {
 } block_q1_0_g128;
 static_assert(sizeof(block_q1_0_g128) == sizeof(ggml_half) + QK1_0_G128 / 8, "wrong q1_0_g128 block size/padding");
 
+// Bonsai Q1_0 repacked for the T-MAC style LUT kernel: 32 rows interleaved, per-group 4-bit
+// weight codes packed 2 per byte. Size-preserving with block_q1_0_g128 (32 rows * 18 bytes).
+#define QK1_0_G128_LUT_ROWS 32
+typedef struct {
+    uint8_t    qs[QK1_0_G128/4/2 * QK1_0_G128_LUT_ROWS];  // [pair 0..15][row 0..31], byte = code(2p,r) | code(2p+1,r)<<4
+    ggml_half  d[QK1_0_G128_LUT_ROWS];                    // per-row block scale
+} block_q1_0_g128_lut;
+static_assert(sizeof(block_q1_0_g128_lut) == QK1_0_G128/4/2 * QK1_0_G128_LUT_ROWS + QK1_0_G128_LUT_ROWS*sizeof(ggml_half),
+              "wrong q1_0_g128_lut block size/padding");
+
 //
 // Bitnet and TriLM - implemented as 1.625 bpw
 //

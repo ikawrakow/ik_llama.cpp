@@ -385,6 +385,7 @@ struct MulMat {
             case GGML_TYPE_MXFP4_R8:
             case GGML_TYPE_IQ4_KS_R16:
             case GGML_TYPE_BF16_R16: return 16;
+            case GGML_TYPE_Q1_0_G128_LUT: return QK1_0_G128_LUT_ROWS;
             default: return 1;
         }
 #else
@@ -422,6 +423,7 @@ struct MulMat {
             case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_IQ4_KS_R16:
             case GGML_TYPE_BF16_R16: return 16;
+            case GGML_TYPE_Q1_0_G128_LUT: return QK1_0_G128_LUT_ROWS;
             default: return 1;
         }
 #endif
@@ -542,12 +544,59 @@ extern "C" IQK_API int iqk_dequant_type(int type, int Ny) {
     return MulMat::is_dequant_better(ggml_type(type), Ny);
 }
 
-extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
+extern "C" // Dedicated GEMM for Q1_0_G128_LUT: builds the activation LUTs once per y-chunk and
+// reuses them across all output-row tiles (T-MAC style loop order).
+IQK_API bool iqk_mul_mat_q1_0_lut(long Nx, long Ny, long ne00, int typeA, const void * A, long strideA,
+                          int typeB, const void * B, long strideB, float * C, long stride_C, int ith, int nth);
+
+bool iqk_mul_mat_q1_0_lut(long Nx, long Ny, long ne00, int typeA, const void * A, long strideA,
+                          int typeB, const void * B, long strideB, float * C, long stride_C, int ith, int nth) {
+    constexpr int kRows = 32;
+    constexpr int kTile = 1024;   // multiple of 32: amortizes the per-call LUT build + FNV hash
+    if (Nx % kRows != 0) return false;
+    MulMat mm;
+    if (!MulMat::prepare(typeA, typeB, ne00, mm, IQK_MAX_NY)) return false;
+    int ny = (int)mm.funcs.size();
+    while (ny > 0 && !mm.funcs[ny-1]) --ny;
+    if (ny == 0) return false;
+    if (Ny >= nth) {
+        // split y across threads (LUT built once per activation column, no duplication)
+        long ythread = (Ny + nth - 1)/nth;
+        long y0 = ith*ythread, y1 = std::min<long>(Ny, y0 + ythread);
+        for (long y = y0; y < y1; y += ny) {
+            int nrc_y = (int)std::min<long>(ny, y1 - y);
+            for (long x = 0; x < Nx; x += kTile) {
+                int mx = (int)std::min<long>(kTile, Nx - x);
+                DataInfo info{C + x + y*stride_C, (const char *)B + y*strideB, (size_t)stride_C, (size_t)strideB, 0, 1, nullptr, 0};
+                mm.funcs[nrc_y-1](ne00, (const void *)((const char *)A + x*strideA), strideA, info, mx);
+            }
+        }
+    } else {
+        // few columns: split x in whole 32-row groups (keeps kernel alignment)
+        long xg = Nx/kRows;
+        long per = (xg + nth - 1)/nth;
+        long g0 = ith*per, g1 = std::min<long>(xg, g0 + per);
+        long x0 = g0*kRows, x1 = g1*kRows;
+        for (long y = 0; y < Ny; y += ny) {
+            int nrc_y = (int)std::min<long>(ny, Ny - y);
+            for (long x = x0; x < x1; x += kTile) {
+                int mx = (int)std::min<long>(kTile, x1 - x);
+                DataInfo info{C + x + y*stride_C, (const char *)B + y*strideB, (size_t)stride_C, (size_t)strideB, 0, 1, nullptr, 0};
+                mm.funcs[nrc_y-1](ne00, (const void *)((const char *)A + x*strideA), strideA, info, mx);
+            }
+        }
+    }
+    return true;
+}
+
+IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long stride_C, int ith, int nth) {
 
     constexpr int k_min_step = 32;
+
+    if (typeA == GGML_TYPE_Q1_0_G128_LUT && iqk_mul_mat_q1_0_lut(Nx, Ny, ne00, typeA, A, strideA, typeB, B, strideB, C, stride_C, ith, nth)) return true;
 
     MulMat mm;
 
@@ -558,7 +607,7 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
             return false;
         }
-        const int min_step = Ny <= 16 ? 16 : 32;
+        const int min_step = (Ny <= 16 && typeA != GGML_TYPE_Q1_0_G128_LUT) ? 16 : 32;
         int ntile_x = (Nx + min_step - 1)/min_step;
         int ntile_y = (Ny + min_step - 1)/min_step;
         int ntile   = ntile_x * ntile_y;
@@ -988,6 +1037,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_IQ2_BN:
         case GGML_TYPE_IQ2_BN_R4:
         case GGML_TYPE_Q1_0_G128:
+        case GGML_TYPE_Q1_0_G128_LUT:
             return iqk_set_kernels_1bit(ne00, typeA, typeB, mm.funcs, mm.func16);
 
         default:
@@ -1081,6 +1131,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_IQ1_S_R4:
         case GGML_TYPE_IQ1_M_R4:
         case GGML_TYPE_Q1_0_G128:
+        case GGML_TYPE_Q1_0_G128_LUT:
             return iqk_set_kernels_1bit(ne00, typeA, typeB, m.funcs, m.func16);
         case GGML_TYPE_IQ1_KT:
         case GGML_TYPE_IQ2_KT:

@@ -1505,6 +1505,115 @@ static void mul_mat_q1_0_g128_q8_0(int n, const void * vx, size_t bx, const Data
     }
 }
 
+static const __m256i LUT_M0 = _mm256_setr_epi16(0,~0,0,~0,0,~0,0,~0,0,~0,0,~0,0,~0,0,~0);
+static const __m256i LUT_M1 = _mm256_setr_epi16(0,0,~0,~0,0,0,~0,~0,0,0,~0,~0,0,0,~0,~0);
+static const __m256i LUT_M2 = _mm256_setr_epi16(0,0,0,0,~0,~0,~0,~0,0,0,0,0,~0,~0,~0,~0);
+static const __m256i LUT_M3 = _mm256_setr_epi16(0,0,0,0,0,0,0,0,~0,~0,~0,~0,~0,~0,~0,~0);
+
+// T-MAC style LUT kernel for Q1_0_G128_LUT: 16-entry int16 LUTs built once per (iy, ib),
+// reused across all output-row tiles.  y[row] = sum_ib d_w[row] * sum_k d_q8[k] * (2*sum w*qs - bsums[k])
+template <int nrc_y>
+static void mul_mat_q1_0_g128_lut_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x % QK1_0_G128_LUT_ROWS == 0);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
+    const int nb = n / QK1_0_G128;
+    const int ngroups = nrc_x / QK1_0_G128_LUT_ROWS;
+    const __m256i m0F = _mm256_set1_epi8(0x0F);
+    const __m256i zero = _mm256_setzero_si256();
+    static thread_local std::vector<int8_t> c_lutlo, c_luthi;
+    static thread_local uint64_t c_hash = 0;
+    static thread_local int c_nb = 0, c_nrcy = 0;
+    uint64_t hash = 0x9E3779B97F4A7C15ULL;
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        const uint8_t * p = (const uint8_t *)q8.y[iy][0].d;
+        const size_t nbytes = (size_t)nb*sizeof(block_q8_2_x4);
+        for (size_t i = 0; i < nbytes; i += 8) {
+            uint64_t w = 0; memcpy(&w, p + i, nbytes - i < 8 ? nbytes - i : 8);
+            hash = (hash ^ w) * 0x100000001b3ULL;
+        }
+    }
+    if (c_nb != nb || c_nrcy != nrc_y || c_hash != hash) {
+        c_nb = nb; c_nrcy = nrc_y; c_hash = hash;
+        c_lutlo.assign((size_t)nb*nrc_y*32*16, 0);
+        c_luthi.assign((size_t)nb*nrc_y*32*16, 0);
+        for (int iy = 0; iy < nrc_y; ++iy) for (int ib = 0; ib < nb; ++ib) {
+            const int8_t * a = (const int8_t *)q8.y[iy][ib].qs;
+            int8_t * lo = c_lutlo.data() + ((size_t)iy*nb + ib)*512;
+            int8_t * hi = c_luthi.data() + ((size_t)iy*nb + ib)*512;
+            for (int g = 0; g < 32; ++g) {
+                const int8_t * ag = a + 4*g;
+                __m256i v = _mm256_add_epi16(
+                    _mm256_add_epi16(_mm256_and_si256(LUT_M0, _mm256_set1_epi16(ag[0])), _mm256_and_si256(LUT_M1, _mm256_set1_epi16(ag[1]))),
+                    _mm256_add_epi16(_mm256_and_si256(LUT_M2, _mm256_set1_epi16(ag[2])), _mm256_and_si256(LUT_M3, _mm256_set1_epi16(ag[3]))));
+                v = _mm256_slli_epi16(v, 1);
+                __m256i plo = _mm256_packus_epi16(_mm256_and_si256(v, _mm256_set1_epi16(0xFF)), _mm256_setzero_si256());
+                __m256i phi = _mm256_packus_epi16(_mm256_srli_epi16(v, 8), _mm256_setzero_si256());
+                _mm_storeu_si128((__m128i*)(lo + g*16), _mm_or_si128(_mm256_castsi256_si128(plo), _mm_slli_si128(_mm256_extracti128_si256(plo,1), 8)));
+                _mm_storeu_si128((__m128i*)(hi + g*16), _mm_or_si128(_mm256_castsi256_si128(phi), _mm_slli_si128(_mm256_extracti128_si256(phi,1), 8)));
+            }
+        }
+    }
+    static thread_local std::vector<float> acc;
+    if ((int)acc.size() < nrc_x) acc.resize(nrc_x);
+    float * accp = acc.data();
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        std::fill(accp, accp + nrc_x, 0.0f);
+        for (int ib = 0; ib < nb; ++ib) {
+            const int8_t * lutlo = c_lutlo.data() + ((size_t)iy*nb + ib)*512;
+            const int8_t * luthi = c_luthi.data() + ((size_t)iy*nb + ib)*512;
+            __m256i lvlo[32], lvhi[32];
+            for (int g = 0; g < 32; ++g) {
+                lvlo[g] = _mm256_broadcastsi128_si256(_mm_load_si128((const __m128i*)(lutlo + g*16)));
+                lvhi[g] = _mm256_broadcastsi128_si256(_mm_load_si128((const __m128i*)(luthi + g*16)));
+            }
+            const auto * dd = (const ggml_half *)q8.y[iy][ib].d;
+            float dsub[4]; __m256i bs16[4];
+            for (int k = 0; k < 4; ++k) { uint32_t ub = (uint32_t)dd[k] << 16; float f; memcpy(&f, &ub, 4); dsub[k] = f; bs16[k] = _mm256_set1_epi16((int16_t)((const int16_t *)dd)[4+k]); }
+            for (int grp = 0; grp < ngroups; ++grp) {
+                const auto * blk = (const block_q1_0_g128_lut *)((const char *)vx + (size_t)grp*QK1_0_G128_LUT_ROWS*bx + (size_t)ib*sizeof(block_q1_0_g128_lut));
+                __m256i sA[4] = {zero,zero,zero,zero};
+                __m256i sB[4] = {zero,zero,zero,zero};
+                for (int p = 0; p < 16; ++p) {
+                    __m256i codes = _mm256_loadu_si256((const __m256i *)(blk->qs + p*32));
+                    __m256i lo_c = _mm256_and_si256(codes, m0F);
+                    __m256i hi_c = _mm256_and_si256(_mm256_srli_epi16(codes,4), m0F);
+                    __m256i va = _mm256_shuffle_epi8(lvlo[2*p], lo_c);
+                    __m256i vb = _mm256_shuffle_epi8(lvhi[2*p], lo_c);
+                    __m256i vc = _mm256_shuffle_epi8(lvlo[2*p+1], hi_c);
+                    __m256i vd = _mm256_shuffle_epi8(lvhi[2*p+1], hi_c);
+                    int k = p >> 2;
+                    sA[k] = _mm256_add_epi16(sA[k], _mm256_add_epi16(_mm256_unpacklo_epi8(va,vb), _mm256_unpacklo_epi8(vc,vd)));
+                    sB[k] = _mm256_add_epi16(sB[k], _mm256_add_epi16(_mm256_unpackhi_epi8(va,vb), _mm256_unpackhi_epi8(vc,vd)));
+                }
+                float dwv[32];
+#ifdef __F16C__
+                for (int r = 0; r < QK1_0_G128_LUT_ROWS; r += 8)
+                    _mm256_storeu_ps(dwv + r, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(blk->d + r))));
+#else
+                for (int r = 0; r < QK1_0_G128_LUT_ROWS; ++r) dwv[r] = GGML_FP16_TO_FP32(blk->d[r]);
+#endif
+                float * arow = accp + (size_t)grp*QK1_0_G128_LUT_ROWS;
+                for (int k = 0; k < 4; ++k) {
+                    __m256i sa = _mm256_sub_epi16(sA[k], bs16[k]);
+                    __m256i sb = _mm256_sub_epi16(sB[k], bs16[k]);
+                    __m256 dks = _mm256_set1_ps(dsub[k]);
+                    auto flush = [&](__m128i c16, const float * dw8, int ro) {
+                        __m256 f = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(c16));
+                        __m256 sc = _mm256_mul_ps(_mm256_loadu_ps(dw8), dks);
+                        _mm256_storeu_ps(arow + ro, _mm256_fmadd_ps(f, sc, _mm256_loadu_ps(arow + ro)));
+                    };
+                    flush(_mm256_castsi256_si128(sa),  dwv +  0,  0);
+                    flush(_mm256_castsi256_si128(sb),  dwv +  8,  8);
+                    flush(_mm256_extracti128_si256(sa,1), dwv + 16, 16);
+                    flush(_mm256_extracti128_si256(sb,1), dwv + 24, 24);
+                }
+            }
+        }
+        float * out = info.dst_row(iy);
+        for (int ix = 0; ix < nrc_x; ++ix) out[ix] = accp[ix];
+    }
+}
+
 template <int nrc_y>
 static void mul_mat_iq2_bn_r4_q8_k16_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     if (nrc_x%4) {
@@ -1967,6 +2076,11 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
             if (ne00 % QK1_0_G128 != 0) return false;
             expected_typeB = GGML_TYPE_Q8_2_X4;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q1_0_g128_q8_0, funcs);
+            break;
+        case GGML_TYPE_Q1_0_G128_LUT:
+            if (ne00 % QK1_0_G128 != 0) return false;
+            expected_typeB = GGML_TYPE_Q8_2_X4;
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q1_0_g128_lut_q8_0, funcs);
             break;
 
         default:

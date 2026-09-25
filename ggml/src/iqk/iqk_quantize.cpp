@@ -8670,6 +8670,9 @@ const Repack * get_repack_info(ggml_type type) {
         { GGML_TYPE_Q8_K,   { GGML_TYPE_Q8_K_R8,   8,  (Repack::repack_func)repack_q8_k}    },
         { GGML_TYPE_Q8_KV,  { GGML_TYPE_Q8_KV_R8,  8,  (Repack::repack_func)repack_q8_KV}   },
         { GGML_TYPE_MXFP4,  { GGML_TYPE_MXFP4_R8,  8,  (Repack::repack_func)repack_mxfp4}   },
+#if !defined(HAVE_FANCY_SIMD) && defined(__x86_64__)
+        { GGML_TYPE_Q1_0_G128, { GGML_TYPE_Q1_0_G128_LUT, QK1_0_G128_LUT_ROWS, (Repack::repack_func)repack_q1_0_g128_lut} },
+#endif
 #ifdef __AVX512BF16__
         { GGML_TYPE_BF16,   { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_bf16_t>}},
         { GGML_TYPE_F16,    { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_half>}  },
@@ -8684,6 +8687,7 @@ int iqk_repacked_type(const struct ggml_tensor * tensor) {
     if (!ggml_is_contiguous(tensor)) return (int)tensor->type;
     if (is_forbidden_tensor(tensor->name)) return (int)tensor->type;
     auto rptr = get_repack_info(tensor->type);
+    if (rptr && rptr->new_type == GGML_TYPE_Q1_0_G128_LUT && tensor->ne[1] < 512) return (int)tensor->type;
     return rptr && tensor->ne[1] % rptr->num_rows == 0 ? (int)rptr->new_type : (int)tensor->type;
 }
 
@@ -10593,6 +10597,79 @@ void vec_dot_iq4_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
 
 void quantize_row_q1_0_g128_ref(const float * x, block_q1_0_g128  * y, int64_t k) {
     quantize_row_q1_0_g128(x, y, k);
+}
+
+// ---------------------------------------------------------------------------
+// Q1_0_G128 LUT (repacked): 32 rows interleaved, per-group 4-bit codes packed
+// 2 per byte. The repack is a pure 32x16 byte transpose of the base qs[].
+// ---------------------------------------------------------------------------
+void repack_q1_0_g128_lut(int nrows, int n_per_row, const block_q1_0_g128 * x, block_q1_0_g128_lut * y, [[maybe_unused]] bool online) {
+    GGML_ASSERT(nrows % QK1_0_G128_LUT_ROWS == 0);
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    const int nblock = n_per_row / QK1_0_G128;
+    for (int row = 0; row < nrows; row += QK1_0_G128_LUT_ROWS) {
+        const block_q1_0_g128 * xr[QK1_0_G128_LUT_ROWS];
+        for (int k = 0; k < QK1_0_G128_LUT_ROWS; ++k) xr[k] = x + nblock*k;
+        for (int ib = 0; ib < nblock; ++ib) {
+            for (int k = 0; k < QK1_0_G128_LUT_ROWS; ++k) y[ib].d[k] = xr[k][ib].d;
+            for (int k = 0; k < QK1_0_G128_LUT_ROWS; ++k)
+                for (int p = 0; p < QK1_0_G128/8; ++p)
+                    y[ib].qs[p*QK1_0_G128_LUT_ROWS + k] = xr[k][ib].qs[p];
+        }
+        x += QK1_0_G128_LUT_ROWS*nblock;
+        y += nblock;
+    }
+}
+
+void dequantize_row_q1_0_g128_lut(const block_q1_0_g128_lut * x, float * y, int64_t n) {
+    const int n_per_row = (int)(n / QK1_0_G128_LUT_ROWS);
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    const int nblock = n_per_row / QK1_0_G128;
+    for (int r = 0; r < QK1_0_G128_LUT_ROWS; ++r) {
+        float * yr = y + (int64_t)r*n_per_row;
+        for (int ib = 0; ib < nblock; ++ib) {
+            const float d = GGML_FP16_TO_FP32(x[ib].d[r]);
+            for (int p = 0; p < QK1_0_G128/8; ++p) {
+                const uint8_t b = x[ib].qs[p*QK1_0_G128_LUT_ROWS + r];
+                for (int j = 0; j < 8; ++j) {
+                    yr[(int64_t)ib*QK1_0_G128 + 8*p + j] = (b >> j) & 1 ? d : -d;
+                }
+            }
+        }
+    }
+}
+
+void quantize_row_q1_0_g128_lut(const float * x, void * vy, int64_t n) {
+    block_q1_0_g128_lut * y = (block_q1_0_g128_lut *)vy;
+    const int n_per_row = (int)(n / QK1_0_G128_LUT_ROWS);
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    const int nblock = n_per_row / QK1_0_G128;
+    std::vector<block_q1_0_g128> tmp((size_t)QK1_0_G128_LUT_ROWS*nblock);
+    for (int r = 0; r < QK1_0_G128_LUT_ROWS; ++r) {
+        quantize_row_q1_0_g128(x + (int64_t)r*n_per_row, tmp.data() + (size_t)r*nblock, n_per_row);
+    }
+    for (int ib = 0; ib < nblock; ++ib) {
+        for (int r = 0; r < QK1_0_G128_LUT_ROWS; ++r) y[ib].d[r] = tmp[(size_t)r*nblock + ib].d;
+        for (int r = 0; r < QK1_0_G128_LUT_ROWS; ++r)
+            for (int p = 0; p < QK1_0_G128/8; ++p)
+                y[ib].qs[p*QK1_0_G128_LUT_ROWS + r] = tmp[(size_t)r*nblock + ib].qs[p];
+    }
+}
+
+void quantize_row_q1_0_g128_lut_ref(const float * x, block_q1_0_g128_lut * y, int64_t n) {
+    quantize_row_q1_0_g128_lut(x, y, n);
+}
+
+void vec_dot_q1_0_g128_lut_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q1_0_G128_LUT, vx, 0, GGML_TYPE_Q8_2_X4, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
 }
 
 void quantize_row_q1_0_g128(const float * x, void * vy, int64_t k) {

@@ -489,6 +489,8 @@ extern "C" {
         GGML_TYPE_Q8_K_R16  = 397,
         GGML_TYPE_Q8_KV_R8  = 398,
         GGML_TYPE_Q8_K_R8   = 399,
+        // Bonsai Q1_0 repacked into per-group 4-bit codes, 32 rows interleaved (T-MAC style LUT kernel)
+        GGML_TYPE_Q1_0_G128_LUT = 400,
         GGML_TYPE_COUNT,
     };
 
