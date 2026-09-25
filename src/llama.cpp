@@ -10676,7 +10676,8 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
 }
 
 static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u;
-static constexpr uint32_t DSV4_STATE_VER_USED_ROWS = 2;
+static constexpr uint32_t DSV4_STATE_VER_MIN = 2; // used-rows layout, no compression ratios
+static constexpr uint32_t DSV4_STATE_VER     = 3; // + compression ratios
 
 static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint32_t kv_rows) {
     const uint64_t n_rows = ((uint64_t) std::max<llama_pos>(0, pos_max) + 1) / (ratio ? ratio : 1);
@@ -11064,7 +11065,7 @@ struct llama_data_write {
         // the old file layout for all other architectures)
         if (llm_arch_is_dsv4(ctx->model.arch) && ctx->dsv4.cache.cache_ctx != nullptr) {
             write(&DSV4_STATE_MAGIC, sizeof(DSV4_STATE_MAGIC));
-            write(&DSV4_STATE_VER_USED_ROWS, sizeof(DSV4_STATE_VER_USED_ROWS));
+            write(&DSV4_STATE_VER, sizeof(DSV4_STATE_VER));
 
             const uint32_t dsv4_n_layer = n_layer;
             write(&dsv4_n_layer, sizeof(dsv4_n_layer));
@@ -11077,6 +11078,11 @@ struct llama_data_write {
             write(&dsv4_stream_idx, sizeof(dsv4_stream_idx));
             write(&ctx->dsv4.cache.n_stream, sizeof(ctx->dsv4.cache.n_stream));
 
+            const uint32_t dsv4_csa_ratio = ctx->model.hparams.dsv4_csa_ratio;
+            const uint32_t dsv4_hca_ratio = ctx->model.hparams.dsv4_hca_ratio;
+            write(&dsv4_csa_ratio, sizeof(dsv4_csa_ratio));
+            write(&dsv4_hca_ratio, sizeof(dsv4_hca_ratio));
+
             const uint32_t cap_csa_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.csa_k, ctx->dsv4.cache.n_stream);
             const uint32_t cap_hca_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.hca_k, ctx->dsv4.cache.n_stream);
             const uint32_t cap_lid_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.lid_k, ctx->dsv4.cache.n_stream);
@@ -11084,9 +11090,9 @@ struct llama_data_write {
             auto dsv4_used_rows = [&](uint32_t ratio, uint32_t cap) -> uint32_t {
                 return (seq_id != -1) ? dsv4_state_n_used_k_rows(dsv4_pos_max, ratio, cap) : cap;
             };
-            const uint32_t dsv4_n_rows_csa = dsv4_used_rows(ctx->model.hparams.dsv4_csa_ratio, cap_csa_stream);
-            const uint32_t dsv4_n_rows_hca = dsv4_used_rows(ctx->model.hparams.dsv4_hca_ratio, cap_hca_stream);
-            const uint32_t dsv4_n_rows_lid = dsv4_used_rows(ctx->model.hparams.dsv4_csa_ratio, cap_lid_stream);
+            const uint32_t dsv4_n_rows_csa = dsv4_used_rows(dsv4_csa_ratio, cap_csa_stream);
+            const uint32_t dsv4_n_rows_hca = dsv4_used_rows(dsv4_hca_ratio, cap_hca_stream);
+            const uint32_t dsv4_n_rows_lid = dsv4_used_rows(dsv4_csa_ratio, cap_lid_stream);
             write(&dsv4_n_rows_csa, sizeof(dsv4_n_rows_csa));
             write(&dsv4_n_rows_hca, sizeof(dsv4_n_rows_hca));
             write(&dsv4_n_rows_lid, sizeof(dsv4_n_rows_lid));
@@ -11907,7 +11913,7 @@ struct llama_data_read {
             uint32_t dsv4_n_layer = 0;
             if (dsv4_ver2) {
                 read_to(&dsv4_ver, sizeof(dsv4_ver));
-                if (dsv4_ver != DSV4_STATE_VER_USED_ROWS) {
+                if (dsv4_ver < DSV4_STATE_VER_MIN || dsv4_ver > DSV4_STATE_VER) {
                     LLAMA_LOG_ERROR("%s: DSV4 state version mismatch (%u)\n", __func__, dsv4_ver);
                     return false;
                 }
@@ -11935,6 +11941,18 @@ struct llama_data_read {
 
             uint32_t dsv4_n_rows_csa = 0, dsv4_n_rows_hca = 0, dsv4_n_rows_lid = 0;
             if (dsv4_ver2) {
+                if (dsv4_ver >= 3) {
+                    uint32_t dsv4_csa_ratio, dsv4_hca_ratio;
+                    read_to(&dsv4_csa_ratio, sizeof(dsv4_csa_ratio));
+                    read_to(&dsv4_hca_ratio, sizeof(dsv4_hca_ratio));
+                    if (dsv4_csa_ratio != ctx->model.hparams.dsv4_csa_ratio ||
+                        dsv4_hca_ratio != ctx->model.hparams.dsv4_hca_ratio) {
+                        LLAMA_LOG_ERROR("%s: DSV4 compression ratio mismatch (csa %u != %u, hca %u != %u)\n",
+                                __func__, dsv4_csa_ratio, ctx->model.hparams.dsv4_csa_ratio,
+                                dsv4_hca_ratio, ctx->model.hparams.dsv4_hca_ratio);
+                        return false;
+                    }
+                }
                 read_to(&dsv4_n_rows_csa, sizeof(dsv4_n_rows_csa));
                 read_to(&dsv4_n_rows_hca, sizeof(dsv4_n_rows_hca));
                 read_to(&dsv4_n_rows_lid, sizeof(dsv4_n_rows_lid));
