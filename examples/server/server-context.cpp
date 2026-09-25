@@ -311,7 +311,8 @@ void server_context::init() {
     const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
 
     const char * model_arch = llama_model_arch_string(model);
-    if (!params_base.use_jinja && model_arch != nullptr && std::string(model_arch) == "lfm2") {
+    if (!params_base.use_jinja && model_arch != nullptr &&
+            (std::string(model_arch) == "lfm2" || std::string(model_arch) == "lfm2moe")) {
         params_base.use_jinja = true;
         SRV_WRN("%s\n", "LFM2 model detected: enabling Jinja chat templates automatically");
     }

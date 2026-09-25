@@ -609,6 +609,9 @@ class Model:
         if chkhsh == "169bf0296a13c4d9b7672313f749eb36501d931022de052aad6e36f2bf34dd51":
             # ref: https://huggingface.co/LiquidAI/LFM2-Tokenizer
             res = "lfm2"
+        if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
+            # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B
+            res = "lfm2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -6969,7 +6972,7 @@ class LFM2Model(Model):
     def set_vocab(self):
         self._set_vocab_gpt2()
 
-    def set_gguf_parameters(self):
+    def _set_attention_layer_types(self):
         # zero KV heads mark short-conv layers; old configs use full_attn_idxs,
         # newer ones the layer_types list
         if "layer_types" in self.hparams:
@@ -6978,12 +6981,29 @@ class LFM2Model(Model):
             full_idxs = set(self.hparams.get("full_attn_idxs", []))
             full_attention = [i in full_idxs for i in range(self.block_count)]
         n_kv = self.hparams["num_key_value_heads"]
+        if isinstance(n_kv, list):
+            return
         self.hparams["num_key_value_heads"] = [
             n_kv if is_full else 0
             for is_full in full_attention
         ]
 
-        ff_dim = self.hparams["block_ff_dim"]
+    def _set_rope_theta(self):
+        # transformers >= 5 moves rope_theta into the rope_parameters dict
+        if self.hparams.get("rope_theta") is None:
+            rope_parameters = self.hparams.get("rope_parameters")
+            if isinstance(rope_parameters, dict) and rope_parameters.get("rope_theta") is not None:
+                self.hparams["rope_theta"] = rope_parameters["rope_theta"]
+
+    def _head_dim(self) -> int:
+        return self.hparams.get(
+            "head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+
+    def set_gguf_parameters(self):
+        self._set_attention_layer_types()
+        self._set_rope_theta()
+
+        ff_dim = self.find_hparam(["block_ff_dim", "intermediate_size"])
         if self.hparams.get("block_auto_adjust_ff_dim", False):
             ff_dim = int(2 * ff_dim / 3)
             multiplier = self.hparams.get("block_ffn_dim_multiplier")
@@ -7009,15 +7029,9 @@ class LFM2Model(Model):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
         self.gguf_writer.add_shortconv_l_cache(self.hparams["conv_L_cache"])
         self.gguf_writer.add_feed_forward_length(ff_dim)
-        self.gguf_writer.add_rope_dimension_count(
-            self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
-        )
-        self.gguf_writer.add_key_length(
-            self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
-        )
-        self.gguf_writer.add_value_length(
-            self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
-        )
+        self.gguf_writer.add_rope_dimension_count(self._head_dim())
+        self.gguf_writer.add_key_length(self._head_dim())
+        self.gguf_writer.add_value_length(self._head_dim())
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["norm_eps"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -7031,6 +7045,85 @@ class LFM2Model(Model):
                 new_name, gguf.MODEL_TENSOR.SHORTCONV_CONV, bid):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+
+@Model.register("Lfm2MoeForCausalLM", "LFM2MoeForCausalLM")
+class LFM2MoeModel(LFM2Model):
+    """Converter for Liquid AI's LFM2 MoE models (LFM2-8B-A1B, LFM2-24B-A2B, ...)."""
+
+    model_arch = gguf.MODEL_ARCH.LFM2MOE
+
+    # per-layer cache of the individual expert tensors, merged once complete
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def set_gguf_parameters(self):
+        # LFM2-MoE configs use num_experts; the base converter expects num_local_experts
+        saved_num_local_experts = self.hparams.pop("num_local_experts", None)
+        super().set_gguf_parameters()
+        if saved_num_local_experts is not None:
+            self.hparams["num_local_experts"] = saved_num_local_experts
+
+        n_expert = self.find_hparam(["num_experts", "num_local_experts"])
+        self.gguf_writer.add_expert_count(n_expert)
+        # num_experts_per_tok is already handled by the base converter
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+        self.gguf_writer.add_leading_dense_block_count(self.hparams["num_dense_layers"])
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        self.gguf_writer.add_expert_weights_norm(self.hparams.get("norm_topk_prob", True))
+        self.gguf_writer.add_expert_weights_scale(self.hparams.get("routed_scaling_factor", 1.0))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # the routing bias is stored without a .weight / .bias suffix
+        if name.endswith("feed_forward.expert_bias"):
+            return [(self.map_tensor_name(name + ".bias"), data_torch)]
+
+        # transformers >= 5 stores the experts fused: gate_up_proj is
+        # [n_expert, 2 * moe_intermediate_size, n_embd] (gate half first),
+        # down_proj is [n_expert, n_embd, moe_intermediate_size]
+        if name.endswith("feed_forward.experts.gate_up_proj"):
+            assert bid is not None
+            n_ff_exp = self.hparams["moe_intermediate_size"]
+            return [
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), data_torch[:, :n_ff_exp, :]),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP,   bid), data_torch[:, n_ff_exp:,  :]),
+            ]
+        if name.endswith("feed_forward.experts.down_proj"):
+            assert bid is not None
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid), data_torch)]
+
+        # merge the per-expert tensors into the 3d tensors llama.cpp expects
+        if "feed_forward.experts." in name:
+            assert bid is not None
+            n_expert = self.find_hparam(["num_experts", "num_local_experts"])
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) < n_expert * 3:
+                return []
+
+            tensors: list[tuple[str, Tensor]] = []
+            for w_name in ("w1", "w2", "w3"):
+                datas: list[Tensor] = []
+                for xid in range(n_expert):
+                    ename = f"model.layers.{bid}.feed_forward.experts.{xid}.{w_name}.weight"
+                    datas.append(self._experts[bid][ename])
+                    del self._experts[bid][ename]
+
+                merged = torch.stack(datas, dim=0)
+                merged_name = f"layers.{bid}.feed_forward.experts.{w_name}.weight"
+                tensors.append((self.map_tensor_name(merged_name), merged))
+            return tensors
+
+        return super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            experts = [k for d in self._experts for k in d.keys()]
+            if experts:
+                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 ###### CONVERSION LOGIC ######

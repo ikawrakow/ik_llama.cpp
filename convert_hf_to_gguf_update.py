@@ -109,6 +109,7 @@ models = [
     {"name": "gpt-4o",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/openai/gpt-oss-20b", "chkhsh": "ccc2ef013c104be7bae2965776d611e1d7a8a2a9c547dd93a682c9a9fc80352e", },  # o200k_harmony shares the GPT-4o pre-tokenizer
     {"name": "openpangu",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/openpangu/openPangu-2.0-Flash", "chkhsh": "65df2fe396b537a53433301848c0a739f56d56f67ad3d35eba27961ac33c12bb", },  # primary source: https://gitcode.com/ascend-tribe/openPangu-2.0-Flash
     {"name": "lfm2",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LiquidAI/LFM2-Tokenizer"},
+    {"name": "lfm2",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LiquidAI/LFM2.5-8B-A1B"},
 ]
 
 
