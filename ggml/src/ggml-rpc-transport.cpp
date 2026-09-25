@@ -20,7 +20,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <optional>
-
+#include <cstring>
 
 #ifdef _WIN32
 typedef SOCKET sockfd_t;
@@ -28,11 +28,6 @@ using ssize_t = __int64;
 #else
 typedef int sockfd_t;
 #endif
-
-static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
-
-#define LOG_DBG(...) \
-    do { if (RPC_DEBUG) GGML_LOG_DEBUG(__VA_ARGS__); } while (0)
 
 #define GGML_DEBUG 0
 #if (GGML_DEBUG >= 1)
