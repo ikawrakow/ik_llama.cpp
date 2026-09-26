@@ -10677,7 +10677,7 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
 
 static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u;
 static constexpr uint32_t DSV4_STATE_VER_MIN = 2; // used-rows layout, no compression ratios
-static constexpr uint32_t DSV4_STATE_VER     = 3; // + compression ratios
+static constexpr uint32_t DSV4_STATE_VER     = 4; // + compression ratios (3), + shared-streams flag (4)
 
 static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint32_t kv_rows) {
     const uint64_t n_rows = ((uint64_t) std::max<llama_pos>(0, pos_max) + 1) / (ratio ? ratio : 1);
@@ -11082,6 +11082,9 @@ struct llama_data_write {
             const uint32_t dsv4_hca_ratio = ctx->model.hparams.dsv4_hca_ratio;
             write(&dsv4_csa_ratio, sizeof(dsv4_csa_ratio));
             write(&dsv4_hca_ratio, sizeof(dsv4_hca_ratio));
+
+            const uint32_t dsv4_shared_streams = ctx->model.hparams.dsv4_shared_streams ? 1 : 0;
+            write(&dsv4_shared_streams, sizeof(dsv4_shared_streams));
 
             const uint32_t cap_csa_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.csa_k, ctx->dsv4.cache.n_stream);
             const uint32_t cap_hca_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.hca_k, ctx->dsv4.cache.n_stream);
@@ -11950,6 +11953,15 @@ struct llama_data_read {
                         LLAMA_LOG_ERROR("%s: DSV4 compression ratio mismatch (csa %u != %u, hca %u != %u)\n",
                                 __func__, dsv4_csa_ratio, ctx->model.hparams.dsv4_csa_ratio,
                                 dsv4_hca_ratio, ctx->model.hparams.dsv4_hca_ratio);
+                        return false;
+                    }
+                }
+                if (dsv4_ver >= 4) {
+                    uint32_t dsv4_shared_streams;
+                    read_to(&dsv4_shared_streams, sizeof(dsv4_shared_streams));
+                    if ((dsv4_shared_streams != 0) != ctx->model.hparams.dsv4_shared_streams) {
+                        LLAMA_LOG_ERROR("%s: DSV4 shared-streams mismatch (file %u != model %u); refusing cross-restore between DeepSeek-V4 and V4.1 layouts\n",
+                                __func__, dsv4_shared_streams, ctx->model.hparams.dsv4_shared_streams ? 1u : 0u);
                         return false;
                     }
                 }
