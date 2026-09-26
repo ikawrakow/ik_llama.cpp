@@ -371,7 +371,7 @@ The first line downloads the model if it is not present. It sets `MODEL` to the 
 
 ```bash
 # Downloads the model if it is not present. Sets MODEL to the cache path.
-MODEL=$(hf download ukisai/Swift-1.5-Qwen3.8-27B-GGUF Swift-1.5-Qwen3.8-27B-IQ4_XS.gguf | sed 's/^path=//')
+MODEL=$(hf download ukisai/Swift-1.5-Qwen3.8-27B-GGUF Swift-1.5-Qwen3.8-27B-IQ4_XS.gguf | grep -oE '/[^ ]+\.gguf' | tail -1)
 
 ./build/bin/llama-server \
   -m "$MODEL" \
