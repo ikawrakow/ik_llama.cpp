@@ -10678,8 +10678,7 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
 }
 
 static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u;
-static constexpr uint32_t DSV4_STATE_VER_MIN = 2; // used-rows layout, no compression ratios
-static constexpr uint32_t DSV4_STATE_VER     = 4; // + compression ratios (3), + shared-streams flag (4)
+static constexpr uint32_t DSV4_STATE_VER = 2; // used-rows layout with compression ratios and shared-streams flag
 
 static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint32_t kv_rows) {
     const uint64_t n_rows = ((uint64_t) std::max<llama_pos>(0, pos_max) + 1) / (ratio ? ratio : 1);
@@ -11932,7 +11931,7 @@ struct llama_data_read {
             uint32_t dsv4_n_layer = 0;
             if (dsv4_ver2) {
                 read_to(&dsv4_ver, sizeof(dsv4_ver));
-                if (dsv4_ver < DSV4_STATE_VER_MIN || dsv4_ver > DSV4_STATE_VER) {
+                if (dsv4_ver != DSV4_STATE_VER) {
                     LLAMA_LOG_ERROR("%s: DSV4 state version mismatch (%u)\n", __func__, dsv4_ver);
                     return false;
                 }
@@ -11960,26 +11959,22 @@ struct llama_data_read {
 
             uint32_t dsv4_n_rows_csa = 0, dsv4_n_rows_hca = 0, dsv4_n_rows_lid = 0;
             if (dsv4_ver2) {
-                if (dsv4_ver >= 3) {
-                    uint32_t dsv4_csa_ratio, dsv4_hca_ratio;
-                    read_to(&dsv4_csa_ratio, sizeof(dsv4_csa_ratio));
-                    read_to(&dsv4_hca_ratio, sizeof(dsv4_hca_ratio));
-                    if (dsv4_csa_ratio != ctx->model.hparams.dsv4_csa_ratio ||
-                        dsv4_hca_ratio != ctx->model.hparams.dsv4_hca_ratio) {
-                        LLAMA_LOG_ERROR("%s: DSV4 compression ratio mismatch (csa %u != %u, hca %u != %u)\n",
-                                __func__, dsv4_csa_ratio, ctx->model.hparams.dsv4_csa_ratio,
-                                dsv4_hca_ratio, ctx->model.hparams.dsv4_hca_ratio);
-                        return false;
-                    }
+                uint32_t dsv4_csa_ratio, dsv4_hca_ratio;
+                read_to(&dsv4_csa_ratio, sizeof(dsv4_csa_ratio));
+                read_to(&dsv4_hca_ratio, sizeof(dsv4_hca_ratio));
+                if (dsv4_csa_ratio != ctx->model.hparams.dsv4_csa_ratio ||
+                    dsv4_hca_ratio != ctx->model.hparams.dsv4_hca_ratio) {
+                    LLAMA_LOG_ERROR("%s: DSV4 compression ratio mismatch (csa %u != %u, hca %u != %u)\n",
+                            __func__, dsv4_csa_ratio, ctx->model.hparams.dsv4_csa_ratio,
+                            dsv4_hca_ratio, ctx->model.hparams.dsv4_hca_ratio);
+                    return false;
                 }
-                if (dsv4_ver >= 4) {
-                    uint32_t dsv4_shared_streams;
-                    read_to(&dsv4_shared_streams, sizeof(dsv4_shared_streams));
-                    if ((dsv4_shared_streams != 0) != ctx->model.hparams.dsv4_shared_streams) {
-                        LLAMA_LOG_ERROR("%s: DSV4 shared-streams mismatch (file %u != model %u); refusing cross-restore between DeepSeek-V4 and V4.1 layouts\n",
-                                __func__, dsv4_shared_streams, ctx->model.hparams.dsv4_shared_streams ? 1u : 0u);
-                        return false;
-                    }
+                uint32_t dsv4_shared_streams;
+                read_to(&dsv4_shared_streams, sizeof(dsv4_shared_streams));
+                if ((dsv4_shared_streams != 0) != ctx->model.hparams.dsv4_shared_streams) {
+                    LLAMA_LOG_ERROR("%s: DSV4 shared-streams mismatch (file %u != model %u); refusing cross-restore between DeepSeek-V4 and V4.1 layouts\n",
+                            __func__, dsv4_shared_streams, ctx->model.hparams.dsv4_shared_streams ? 1u : 0u);
+                    return false;
                 }
                 read_to(&dsv4_n_rows_csa, sizeof(dsv4_n_rows_csa));
                 read_to(&dsv4_n_rows_hca, sizeof(dsv4_n_rows_hca));
