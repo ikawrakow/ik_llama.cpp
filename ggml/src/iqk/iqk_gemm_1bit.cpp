@@ -2590,7 +2590,6 @@ static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const D
     Q8<nrc_y, block_q8_K128> q8(info);
     constexpr int n_rows = QK1_0_G128_R8_ROWS;
     const uint8x16_t two = vdupq_n_u8(2);
-    const  int8x16_t one = vdupq_n_s8(2);
     const int nb = n/QK1_0_G128;
     float32x4_t acc[2*nrc_y]  = {};
     int32x4_t   sumi[2*nrc_y] = {};
@@ -2626,48 +2625,14 @@ static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const D
             for (int l = 0; l < 4; ++l) {
                 auto bits = vld1q_u8_x2(x[ib].qs + 32*l);
                 make_quants(bits);
-                //qx[0] = vreinterpretq_s8_u8(vandq_u8(vshlq_n_u8(bits.val[0], 1), two));
-                //qx[1] = vreinterpretq_s8_u8(vandq_u8(vshlq_n_u8(bits.val[1], 1), two));
-                //qx[2] = vreinterpretq_s8_u8(vandq_u8(bits.val[0], two));
-                //qx[3] = vreinterpretq_s8_u8(vandq_u8(bits.val[1], two));
-                //qx[4] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[0], 1), two));
-                //qx[5] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[1], 1), two));
-                //qx[6] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[0], 2), two));
-                //qx[7] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[1], 2), two));
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     dot(iy, q8.y[iy][ib].qs + 32*l);
-                    //auto y = vld1q_s8(q8.y[iy][ib].qs + 32*l);
-                    //sumi[2*iy+0] = vdotq_laneq_s32(sumi[2*iy+0], qx[0], y, 0);
-                    //sumi[2*iy+1] = vdotq_laneq_s32(sumi[2*iy+1], qx[1], y, 0);
-                    //sumi[2*iy+0] = vdotq_laneq_s32(sumi[2*iy+0], qx[2], y, 1);
-                    //sumi[2*iy+1] = vdotq_laneq_s32(sumi[2*iy+1], qx[3], y, 1);
-                    //sumi[2*iy+0] = vdotq_laneq_s32(sumi[2*iy+0], qx[4], y, 2);
-                    //sumi[2*iy+1] = vdotq_laneq_s32(sumi[2*iy+1], qx[5], y, 2);
-                    //sumi[2*iy+0] = vdotq_laneq_s32(sumi[2*iy+0], qx[6], y, 3);
-                    //sumi[2*iy+1] = vdotq_laneq_s32(sumi[2*iy+1], qx[7], y, 3);
                 }
                 bits.val[0] = vshrq_n_u8(bits.val[0], 4);
                 bits.val[1] = vshrq_n_u8(bits.val[1], 4);
                 make_quants(bits);
-                //qx[0] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[0], 3), two));
-                //qx[1] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[1], 3), two));
-                //qx[2] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[0], 4), two));
-                //qx[3] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[1], 4), two));
-                //qx[4] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[0], 5), two));
-                //qx[5] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[1], 5), two));
-                //qx[6] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[0], 6), two));
-                //qx[7] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[1], 6), two));
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     dot(iy, q8.y[iy][ib].qs + 32*l + 16);
-                    //auto y = vld1q_s8(q8.y[iy][ib].qs + 32*l + 16);
-                    //sumi[2*iy+0] = vdotq_laneq_s32(sumi[2*iy+0], qx[0], y, 0);
-                    //sumi[2*iy+1] = vdotq_laneq_s32(sumi[2*iy+1], qx[1], y, 0);
-                    //sumi[2*iy+0] = vdotq_laneq_s32(sumi[2*iy+0], qx[2], y, 1);
-                    //sumi[2*iy+1] = vdotq_laneq_s32(sumi[2*iy+1], qx[3], y, 1);
-                    //sumi[2*iy+0] = vdotq_laneq_s32(sumi[2*iy+0], qx[4], y, 2);
-                    //sumi[2*iy+1] = vdotq_laneq_s32(sumi[2*iy+1], qx[5], y, 2);
-                    //sumi[2*iy+0] = vdotq_laneq_s32(sumi[2*iy+0], qx[6], y, 3);
-                    //sumi[2*iy+1] = vdotq_laneq_s32(sumi[2*iy+1], qx[7], y, 3);
                 }
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
