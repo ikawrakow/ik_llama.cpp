@@ -1347,6 +1347,8 @@ add_library(ggml
             ggml-moe-prefetch.h
             ggml-quants.c
             ggml-quants.h
+            ggml-kv-quants.c
+            ggml-kv-quants.h
             ggml-utils.h
             ggml-impl.h
             ggml-rpc-transport.h

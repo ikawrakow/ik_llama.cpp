@@ -491,6 +491,9 @@ extern "C" {
         GGML_TYPE_Q8_K_R16  = 397,
         GGML_TYPE_Q8_KV_R8  = 398,
         GGML_TYPE_Q8_K_R8   = 399,
+        GGML_TYPE_FP4_B16_E4M3 = 400, // e2m1 values, block 16, e4m3 scale
+        GGML_TYPE_FP4_B32_E8M0 = 401, // e2m1 values, block 32, e8m0 scale
+        GGML_TYPE_FP8_B32_E8M0 = 402, // e4m3 values, block 32, e8m0 scale
         GGML_TYPE_COUNT,
     };
 

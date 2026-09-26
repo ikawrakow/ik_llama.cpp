@@ -10,6 +10,7 @@
 #include "ggml-impl.h"
 #include "ggml-utils.h"
 #include "ggml-quants.h"
+#include "ggml-kv-quants.h"
 #include "ggml.h"
 #include "ggml-aarch64.h"
 #include "ggml-moe-prefetch.h"
@@ -1334,6 +1335,36 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_FP4_B16_E4M3] = {
+        .type_name                = "fp4_B16_E4M3",
+        .blck_size                = QK_FP4_B16,
+        .type_size                = sizeof(block_fp4_b16_e4m3),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_fp4_b16_e4m3,
+        .from_float               = quantize_row_fp4_b16_e4m3,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_FP4_B32_E8M0] = {
+        .type_name                = "fp4_B32_E8M0",
+        .blck_size                = QK_FP4_B32,
+        .type_size                = sizeof(block_fp4_b32_e8m0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_fp4_b32_e8m0,
+        .from_float               = quantize_row_fp4_b32_e8m0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_FP8_B32_E8M0] = {
+        .type_name                = "fp8_B32_E8M0",
+        .blck_size                = QK_FP8_B32,
+        .type_size                = sizeof(block_fp8_b32_e8m0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_fp8_b32_e8m0,
+        .from_float               = quantize_row_fp8_b32_e8m0,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -20268,6 +20299,9 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
+        case GGML_TYPE_FP4_B16_E4M3:
+        case GGML_TYPE_FP4_B32_E8M0:
+        case GGML_TYPE_FP8_B32_E8M0:
             {
                 ggml_compute_forward_get_rows_q(params, dst);
             } break;

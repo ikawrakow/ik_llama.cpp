@@ -4968,6 +4968,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_FP4_B16_E4M3:
+                    case GGML_TYPE_FP4_B32_E8M0:
+                    case GGML_TYPE_FP8_B32_E8M0:
                         return true;
                     case GGML_TYPE_I32:
                         return op->src[0]->type == op->type;
@@ -4979,7 +4982,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             {
                 return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
                        op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q5_0 ||
-                       op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL) &&
+                       op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL ||
+                       op->type == GGML_TYPE_FP4_B16_E4M3 || op->type == GGML_TYPE_FP4_B32_E8M0 ||
+                       op->type == GGML_TYPE_FP8_B32_E8M0) &&
                        op->src[0]->type == GGML_TYPE_F32 &&
                        (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32);
             } break;
