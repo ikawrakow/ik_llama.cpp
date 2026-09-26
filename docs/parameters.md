@@ -367,9 +367,14 @@ WIP
 | Prompt processing | ~340 t/s (short prompt), ~465 t/s (108k prompt) |
 | Token generation | ~40 t/s (short ctx), 22-27 t/s at 86k-108k ctx, MTP acceptance ~70% |
 
+The first line downloads the model if it is not present. It sets `MODEL` to the path in the Hugging Face cache.
+
 ```bash
+# Downloads the model if it is not present. Sets MODEL to the cache path.
+MODEL=$(hf download ukisai/Swift-1.5-Qwen3.8-27B-GGUF Swift-1.5-Qwen3.8-27B-IQ4_XS.gguf | sed 's/^path=//')
+
 ./build/bin/llama-server \
-  -m Swift-1.5-Qwen3.8-27B-IQ4_XS.gguf \
+  -m "$MODEL" \
   -fa on --jinja -ngl 99 -c 128000 \
   --spec-type mtp:n_max=3 \
   -ctk q8_0 -ctv q8_0 \
