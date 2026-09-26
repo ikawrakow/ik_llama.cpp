@@ -1505,81 +1505,89 @@ static void mul_mat_q1_0_g128_q8_0(int n, const void * vx, size_t bx, const Data
     }
 }
 
-// Q1_0_G128_R8: set-bit sums corrected with the q8 bsums (2*sum_set - sum_all).
-//template <int nrc_y>
-//static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-//    GGML_ASSERT(nrc_x%QK1_0_G128_R8_ROWS == 0);
-//    Q8<nrc_y, block_q8_K128> q8(info);
-//    constexpr int n_rows = QK1_0_G128_R8_ROWS;
-//    constexpr int n_tile = QK1_0_G128/32;
-//    const int nb = n/QK1_0_G128;
-//    const __m256i bitmask = _mm256_set1_epi64x(0x8040201008040201);
-//    const __m256i shuffle = _mm256_setr_epi8(
-//        0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1,1,
-//        2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3);
-//    const __m256i one = _mm256_set1_epi8(1);
-//    const __m256i m1  = _mm256_set1_epi16(1);
-//    for (int ix = 0; ix < nrc_x; ix += n_rows) {
-//        auto x = (const block_q1_0_g128_r8 *)((const char *)vx + ix*bx);
-//        __m256 acc[n_rows][nrc_y];
-//        float corr[n_rows][nrc_y];
-//        for (int r = 0; r < n_rows; ++r) {
-//            for (int iy = 0; iy < nrc_y; ++iy) { acc[r][iy] = _mm256_setzero_ps(); corr[r][iy] = 0.f; }
-//        }
-//        for (int ib = 0; ib < nb; ++ib) {
-//            float dw[n_rows];
-//            _mm256_storeu_ps(dw, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)x[ib].d)));
-//            // Expand the 8 rows' bits once per block, reuse across all activation rows.
-//            __m256i qx[n_tile][n_rows];
-//            for (int it = 0; it < n_tile; ++it) {
-//                for (int r = 0; r < n_rows; ++r) {
-//                    uint32_t bits;
-//                    std::memcpy(&bits, x[ib].qs + 32*it + 4*r, 4);
-//                    auto q = _mm256_shuffle_epi8(_mm256_set1_epi32((int)bits), shuffle);
-//                    qx[it][r] = _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(q, bitmask), bitmask), one);
-//                }
-//            }
-//            for (int iy = 0; iy < nrc_y; ++iy) {
-//                const float qd = q8.y[iy][ib].d;
-//                const int bt = q8.y[iy][ib].bsums[0] + q8.y[iy][ib].bsums[1] + q8.y[iy][ib].bsums[2] + q8.y[iy][ib].bsums[3];
-//                __m256i isum[n_rows] = {};
-//                for (int it = 0; it < n_tile; ++it) {
-//                    auto y = _mm256_loadu_si256((const __m256i *)(q8.y[iy][ib].qs + 32*it));
-//                    for (int r = 0; r < n_rows; ++r) {
-//                        isum[r] = _mm256_add_epi16(isum[r], _mm256_maddubs_epi16(qx[it][r], y));
-//                    }
-//                }
-//                for (int r = 0; r < n_rows; ++r) {
-//                    auto si = _mm256_madd_epi16(m1, isum[r]);
-//                    acc[r][iy] = _mm256_fmadd_ps(_mm256_set1_ps(dw[r]*qd), _mm256_cvtepi32_ps(si), acc[r][iy]);
-//                    corr[r][iy] += dw[r]*qd*bt;
-//                }
-//            }
-//        }
-//        for (int r = 0; r < n_rows; ++r) {
-//            for (int iy = 0; iy < nrc_y; ++iy) {
-//                info.store(ix + r, iy, 2.f*hsum_float_8(acc[r][iy]) - corr[r][iy]);
-//            }
-//        }
-//    }
-//}
+#ifdef HAVE_VNNI256
 template <int nrc_y>
-static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_q1_0_g128_r8_q8_k_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%QK1_0_G128_R8_ROWS == 0);
     Q8<nrc_y, block_q8_K128> q8(info);
     constexpr int n_rows = QK1_0_G128_R8_ROWS;
     const int nb = n/QK1_0_G128;
     const __m256i one = _mm256_set1_epi8(1);
+    const __m256i two = _mm256_set1_epi8(2);
+    __m256i qx[8];
+    __m256i sumi[2*nrc_y] = {};
+    auto dot = [&qx] (const int8_t * y, __m256i & sumi1, __m256i & sumi2) {
+        sumi1 = _mm256_dpbusd_epi32(sumi1, qx[0], _mm256_set1_epi32(*((const int32_t *)(y +  0))));
+        sumi2 = _mm256_dpbusd_epi32(sumi2, qx[1], _mm256_set1_epi32(*((const int32_t *)(y +  4))));
+        sumi1 = _mm256_dpbusd_epi32(sumi1, qx[2], _mm256_set1_epi32(*((const int32_t *)(y +  8))));
+        sumi2 = _mm256_dpbusd_epi32(sumi2, qx[3], _mm256_set1_epi32(*((const int32_t *)(y + 12))));
+        sumi1 = _mm256_dpbusd_epi32(sumi1, qx[4], _mm256_set1_epi32(*((const int32_t *)(y + 16))));
+        sumi2 = _mm256_dpbusd_epi32(sumi2, qx[5], _mm256_set1_epi32(*((const int32_t *)(y + 20))));
+        sumi1 = _mm256_dpbusd_epi32(sumi1, qx[6], _mm256_set1_epi32(*((const int32_t *)(y + 24))));
+        sumi2 = _mm256_dpbusd_epi32(sumi2, qx[7], _mm256_set1_epi32(*((const int32_t *)(y + 28))));
+    };
+    __m256 acc[nrc_y] = {};
+    for (int ix = 0; ix < nrc_x; ix += n_rows) {
+        auto x = (const block_q1_0_g128_r8 *)((const char *)vx + ix*bx);
+        for (int ib = 0; ib < nb; ++ib) {
+            auto vd = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)x[ib].d));
+            for (int l = 0; l < 4; ++l) {
+                auto bits = _mm256_loadu_si256((const __m256i *)x[ib].qs + l);
+                for (int k = 0; k < 4; ++k) {
+                    qx[2*k+0] = _mm256_slli_epi16(_mm256_and_si256(bits, one), 1);
+                    qx[2*k+1] = _mm256_and_si256(bits, two);
+                    bits  = _mm256_srli_epi16(bits, 2);
+                }
+                for (int iy = 0; iy < nrc_y; ++iy) dot(q8.y[iy][ib].qs + 32*l, sumi[2*iy+0], sumi[2*iy+1]);
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto dxy = _mm256_mul_ps(vd, _mm256_set1_ps(q8.y[iy][ib].d));
+                auto sum = _mm256_add_epi32(sumi[2*iy+0], sumi[2*iy+1]);
+                sumi[2*iy+0] = sumi[2*iy+1] = _mm256_setzero_si256();
+                sum = _mm256_sub_epi32(sum, _mm256_set1_epi32(q8.y[iy][ib].s));
+                acc[iy] = _mm256_fmadd_ps(dxy, _mm256_cvtepi32_ps(sum), acc[iy]);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+            acc[iy] = _mm256_setzero_ps();
+        }
+    }
+}
+#endif
+
+template <int nrc_y>
+static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+#ifdef HAVE_VNNI256
+    if constexpr (nrc_y <= 2) {
+        mul_mat_q1_0_g128_r8_q8_k_1<nrc_y>(n, vx, bx, info, nrc_x);
+        return;
+    }
+#endif
+    GGML_ASSERT(nrc_x%QK1_0_G128_R8_ROWS == 0);
+    Q8<nrc_y, block_q8_K128> q8(info);
+    constexpr int n_rows = QK1_0_G128_R8_ROWS;
+    const int nb = n/QK1_0_G128;
+    const __m256i one = _mm256_set1_epi8(1);
+#ifndef HAVE_VNNI256
     const __m256i m1  = _mm256_set1_epi16(1);
+#endif
     __m256i qx[4];
-    auto dot = [&qx] (const int8_t * y) {
+    auto dot = [&qx] (const int8_t * y, __m256i & sumi) {
+#ifdef HAVE_VNNI256
+        sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_set1_epi32(*((const int32_t *)(y +  0))));
+        sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_set1_epi32(*((const int32_t *)(y +  4))));
+        sumi = _mm256_dpbusd_epi32(sumi, qx[2], _mm256_set1_epi32(*((const int32_t *)(y +  8))));
+        sumi = _mm256_dpbusd_epi32(sumi, qx[3], _mm256_set1_epi32(*((const int32_t *)(y + 12))));
+#else
         auto s0 = _mm256_maddubs_epi16(qx[0], _mm256_set1_epi32(*((const int32_t *)(y +  0))));
         auto s1 = _mm256_maddubs_epi16(qx[1], _mm256_set1_epi32(*((const int32_t *)(y +  4))));
         auto s2 = _mm256_maddubs_epi16(qx[2], _mm256_set1_epi32(*((const int32_t *)(y +  8))));
         auto s3 = _mm256_maddubs_epi16(qx[3], _mm256_set1_epi32(*((const int32_t *)(y + 12))));
         s0 = _mm256_add_epi16(s0, s1);
         s2 = _mm256_add_epi16(s2, s3);
-        return _mm256_add_epi16(s0, s2);
+        sumi = _mm256_add_epi16(sumi, _mm256_add_epi16(s0, s2));
+#endif
     };
     __m256 acc[nrc_y] = {};
     for (int ix = 0; ix < nrc_x; ix += n_rows) {
@@ -1593,21 +1601,21 @@ static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const D
                     qx[k] = _mm256_slli_epi16(_mm256_and_si256(bits, one), 1);
                     bits  = _mm256_srli_epi16(bits, 1);
                 }
-                for (int iy = 0; iy < nrc_y; ++iy) {
-                    sumi[iy] = _mm256_add_epi16(sumi[iy], dot(q8.y[iy][ib].qs + 32*l));
-                }
+                for (int iy = 0; iy < nrc_y; ++iy) dot(q8.y[iy][ib].qs + 32*l, sumi[iy]);
                 for (int k = 0; k < 4; ++k) {
                     qx[k] = _mm256_slli_epi16(_mm256_and_si256(bits, one), 1);
                     bits  = _mm256_srli_epi16(bits, 1);
                 }
-                for (int iy = 0; iy < nrc_y; ++iy) {
-                    sumi[iy] = _mm256_add_epi16(sumi[iy], dot(q8.y[iy][ib].qs + 32*l + 16));
-                }
+                for (int iy = 0; iy < nrc_y; ++iy) dot(q8.y[iy][ib].qs + 32*l + 16, sumi[iy]);
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto dxy = _mm256_mul_ps(vd, _mm256_set1_ps(q8.y[iy][ib].d));
+#ifdef HAVE_VNNI256
+                auto sum = _mm256_sub_epi32(sumi[iy], _mm256_set1_epi32(q8.y[iy][ib].s));
+#else
                 auto sum = _mm256_madd_epi16(m1, sumi[iy]);
                 sum = _mm256_sub_epi32(sum, _mm256_set1_epi32(q8.y[iy][ib].s));
+#endif
                 acc[iy] = _mm256_fmadd_ps(dxy, _mm256_cvtepi32_ps(sum), acc[iy]);
             }
         }
