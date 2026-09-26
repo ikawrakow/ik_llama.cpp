@@ -1059,7 +1059,7 @@ static uint8_t * serialize_graph(uint32_t device, const ggml_cgraph * cgraph, co
     return output;
 }
 
-static uint8_t * serialize_viewoff(uint32_t device, const ggml_cgraph * cgraph, const std::shared_ptr<rpc_dispatcher> & dispatcher, size_t * output_size) {
+static uint8_t * serialize_viewoff(uint32_t device, const ggml_cgraph * cgraph, size_t * output_size) {
     uint32_t n_nodes = cgraph->n_nodes;
 
     // count CPY nodes
@@ -1098,7 +1098,7 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
     if (reuse) {
         size_t input_size = 0;
         // For graph recompute, we need to send kv view again
-        uint8_t * input = serialize_viewoff(rpc_ctx->device, cgraph, rpc_ctx->dispatcher, &input_size);
+        uint8_t * input = serialize_viewoff(rpc_ctx->device, cgraph, &input_size);
         std::shared_ptr<uint8_t> input_ptr(input, std::default_delete<uint8_t[]>());
         rpc_ctx->dispatcher->send_async(RPC_CMD_GRAPH_RECOMPUTE, input_ptr, input_size);
     } else {
@@ -1937,7 +1937,7 @@ bool rpc_server::graph_recompute(const std::vector<uint8_t> & input) {
     src += sizeof(n_view_offs);
 
     int n_nodes = graph->n_nodes;
-    int idx = 0;
+    uint32_t idx = 0;
     for (int i = 0; i < n_nodes; i++) {
         auto node = graph->nodes[i];
         if (node->op == GGML_OP_CPY) {
