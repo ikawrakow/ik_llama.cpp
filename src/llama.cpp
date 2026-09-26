@@ -11978,10 +11978,7 @@ struct llama_data_read {
             // Destination stream: when restoring per-stream, write to seq_id's slot
             const int32_t dsv4_dst_stream = dsv4_single_stream ? (int32_t)seq_id : -1;
 
-            // Clear the destination only where the file restores stream data. For DSV4.1
-            // shared streams the writer stores layer_type = 0 for every layer and nothing
-            // is read back, so a reset would wipe compressed rows that main leaves in
-            // place (they are re-derived from the prompt on continue).
+            // Clear the destination only where the file restores stream data.
             if (dsv4_ver2 && !ctx->model.hparams.dsv4_shared_streams) {
                 llama_reset_dsv4_state(ctx, dsv4_dst_stream);
             }
