@@ -458,6 +458,8 @@ extern "C" {
         GGML_TYPE_IQ2_KL  = 157,
         GGML_TYPE_IQ1_KT  = 158,
 
+        GGML_TYPE_Q1_0_G128_R8 = 159, // 8-row repacked Q1_0_G128 (Bonsai), vec_dot_type = Q8_K128
+
         GGML_TYPE_Q4_0_R8   = 202,
         GGML_TYPE_Q5_0_R4   = 206,
         GGML_TYPE_Q8_0_R8   = 208,

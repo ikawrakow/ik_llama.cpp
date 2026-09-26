@@ -3975,6 +3975,7 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
         const __m256 mul = _mm256_set1_ps( id );
         xx = xb;
         int8_t * q8 = y[i].qs;
+        int32_t isum = 0;
         for (int ib = 0; ib < kBlockSize/32; ++ib) {
             __m256 v0 = _mm256_mul_ps(mul, _mm256_loadu_ps(xx)); xx += 8;
             __m256 v1 = _mm256_mul_ps(mul, _mm256_loadu_ps(xx)); xx += 8;
@@ -3988,7 +3989,9 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
             __m256i i1 = _mm256_cvtps_epi32(v1);
             __m256i i2 = _mm256_cvtps_epi32(v2);
             __m256i i3 = _mm256_cvtps_epi32(v3);
-            y[i].bsums[ib] = hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)));
+            int s = hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)));
+            isum += s;
+            y[i].bsums[ib] = s;
             i0 = _mm256_packs_epi32( i0, i1 );
             i2 = _mm256_packs_epi32( i2, i3 );
             i0 = _mm256_packs_epi16( i0, i2 );
@@ -3996,6 +3999,7 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
             _mm256_storeu_si256((__m256i *)q8, i0);
             q8 += 32;
         }
+        y[i].s = isum;
     }
 #elif defined __ARM_NEON
     int32x4_t ival[8];
@@ -4012,6 +4016,7 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
         }
         y[i].d = smax/127;
         auto vid = vdupq_n_f32(127/smax);
+        int32_t isum_tot = 0;
         for (int ib = 0; ib < kBlockSize/32; ++ib) {
             auto isum = vdupq_n_s32(0);
             for (int k = 0; k < 8; ++k) {
@@ -4019,12 +4024,15 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
                 ival[k] = vcvtnq_s32_f32(vmulq_f32(val, vid));
                 isum = vaddq_s32(isum, ival[k]);
             }
-            y[i].bsums[ib] = vaddvq_s32(isum);
+            int s = vaddvq_s32(isum);
+            isum_tot += s;
+            y[i].bsums[ib] = s;
             for (int k = 0; k < 4; ++k) {
                 auto i16 = vcombine_s16(vmovn_s32(ival[2*k+0]), vmovn_s32(ival[2*k+1]));
                 vst1_s8(y[i].qs + 32*ib + 8*k, vmovn_s16(i16));
             }
         }
+        y[i].s = isum_tot;
     }
 #else
     for (int i = 0; i < nb; i++) {
@@ -4046,14 +4054,17 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
             int v = nearest_int(iscale*x[j]);
             y[i].qs[j] = v;
         }
+        int isum_tot = 0;
         for (int j = 0; j < kBlockSize/32; ++j) {
             int sum = 0;
             for (int ii = 0; ii < 32; ++ii) {
                 sum += y[i].qs[j*32 + ii];
             }
+            isum_tot += sum;
             y[i].bsums[j] = sum;
         }
         y[i].d = 1/iscale;
+        y[i].s = isum_tot;
         x += kBlockSize;
     }
 #endif
@@ -8670,6 +8681,7 @@ const Repack * get_repack_info(ggml_type type) {
         { GGML_TYPE_Q8_K,   { GGML_TYPE_Q8_K_R8,   8,  (Repack::repack_func)repack_q8_k}    },
         { GGML_TYPE_Q8_KV,  { GGML_TYPE_Q8_KV_R8,  8,  (Repack::repack_func)repack_q8_KV}   },
         { GGML_TYPE_MXFP4,  { GGML_TYPE_MXFP4_R8,  8,  (Repack::repack_func)repack_mxfp4}   },
+        { GGML_TYPE_Q1_0_G128, { GGML_TYPE_Q1_0_G128_R8, QK1_0_G128_R8_ROWS, (Repack::repack_func)repack_q1_0_g128_r8} },
 #ifdef __AVX512BF16__
         { GGML_TYPE_BF16,   { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_bf16_t>}},
         { GGML_TYPE_F16,    { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_half>}  },
@@ -10675,6 +10687,184 @@ void vec_dot_q1_0_g128_q8_0(int n, float * s, size_t bs, const void * vx, size_t
         }
     }
     *s = sumf;
+}
+
+//
+// xr[0][ib].qs[0]: bits 0...3 go into bytes 0...3, bit 0
+//                  bits 4...7 go into bytes 0...3, bit 1
+// xr[1][ib].qs[0]: bits 0...3 go into bytes 4...7, bit 0
+//                  bits 4...7 go into bytes 4...7, bit 1
+// ...
+// xr[7][ib].qs[0]: bits 0...3 go into bytes 28...31, bit 0
+//                  bits 4...7 go into bytes 28...31, bit 1
+//
+// xr[0][ib].qs[1]: bits 0...3 go into bytes 0...3, bit 2
+//                  bits 4...7 go into bytes 0...3, bit 3
+// xr[1][ib].qs[1]: bits 0...3 go into bytes 4...7, bit 2
+//                  bits 4...7 go into bytes 4...7, bit 3
+// ...
+// xr[7][ib].qs[1]: bits 0...3 go into bytes 28...31, bit 2
+//                  bits 4...7 go into bytes 28...31, bit 3
+//
+// xr[0][ib].qs[2]: bits 0...3 go into bytes 0...3, bit 4
+//                  bits 4...7 go into bytes 0...3, bit 5
+// xr[1][ib].qs[2]: bits 0...3 go into bytes 4...7, bit 4
+//                  bits 4...7 go into bytes 4...7, bit 5
+// ...
+// xr[7][ib].qs[2]: bits 0...3 go into bytes 28...31, bit 4
+//                  bits 4...7 go into bytes 28...31, bit 5
+//
+// xr[0][ib].qs[3]: bits 0...3 go into bytes 0...3, bit 6
+//                  bits 4...7 go into bytes 0...3, bit 7
+// xr[1][ib].qs[3]: bits 0...3 go into bytes 4...7, bit 6
+//                  bits 4...7 go into bytes 4...7, bit 7
+// ...
+// xr[7][ib].qs[3]: bits 0...3 go into bytes 28...31, bit 6
+//                  bits 4...7 go into bytes 28...31, bit 7
+//
+// xr[0][ib].qs[4]: bits 0...3 go into bytes 32+0...3, bit 0
+//                  bits 4...7 go into bytes 32+0...3, bit 1
+// xr[1][ib].qs[4]: bits 0...3 go into bytes 32+4...7, bit 0
+//                  bits 4...7 go into bytes 32+4...7, bit 1
+// ...
+// xr[7][ib].qs[4]: bits 0...3 go into bytes 32+28...31, bit 0
+//                  bits 4...7 go into bytes 32+28...31, bit 1
+//
+// xr[0][ib].qs[5]: bits 0...3 go into bytes 32+0...3, bit 2
+//                  bits 4...7 go into bytes 32+0...3, bit 3
+// xr[1][ib].qs[5]: bits 0...3 go into bytes 32+4...7, bit 2
+//                  bits 4...7 go into bytes 32+4...7, bit 3
+// ...
+// xr[7][ib].qs[5]: bits 0...3 go into bytes 32+28...31, bit 2
+//                  bits 4...7 go into bytes 32+28...31, bit 3
+//
+// xr[0][ib].qs[6]: bits 0...3 go into bytes 32+0...3, bit 4
+//                  bits 4...7 go into bytes 32+0...3, bit 5
+// xr[1][ib].qs[6]: bits 0...3 go into bytes 32+4...7, bit 4
+//                  bits 4...7 go into bytes 32+4...7, bit 5
+// ...
+// xr[7][ib].qs[6]: bits 0...3 go into bytes 32+28...31, bit 4
+//                  bits 4...7 go into bytes 32+28...31, bit 5
+//
+// xr[0][ib].qs[7]: bits 0...3 go into bytes 32+0...3, bit 6
+//                  bits 4...7 go into bytes 32+0...3, bit 7
+// xr[1][ib].qs[7]: bits 0...3 go into bytes 32+4...7, bit 6
+//                  bits 4...7 go into bytes 32+4...7, bit 7
+// ...
+// xr[7][ib].qs[7]: bits 0...3 go into bytes 32+28...31, bit 6
+//                  bits 4...7 go into bytes 32+28...31, bit 7
+
+void repack_q1_0_g128_r8(int nrows, int n_per_row, const block_q1_0_g128 * x, block_q1_0_g128_r8 * y, [[maybe_unused]] bool online) {
+    GGML_ASSERT(nrows % QK1_0_G128_R8_ROWS == 0);
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    constexpr uint8_t k_mask[8] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+    const int nblock = n_per_row/QK1_0_G128;
+    const block_q1_0_g128 * xr[QK1_0_G128_R8_ROWS];
+    for (int row = 0; row < nrows; row += QK1_0_G128_R8_ROWS) {
+        for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) xr[k] = x + nblock*k;
+        for (int ib = 0; ib < nblock; ++ib) {
+            std::memset(&y[ib], 0, sizeof(y[ib]));
+            for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) y[ib].d[k] = xr[k][ib].d;
+            for (int l = 0; l < 4; ++l) {
+                auto qy = y[ib].qs + 4*QK1_0_G128_R8_ROWS*l;
+                for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) {
+                    auto qx = xr[k][ib].qs + 4*l;
+                    for (int i = 0; i < 4; ++i) {
+                        for (int j = 0; j < 4; ++j) {
+                            if (qx[i] & k_mask[j+0]) qy[4*k+j] |= (1 << (2*i+0));
+                        }
+                        for (int j = 0; j < 4; ++j) {
+                            if (qx[i] & k_mask[j+4]) qy[4*k+j] |= (1 << (2*i+1));
+                        }
+                    }
+                }
+            }
+        }
+        x += QK1_0_G128_R8_ROWS*nblock;
+        y += nblock;
+    }
+}
+
+static void dequantize_block_q1_0_g128_r8(const block_q1_0_g128_r8 & x, int8_t * y) {
+    for (int k = 0; k < 8; ++k) {
+        auto yk = y + 128*k;
+        for (int l = 0; l < 4; ++l) {
+            auto qx = x.qs + 32*l;
+            for (int i = 0; i < 4; ++i) {
+                uint8_t mask1 = 1 << (2*i+0);
+                uint8_t mask2 = 1 << (2*i+1);
+                for (int j = 0; j < 4; ++j) {
+                    yk[32*l + 8*i + j + 0] = qx[4*k + j] & mask1 ? 1 : 0;
+                }
+                for (int j = 0; j < 4; ++j) {
+                    yk[32*l + 8*i + j + 4] = qx[4*k + j] & mask2 ? 1 : 0;
+                }
+            }
+        }
+    }
+}
+
+void dequantize_row_q1_0_g128_r8(const block_q1_0_g128_r8 * x, float * y, int64_t n) {
+    const int n_per_row = (int)(n/QK1_0_G128_R8_ROWS);
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    const int nblock = n_per_row/QK1_0_G128;
+    for (int r = 0; r < QK1_0_G128_R8_ROWS; ++r) {
+        float * yr = y + (int64_t)r*n_per_row;
+        for (int ib = 0; ib < nblock; ++ib) {
+            const float d = GGML_FP16_TO_FP32(x[ib].d[r]);
+            for (int l = 0; l < 4; ++l) {
+                auto qx = x[ib].qs + 32*l;
+                for (int i = 0; i < 4; ++i) {
+                    uint8_t mask1 = 1 << (2*i+0);
+                    uint8_t mask2 = 1 << (2*i+1);
+                    for (int j = 0; j < 4; ++j) {
+                        yr[(int64_t)ib*QK1_0_G128 + 32*l + 8*i + j + 0] = qx[4*r + j] & mask1 ? d : -d;
+                    }
+                    for (int j = 0; j < 4; ++j) {
+                        yr[(int64_t)ib*QK1_0_G128 + 32*l + 8*i + j + 4] = qx[4*r + j] & mask2 ? d : -d;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// TODO: fix this
+void quantize_row_q1_0_g128_r8(const float * x, void * vy, int64_t n) {
+    auto y = (block_q1_0_g128_r8 *)vy;
+    const int n_per_row = (int)(n/QK1_0_G128_R8_ROWS);
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    constexpr int n_tile = QK1_0_G128/32;
+    const int nblock = n_per_row/QK1_0_G128;
+    std::vector<block_q1_0_g128> tmp((size_t)QK1_0_G128_R8_ROWS*nblock);
+    for (int r = 0; r < QK1_0_G128_R8_ROWS; ++r) {
+        quantize_row_q1_0_g128(x + (int64_t)r*n_per_row, tmp.data() + (size_t)r*nblock, n_per_row);
+    }
+    for (int ib = 0; ib < nblock; ++ib) {
+        for (int r = 0; r < QK1_0_G128_R8_ROWS; ++r) y[ib].d[r] = tmp[(size_t)r*nblock + ib].d;
+        for (int it = 0; it < n_tile; ++it) {
+            for (int r = 0; r < QK1_0_G128_R8_ROWS; ++r) {
+                for (int b = 0; b < 4; ++b) y[ib].qs[32*it + 4*r + b] = tmp[(size_t)r*nblock + ib].qs[4*it + b];
+            }
+        }
+    }
+}
+
+void quantize_row_q1_0_g128_r8_ref(const float * x, block_q1_0_g128_r8 * y, int64_t n) {
+    quantize_row_q1_0_g128_r8(x, (void *)y, n);
+}
+
+void vec_dot_q1_0_g128_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q1_0_G128_R8, vx, 0, GGML_TYPE_Q8_K128, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n % QK1_0_G128 == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
 }
 
 namespace {

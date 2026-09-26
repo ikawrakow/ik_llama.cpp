@@ -214,7 +214,9 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ3_KS        = 154, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ2_KL        = 155, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ1_KT        = 156, // except 1d tensors
-                                                //
+
+        LLAMA_FTYPE_MOSTLY_Q1_0_G128_R8  = 160, // except 1d tensors, 38 to be compatible with mainline
+
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q5_0_R4       = 208, // except 1d tensors

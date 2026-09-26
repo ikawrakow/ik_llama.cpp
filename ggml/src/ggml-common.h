@@ -416,10 +416,11 @@ typedef struct {
 static_assert(sizeof(block_q8_K64) == sizeof(float) + 64, "wrong q8_K64 block size/padding");
 typedef struct {
     float   d;              // delta
+    int32_t s;              // bsums[0] + bsums[1] + bsums[2] + bsums[3]
     int16_t bsums[4];       // quant sums for blocks of 32
     int8_t  qs[128];        // quants
 } block_q8_K128;
-static_assert(sizeof(block_q8_K128) == sizeof(float) + 4*sizeof(int16_t) + 128, "wrong q8_K128 block size/padding");
+static_assert(sizeof(block_q8_K128) == sizeof(float) + sizeof(int32_t) + 4*sizeof(int16_t) + 128, "wrong q8_K128 block size/padding");
 
 typedef struct {
     ggml_half d[8];         // delta
@@ -560,6 +561,14 @@ typedef struct {
     uint8_t    qs[QK1_0_G128 / 8];
 } block_q1_0_g128;
 static_assert(sizeof(block_q1_0_g128) == sizeof(ggml_half) + QK1_0_G128 / 8, "wrong q1_0_g128 block size/padding");
+
+// 8-row repack: qs[32*tile + 4*row + byte] holds the 8 rows of one 32-element tile.
+#define QK1_0_G128_R8_ROWS 8
+typedef struct {
+    ggml_half d[QK1_0_G128_R8_ROWS];
+    uint8_t   qs[QK1_0_G128];
+} block_q1_0_g128_r8;
+static_assert(sizeof(block_q1_0_g128_r8) == QK1_0_G128_R8_ROWS*sizeof(ggml_half) + QK1_0_G128, "wrong q1_0_g128_r8 block size/padding");
 
 //
 // Bitnet and TriLM - implemented as 1.625 bpw
