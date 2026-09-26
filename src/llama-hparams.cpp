@@ -4,6 +4,7 @@
 #include "llama-model.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <map>
 
@@ -2304,6 +2305,22 @@ void llm_load_hparams(
                         hparams.dsv4_hc_lag = true;
                         hparams.dsv4_q_head_norm = false;
                         LLAMA_LOG_INFO("%s: DeepSeek-V4.1 compressed streams: csa ratio %u, hca ratio %u, shared from source layers\n", __func__, csa_ratio, hca_ratio);
+                    }
+                    if (std::getenv("V41_SEPARATE") != nullptr) {
+                        {
+                            uint32_t src = 0;
+                            if (ml.get_key(LLM_KV_CANDIDATE_SOURCE_LAYER, src, false)) {
+                                hparams.dsv4_candidate_source_layer = (int32_t) src;
+                            }
+                        }
+                        ml.get_key(LLM_KV_CANDIDATE_BLOCK_SIZE,  hparams.dsv4_candidate_block_size,  false);
+                        ml.get_key(LLM_KV_CANDIDATE_TOPK_BLOCKS, hparams.dsv4_candidate_topk_blocks, false);
+                        if (hparams.dsv4_candidate_source_layer < 0) { hparams.dsv4_candidate_source_layer = 20; }
+                        if (hparams.dsv4_candidate_block_size == 0)  { hparams.dsv4_candidate_block_size  = 8; }
+                        if (hparams.dsv4_candidate_topk_blocks == 0) { hparams.dsv4_candidate_topk_blocks = 2048; }
+                        LLAMA_LOG_INFO("%s: DSV4.1 hierarchical indexer: candidate source layer = %d, block size = %u, top-k blocks = %u\n",
+                                __func__, hparams.dsv4_candidate_source_layer,
+                                hparams.dsv4_candidate_block_size, hparams.dsv4_candidate_topk_blocks);
                     }
                     if (hparams.dsv4_hc_mult == 0) {
                         throw std::runtime_error("DeepSeek-V4 hyper_connection.count is missing and could not be inferred");

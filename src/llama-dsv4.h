@@ -16,3 +16,6 @@ enum llama_spec_ckpt_restore_result llama_dsv4_spec_ckpt_restore(llama_context *
 void llama_dsv4_spec_ckpt_discard(llama_context * ctx);
 ggml_tensor * llama_dsv4_spec_ckpt_delta(llama_context * ctx, ggml_tensor * state_tensor);
 void llama_dsv4_spec_ckpt_record_plan(llama_context * ctx);
+
+int64_t llama_dsv4_idx_score_chunk(int64_t n_lid, int64_t n_indexer_head, int64_t n_stream);
+int64_t llama_dsv4_idx_chunk_nodes(int64_t n_tokens, int64_t n_lid, int64_t n_indexer_head, int64_t n_stream, int64_t n_unfused);
