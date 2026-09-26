@@ -692,6 +692,7 @@ bool llama_prepare_dflash_graph_inputs(
         // keep in sync with the draft batch geometry: block starts one past
         // the newest committed feature row
         const int32_t draft_pos_base = (int32_t) last_target_pos + 1;
+        const bool bidir = lctx.model.hparams.dflash_block_bidir;
 
         if (kq_mask_swa->type == GGML_TYPE_F16) {
             const ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
@@ -700,13 +701,16 @@ bool llama_prepare_dflash_graph_inputs(
             for (uint32_t j = 0; j < n_tokens; ++j) {
                 ggml_fp16_t * row = mask_swa_f16.data() + (size_t) j * (size_t) n_kv_total;
                 const int32_t q_pos = draft_pos_base + (int32_t) j;
+                // bidir blocks see one window anchored at the newest committed position; causal
+                // drafts slide it with the query row
+                const int32_t win_ref_pos = bidir ? draft_pos_base - 1 : q_pos;
 
                 for (int32_t k = 0; k < cross_ctx; ++k) {
                     if (!lctx.dflash.kv.cache_slot_valid[(size_t) k]) {
                         continue;
                     }
                     const int32_t k_pos = (int32_t) lctx.dflash.target.pos_ctx_data[(size_t) k];
-                    if (q_pos - k_pos < swa_window) {
+                    if (win_ref_pos - k_pos < swa_window) {
                         row[k] = h_zero;
                     }
                 }
@@ -715,7 +719,7 @@ bool llama_prepare_dflash_graph_inputs(
                     const int32_t block_k = k - cross_ctx;
                     // Follow the draft model's attention contract. DFlash2 proposal blocks are
                     // non-causal unless the model metadata explicitly requests causal attention.
-                    if ((!lctx.cparams.causal_attn || block_k <= (int32_t) j) &&
+                    if ((!lctx.cparams.causal_attn || block_k <= (int32_t) j || bidir) &&
                             ((int32_t) j - block_k) < swa_window) {
                         row[k] = h_zero;
                     }
@@ -727,13 +731,15 @@ bool llama_prepare_dflash_graph_inputs(
             for (uint32_t j = 0; j < n_tokens; ++j) {
                 float * row = lctx.dflash.target.kq_mask_swa_data.data() + (size_t) j * (size_t) n_kv_total;
                 const int32_t q_pos = draft_pos_base + (int32_t) j;
+                // one window at the newest committed position for bidir, per-row sliding otherwise
+                const int32_t win_ref_pos = bidir ? draft_pos_base - 1 : q_pos;
 
                 for (int32_t k = 0; k < cross_ctx; ++k) {
                     if (!lctx.dflash.kv.cache_slot_valid[(size_t) k]) {
                         continue;
                     }
                     const int32_t k_pos = (int32_t) lctx.dflash.target.pos_ctx_data[(size_t) k];
-                    if (q_pos - k_pos < swa_window) {
+                    if (win_ref_pos - k_pos < swa_window) {
                         row[k] = 0.0f;
                     }
                 }
@@ -743,7 +749,7 @@ bool llama_prepare_dflash_graph_inputs(
                     // Intra-block draft tokens are contiguous from draft_pos_base, so the
                     // SWA distance is (j - block_k); apply the model's causal setting and
                     // the same window bound as the cross-context section above.
-                    if ((!lctx.cparams.causal_attn || block_k <= (int32_t) j) &&
+                    if ((!lctx.cparams.causal_attn || block_k <= (int32_t) j || bidir) &&
                             ((int32_t) j - block_k) < swa_window) {
                         row[k] = 0.0f;
                     }

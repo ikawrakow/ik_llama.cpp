@@ -222,7 +222,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 auto this_qkv = qkv + first*nb1/sizeof(float);
                 if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
                          Dk, Dv, neq2_this_thread, this_nkv, nbq2, row_size_k, row_size_v, 0, Dv,
-                         (const float *)this_q, work_k, k == v ? work_k : work_v, work_m, (const float *)sinks, 1,
+                         (const float *)this_q, work_k, k == v ? work_k : work_v, work_m, sinks ? (const float *)sinks + first : nullptr, 1,
                          scale, softcap,
                          this_qkv, nullptr, nullptr)) return false;
                 return true;
@@ -514,7 +514,13 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
         //int nk = 32 * (nek2*nek1/(32*nth));
         int nkk = (nek1 + nk - 1)/nk;
         int nstep_k = nek2*nkk;
-        //if (ith == 0) printf("rk2 = %d, nek1 = %d, nek2 = %d, nk = %d, nkk = %d, nstep_k = %d\n", (int)rk2, (int)nek1, (int)nek2, nk, nkk, nstep_k);
+        //if (ith == 0) {
+        //    static int last_nek1 = 0;
+        //    if (last_nek1 != nek1) {
+        //        printf("rk2 = %d, nek1 = %d, nek2 = %d, nk = %d, nkk = %d, nstep_k = %d\n", (int)rk2, (int)nek1, (int)nek2, nk, nkk, nstep_k);
+        //        last_nek1 = nek1;
+        //    }
+        //}
         for (int istep_k = ith; istep_k < nstep_k; istep_k += nth) {
             int ik02 = istep_k/nkk;
             int ik01 = nk*(istep_k - ik02*nkk);

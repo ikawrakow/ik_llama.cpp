@@ -158,11 +158,30 @@ ggml_cgraph * llm_build_context::build_lfm2() {
         inpL = ggml_add(ctx0, prev, op_out);
         cb(inpL, "operator_residual", il);
 
-        inpL = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, inpL,
-                model.layers[il].ffn_up, nullptr, nullptr,
-                model.layers[il].ffn_gate, nullptr, nullptr,
-                model.layers[il].ffn_down, nullptr, nullptr,
-                nullptr, LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true, false);
+        if (model.layers[il].ffn_gate_inp == nullptr) {
+            inpL = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, inpL,
+                    model.layers[il].ffn_up, nullptr, nullptr,
+                    model.layers[il].ffn_gate, nullptr, nullptr,
+                    model.layers[il].ffn_down, nullptr, nullptr,
+                    nullptr, LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true, false);
+        } else {
+            GGML_ASSERT(model.layers[il].ffn_down_exps != nullptr);
+            inpL = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, inpL,
+                    model.layers[il].ffn_gate_inp,  nullptr,
+                    model.layers[il].ffn_up_exps,   nullptr,
+                    model.layers[il].ffn_gate_exps, nullptr,
+                    model.layers[il].ffn_down_exps, nullptr,
+                    model.layers[il].ffn_exp_probs_b,
+                    nullptr, nullptr,
+                    nullptr, nullptr,
+                    nullptr, nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, hparams.expert_weights_norm,
+                    hparams.expert_weights_scale != 0.0f, hparams.expert_weights_scale,
+                    (llm_expert_gating_func_type) hparams.expert_gating_func,
+                    LLM_FFN_SILU, cb, il, gf, true,
+                    model.layers[il].ffn_up_gate_exps, nullptr);
+        }
         inpL = lctx.cvec.apply_to(ctx0, inpL, il);
         cb(inpL, "l_out", il);
     }

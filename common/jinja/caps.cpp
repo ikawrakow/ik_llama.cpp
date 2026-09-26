@@ -111,7 +111,7 @@ caps caps_get(jinja::program & prog) {
         },
         [&]() {
             // tools
-            return json{nullptr};
+            return json::array();
         },
         [&](bool success, value & messages, value &) {
             auto & content = messages->at(0)->at("content");

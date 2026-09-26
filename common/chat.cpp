@@ -784,9 +784,6 @@ static std::string common_chat_template_direct_apply_impl(
         {"bos_token", tmpl.bos_token()},
         {"eos_token", tmpl.eos_token()},
         {"enable_thinking", inputs.enable_thinking},
-        // LFM2.5: whether previous assistant reasoning is kept in the prompt
-        // (separate from enable_thinking; can be overridden via chat_template_kwargs)
-        {"preserve_thinking", false},
     };
     // openPangu's chat template gates reasoning on a `thinking` variable rather than the
     // ecosystem-standard `enable_thinking`, so the normal toggle never reaches it. Bridge the
@@ -1873,6 +1870,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     common_chat_params data;
 
     const bool is_v4 = tmpl.source().find("function_calls") == std::string::npos;
+    const bool is_v41 = is_v4 && tmpl.source().find("' invoke") != std::string::npos;
 
     std::optional<json> adjusted_messages;
     if (is_v4) {
@@ -1898,13 +1896,14 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     const std::string DSML         = "｜DSML｜";
     const std::string THINK_START  = "<think>";
     const std::string THINK_END    = "</think>";
-    const std::string TC_BLOCK     = is_v4 ? "tool_calls" : "function_calls";
+    const std::string TAG_SPACE    = is_v41 ? " " : "";
+    const std::string TC_BLOCK     = is_v41 ? " calls" : (is_v4 ? "tool_calls" : "function_calls");
     const std::string FC_START     = "<" + DSML + TC_BLOCK + ">";
     const std::string FC_END       = "</" + DSML + TC_BLOCK + ">";
-    const std::string INVOKE_START = "<" + DSML + "invoke";
-    const std::string INVOKE_END   = "</" + DSML + "invoke>";
-    const std::string PARAM_START  = "<" + DSML + "parameter";
-    const std::string PARAM_END    = "</" + DSML + "parameter>";
+    const std::string INVOKE_START = "<" + DSML + TAG_SPACE + "invoke";
+    const std::string INVOKE_END   = "</" + DSML + TAG_SPACE + "invoke>";
+    const std::string PARAM_START  = "<" + DSML + TAG_SPACE + "parameter";
+    const std::string PARAM_END    = "</" + DSML + TAG_SPACE + "parameter>";
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
@@ -2459,7 +2458,7 @@ static common_chat_params common_chat_params_init_k2_horizon(const common_chat_t
             auto func_parser = p.tool(
                 p.tool_open(p.literal(TOOL_CALL_BEGIN) + p.tool_name(p.literal(name)) + p.literal("\n")) +
                 p.tool_args(args) +
-                p.tool_close(p.optional(p.literal(TOOL_CALL_END))));
+                p.tool_close(p.literal(TOOL_CALL_END)));
 
             tool_choice |= p.rule("tool-" + name, func_parser);
         });
@@ -2919,14 +2918,17 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_minimax_m3(tmpl, params);
     }
 
-    // DeepSeek V3.2/V4 format detection: template defines dsml_token and uses it for tool calls.
+    // DeepSeek V3.2/V4/V4.1 format detection: template defines dsml_token and uses it for tool calls.
     // The template source contains the token as a variable assignment, not as a literal in markup.
-    // V3.2 names the tool call block "function_calls", V4 names it "tool_calls".
+    // V3.2 names the tool call block "function_calls", V4 names it "tool_calls", V4.1 names it
+    // " calls" (leading space; the invoke/parameter tags are spaced too).
     if (src.find("dsml_token") != std::string::npos &&
         src.find("DSML") != std::string::npos &&
         (src.find("function_calls") != std::string::npos ||
-         src.find("tool_calls") != std::string::npos)) {
-        LOG_DBG("Using specialized template: DeepSeek V3.2/V4\n");
+         src.find("tool_calls") != std::string::npos ||
+         src.find("' calls>") != std::string::npos ||
+         src.find("' invoke") != std::string::npos)) {
+        LOG_DBG("Using specialized template: DeepSeek V3.2/V4/V4.1\n");
         return common_chat_params_init_deepseek_v3_2(tmpl, params);
     }
 

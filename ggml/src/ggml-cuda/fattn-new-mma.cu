@@ -1990,7 +1990,7 @@ static void launch_fattn_new_mma(
         blocks_num.y = 1;
         blocks_num.z = 1;
 
-        dst_tmp_meta.alloc(blocks_num.x*ncols * (2*2 + DV) * sizeof(float));
+        dst_tmp_meta.alloc(((size_t) blocks_num.x) * ncols * (2 + DV/2));
     } else {
         GGML_ASSERT(K->ne[1] % KQ_row_granularity == 0);
         const int ntiles_KQ = K->ne[1] / KQ_row_granularity; // Max. number of parallel blocks limited by tensor size.

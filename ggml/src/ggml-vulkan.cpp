@@ -10495,7 +10495,11 @@ static bool ggml_backend_vk_supports_op(ggml_backend_t backend, const ggml_tenso
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_IQ4_NL:
                     case GGML_TYPE_IQ4_KS:
+                        break;
                     case GGML_TYPE_IQ4_KT:
+                        if (op->src[0]->ne[0] % ggml_blck_size(src0_type) != 0) {
+                            return false;
+                        }
                         break;
                     default:
                         return false;
@@ -10604,10 +10608,11 @@ static bool ggml_backend_vk_supports_op(ggml_backend_t backend, const ggml_tenso
                     case GGML_TYPE_IQ3_XXS:
                     case GGML_TYPE_IQ3_S:
                     case GGML_TYPE_IQ4_KS:
-                    case GGML_TYPE_IQ4_KT:
                         // these two are addressed by row rather than through nb01/02/03,
                         // which cannot express a per-row scale, so only contiguous src0
                         return ggml_is_contiguous(op->src[0]);
+                    case GGML_TYPE_IQ4_KT:
+                        return ggml_is_contiguous(op->src[0]) && op->src[0]->ne[0] % ggml_blck_size(op->src[0]->type) == 0;
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_IQ4_NL:
                         return true;

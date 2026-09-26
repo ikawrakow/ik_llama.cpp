@@ -168,7 +168,7 @@ ggml_cgraph * llm_build_context::build_k_shift() {
         ? LLAMA_ROPE_TYPE_NEOX
         : hparams.rope_type;
 
-    const float yarn_attn_factor_shift = model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_DEEPSEEK4 || model.arch == LLM_ARCH_MISTRAL4
+    const float yarn_attn_factor_shift = model.arch == LLM_ARCH_DEEPSEEK2 || llm_arch_is_dsv4(model.arch) || model.arch == LLM_ARCH_MISTRAL4
         ? 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale))
         : cparams.yarn_attn_factor;
 
@@ -468,6 +468,8 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
     struct ggml_tensor * cur = nullptr;
 
     if (batch.token) {
+        lctx.inp_engram_rows.clear();
+        lctx.inp_engram_gate_ids.clear();
         lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
 
         cb(lctx.inp_tokens, "inp_tokens", -1);
@@ -611,7 +613,8 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask_swa_win(int64_t n_kv_win, boo
     return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa_win, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa_win;
 }
 
-ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed) {
+ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed,
+        const llama_kv_cache * kv) {
     if (windowed) *windowed = false;
     lctx.swa_window_view = {};
 
@@ -619,12 +622,15 @@ ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool 
         return nullptr;
     }
 
+    const llama_kv_cache & cache = kv ? *kv : kv_self;
+    const int32_t cache_n_kv = kv ? (int32_t) kv->n : n_kv;
+
     const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
-    const int64_t live = compacted
-        ? (int64_t) swa_head - (int64_t) kv_self.sink_rows + n_tokens : 0;
+    const int64_t live = !compacted ? 0 : kv ? (int64_t) kv->live_swa()
+        : (int64_t) swa_head - (int64_t) kv_self.sink_rows + n_tokens;
     const llama_swa_window_view view = compacted
-        ? llama_swa_calc_window_view_compact(live, kv_self.sink_rows, n_tokens, window, pad)
-        : llama_swa_calc_window_view(n_kv, n_tokens, window, pad);
+        ? llama_swa_calc_window_view_compact(live, cache.sink_rows, n_tokens, window, pad)
+        : llama_swa_calc_window_view(cache_n_kv, n_tokens, window, pad);
 
     if (!view.engaged) {
         return build_inp_KQ_mask_swa();
@@ -633,7 +639,7 @@ ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool 
     lctx.swa_window_view = {
         true,
         compacted,
-        n_kv,
+        cache_n_kv,
         n_tokens,
         window,
         pad,
@@ -897,6 +903,8 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
     struct ggml_tensor * inpL;
 
     if (batch.token) {
+        lctx.inp_engram_rows.clear();
+        lctx.inp_engram_gate_ids.clear();
         lctx.inp_tokens = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, batch.n_tokens);
         cb(lctx.inp_tokens, "inp_tokens", -1);
         ggml_set_input(lctx.inp_tokens);
@@ -2303,7 +2311,7 @@ ggml_tensor * llm_build_context::llm_build_kv(
         ggml_build_forward_expand(graph, v_cur);
     }
 
-    const bool compacted = kv.is_compacted(il);
+    const bool compacted = kv.is_compacted(kv_il >= 0 ? kv_il : il);
     const bool use_swa_window = compacted && lctx.swa_window_view.active;
     const int32_t store_head = compacted ? swa_head : kv_head;
     const int32_t n_kv_view = use_swa_window ? (int32_t) lctx.swa_window_view.w_view : n_kv;
@@ -2827,6 +2835,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
                 result = llm.build_mellum();
             } break;
         case LLM_ARCH_LFM2:
+        case LLM_ARCH_LFM2MOE:
             {
                 result = llm.build_lfm2();
             } break;
@@ -2958,6 +2967,11 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_DEEPSEEK4:
             {
                 result = llm.build_deepseek4();
+            } break;
+        case LLM_ARCH_DEEPSEEK41:
+            {
+                static const bool v41_separate = getenv("V41_SEPARATE") != nullptr;
+                result = v41_separate ? llm.build_deepseek41() : llm.build_deepseek4();
             } break;
         case LLM_ARCH_OPENPANGU:
             {

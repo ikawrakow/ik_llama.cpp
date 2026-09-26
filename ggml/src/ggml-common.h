@@ -416,10 +416,11 @@ typedef struct {
 static_assert(sizeof(block_q8_K64) == sizeof(float) + 64, "wrong q8_K64 block size/padding");
 typedef struct {
     float   d;              // delta
+    int32_t s;              // bsums[0] + bsums[1] + bsums[2] + bsums[3]
     int16_t bsums[4];       // quant sums for blocks of 32
     int8_t  qs[128];        // quants
 } block_q8_K128;
-static_assert(sizeof(block_q8_K128) == sizeof(float) + 4*sizeof(int16_t) + 128, "wrong q8_K128 block size/padding");
+static_assert(sizeof(block_q8_K128) == sizeof(float) + sizeof(int32_t) + 4*sizeof(int16_t) + 128, "wrong q8_K128 block size/padding");
 
 typedef struct {
     ggml_half d[8];         // delta
@@ -427,11 +428,15 @@ typedef struct {
 } block_q8_k_r8;
 static_assert(sizeof(block_q8_k_r8) == 8*sizeof(ggml_half) + 8*QK_K, "wrong q8_k_r8 block size/padding");
 
+#define GGML_Q8_K_R16_ALIGN 64
+
 typedef struct {
-    ggml_half d[16];         // delta
+    float     d[16];         // delta
     int8_t    qs[16*QK_K];   // quants, stored as unsigned ints
 } block_q8_k_r16;
-static_assert(sizeof(block_q8_k_r16) == 16*sizeof(ggml_half) + 16*QK_K, "wrong q8_k_r16 block size/padding");
+static_assert(16*sizeof(float) == GGML_Q8_K_R16_ALIGN, "q8_k_r16 header must be exactly one alignment unit");
+static_assert(sizeof(block_q8_k_r16) == GGML_Q8_K_R16_ALIGN + 16*QK_K, "wrong q8_k_r16 block size/padding");
+static_assert(sizeof(block_q8_k_r16) % GGML_Q8_K_R16_ALIGN == 0, "q8_k_r16 block stride must keep qs aligned");
 
 // (Almost) "true" 2-bit quantization.
 // Due to the need to use blocks as per ggml design, it ends up using
@@ -557,6 +562,14 @@ typedef struct {
 } block_q1_0_g128;
 static_assert(sizeof(block_q1_0_g128) == sizeof(ggml_half) + QK1_0_G128 / 8, "wrong q1_0_g128 block size/padding");
 
+// 8-row repack: qs[32*tile + 4*row + byte] holds the 8 rows of one 32-element tile.
+#define QK1_0_G128_R8_ROWS 8
+typedef struct {
+    ggml_half d[QK1_0_G128_R8_ROWS];
+    uint8_t   qs[QK1_0_G128];
+} block_q1_0_g128_r8;
+static_assert(sizeof(block_q1_0_g128_r8) == QK1_0_G128_R8_ROWS*sizeof(ggml_half) + QK1_0_G128, "wrong q1_0_g128_r8 block size/padding");
+
 //
 // Bitnet and TriLM - implemented as 1.625 bpw
 //
@@ -626,6 +639,12 @@ typedef struct {
     uint8_t  qs[QK_K*2];
 } block_iq4_ks_r4;
 static_assert(sizeof(block_iq4_ks_r4) == 4*sizeof(block_iq4_ks), "wrong iq4_ks_r4 block size/padding");
+
+typedef struct {
+    uint8_t  scales[16];
+    uint8_t  qs[8*QK8_0];
+} block_iq4_ks_r16;
+static_assert(sizeof(block_iq4_ks_r16) == 16 + 8*QK8_0, "wrong iq4_ks_r16 block size/padding");
 
 typedef struct {
     uint32_t qs[QK_K/8];

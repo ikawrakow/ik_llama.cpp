@@ -3832,6 +3832,8 @@ struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ3_KT> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
 };
 
+#include "mmq_kt_tail.cuh"
+
 template <int mmq_x, int mmq_y, int nwarps, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ5_KS> {
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq5_ks<mmq_y, nwarps, need_check>;
@@ -3846,7 +3848,7 @@ struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ5_KS_R4> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
 };
 
-template <ggml_type type, int mmq_x, int nwarps, bool need_check, bool fixup>
+template <ggml_type type, int mmq_x, int nwarps, bool need_check, bool fixup, bool has_tail>
 static __device__ void mul_mat_q_process_tile(
     const char * __restrict__ x, const char * __restrict__ yc, float * __restrict__ dst, float * __restrict__ tmp_fixup,
     const int & ne00, const int & ne01, const int & stride01, const int & ne10, const int & ne11, const int & stride11, const int & ne0,
@@ -3877,7 +3879,9 @@ static __device__ void mul_mat_q_process_tile(
 
     const int * y = (const int *) yc + jt*(mmq_x*sizeof(block_q8_1_mmq)/sizeof(int));
 
-    for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+    const int kb0_full_stop = has_tail ? min(kb0_stop, ne00/qk) : kb0_stop;
+    int kb0 = kb0_start;
+    for (; kb0 < kb0_full_stop; kb0 += blocks_per_iter) {
         load_tiles(x + int64_t(stride01)*it*mmq_y, tile_x, kb0, tile_x_max_i, stride01);
 
         {
@@ -3913,6 +3917,24 @@ static __device__ void mul_mat_q_process_tile(
         __syncthreads();
     }
 
+    if constexpr (has_tail) {
+        if (kb0 < kb0_stop) {
+            mmq_kt_tail<type>::template load<mmq_y, nwarps, need_check>(x + int64_t(stride01)*it*mmq_y, tile_x, kb0, tile_x_max_i, stride01, (ne00 % qk)/32);
+#pragma unroll
+            for (int k = 0; k < 2; ++k) {
+                const int * by0 = y + stride11*(kb0*(qk*sizeof(block_q8_1_mmq) / (4*QK8_1*sizeof(int))) + k*sizeof(block_q8_1_mmq)/sizeof(int));
+#pragma unroll
+                for (int l0 = 0; l0 < mmq_x*MMQ_TILE_Y_K; l0 += nwarps*WARP_SIZE) {
+                    int l = l0 + threadIdx.y*WARP_SIZE + threadIdx.x;
+                    tile_y[l] = by0[l];
+                }
+                __syncthreads();
+                vec_dot(tile_x, tile_y, sum, k*WARP_SIZE);
+                __syncthreads();
+            }
+        }
+    }
+
     if (fixup) {
         write_back(sum, tmp_fixup + blockIdx.x*(mmq_x*mmq_y), mmq_y, mmq_y, mmq_x);
     } else {
@@ -3923,7 +3945,7 @@ static __device__ void mul_mat_q_process_tile(
 
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
 
-template <ggml_type type, int mmq_x, int nwarps, bool need_check>
+template <ggml_type type, int mmq_x, int nwarps, bool need_check, bool has_tail>
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*nwarps, 2)
@@ -3952,14 +3974,14 @@ static __global__ void mul_mat_q(
 #if (defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) || __CUDA_ARCH__ < CC_VOLTA
     {
         constexpr bool fixup = false;
-        mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
+        mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup, has_tail>
             (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
-                blockIdx.x, blockIdx.y, 0, ne00/qk);
+                blockIdx.x, blockIdx.y, 0, (ne00 + qk - 1)/qk);
         return;
     }
 #endif // (defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) || __CUDA_ARCH__ < CC_VOLTA
 
-    const     int64_t blocks_per_ne00 = ne00 / qk;
+    const     int64_t blocks_per_ne00 = (ne00 + qk - 1) / qk;
     constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
 
     const int ntx = (ne11 + mmq_x - 1) / mmq_x; // Number of tiles x
@@ -3980,7 +4002,7 @@ static __global__ void mul_mat_q(
         const int it = (kbc - jt*(blocks_per_ne00*nty)) / blocks_per_ne00; // i index of current tile.
 
         constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
-        mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
+        mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup, has_tail>
             (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
              it, jt, kb0_start, kb0_stop);
 
@@ -3999,7 +4021,7 @@ static __global__ void mul_mat_q(
     const int it = (kbc - jt*(blocks_per_ne00*nty)) / blocks_per_ne00;
 
     constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
-    mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
+    mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup, has_tail>
         (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
             it, jt, kb0_start, kb0_stop);
 }
@@ -4012,7 +4034,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
     constexpr int     mmq_y           = get_mmq_y_device();
     constexpr int     qk              = ggml_cuda_type_traits<type>::qk;
     constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
-    const     int64_t blocks_per_ne00 = ne00 / qk;
+    const     int64_t blocks_per_ne00 = (ne00 + qk - 1) / qk;
 
     float sum[mmq_x*mmq_y / (nwarps*WARP_SIZE)] = {0.0f};
 
@@ -4108,8 +4130,8 @@ static int mmq_get_shmem(const int mmq_x, const int mmq_y, const int cc) {
     return shmem_x + GGML_PAD(shmem_y, MMQ_NWARPS*WARP_SIZE*sizeof(int));
 }
 
-template <ggml_type type, int mmq_x>
-static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+template <ggml_type type, int mmq_x, bool has_tail>
+static void launch_mul_mat_q_impl(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     const int id = ggml_cuda_get_device();
     const int cc = ggml_cuda_info().devices[id].cc;
     const int nsm = ggml_cuda_info().devices[id].nsm;
@@ -4122,8 +4144,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
     static bool shmem_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
     if (!shmem_limit_raised[id]) {
-        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, false>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
-        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, true>,  cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
+        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, false, has_tail>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
+        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, MMQ_NWARPS, true, has_tail>,  cudaFuncAttributeMaxDynamicSharedMemorySize, shmem));
         shmem_limit_raised[id] = true;
     }
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
@@ -4136,11 +4158,11 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     if (!use_stream_k) {
         if (args.ne01 % mmq_y == 0) {
             constexpr bool need_check = false;
-            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
+            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, has_tail><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
                 (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
         } else {
             constexpr bool need_check = true;
-            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
+            mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, has_tail><<<block_nums_xy_tiling, block_dims, shmem, stream>>>
                 (args.x, args.y, args.dst, nullptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
         }
         return;
@@ -4154,7 +4176,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     if (args.ne01 % mmq_y == 0) {
         constexpr bool need_check = false;
 
-        mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_mmq, block_dims, shmem, stream>>>
+        mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, has_tail><<<block_nums_mmq, block_dims, shmem, stream>>>
             (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
 
         mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, 0, stream>>>
@@ -4163,13 +4185,24 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     } else {
         constexpr bool need_check = true;
 
-        mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_mmq, block_dims, shmem, stream>>>
+        mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check, has_tail><<<block_nums_mmq, block_dims, shmem, stream>>>
             (args.x, args.y, args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.stride01, args.ne10, args.ne11, args.stride11, args.ne0);
 
         mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, 0, stream>>>
             (args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.ne11, args.ne0, block_nums_mmq.x);
 
     }
+}
+
+template <ggml_type type, int mmq_x>
+static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+    if constexpr (mmq_kt_tail<type>::value) {
+        if (args.ne00 % ggml_cuda_type_traits<type>::qk != 0) {
+            launch_mul_mat_q_impl<type, mmq_x, true>(ctx, args, stream);
+            return;
+        }
+    }
+    launch_mul_mat_q_impl<type, mmq_x, false>(ctx, args, stream);
 }
 
 template <ggml_type type>

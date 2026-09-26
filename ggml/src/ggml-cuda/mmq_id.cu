@@ -99,6 +99,7 @@ static __global__ void mmq_ids_helper(
         }
     }
     nex_prev = warp_reduce_sum<warp_size>(nex_prev);
+    ggml_cuda_syncwarp(); // the loop above writes store[], the loop below reads it back
 
     for (int itc = threadIdx.x; itc < it_compact; itc += warp_size) {
         const mmq_ids_helper_store store_it = store[itc];

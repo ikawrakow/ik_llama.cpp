@@ -231,8 +231,8 @@ struct bin_bcast_cuda {
                 (ne2*ne3 + block_dims.z - 1) / block_dims.z
             );
 
-            if (block_nums.z > 65535) {
-                // this is the maximum number of blocks in z dimension, fallback to 1D grid kernel
+            if (block_nums.y > 65535 || block_nums.z > 65535) {
+                // gridDim.y and gridDim.z are both limited to 65535, fallback to 1D grid kernel
                 int block_num = (ne0*ne1*ne2*ne3 + block_size - 1) / block_size;
                 k_bin_bcast_unravel<bin_op><<<block_num, block_size, 0, stream>>>(
                     src0_dd, src1_dd, dst_dd,

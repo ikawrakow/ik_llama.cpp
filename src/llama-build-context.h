@@ -159,7 +159,8 @@ struct llm_build_context {
 
     ggml_tensor * build_inp_KQ_mask_swa_win(int64_t n_kv_win, bool causal = true);
 
-    ggml_tensor * build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed = nullptr);
+    ggml_tensor * build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed = nullptr,
+            const llama_kv_cache * kv = nullptr);
 
     ggml_tensor * build_inp_mean();
 
@@ -303,6 +304,7 @@ struct llm_build_context {
 
     ggml_cgraph * build_deepseek2();
     ggml_cgraph * build_deepseek4();
+    ggml_cgraph * build_deepseek41();
     ggml_cgraph * build_openpangu();
 
     // openPangu attention sublayer body (shared by base layers and the NextN/MTP head):
