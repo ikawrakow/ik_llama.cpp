@@ -1629,6 +1629,7 @@ static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const D
     constexpr int n_rows = QK1_0_G128_R8_ROWS;
     const int nb = n/QK1_0_G128;
     const __m256i one = _mm256_set1_epi8(1);
+    const __m256i two = _mm256_set1_epi8(2);
 #ifndef HAVE_VNNI256
     const __m256i m1  = _mm256_set1_epi16(1);
 #endif
@@ -1657,15 +1658,23 @@ static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const D
             auto vd = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)x[ib].d));
             for (int l = 0; l < 4; ++l) {
                 auto bits = _mm256_loadu_si256((const __m256i *)x[ib].qs + l);
-                for (int k = 0; k < 4; ++k) {
-                    qx[k] = _mm256_slli_epi16(_mm256_and_si256(bits, one), 1);
-                    bits  = _mm256_srli_epi16(bits, 1);
-                }
+                qx[0] = _mm256_and_si256(_mm256_slli_epi16(bits, 1), two);
+                qx[1] = _mm256_and_si256(bits, two);
+                qx[2] = _mm256_and_si256(_mm256_srli_epi16(bits, 1), two);
+                qx[3] = _mm256_and_si256(_mm256_srli_epi16(bits, 2), two);
+                //for (int k = 0; k < 4; ++k) {
+                //    qx[k] = _mm256_slli_epi16(_mm256_and_si256(bits, one), 1);
+                //    bits  = _mm256_srli_epi16(bits, 1);
+                //}
                 for (int iy = 0; iy < nrc_y; ++iy) dot(q8.y[iy][ib].qs + 32*l, sumi[iy]);
-                for (int k = 0; k < 4; ++k) {
-                    qx[k] = _mm256_slli_epi16(_mm256_and_si256(bits, one), 1);
-                    bits  = _mm256_srli_epi16(bits, 1);
-                }
+                qx[0] = _mm256_and_si256(_mm256_srli_epi16(bits, 3), two);
+                qx[1] = _mm256_and_si256(_mm256_srli_epi16(bits, 4), two);
+                qx[2] = _mm256_and_si256(_mm256_srli_epi16(bits, 5), two);
+                qx[3] = _mm256_and_si256(_mm256_srli_epi16(bits, 6), two);
+                //for (int k = 0; k < 4; ++k) {
+                //    qx[k] = _mm256_slli_epi16(_mm256_and_si256(bits, one), 1);
+                //    bits  = _mm256_srli_epi16(bits, 1);
+                //}
                 for (int iy = 0; iy < nrc_y; ++iy) dot(q8.y[iy][ib].qs + 32*l + 16, sumi[iy]);
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
