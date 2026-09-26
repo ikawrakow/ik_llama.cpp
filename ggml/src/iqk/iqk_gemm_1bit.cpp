@@ -2089,6 +2089,148 @@ void iqk_convert_iq1_s_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int
     }
 }
 
+#if 0 // TODO: needs the x4-interleaved IQK activation layout
+// Prism ternary (PQ2_0 / PTQ1_0)
+
+static inline int ik_hsum_i32_4(const __m128i x) {
+    __m128i y = _mm_add_epi32(x, _mm_srli_si128(x, 8));
+    y = _mm_add_epi32(y, _mm_srli_si128(y, 4));
+    return _mm_cvtsi128_si32(y);
+}
+
+static inline __m128i ik_mul_sum_tern(const __m128i c, const __m128i y) {
+    const __m128i dot = _mm_maddubs_epi16(c, y);
+    const __m128i sum = _mm_maddubs_epi16(_mm_set1_epi8(1), y);
+    return _mm_madd_epi16(_mm_sub_epi16(dot, sum), _mm_set1_epi16(1));
+}
+
+static inline __m128i ik_dec_tr(__m128i * x) {
+    const __m128i biased = _mm_xor_si128(*x, _mm_set1_epi8(-128));
+    const __m128i ge1 = _mm_cmpgt_epi8(biased, _mm_set1_epi8(85 - 128));
+    const __m128i ge2 = _mm_cmpgt_epi8(biased, _mm_set1_epi8(170 - 128));
+    *x = _mm_add_epi8(*x, _mm_add_epi8(*x, *x));
+    return _mm_sub_epi8(_mm_setzero_si128(), _mm_add_epi8(ge1, ge2));
+}
+
+#if defined(__SSSE3__)
+static inline void ik_decode_ptq1_0_codes(const block_ptq1_0 * x, uint8_t * c) {
+    const __m128i zero = _mm_setzero_si128();
+    __m128i packed = _mm_loadu_si128((const __m128i *) x->qs);
+    for (int j = 0; j < 5; ++j) {
+        _mm_storeu_si128((__m128i *)(c + 16*j), ik_dec_tr(&packed));
+    }
+    __m128i tail = _mm_loadl_epi64((const __m128i *)(x->qs + 16));
+    for (int j = 0; j < 5; ++j) {
+        _mm_storel_epi64((__m128i *)(c + 80 + 8*j), ik_dec_tr(&tail));
+    }
+    uint16_t qh;
+    memcpy(&qh, x->qh, sizeof(qh));
+    const __m128i bits = _mm_unpacklo_epi8(_mm_set1_epi16((int16_t) qh), zero);
+    const __m128i muls = _mm_setr_epi16(1,1,3,3,9,9,27,27);
+    __m128i t = _mm_and_si128(_mm_mullo_epi16(bits, muls), _mm_set1_epi16(255));
+    __m128i q16 = _mm_sub_epi16(_mm_srli_epi16(_mm_add_epi16(t, _mm_add_epi16(t, t)), 8), _mm_set1_epi16(1));
+    q16 = _mm_add_epi16(q16, _mm_set1_epi16(1));
+    __m128i q8b = _mm_packus_epi16(q16, q16);
+    _mm_storel_epi64((__m128i *)(c + 120), q8b);
+}
+#else
+static inline void ik_decode_ptq1_0_codes(const block_ptq1_0 * x, uint8_t * c) {
+    static const uint8_t pow3[6] = {1, 3, 9, 27, 81, 243};
+    static const int stages[3] = {32, 16, 8};
+    int o = 0, j = 0;
+    for (int s = 0; s < 3; ++s) {
+        const int cc = stages[s];
+        for (; j + cc <= (int)sizeof(x->qs); j += cc) {
+            for (int nn = 0; nn < 5; ++nn) {
+                for (int m = 0; m < cc; ++m) {
+                    const uint8_t v = (uint8_t)(x->qs[j + m] * pow3[nn]);
+                    c[o++] = (uint8_t)(((uint16_t)v * 3) >> 8);
+                }
+            }
+        }
+    }
+    for (int nn = 0; nn < 4; ++nn) {
+        for (int h = 0; h < (int)sizeof(x->qh); ++h) {
+            const uint8_t v = (uint8_t)(x->qh[h] * pow3[nn]);
+            c[o++] = (uint8_t)(((uint16_t)v * 3) >> 8);
+        }
+    }
+}
+#endif
+
+template <int nrc_y>
+static void mul_mat_ptq1_0_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    const int nb = n / QK_PTQ1_0;
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const block_ptq1_0 * x = (const block_ptq1_0 *)((const char *)vx + ix*bx);
+        float acc[nrc_y] = {};
+        for (int ib = 0; ib < nb; ++ib) {
+            uint8_t c[QK_PTQ1_0];
+            ik_decode_ptq1_0_codes(x + ib, c);
+            const float d0 = GGML_FP16_TO_FP32(x[ib].d);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const block_q8_0 * y = (const block_q8_0 *)info.src1_row(iy) + 4*ib;
+#if defined(__SSSE3__)
+                float s = 0.0f;
+                for (int k = 0; k < 4; ++k) {
+                    const __m128i dd = _mm_add_epi32(
+                        ik_mul_sum_tern(_mm_loadu_si128((const __m128i *)(c + 32*k)),    _mm_loadu_si128((const __m128i *) y[k].qs)),
+                        ik_mul_sum_tern(_mm_loadu_si128((const __m128i *)(c + 32*k+16)), _mm_loadu_si128((const __m128i *) y[k].qs + 16)));
+                    s += GGML_FP16_TO_FP32(y[k].d) * (float) ik_hsum_i32_4(dd);
+                }
+                acc[iy] += d0 * s;
+#else
+                float s = 0.0f;
+                for (int k = 0; k < 4; ++k) {
+                    int isum = 0;
+                    for (int b = 0; b < 32; ++b) isum += ((int)c[32*k + b] - 1) * (int)y[k].qs[b];
+                    s += GGML_FP16_TO_FP32(y[k].d) * (float)isum;
+                }
+                acc[iy] += d0 * s;
+#endif
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+        }
+    }
+}
+
+template <int nrc_y>
+static void mul_mat_pq2_0_q8_K(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    const int nb = n / QK_PQ2_0;
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const block_pq2_0 * x = (const block_pq2_0 *)((const char *)vx + ix*bx);
+        float acc[nrc_y] = {};
+        for (int ib = 0; ib < nb; ++ib) {
+            uint8_t c[QK_PQ2_0];
+            for (int e = 0; e < QK_PQ2_0; ++e) {
+                c[e] = (uint8_t)((x[ib].qs[e >> 2] >> ((e & 3) * 2)) & 3);
+            }
+            const float d0 = GGML_FP16_TO_FP32(x[ib].d);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const block_q8_K * yb = (const block_q8_K *)info.src1_row(iy) + (ib >> 1);
+                const int8_t * q8 = yb->qs + 128 * (ib & 1);
+#if defined(__SSSE3__)
+                __m128i dd = _mm_setzero_si128();
+                for (int k = 0; k < 8; ++k) {
+                    dd = _mm_add_epi32(dd, ik_mul_sum_tern(_mm_loadu_si128((const __m128i *)(c + 16*k)), _mm_loadu_si128((const __m128i *)(q8 + 16*k))));
+                }
+                acc[iy] += d0 * yb->d * (float) ik_hsum_i32_4(dd);
+#else
+                int isum = 0;
+                for (int e = 0; e < QK_PQ2_0; ++e) isum += ((int)c[e] - 1) * (int)q8[e];
+                acc[iy] += d0 * yb->d * (float)isum;
+#endif
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+        }
+    }
+}
+#endif
+
 } // namespace
 
 bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& funcs, mul_mat_t& func16) {
@@ -2156,6 +2298,18 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
             expected_typeB = GGML_TYPE_Q8_K128;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q1_0_g128_r8_q8_k, funcs);
             break;
+#if 0 // TODO: needs the x4-interleaved IQK activation layout
+        case GGML_TYPE_PTQ1_0:
+            if (ne00 % QK_PTQ1_0 != 0) return false;
+            expected_typeB = GGML_TYPE_Q8_0;
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_ptq1_0_q8_0, funcs);
+            break;
+        case GGML_TYPE_PQ2_0:
+            if (ne00 % QK_PQ2_0 != 0) return false;
+            expected_typeB = GGML_TYPE_Q8_K;
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_pq2_0_q8_K, funcs);
+            break;
+#endif
 
         default:
             return false;
