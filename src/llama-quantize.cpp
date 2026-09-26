@@ -1034,14 +1034,12 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
     }
 }
 
-static constexpr size_t k_max_dequant_slab_bytes = 1ull << 30;
-
 static void do_quantize_slabbed(int nthread, const ggml_tensor * tensor, ggml_type new_type,
         std::vector<no_init<float>> & f32_buf, char * new_data, const float * imatrix,
         std::vector<std::thread> & workers, size_t & new_size, int chunk_size_multiplier,
         const llama_model_quantize_params * params) {
     const int64_t n_per_row = tensor->ne[0];
-    const int64_t max_slab_elements = k_max_dequant_slab_bytes / sizeof(float);
+    const int64_t max_slab_elements = params->slab_size / sizeof(float);
     const int64_t nslices = tensor->ne[2]*tensor->ne[3];
     ggml_tensor slab = *tensor;
     new_size = 0;
@@ -1785,8 +1783,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 float * f32_data = nullptr;
 
                 const bool is_extra_output = params->extra_output_type != GGML_TYPE_COUNT && tensor == output_tensor;
-                const bool use_slabs = !is_extra_output && tensor->type != GGML_TYPE_F32 && tensor->type != GGML_TYPE_I2_S &&
-                    new_type != GGML_TYPE_Q8_K_R16 && (size_t)nelements*sizeof(float) > k_max_dequant_slab_bytes;
+                const bool use_slabs = params->slab_size > 0 && !is_extra_output && tensor->type != GGML_TYPE_F32 && tensor->type != GGML_TYPE_I2_S &&
+                    new_type != GGML_TYPE_Q8_K_R16 && (size_t)nelements*sizeof(float) > params->slab_size;
 
                 if (tensor->type == GGML_TYPE_F32) {
                     f32_data = (float *) tensor->data;
