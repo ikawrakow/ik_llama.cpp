@@ -10649,14 +10649,6 @@ void dequantize_row_q1_0_g128(const block_q1_0_g128  * x, float * y, int64_t k) 
     }
 }
 
-static inline void dequantize_block_q1_0_g128(const block_q1_0_g128 & x, int8_t * y) {
-    constexpr uint8_t k_mask[8] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
-    for (int i = 0; i < QK1_0_G128/8; ++i) {
-        for (int j = 0; j < 8; ++j) y[j] = x.qs[i] & k_mask[j] ? 1 : 0;
-        y += 8;
-    }
-}
-
 void vec_dot_q1_0_g128_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
     assert(n % QK1_0_G128 == 0);
     assert(nrc == 1);
@@ -10697,43 +10689,6 @@ void vec_dot_q1_0_g128_q8_0(int n, float * s, size_t bs, const void * vx, size_t
     *s = sumf;
 }
 
-// 4 bits from row 0, 4 bits from row 1, ..., 4 bits from row 8
-// === bytes 0...31
-// bit 0: 0...3 -> row 0, 4...7 -> row 1, 8...11 -> row 2, 12...15 -> row 3, ..., 28...31 -> row 7: bits 0...3 in byte 0
-// bit 1: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 0
-// bit 2: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 1
-// bit 3: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 1
-// bit 4: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 2
-// bit 5: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 2
-// bit 6: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 3
-// bit 7: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 3
-// === bytes 32...63
-// bit 0: 0...3 -> row 0, 4...7 -> row 1, 8...11 -> row 2, 12...15 -> row 3, ..., 28...31 -> row 7: bits 0...3 in byte 4
-// bit 1: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 4
-// bit 2: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 5
-// bit 3: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 5
-// bit 4: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 6
-// bit 5: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 6
-// bit 6: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 7
-// bit 7: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 7
-// === bytes 64...95
-// bit 0: 0...3 -> row 0, 4...7 -> row 1, 8...11 -> row 2, 12...15 -> row 3, ..., 28...31 -> row 7: bits 0...3 in byte 8
-// bit 1: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 8
-// bit 2: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 9
-// bit 3: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 9
-// bit 4: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 10
-// bit 5: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 10
-// bit 6: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 11
-// bit 7: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 11
-// === bytes 96...128
-// bit 0: 0...3 -> row 0, 4...7 -> row 1, 8...11 -> row 2, 12...15 -> row 3, ..., 28...31 -> row 7: bits 0...3 in byte 12
-// bit 1: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 12
-// bit 2: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 13
-// bit 3: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 13
-// bit 4: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 14
-// bit 5: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 14
-// bit 6: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 15
-// bit 7: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 15
 //
 // xr[0][ib].qs[0]: bits 0...3 go into bytes 0...3, bit 0
 //                  bits 4...7 go into bytes 0...3, bit 1
@@ -10799,33 +10754,12 @@ void vec_dot_q1_0_g128_q8_0(int n, float * s, size_t bs, const void * vx, size_t
 // xr[7][ib].qs[7]: bits 0...3 go into bytes 32+28...31, bit 6
 //                  bits 4...7 go into bytes 32+28...31, bit 7
 
-static void dequantize_block_q1_0_g128_r8(const block_q1_0_g128_r8 & x, int8_t * y) {
-    for (int k = 0; k < 8; ++k) {
-        auto yk = y + 128*k;
-        for (int l = 0; l < 4; ++l) {
-            auto qx = x.qs + 32*l;
-            for (int i = 0; i < 4; ++i) {
-                uint8_t mask1 = 1 << (2*i+0);
-                uint8_t mask2 = 1 << (2*i+1);
-                for (int j = 0; j < 4; ++j) {
-                    yk[32*l + 8*i + j + 0] = qx[4*k + j] & mask1 ? 1 : 0;
-                }
-                for (int j = 0; j < 4; ++j) {
-                    yk[32*l + 8*i + j + 4] = qx[4*k + j] & mask2 ? 1 : 0;
-                }
-            }
-        }
-    }
-}
-
 void repack_q1_0_g128_r8(int nrows, int n_per_row, const block_q1_0_g128 * x, block_q1_0_g128_r8 * y, [[maybe_unused]] bool online) {
     GGML_ASSERT(nrows % QK1_0_G128_R8_ROWS == 0);
     GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
     constexpr uint8_t k_mask[8] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
     const int nblock = n_per_row/QK1_0_G128;
     const block_q1_0_g128 * xr[QK1_0_G128_R8_ROWS];
-    int8_t testx[QK1_0_G128];
-    int8_t testy[QK1_0_G128*QK1_0_G128_R8_ROWS];
     for (int row = 0; row < nrows; row += QK1_0_G128_R8_ROWS) {
         for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) xr[k] = x + nblock*k;
         for (int ib = 0; ib < nblock; ++ib) {
@@ -10845,21 +10779,28 @@ void repack_q1_0_g128_r8(int nrows, int n_per_row, const block_q1_0_g128 * x, bl
                     }
                 }
             }
-            dequantize_block_q1_0_g128_r8(y[ib], testy);
-            int nbad = 0;
-            for (int k = 0; k < 8; ++k) {
-                dequantize_block_q1_0_g128(xr[k][ib], testx);
-                for (int j = 0; j < 128; ++j) {
-                    if (testy[128*k + j] != testx[j]) ++nbad;
-                }
-            }
-            if (nbad > 0) {
-                printf("Oops: %d bad values in row %d, block %d\n", nbad, row, ib);
-                exit(1);
-            }
         }
         x += QK1_0_G128_R8_ROWS*nblock;
         y += nblock;
+    }
+}
+
+static void dequantize_block_q1_0_g128_r8(const block_q1_0_g128_r8 & x, int8_t * y) {
+    for (int k = 0; k < 8; ++k) {
+        auto yk = y + 128*k;
+        for (int l = 0; l < 4; ++l) {
+            auto qx = x.qs + 32*l;
+            for (int i = 0; i < 4; ++i) {
+                uint8_t mask1 = 1 << (2*i+0);
+                uint8_t mask2 = 1 << (2*i+1);
+                for (int j = 0; j < 4; ++j) {
+                    yk[32*l + 8*i + j + 0] = qx[4*k + j] & mask1 ? 1 : 0;
+                }
+                for (int j = 0; j < 4; ++j) {
+                    yk[32*l + 8*i + j + 4] = qx[4*k + j] & mask2 ? 1 : 0;
+                }
+            }
+        }
     }
 }
 
@@ -10871,14 +10812,24 @@ void dequantize_row_q1_0_g128_r8(const block_q1_0_g128_r8 * x, float * y, int64_
         float * yr = y + (int64_t)r*n_per_row;
         for (int ib = 0; ib < nblock; ++ib) {
             const float d = GGML_FP16_TO_FP32(x[ib].d[r]);
-            for (int e = 0; e < QK1_0_G128; ++e) {
-                const uint8_t q = x[ib].qs[32*(e/32) + 4*r + (e%32)/8];
-                yr[(int64_t)ib*QK1_0_G128 + e] = (q >> (e%8)) & 1 ? d : -d;
+            for (int l = 0; l < 4; ++l) {
+                auto qx = x[ib].qs + 32*l;
+                for (int i = 0; i < 4; ++i) {
+                    uint8_t mask1 = 1 << (2*i+0);
+                    uint8_t mask2 = 1 << (2*i+1);
+                    for (int j = 0; j < 4; ++j) {
+                        yr[(int64_t)ib*QK1_0_G128 + 32*l + 8*i + j + 0] = qx[4*r + j] & mask1 ? d : -d;
+                    }
+                    for (int j = 0; j < 4; ++j) {
+                        yr[(int64_t)ib*QK1_0_G128 + 32*l + 8*i + j + 4] = qx[4*r + j] & mask2 ? d : -d;
+                    }
+                }
             }
         }
     }
 }
 
+// TODO: fix this
 void quantize_row_q1_0_g128_r8(const float * x, void * vy, int64_t n) {
     auto y = (block_q1_0_g128_r8 *)vy;
     const int n_per_row = (int)(n/QK1_0_G128_R8_ROWS);
