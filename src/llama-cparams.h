@@ -46,6 +46,7 @@ struct llama_cparams {
     bool dsa = false;                 // enable GLM DSA sparse attention (off by default; opt-in via --dsa)
     bool fused_idx_topk = false;      // enable the fused indexer topk op (set from llama_context_params, where it is on by default)
     bool swa_compress = false;
+    bool dsv4_legacy_state = false;   // write DeepSeek-V4 state in the legacy full-slice layout (no MAGIC)
     int  dsa_top_k = -1;              // DSA top-k override (<0 => use the model's configured indexer_top_k)
     bool split_mode_graph_scheduling;
     //bool split_mode_f16;
