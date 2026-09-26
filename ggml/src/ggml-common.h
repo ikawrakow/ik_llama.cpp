@@ -416,10 +416,11 @@ typedef struct {
 static_assert(sizeof(block_q8_K64) == sizeof(float) + 64, "wrong q8_K64 block size/padding");
 typedef struct {
     float   d;              // delta
+    int32_t s;              // bsums[0] + bsums[1] + bsums[2] + bsums[3]
     int16_t bsums[4];       // quant sums for blocks of 32
     int8_t  qs[128];        // quants
 } block_q8_K128;
-static_assert(sizeof(block_q8_K128) == sizeof(float) + 4*sizeof(int16_t) + 128, "wrong q8_K128 block size/padding");
+static_assert(sizeof(block_q8_K128) == sizeof(float) + sizeof(int32_t) + 4*sizeof(int16_t) + 128, "wrong q8_K128 block size/padding");
 
 typedef struct {
     ggml_half d[8];         // delta

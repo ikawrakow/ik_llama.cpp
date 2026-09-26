@@ -3975,6 +3975,7 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
         const __m256 mul = _mm256_set1_ps( id );
         xx = xb;
         int8_t * q8 = y[i].qs;
+        int32_t isum = 0;
         for (int ib = 0; ib < kBlockSize/32; ++ib) {
             __m256 v0 = _mm256_mul_ps(mul, _mm256_loadu_ps(xx)); xx += 8;
             __m256 v1 = _mm256_mul_ps(mul, _mm256_loadu_ps(xx)); xx += 8;
@@ -3988,7 +3989,9 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
             __m256i i1 = _mm256_cvtps_epi32(v1);
             __m256i i2 = _mm256_cvtps_epi32(v2);
             __m256i i3 = _mm256_cvtps_epi32(v3);
-            y[i].bsums[ib] = hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)));
+            int s = hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)));
+            isum += s;
+            y[i].bsums[ib] = s;
             i0 = _mm256_packs_epi32( i0, i1 );
             i2 = _mm256_packs_epi32( i2, i3 );
             i0 = _mm256_packs_epi16( i0, i2 );
@@ -3996,6 +3999,7 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
             _mm256_storeu_si256((__m256i *)q8, i0);
             q8 += 32;
         }
+        y[i].s = isum;
     }
 #elif defined __ARM_NEON
     int32x4_t ival[8];
@@ -4012,6 +4016,7 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
         }
         y[i].d = smax/127;
         auto vid = vdupq_n_f32(127/smax);
+        int32_t isum_tot = 0;
         for (int ib = 0; ib < kBlockSize/32; ++ib) {
             auto isum = vdupq_n_s32(0);
             for (int k = 0; k < 8; ++k) {
@@ -4019,12 +4024,15 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
                 ival[k] = vcvtnq_s32_f32(vmulq_f32(val, vid));
                 isum = vaddq_s32(isum, ival[k]);
             }
-            y[i].bsums[ib] = vaddvq_s32(isum);
+            int s = vaddvq_s32(isum);
+            isum_tot += s;
+            y[i].bsums[ib] = s;
             for (int k = 0; k < 4; ++k) {
                 auto i16 = vcombine_s16(vmovn_s32(ival[2*k+0]), vmovn_s32(ival[2*k+1]));
                 vst1_s8(y[i].qs + 32*ib + 8*k, vmovn_s16(i16));
             }
         }
+        y[i].s = isum_tot;
     }
 #else
     for (int i = 0; i < nb; i++) {
@@ -4046,14 +4054,17 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
             int v = nearest_int(iscale*x[j]);
             y[i].qs[j] = v;
         }
+        int isum_tot = 0;
         for (int j = 0; j < kBlockSize/32; ++j) {
             int sum = 0;
             for (int ii = 0; ii < 32; ++ii) {
                 sum += y[i].qs[j*32 + ii];
             }
+            isum_tot += sum;
             y[i].bsums[j] = sum;
         }
         y[i].d = 1/iscale;
+        y[i].s = isum_tot;
         x += kBlockSize;
     }
 #endif
@@ -10638,6 +10649,14 @@ void dequantize_row_q1_0_g128(const block_q1_0_g128  * x, float * y, int64_t k) 
     }
 }
 
+static inline void dequantize_block_q1_0_g128(const block_q1_0_g128 & x, int8_t * y) {
+    constexpr uint8_t k_mask[8] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+    for (int i = 0; i < QK1_0_G128/8; ++i) {
+        for (int j = 0; j < 8; ++j) y[j] = x.qs[i] & k_mask[j] ? 1 : 0;
+        y += 8;
+    }
+}
+
 void vec_dot_q1_0_g128_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
     assert(n % QK1_0_G128 == 0);
     assert(nrc == 1);
@@ -10678,21 +10697,165 @@ void vec_dot_q1_0_g128_q8_0(int n, float * s, size_t bs, const void * vx, size_t
     *s = sumf;
 }
 
-// q1_0_g128_r8: qs[32*tile + 4*row + byte] = base[4*tile + byte] of that row.
+// 4 bits from row 0, 4 bits from row 1, ..., 4 bits from row 8
+// === bytes 0...31
+// bit 0: 0...3 -> row 0, 4...7 -> row 1, 8...11 -> row 2, 12...15 -> row 3, ..., 28...31 -> row 7: bits 0...3 in byte 0
+// bit 1: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 0
+// bit 2: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 1
+// bit 3: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 1
+// bit 4: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 2
+// bit 5: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 2
+// bit 6: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 3
+// bit 7: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 3
+// === bytes 32...63
+// bit 0: 0...3 -> row 0, 4...7 -> row 1, 8...11 -> row 2, 12...15 -> row 3, ..., 28...31 -> row 7: bits 0...3 in byte 4
+// bit 1: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 4
+// bit 2: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 5
+// bit 3: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 5
+// bit 4: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 6
+// bit 5: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 6
+// bit 6: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 7
+// bit 7: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 7
+// === bytes 64...95
+// bit 0: 0...3 -> row 0, 4...7 -> row 1, 8...11 -> row 2, 12...15 -> row 3, ..., 28...31 -> row 7: bits 0...3 in byte 8
+// bit 1: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 8
+// bit 2: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 9
+// bit 3: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 9
+// bit 4: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 10
+// bit 5: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 10
+// bit 6: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 11
+// bit 7: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 11
+// === bytes 96...128
+// bit 0: 0...3 -> row 0, 4...7 -> row 1, 8...11 -> row 2, 12...15 -> row 3, ..., 28...31 -> row 7: bits 0...3 in byte 12
+// bit 1: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 12
+// bit 2: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 13
+// bit 3: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 13
+// bit 4: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 14
+// bit 5: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 14
+// bit 6: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 0...3 in byte 15
+// bit 7: 0...3 -> row 0, 4...7 -> row 1, ..., 28...31 -> row 7: bits 4...7 in byte 15
+//
+// xr[0][ib].qs[0]: bits 0...3 go into bytes 0...3, bit 0
+//                  bits 4...7 go into bytes 0...3, bit 1
+// xr[1][ib].qs[0]: bits 0...3 go into bytes 4...7, bit 0
+//                  bits 4...7 go into bytes 4...7, bit 1
+// ...
+// xr[7][ib].qs[0]: bits 0...3 go into bytes 28...31, bit 0
+//                  bits 4...7 go into bytes 28...31, bit 1
+//
+// xr[0][ib].qs[1]: bits 0...3 go into bytes 0...3, bit 2
+//                  bits 4...7 go into bytes 0...3, bit 3
+// xr[1][ib].qs[1]: bits 0...3 go into bytes 4...7, bit 2
+//                  bits 4...7 go into bytes 4...7, bit 3
+// ...
+// xr[7][ib].qs[1]: bits 0...3 go into bytes 28...31, bit 2
+//                  bits 4...7 go into bytes 28...31, bit 3
+//
+// xr[0][ib].qs[2]: bits 0...3 go into bytes 0...3, bit 4
+//                  bits 4...7 go into bytes 0...3, bit 5
+// xr[1][ib].qs[2]: bits 0...3 go into bytes 4...7, bit 4
+//                  bits 4...7 go into bytes 4...7, bit 5
+// ...
+// xr[7][ib].qs[2]: bits 0...3 go into bytes 28...31, bit 4
+//                  bits 4...7 go into bytes 28...31, bit 5
+//
+// xr[0][ib].qs[3]: bits 0...3 go into bytes 0...3, bit 6
+//                  bits 4...7 go into bytes 0...3, bit 7
+// xr[1][ib].qs[3]: bits 0...3 go into bytes 4...7, bit 6
+//                  bits 4...7 go into bytes 4...7, bit 7
+// ...
+// xr[7][ib].qs[3]: bits 0...3 go into bytes 28...31, bit 6
+//                  bits 4...7 go into bytes 28...31, bit 7
+//
+// xr[0][ib].qs[4]: bits 0...3 go into bytes 32+0...3, bit 0
+//                  bits 4...7 go into bytes 32+0...3, bit 1
+// xr[1][ib].qs[4]: bits 0...3 go into bytes 32+4...7, bit 0
+//                  bits 4...7 go into bytes 32+4...7, bit 1
+// ...
+// xr[7][ib].qs[4]: bits 0...3 go into bytes 32+28...31, bit 0
+//                  bits 4...7 go into bytes 32+28...31, bit 1
+//
+// xr[0][ib].qs[5]: bits 0...3 go into bytes 32+0...3, bit 2
+//                  bits 4...7 go into bytes 32+0...3, bit 3
+// xr[1][ib].qs[5]: bits 0...3 go into bytes 32+4...7, bit 2
+//                  bits 4...7 go into bytes 32+4...7, bit 3
+// ...
+// xr[7][ib].qs[5]: bits 0...3 go into bytes 32+28...31, bit 2
+//                  bits 4...7 go into bytes 32+28...31, bit 3
+//
+// xr[0][ib].qs[6]: bits 0...3 go into bytes 32+0...3, bit 4
+//                  bits 4...7 go into bytes 32+0...3, bit 5
+// xr[1][ib].qs[6]: bits 0...3 go into bytes 32+4...7, bit 4
+//                  bits 4...7 go into bytes 32+4...7, bit 5
+// ...
+// xr[7][ib].qs[6]: bits 0...3 go into bytes 32+28...31, bit 4
+//                  bits 4...7 go into bytes 32+28...31, bit 5
+//
+// xr[0][ib].qs[7]: bits 0...3 go into bytes 32+0...3, bit 6
+//                  bits 4...7 go into bytes 32+0...3, bit 7
+// xr[1][ib].qs[7]: bits 0...3 go into bytes 32+4...7, bit 6
+//                  bits 4...7 go into bytes 32+4...7, bit 7
+// ...
+// xr[7][ib].qs[7]: bits 0...3 go into bytes 32+28...31, bit 6
+//                  bits 4...7 go into bytes 32+28...31, bit 7
+
+static void dequantize_block_q1_0_g128_r8(const block_q1_0_g128_r8 & x, int8_t * y) {
+    for (int k = 0; k < 8; ++k) {
+        auto yk = y + 128*k;
+        for (int l = 0; l < 4; ++l) {
+            auto qx = x.qs + 32*l;
+            for (int i = 0; i < 4; ++i) {
+                uint8_t mask1 = 1 << (2*i+0);
+                uint8_t mask2 = 1 << (2*i+1);
+                for (int j = 0; j < 4; ++j) {
+                    yk[32*l + 8*i + j + 0] = qx[4*k + j] & mask1 ? 1 : 0;
+                }
+                for (int j = 0; j < 4; ++j) {
+                    yk[32*l + 8*i + j + 4] = qx[4*k + j] & mask2 ? 1 : 0;
+                }
+            }
+        }
+    }
+}
+
 void repack_q1_0_g128_r8(int nrows, int n_per_row, const block_q1_0_g128 * x, block_q1_0_g128_r8 * y, [[maybe_unused]] bool online) {
     GGML_ASSERT(nrows % QK1_0_G128_R8_ROWS == 0);
     GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
-    constexpr int n_tile = QK1_0_G128/32;
+    constexpr uint8_t k_mask[8] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
     const int nblock = n_per_row/QK1_0_G128;
+    const block_q1_0_g128 * xr[QK1_0_G128_R8_ROWS];
+    int8_t testx[QK1_0_G128];
+    int8_t testy[QK1_0_G128*QK1_0_G128_R8_ROWS];
     for (int row = 0; row < nrows; row += QK1_0_G128_R8_ROWS) {
-        const block_q1_0_g128 * xr[QK1_0_G128_R8_ROWS];
         for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) xr[k] = x + nblock*k;
         for (int ib = 0; ib < nblock; ++ib) {
+            std::memset(&y[ib], 0, sizeof(y[ib]));
             for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) y[ib].d[k] = xr[k][ib].d;
-            for (int it = 0; it < n_tile; ++it) {
+            for (int l = 0; l < 4; ++l) {
+                auto qy = y[ib].qs + 4*QK1_0_G128_R8_ROWS*l;
                 for (int k = 0; k < QK1_0_G128_R8_ROWS; ++k) {
-                    for (int b = 0; b < 4; ++b) y[ib].qs[32*it + 4*k + b] = xr[k][ib].qs[4*it + b];
+                    auto qx = xr[k][ib].qs + 4*l;
+                    for (int i = 0; i < 4; ++i) {
+                        for (int j = 0; j < 4; ++j) {
+                            if (qx[i] & k_mask[j+0]) qy[4*k+j] |= (1 << (2*i+0));
+                        }
+                        for (int j = 0; j < 4; ++j) {
+                            if (qx[i] & k_mask[j+4]) qy[4*k+j] |= (1 << (2*i+1));
+                        }
+                    }
                 }
+            }
+            dequantize_block_q1_0_g128_r8(y[ib], testy);
+            int nbad = 0;
+            for (int k = 0; k < 8; ++k) {
+                dequantize_block_q1_0_g128(xr[k][ib], testx);
+                for (int j = 0; j < 128; ++j) {
+                    if (testy[128*k + j] != testx[j]) ++nbad;
+                }
+            }
+            if (nbad > 0) {
+                printf("Oops: %d bad values in row %d, block %d\n", nbad, row, ib);
+                exit(1);
             }
         }
         x += QK1_0_G128_R8_ROWS*nblock;
