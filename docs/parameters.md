@@ -34,6 +34,8 @@ Overview of the most common command-line parameters in `ik_llama.cpp` and some i
 
 - [Graph parallel models](#graph-parallel-models)
 
+- [Tested configurations](#tested-configurations)
+
 ## LLM Jargon
 
 Some often used terms.
@@ -354,40 +356,6 @@ C. Other tips
 
 WIP
 
-#### Tested configuration: 27B hybrid (linear attention + full attention, MTP) at 128k context on 24 GB VRAM
-
-`Swift-1.5-Qwen3.8-27B-IQ4_XS` is a Qwen3.5-class hybrid model. It has 65 layers, and only every 4th layer is full attention (16 layers). The other layers use linear attention (Gated DeltaNet). The model also has one MTP (multi-token prediction) head. The KV cache keeps only the 16 full attention layers, so a 128k context fits in 24 GB with the whole model.
-
-| Item | Value |
-| - | - |
-| GPU | 1x NVIDIA TITAN RTX 24 GB (Turing, sm_75) |
-| CPU / RAM | Xeon E5-2660 v3 (AVX2), 125 GB |
-| Model | [ukisai/Swift-1.5-Qwen3.8-27B-GGUF](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF) IQ4_XS, 14.4 GiB, 65+1 (MTP) layers |
-| VRAM at 128k ctx | 19.2 GiB of 22.7 GiB (model 14.4 + KV q8_0 4.7) |
-| Prompt processing | ~340 t/s (short prompt), ~465 t/s (108k prompt) |
-| Token generation | ~40 t/s (short ctx), 22-27 t/s at 86k-108k ctx, MTP acceptance ~70% |
-
-The first line downloads the model if it is not present. It sets `MODEL` to the path in the Hugging Face cache.
-
-```bash
-# Downloads the model if it is not present. Sets MODEL to the cache path.
-MODEL=$(hf download ukisai/Swift-1.5-Qwen3.8-27B-GGUF Swift-1.5-Qwen3.8-27B-IQ4_XS.gguf | grep -oE '/[^ ]+\.gguf' | tail -1)
-
-./build/bin/llama-server \
-  -m "$MODEL" \
-  -fa on --jinja -ngl 99 -c 128000 \
-  --spec-type mtp:n_max=3 \
-  -ctk q8_0 -ctv q8_0 \
-  --host 0.0.0.0 --port 8080
-```
-
-Notes, measured on the machine above:
-- `--spec-type mtp:n_max=3` gives +24% token generation over no MTP (40.6 vs 32.8 t/s). For this model, `n_max=3` is faster than `n_max=1` (37.1 t/s). The autotuner suggests 1, but the MTP head accepts about 70% of the drafts, so the longer draft chain wins.
-- `-ctk q8_0 -ctv q8_0` is required for the 128k context to fit. The flags cut the KV cache from about 13 GiB to 4.7 GiB. You see no quality loss. `-fa on` (flash attention) works with the quantized KV cache.
-- `--jinja` is required for the correct chat template of this thinking model. The model emits `reasoning_content`.
-- The model is trained on 262k context, so 128k is inside its range. At 108k context, the generation speed is about 40% below the short context speed.
-- The batch size (`-b`/`-ub`) and the `GGML_CUDA_F16` build flag made no measurable difference for this model on this GPU.
-
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
 | `-ngl, --gpu-layers N` | Number of layers to store in VRAM | `999` | For better speed you aim to offload the entire model in GPU memory. To identify how many layers (also shape and more metadata) open the GGUF model file on the Web browser [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf) then scroll down to the Tensors table. Use a number higher than the numbers of model layers to fully offload (`--gpu-layers` 999, for a model with less than 999 layers). See `--ctx-size` and reduce it to the minimum needed. If model fails to load due to the insufficient GPU memory, reduce the number of layers (`--gpu-layers 20`, for a model with 40 layers will offload only the first 20 layers). |
@@ -608,3 +576,39 @@ LLM_ARCH_MISTRAL4,
 LLM_ARCH_MELLUM,
 LLM_ARCH_LAGUNA,
 ```
+
+## Tested configurations
+
+### 27B hybrid (linear attention + full attention, MTP) at 128k context on 24 GB VRAM
+
+`Swift-1.5-Qwen3.8-27B-IQ4_XS` is a Qwen3.5-class hybrid model. It has 65 layers, and only every 4th layer is full attention (16 layers). The other layers use linear attention (Gated DeltaNet). The model also has one MTP (multi-token prediction) head. The KV cache keeps only the 16 full attention layers, so a 128k context fits in 24 GB with the whole model.
+
+| Item | Value |
+| - | - |
+| GPU | 1x NVIDIA TITAN RTX 24 GB (Turing, sm_75) |
+| CPU / RAM | Xeon E5-2660 v3 (AVX2), 125 GB |
+| Model | [ukisai/Swift-1.5-Qwen3.8-27B-GGUF](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF) IQ4_XS, 14.4 GiB, 65+1 (MTP) layers |
+| VRAM at 128k ctx | 19.2 GiB of 22.7 GiB (model 14.4 + KV q8_0 4.7) |
+| Prompt processing | ~340 t/s (short prompt), ~465 t/s (108k prompt) |
+| Token generation | ~40 t/s (short ctx), 22-27 t/s at 86k-108k ctx, MTP acceptance ~70% |
+
+The first line downloads the model if it is not present. It sets `MODEL` to the path in the Hugging Face cache.
+
+```bash
+# Downloads the model if it is not present. Sets MODEL to the cache path.
+MODEL=$(hf download ukisai/Swift-1.5-Qwen3.8-27B-GGUF Swift-1.5-Qwen3.8-27B-IQ4_XS.gguf | grep -oE '/[^ ]+\.gguf' | tail -1)
+
+./build/bin/llama-server \
+  -m "$MODEL" \
+  -fa on --jinja -ngl 99 -c 128000 \
+  --spec-type mtp:n_max=3 \
+  -ctk q8_0 -ctv q8_0 \
+  --host 0.0.0.0 --port 8080
+```
+
+Notes, measured on the machine above:
+- `--spec-type mtp:n_max=3` gives +24% token generation over no MTP (40.6 vs 32.8 t/s). For this model, `n_max=3` is faster than `n_max=1` (37.1 t/s). The autotuner suggests 1, but the MTP head accepts about 70% of the drafts, so the longer draft chain wins.
+- `-ctk q8_0 -ctv q8_0` is required for the 128k context to fit. The flags cut the KV cache from about 13 GiB to 4.7 GiB. You see no quality loss. `-fa on` (flash attention) works with the quantized KV cache.
+- `--jinja` is required for the correct chat template of this thinking model. The model emits `reasoning_content`.
+- The model is trained on 262k context, so 128k is inside its range. At 108k context, the generation speed is about 40% below the short context speed.
+- The batch size (`-b`/`-ub`) and the `GGML_CUDA_F16` build flag made no measurable difference for this model on this GPU.

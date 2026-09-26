@@ -79,7 +79,7 @@ Start the server with one of the commands (CPU or GPU):
 
 That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser and start chatting, or use the available API endpoins in your program/harness.
 
-See [Common GPU configurations and popular models](docs/parameters.md#common-gpu-configurations-and-popular-models) for tested per-model configurations, VRAM budgets, and measured speeds.
+See [Tested configurations](docs/parameters.md#tested-configurations) for tested per-model configurations, VRAM budgets, and measured speeds.
 
 ### Run in Docker or Podman
 
