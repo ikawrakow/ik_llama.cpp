@@ -992,6 +992,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_Q1_0_G128_R8:
             return iqk_set_kernels_1bit(ne00, typeA, typeB, mm.funcs, mm.func16);
+        // TODO: PQ2_0/PTQ1_0 IQK kernels need the x4-interleaved activation layout
 
         default:
             return false;
@@ -1086,6 +1087,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_Q1_0_G128_R8:
             return iqk_set_kernels_1bit(ne00, typeA, typeB, m.funcs, m.func16);
+        // TODO: PQ2_0/PTQ1_0 IQK kernels need the x4-interleaved activation layout
         case GGML_TYPE_IQ1_KT:
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:

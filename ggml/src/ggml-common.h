@@ -570,6 +570,22 @@ typedef struct {
 } block_q1_0_g128_r8;
 static_assert(sizeof(block_q1_0_g128_r8) == QK1_0_G128_R8_ROWS*sizeof(ggml_half) + QK1_0_G128, "wrong q1_0_g128_r8 block size/padding");
 
+// Prism ternary formats (PQ2_0 / PTQ1_0)
+#define QK_PQ2_0 128
+typedef struct {
+    ggml_half d;                  // delta (scale)
+    uint8_t   qs[QK_PQ2_0 / 4];   // 2 bits per weight
+} block_pq2_0;
+static_assert(sizeof(block_pq2_0) == sizeof(ggml_half) + QK_PQ2_0 / 4, "wrong pq2_0 block size/padding");
+
+#define QK_PTQ1_0 128
+typedef struct {
+    uint8_t   qs[(QK_PTQ1_0 - 4*QK_PTQ1_0/64)/5]; // 5 base-3 trits per byte
+    uint8_t   qh[QK_PTQ1_0/64];                    // high trits
+    ggml_half d;                                   // delta (scale)
+} block_ptq1_0;
+static_assert(sizeof(block_ptq1_0) == 28, "wrong ptq1_0 block size/padding");
+
 //
 // Bitnet and TriLM - implemented as 1.625 bpw
 //

@@ -513,6 +513,15 @@ struct rpc_device {
 
 struct llama_cparams;
 
+// Prism ternary activation-side Hadamard transform, keyed by GGUF weight name
+struct llama_hadamard_transform {
+    struct ggml_tensor * rot   = nullptr; // [block, block]
+    struct ggml_tensor * signs = nullptr; // [ne0]
+    int64_t perm_hd  = 1;                 // GDN v-grouped reshape (head dim)
+    int64_t perm_nk  = 1;                 // GDN v-grouped reshape (n groups)
+    int64_t perm_rep = 1;                 // GDN v-grouped reshape (repeat count)
+};
+
 struct llama_model {
     e_model     type  = MODEL_UNKNOWN;
     llm_arch    arch  = LLM_ARCH_UNKNOWN;
@@ -522,6 +531,10 @@ struct llama_model {
 
     llama_hparams hparams = {};
     llama_vocab   vocab;
+
+    // Prism ternary Hadamard rotations; empty for every other model
+    std::unordered_map<std::string, llama_hadamard_transform> hadamard_rotations;
+    std::unordered_map<std::string, llama_hadamard_transform> hadamard_inverses;
 
     struct ggml_tensor * tok_embd;
     struct ggml_tensor * type_embd;
