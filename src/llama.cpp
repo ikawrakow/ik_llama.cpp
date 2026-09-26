@@ -8559,6 +8559,7 @@ struct llama_context_params llama_context_default_params() {
         /*.dsa                         =*/ false,
         /*.fused_idx_topk              =*/ true,
         /*.swa_compress                =*/ false,
+        /*.dsv4_legacy_state           =*/ false,
         /*.dsa_top_k                   =*/ -1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
@@ -9054,6 +9055,7 @@ struct llama_context * llama_init_from_model(
     cparams.dsa              = params.dsa;
     cparams.fused_idx_topk   = params.fused_idx_topk;
     cparams.swa_compress     = params.swa_compress;
+    cparams.dsv4_legacy_state = params.dsv4_legacy_state;
     cparams.dsa_top_k        = params.dsa_top_k;
 
     if (cparams.swa_compress != model->swa_compress) {
@@ -11064,8 +11066,13 @@ struct llama_data_write {
         // DSV4 compressed indexer cache (only for DSV4 models — preserves
         // the old file layout for all other architectures)
         if (llm_arch_is_dsv4(ctx->model.arch) && ctx->dsv4.cache.cache_ctx != nullptr) {
-            write(&DSV4_STATE_MAGIC, sizeof(DSV4_STATE_MAGIC));
-            write(&DSV4_STATE_VER, sizeof(DSV4_STATE_VER));
+            // --dsv4-legacy-state: emit the pre-PR full-slice layout (no MAGIC,
+            // ratios or row counts), byte-identical to main and readable by old builds
+            const bool dsv4_legacy_state = ctx->cparams.dsv4_legacy_state;
+            if (!dsv4_legacy_state) {
+                write(&DSV4_STATE_MAGIC, sizeof(DSV4_STATE_MAGIC));
+                write(&DSV4_STATE_VER, sizeof(DSV4_STATE_VER));
+            }
 
             const uint32_t dsv4_n_layer = n_layer;
             write(&dsv4_n_layer, sizeof(dsv4_n_layer));
@@ -11080,25 +11087,34 @@ struct llama_data_write {
 
             const uint32_t dsv4_csa_ratio = ctx->model.hparams.dsv4_csa_ratio;
             const uint32_t dsv4_hca_ratio = ctx->model.hparams.dsv4_hca_ratio;
-            write(&dsv4_csa_ratio, sizeof(dsv4_csa_ratio));
-            write(&dsv4_hca_ratio, sizeof(dsv4_hca_ratio));
+            if (!dsv4_legacy_state) {
+                write(&dsv4_csa_ratio, sizeof(dsv4_csa_ratio));
+                write(&dsv4_hca_ratio, sizeof(dsv4_hca_ratio));
+            }
 
-            const uint32_t dsv4_shared_streams = ctx->model.hparams.dsv4_shared_streams ? 1 : 0;
-            write(&dsv4_shared_streams, sizeof(dsv4_shared_streams));
+            if (!dsv4_legacy_state) {
+                const uint32_t dsv4_shared_streams = ctx->model.hparams.dsv4_shared_streams ? 1 : 0;
+                write(&dsv4_shared_streams, sizeof(dsv4_shared_streams));
+            }
 
             const uint32_t cap_csa_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.csa_k, ctx->dsv4.cache.n_stream);
             const uint32_t cap_hca_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.hca_k, ctx->dsv4.cache.n_stream);
             const uint32_t cap_lid_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.lid_k, ctx->dsv4.cache.n_stream);
             const llama_pos dsv4_pos_max = (seq_id != -1) ? llama_kv_cache_seq_pos_max(ctx->kv_self, seq_id) : -1;
             auto dsv4_used_rows = [&](uint32_t ratio, uint32_t cap) -> uint32_t {
+                if (dsv4_legacy_state) {
+                    return cap;
+                }
                 return (seq_id != -1) ? dsv4_state_n_used_k_rows(dsv4_pos_max, ratio, cap) : cap;
             };
             const uint32_t dsv4_n_rows_csa = dsv4_used_rows(dsv4_csa_ratio, cap_csa_stream);
             const uint32_t dsv4_n_rows_hca = dsv4_used_rows(dsv4_hca_ratio, cap_hca_stream);
             const uint32_t dsv4_n_rows_lid = dsv4_used_rows(dsv4_csa_ratio, cap_lid_stream);
-            write(&dsv4_n_rows_csa, sizeof(dsv4_n_rows_csa));
-            write(&dsv4_n_rows_hca, sizeof(dsv4_n_rows_hca));
-            write(&dsv4_n_rows_lid, sizeof(dsv4_n_rows_lid));
+            if (!dsv4_legacy_state) {
+                write(&dsv4_n_rows_csa, sizeof(dsv4_n_rows_csa));
+                write(&dsv4_n_rows_hca, sizeof(dsv4_n_rows_hca));
+                write(&dsv4_n_rows_lid, sizeof(dsv4_n_rows_lid));
+            }
 
             for (uint32_t il = 0; il < n_layer; ++il) {
                 uint32_t layer_type = 0;
