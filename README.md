@@ -79,6 +79,8 @@ Start the server with one of the commands (CPU or GPU):
 
 That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser and start chatting, or use the available API endpoins in your program/harness.
 
+See [Tested configurations](docs/parameters.md#tested-configurations) for tested per-model configurations, VRAM budgets, and measured speeds.
+
 ### Run in Docker or Podman
 
 Pull one of the available images from `ghcr.io`. [View all tags](https://github.com/ikawrakow/ik_llama.cpp/pkgs/container/ik-llama-cpp/versions?filters%5Bversion_type%5D=tagged)
