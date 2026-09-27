@@ -118,6 +118,7 @@ std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
         { GGML_TYPE_Q8_KV_R8,    { GGML_TYPE_Q8_KV, 8} },
         { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_0, 8} },
         { GGML_TYPE_BF16_R16,    { GGML_TYPE_BF16, 16} },
+        { GGML_TYPE_IQ3KS_R16,   { GGML_TYPE_Q3KS_G128, 16} },
     };
     if (auto it = k_map.find(type); it != k_map.end()) return it->second;
     return {type, 1};
@@ -252,6 +253,12 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             convert_incompatible_tensor = true;
         }
     }
+    if (new_type == GGML_TYPE_IQ3KS_R16) {
+        if (nx % 128 != 0 || ny % 16 != 0) {
+            LLAMA_LOG_WARN("\n\n%s : tensor %d x %d is not compatible with %s (needs cols %% 128 == 0 and rows %% 16 == 0)", __func__, nx, ny, ggml_type_name(new_type));
+            convert_incompatible_tensor = true;
+        }
+    }
     if (convert_incompatible_tensor) {
         switch (new_type) {
             case GGML_TYPE_IQ2_XXS:
@@ -288,6 +295,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             // Disable GGML_TYPE_IQ4_KS_R16 until we have CUDA implementation for it
             //case GGML_TYPE_IQ4_XS: new_type = ny % 16 == 0 ? GGML_TYPE_IQ4_KS_R16 : GGML_TYPE_IQ4_NL; break;
             case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
+            case GGML_TYPE_IQ3KS_R16: new_type = GGML_TYPE_Q3KS_G128; break;
             case GGML_TYPE_IQ4_K:
             case GGML_TYPE_IQ4_K_R4:
             case GGML_TYPE_Q4_K_R4:
@@ -894,8 +902,13 @@ static size_t llama_tensor_quantize_internal(enum ggml_type new_type, const floa
     bool valid = true;
     auto compute = [&mutex, &counter, &new_size, &valid, new_type, f32_data, new_data, chunk_size,
             nrows, n_per_row, imatrix, user_data]() {
-        const int64_t nrows_per_chunk = chunk_size / n_per_row;
-        size_t local_size = 0;
+        // keep per-thread chunks aligned to the interleave factor (row-interleaved
+        // quants quantize whole bands of rows; a mis-aligned chunk would split bands)
+        int64_t nrows_per_chunk = chunk_size / n_per_row;
+        const int64_t packed = interleaved_properties(new_type).second;
+        if (packed > 1) {
+            nrows_per_chunk = std::max(packed, (nrows_per_chunk / packed) * packed);
+        }
         while (true) {
             std::unique_lock<std::mutex> lock(mutex);
             int64_t first_row = counter; counter += nrows_per_chunk;
@@ -1103,6 +1116,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_F16:  default_type = GGML_TYPE_F16;  break;
         case LLAMA_FTYPE_MOSTLY_BF16: default_type = GGML_TYPE_BF16; break;
         case LLAMA_FTYPE_MOSTLY_BF16_R16: default_type = GGML_TYPE_BF16_R16; break;
+        case LLAMA_FTYPE_MOSTLY_Q3KS_G128: default_type = GGML_TYPE_Q3KS_G128; break;
+        case LLAMA_FTYPE_MOSTLY_Q3KS_R16:  default_type = GGML_TYPE_IQ3KS_R16; break;
         case LLAMA_FTYPE_ALL_F32:     default_type = GGML_TYPE_F32;  break;
 
         // K-quants

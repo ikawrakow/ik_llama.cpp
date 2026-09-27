@@ -757,6 +757,32 @@ typedef struct {
 } block_iq3_ks;
 static_assert(sizeof(block_iq3_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/8, "wrong iq3_ks block size/padding");
 
+// iq3ks-class dual-codebook 3-bit, superblock 128 = 4 groups of 32 (Q3KS_G128, type 45):
+//   row = [d: fp16] + nbl * block_q3ks_g128 (51 B per 128 weights => 3.205 bpw)
+//   dequant: w = d_row * (ul-16) * iq3nl[cb][idx]
+//   qs[32] : 2 low index bits, group ib at bit-pair 2*ib of weight j
+//   qh[16] : high index bit, weight j -> bit ib
+//   scales[2]: byte0=(ul0&0xF)|(ul1&0xF)<<4, byte1=(ul2&0xF)|(ul3&0xF)<<4
+//   extra[1] : bits 0-3 = ul bit4 per group, bits 4-7 = codebook select
+#define QK3KS_G128 128
+typedef struct {
+    uint8_t qs[QK3KS_G128/4];   // 32
+    uint8_t qh[QK3KS_G128/8];   // 16
+    uint8_t scales[2];
+    uint8_t extra;
+} block_q3ks_g128;
+static_assert(sizeof(block_q3ks_g128) == QK3KS_G128/4 + QK3KS_G128/8 + 3, "wrong q3ks_g128 block size/padding");
+
+// 16-row interleaved IQ3_KS-class 3-bit (IQ3KS_R16, type 46):
+//   tensor = ceil(nrows/16) bands; band = [d: 16 x fp16 (row scales)] + (n_per_row/128) tiles
+//   tile = 16 row-major block_q3ks_g128 (51 B each, byte-identical to the Q3KS_G128 superblocks)
+//   dequant: w = d_row * (ul-16) * iq3nl[cb][idx]   (same as IQ3_KS / Q3KS_G128)
+//   requires nrows % 16 == 0 and n_per_row % 128 == 0; 3.1875 + 16/n_per_row bpw (3.205 at n = 896)
+typedef struct {
+    block_q3ks_g128 sb[16];
+} block_iq3ks_r16;
+static_assert(sizeof(block_iq3ks_r16) == 16*sizeof(block_q3ks_g128), "wrong iq3ks_r16 tile size/padding");
+
 typedef struct {
     ggml_half d[4];
     uint8_t extra[8];

@@ -2123,6 +2123,8 @@ class GGMLQuantizationType(IntEnum):
     IQ3_KS    = 156
     IQ2_KL    = 157
     IQ1_KT    = 158
+    Q3KS_G128 = 45
+    IQ3KS_R16 = 46
     Q4_0_R8   = 202
     Q5_0_R4   = 206
     Q8_0_R8   = 208

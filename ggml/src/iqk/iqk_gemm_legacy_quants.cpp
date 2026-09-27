@@ -2583,6 +2583,60 @@ void iqk_convert_qX_1_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int 
     }
 }
 
+// ========================================= iq3ks_r16 (16-row interleaved K1 superblocks)
+//
+// A layout: bands of 16 rows; band = [16 x fp16 d] + (n/128) tiles, tile =
+// 16 row-major block_q3ks_g128 (51 B each, same math as the Q3KS_G128 type).
+// Activations: block_q8_0_x4 (4 consecutive Q8_0 blocks).
+
+template <int nrc_y>
+static void mul_mat_iq3ks_r16_q8_0_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%16 == 0);
+    GGML_ASSERT(n%QK3KS_G128 == 0);
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+    const int ntiles = n / QK3KS_G128;
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        const ggml_half * dptr = (const ggml_half *)((const char *)vx + ix*bx);
+        const block_iq3ks_r16 * tiles = (const block_iq3ks_r16 *)(dptr + 16);
+        float d[16];
+        for (int k = 0; k < 16; ++k) d[k] = GGML_FP16_TO_FP32(dptr[k]);
+        float acc[16][nrc_y];
+        for (int k = 0; k < 16; ++k)
+            for (int iy = 0; iy < nrc_y; ++iy) acc[k][iy] = 0.f;
+        for (int t = 0; t < ntiles; ++t) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const block_q8_0_x4 * y4 = (const block_q8_0_x4 *)q8.y[iy] + t;
+                for (int k = 0; k < 16; ++k) {
+                    const block_q3ks_g128 * sb = tiles[t].sb + k;
+                    const int8_t * qy8 = y4->qs;
+                    const ggml_half * yd4 = y4->d;
+                    for (int ib = 0; ib < 4; ++ib) {
+                        int ul;
+                        switch (ib) {
+                            case 0: ul = (sb->scales[0] & 0xf) | (((sb->extra >> 0) & 1) << 4); break;
+                            case 1: ul = (sb->scales[0] >> 4)  | (((sb->extra >> 1) & 1) << 4); break;
+                            case 2: ul = (sb->scales[1] & 0xf) | (((sb->extra >> 2) & 1) << 4); break;
+                            default: ul = (sb->scales[1] >> 4) | (((sb->extra >> 3) & 1) << 4); break;
+                        }
+                        const float dl = d[k]*(ul - 16);
+                        const int8_t * values = iq3nl_values + (((sb->extra >> (4 + ib)) & 1) << 3);
+                        const int8_t * qs8 = qy8 + 32*ib;
+                        int sumi = 0;
+                        for (int j = 0; j < 32; ++j) {
+                            const int idx = ((sb->qs[j] >> (2*ib)) & 3) | (((sb->qh[j >> 1] >> (ib + 4*(j & 1))) & 1) << 2);
+                            sumi += (int)values[idx] * (int)qs8[j];
+                        }
+                        acc[k][iy] += dl * GGML_FP16_TO_FP32(yd4[ib]) * (float)sumi;
+                    }
+                }
+            }
+        }
+        for (int k = 0; k < 16; ++k)
+            for (int iy = 0; iy < nrc_y; ++iy)
+                info.store(ix + k, iy, acc[k][iy]);
+    }
+}
+
 template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
     if constexpr (std::is_same_v<Dequantizer, Q4_0_Unpacker> || std::is_same_v<Dequantizer, Q5_0_Unpacker>) {
         IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_0_q8_0_T, Dequantizer, funcs)
@@ -2669,6 +2723,12 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
         case GGML_TYPE_MXFP4:
             set_functions<MXFP4_Unpacker>(kernels);
             break;
+        case GGML_TYPE_IQ3KS_R16:
+            expected_typeB = GGML_TYPE_Q8_0_X4;
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq3ks_r16_q8_0_x4, kernels)
+            func16 = mul_mat_iq3ks_r16_q8_0_x4<16>;
+            break;
+        
         case GGML_TYPE_Q4_0_R8:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q4_0_r8_q8_2, kernels)
 #ifdef HAVE_FANCY_SIMD

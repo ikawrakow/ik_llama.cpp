@@ -1322,6 +1322,8 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         up && gate && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
+        (up->type != GGML_TYPE_Q3KS_G128 && gate->type != GGML_TYPE_Q3KS_G128 &&
+        up->type != GGML_TYPE_IQ3KS_R16 && gate->type != GGML_TYPE_IQ3KS_R16) &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :

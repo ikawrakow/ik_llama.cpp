@@ -1517,6 +1517,109 @@ static void dequantize_block_q8_0_f16_cuda(const void * __restrict__ vx, half * 
     }
 }
 
+// QAT iq3ks-codebook 3-bit, superblock 128 (Q3KS_G128): 32 threads per 128-sb,
+// thread tid dequantizes weights tid, tid+32, tid+64, tid+96 (one per group).
+template<typename dst_t>
+static __global__ void dequantize_block_q3ks_g128(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
+    const int64_t ii = blockIdx.x;                      // superblock index
+    const int64_t row = (QK3KS_G128 * ii) / n_per_row;
+    const char * cx = (const char *)vx + row * row_size;
+    // row_stride (359 B) is odd -> row start may be at an odd address; load the
+    // fp16 d byte-wise to avoid misaligned half loads.
+    ggml_half dh = __ushort_as_half((unsigned short)(((uint16_t)(uint8_t)cx[0]) | ((uint16_t)(uint8_t)cx[1] << 8)));
+    const float scale = dh;
+    const block_q3ks_g128 * x = (const block_q3ks_g128 *)(cx + sizeof(ggml_half));
+    const int64_t i = ii - (row*n_per_row)/QK3KS_G128;
+    const int tid = threadIdx.x;                        // 0..31: within-group position j
+    dst_t * y = yy + ii*QK3KS_G128 + tid;
+    const uint8_t q = x[i].qs[tid];                     // low 2 bits: bit-pair 2*ib
+    const uint8_t h = x[i].qh[tid >> 1];                // high bit: (tid&1)*4 + ib
+    const uint8_t ex = x[i].extra;
+    const uint8_t s0 = x[i].scales[0], s1 = x[i].scales[1];
+    const float d0 = scale * (int(((s0      ) & 0xf) | ((ex & 1) << 4)) - 16);
+    const float d1 = scale * (int(((s0 >>  4)      ) | ((ex & 2) << 3)) - 16);
+    const float d2 = scale * (int(((s1      ) & 0xf) | ((ex & 4) << 2)) - 16);
+    const float d3 = scale * (int(((s1 >>  4)      ) | ((ex & 8) << 1)) - 16);
+    const int8_t * v0 = iq3nl_values + (((ex >> 4) & 1) << 3);
+    const int8_t * v1 = iq3nl_values + (((ex >> 5) & 1) << 3);
+    const int8_t * v2 = iq3nl_values + (((ex >> 6) & 1) << 3);
+    const int8_t * v3 = iq3nl_values + (((ex >> 7) & 1) << 3);
+    const int hb = 4*(tid & 1);
+    if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
+        y[ 0] = __float2bfloat16(d0 * v0[((q >> 0) & 3) | (((h >> (0 + hb)) & 1) << 2)]);
+        y[32] = __float2bfloat16(d1 * v1[((q >> 2) & 3) | (((h >> (1 + hb)) & 1) << 2)]);
+        y[64] = __float2bfloat16(d2 * v2[((q >> 4) & 3) | (((h >> (2 + hb)) & 1) << 2)]);
+        y[96] = __float2bfloat16(d3 * v3[((q >> 6) & 3) | (((h >> (3 + hb)) & 1) << 2)]);
+    } else {
+        y[ 0] = d0 * v0[((q >> 0) & 3) | (((h >> (0 + hb)) & 1) << 2)];
+        y[32] = d1 * v1[((q >> 2) & 3) | (((h >> (1 + hb)) & 1) << 2)];
+        y[64] = d2 * v2[((q >> 4) & 3) | (((h >> (2 + hb)) & 1) << 2)];
+        y[96] = d3 * v3[((q >> 6) & 3) | (((h >> (3 + hb)) & 1) << 2)];
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q3ks_g128_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    GGML_ASSERT(n_per_row % QK3KS_G128 == 0);
+    const int64_t k = nrows * n_per_row;
+    const int64_t row_size = ggml_row_size(GGML_TYPE_Q3KS_G128, n_per_row);
+    const int nb = k / QK3KS_G128;
+    dequantize_block_q3ks_g128<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+}
+
+// IQ3KS_R16 (type 46): 16-row interleaved K1 superblocks. Block ii = (row, tile);
+// band b = row/16 holds [16 fp16 d] + tiles of 16 row-major 51 B superblocks.
+template<typename dst_t>
+static __global__ void dequantize_block_iq3ks_r16(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t band_size) {
+    const int64_t ii = blockIdx.x;                      // (row, superblock) index
+    const int64_t ntiles = n_per_row / QK3KS_G128;
+    const int64_t row = ii / ntiles;
+    const int64_t tile = ii - row*ntiles;
+    const int64_t band = row >> 4;
+    const int64_t ir = row & 15;
+    const char * cx = (const char *)vx + band*band_size;
+    ggml_half dh = __ushort_as_half((unsigned short)(((uint16_t)(uint8_t)cx[2*ir]) | ((uint16_t)(uint8_t)cx[2*ir + 1] << 8)));
+    const float scale = dh;
+    const block_q3ks_g128 * x = (const block_q3ks_g128 *)(cx + 32 + tile*16*sizeof(block_q3ks_g128) + ir*sizeof(block_q3ks_g128));
+    const int tid = threadIdx.x;                        // 0..31: within-group position j
+    dst_t * y = yy + ii*QK3KS_G128 + tid;
+    const uint8_t q = x->qs[tid];
+    const uint8_t h = x->qh[tid >> 1];
+    const uint8_t ex = x->extra;
+    const uint8_t s0 = x->scales[0], s1 = x->scales[1];
+    const float d0 = scale * (int(((s0      ) & 0xf) | ((ex & 1) << 4)) - 16);
+    const float d1 = scale * (int(((s0 >>  4)      ) | ((ex & 2) << 3)) - 16);
+    const float d2 = scale * (int(((s1      ) & 0xf) | ((ex & 4) << 2)) - 16);
+    const float d3 = scale * (int(((s1 >>  4)      ) | ((ex & 8) << 1)) - 16);
+    const int8_t * v0 = iq3nl_values + (((ex >> 4) & 1) << 3);
+    const int8_t * v1 = iq3nl_values + (((ex >> 5) & 1) << 3);
+    const int8_t * v2 = iq3nl_values + (((ex >> 6) & 1) << 3);
+    const int8_t * v3 = iq3nl_values + (((ex >> 7) & 1) << 3);
+    const int hb = 4*(tid & 1);
+    if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
+        y[ 0] = __float2bfloat16(d0 * v0[((q >> 0) & 3) | (((h >> (0 + hb)) & 1) << 2)]);
+        y[32] = __float2bfloat16(d1 * v1[((q >> 2) & 3) | (((h >> (1 + hb)) & 1) << 2)]);
+        y[64] = __float2bfloat16(d2 * v2[((q >> 4) & 3) | (((h >> (2 + hb)) & 1) << 2)]);
+        y[96] = __float2bfloat16(d3 * v3[((q >> 6) & 3) | (((h >> (3 + hb)) & 1) << 2)]);
+    } else {
+        y[ 0] = d0 * v0[((q >> 0) & 3) | (((h >> (0 + hb)) & 1) << 2)];
+        y[32] = d1 * v1[((q >> 2) & 3) | (((h >> (1 + hb)) & 1) << 2)];
+        y[64] = d2 * v2[((q >> 4) & 3) | (((h >> (2 + hb)) & 1) << 2)];
+        y[96] = d3 * v3[((q >> 6) & 3) | (((h >> (3 + hb)) & 1) << 2)];
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_iq3ks_r16_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    GGML_ASSERT(n_per_row % QK3KS_G128 == 0);
+    GGML_ASSERT(nrows % 16 == 0);
+    const int64_t k = nrows * n_per_row;
+    const int64_t band_size = 32 + (n_per_row / QK3KS_G128) * 16 * sizeof(block_q3ks_g128);
+    const int nb = k / QK3KS_G128;
+    dequantize_block_iq3ks_r16<<<nb, 32, 0, stream>>>(vx, y, n_per_row, band_size);
+}
+
+
 template<typename dst_t>
 static void dequantize_row_q2_K_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
     const int64_t k = nrows * n_per_row;
@@ -1970,6 +2073,10 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_q2_K_cuda;
         case GGML_TYPE_Q3_K:
             return dequantize_row_q3_K_cuda;
+        case GGML_TYPE_Q3KS_G128:
+            return dequantize_row_q3ks_g128_cuda;
+        case GGML_TYPE_IQ3KS_R16:
+            return dequantize_row_iq3ks_r16_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
         case GGML_TYPE_Q5_K:
@@ -2073,6 +2180,10 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_q2_K_cuda;
         case GGML_TYPE_Q3_K:
             return dequantize_row_q3_K_cuda;
+        case GGML_TYPE_Q3KS_G128:
+            return dequantize_row_q3ks_g128_cuda;
+        case GGML_TYPE_IQ3KS_R16:
+            return dequantize_row_iq3ks_r16_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
         case GGML_TYPE_Q5_K:
