@@ -909,6 +909,7 @@ static size_t llama_tensor_quantize_internal(enum ggml_type new_type, const floa
         if (packed > 1) {
             nrows_per_chunk = std::max(packed, (nrows_per_chunk / packed) * packed);
         }
+        size_t local_size = 0;
         while (true) {
             std::unique_lock<std::mutex> lock(mutex);
             int64_t first_row = counter; counter += nrows_per_chunk;
@@ -1086,7 +1087,10 @@ static void do_quantize_slabbed(int nthread, const ggml_tensor * tensor, ggml_ty
     } else {
         const int64_t nrows         = ggml_nrows(tensor);
         const size_t  row_out_bytes = ggml_row_size(new_type, n_per_row);
-        const int64_t group = std::lcm<int64_t>(interleaved_properties(tensor->type).second, chunk_size_multiplier);
+        // align slabs to BOTH the source and the target interleave factor: a slab
+        // that starts mid-band would corrupt row-interleaved targets (the target's
+        // bands must sit at 16-row boundaries of the whole tensor)
+        const int64_t group = std::lcm(std::lcm<int64_t>(interleaved_properties(tensor->type).second, interleaved_properties(new_type).second), chunk_size_multiplier);
         int64_t rows_per_slab = std::max<int64_t>(group, max_slab_elements/n_per_row);
         rows_per_slab -= rows_per_slab % group;
         if (work.size() < rows_per_slab*row_out_bytes) work.resize(rows_per_slab*row_out_bytes);
