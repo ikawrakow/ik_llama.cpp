@@ -12,6 +12,11 @@
 typedef void (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float *);
 typedef void (*vec_dot_q_tail_cuda_t)(const void * __restrict__ vbq, const void * __restrict__ bq8_1, const int & kbx, const int & iqs, const int & nt, float *);
 
+// Whether a tail kernel was given, decided by specialization and not by comparing the pointer to nullptr:
+// nvcc with MSVC as host compiler rejects that comparison in a constant expression when it names a function.
+template <vec_dot_q_tail_cuda_t tail> struct iqk_mmvq_has_tail { static constexpr bool value = true; };
+template <> struct iqk_mmvq_has_tail<nullptr> { static constexpr bool value = false; };
+
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ1_M_R4> {
     static constexpr int qk = 32;
@@ -68,7 +73,7 @@ static __device__ void iqk_mul_mat_vec_q_kernel(
             }
         }
     }
-    if constexpr (vec_dot_tail != nullptr) {
+    if constexpr (iqk_mmvq_has_tail<vec_dot_tail>::value) {
         const int nt = (ncols_x % qk)/32;
         if (nt > 0 && kbx == blocks_per_row_x) {
             const int kby = kbx * (qk/QK8_1);
@@ -177,7 +182,7 @@ static __device__ void iqk_fused_mul_mat_vec_q_kernel(
             }
         }
     }
-    if constexpr (vec_dot_tail != nullptr) {
+    if constexpr (iqk_mmvq_has_tail<vec_dot_tail>::value) {
         const int nt = (ncols_x % qk)/32;
         if (nt > 0 && kbx == blocks_per_row_x) {
             const int kby = kbx * (qk/QK8_1);
@@ -322,7 +327,7 @@ static __global__ void iqk_fused_mul_mat_vec_q(
 template <ggml_type type, int vdr, vec_dot_q_cuda_t vec_dot_q_cuda, int n_interleaved = 1, vec_dot_q_tail_cuda_t vec_dot_tail = nullptr>
 static void iqk_mul_mat_vec_q_cuda(const mmvq_args & args, cudaStream_t stream) {
 
-    if constexpr (vec_dot_tail != nullptr) {
+    if constexpr (iqk_mmvq_has_tail<vec_dot_tail>::value) {
         GGML_ASSERT(args.ncols_x % 32 == 0);
     } else {
         GGML_ASSERT(args.ncols_x % ggml_blck_size(type) == 0);
