@@ -325,7 +325,7 @@ struct mtmd_context {
                 img_end = "<|media_end|>";
             }
         }
-        else if (proj == PROJECTOR_TYPE_DEEPSEEK4V) {
+        else if (proj == PROJECTOR_TYPE_DEEPSEEK4V || proj == PROJECTOR_TYPE_DEEPSEEK41) {
             // markers are learned embeddings emitted by the encoder graph
             img_beg = "";
             img_end = "";
