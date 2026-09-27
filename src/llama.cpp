@@ -5287,6 +5287,9 @@ static bool llm_load_tensors(
         ml.tensor_buft_overrides = nullptr;
     }
 
+    // Prism ternary Hadamard rotations
+    llm_load_hadamard(ml, model);
+
     // loading time will be recalculate after the first eval, so
     // we take page faults deferred by mmap() into consideration
     model.t_load_us = ggml_time_us() - model.t_start_us;

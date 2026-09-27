@@ -221,6 +221,9 @@ void llm_load_arch(llama_model_loader & ml, llama_model & model);
 
 void llm_load_hparams(llama_model_loader & ml, llama_model & model, bool ignore_vocab = false);
 
+// Prism ternary Hadamard rotations; no-op unless the GGUF declares them
+void llm_load_hadamard(llama_model_loader & ml, llama_model & model);
+
 struct create_tensors_helper_interface {
     virtual ~create_tensors_helper_interface() = default;
     virtual bool create_tensors() = 0;
