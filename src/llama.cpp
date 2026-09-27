@@ -5334,7 +5334,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #endif
         }
         if (params.defer_ple) {
-#ifdef __linux__
+#if defined(__linux__) || defined(_WIN32)
             if (!params.use_mmap) {
                 LLAMA_LOG_WARN("%s: --defer-ple had no effect: mmap is disabled\n", __func__);
             } else {
@@ -5344,7 +5344,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 }
             }
 #else
-            LLAMA_LOG_WARN("%s: deferred per-layer token embedding is only supported on Linux; ignoring defer_ple\n", __func__);
+            LLAMA_LOG_WARN("%s: deferred per-layer token embedding is only supported on Linux and Windows; ignoring defer_ple\n", __func__);
 #endif
         }
         try {

@@ -3332,7 +3332,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
     options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
-    options.push_back({ "*",           "       --defer-ple",            "keep the per-layer token embedding on the file instead of resident in memory (Linux)"});
+    options.push_back({ "*",           "       --defer-ple",            "keep the per-layer token embedding on the file instead of resident in memory (Linux, Windows)"});
     options.push_back({ "*",           "       --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
     options.push_back({ "*",           "       --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
