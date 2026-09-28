@@ -19,8 +19,6 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     constexpr int qstep = 8;
     const int kqsx = threadIdx.x % qstep;
 
-    uint32_t aux32[2];
-    const uint8_t * aux8 = (const uint8_t *)aux32;
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * WARP_SIZE/qstep) {
         int i = i0 + threadIdx.y*(WARP_SIZE/qstep) + threadIdx.x/qstep;
@@ -32,19 +30,18 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         const block_iq4_k * bxi = (const block_iq4_k *)(x + i*stride) + kbx0;
         const uint16_t extra = bxi->extra >> 2*kqsx;
 
-        auto values_l = iq4k_table + ((extra & 1) << 8);
-        auto values_h = iq4k_table + ((extra & 2) << 7);
+        // iq4k_values high half is the low half + 4, so the half select is a packed byte add.
+        const int add_l = 0x04040404 & -( extra       & 1);
+        const int add_h = 0x04040404 & -((extra >> 1) & 1);
 
     #pragma unroll
         for (int l = 0; l < qstep/2; ++l) {
 
             const int q4 = get_int_b4(bxi->qs, (qstep/2)*kqsx + l);
 
-            aux32[0] = (q4 >> 0) & 0x0f0f0f0f;
-            aux32[1] = (q4 >> 4) & 0x0f0f0f0f;
-
-            int val0 = int_from_table_x(aux8+0, values_l);
-            int val1 = int_from_table_x(aux8+4, values_h);
+            const int2 v = get_int_from_table_16(q4, iq4k_values);
+            const int val0 = v.x + add_l;
+            const int val1 = v.y + add_h;
 
 #ifdef INT8_MMA_AVAILABLE
             x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + l + 0] = val0;
