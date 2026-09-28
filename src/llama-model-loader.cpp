@@ -1096,12 +1096,19 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
     if (use_mmap) {
         mappings.reserve(files.size());
         mmaps_used.reserve(files.size());
+        size_t n_prefetched = 0;
+        size_t n_skipped = 0;
         for (size_t fi = 0; fi < files.size(); ++fi) {
             const auto & file = files[fi];
             // Files holding deferred sparse tables (PLE) are never bulk-prefetched:
             // faulting tens of GB upfront only to evict them right after wastes
             // IO and page cache. Dense shards keep the bulk prefetch.
             const size_t file_prefetch = (prefetch && !file_has_deferred_ple((int) fi)) ? (size_t) -1 : 0;
+            if (file_prefetch > 0) {
+                ++n_prefetched;
+            } else {
+                ++n_skipped;
+            }
             std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), file_prefetch, ggml_is_numa(), use_thp));
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
@@ -1110,6 +1117,10 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
                 mlock_mmaps->emplace_back(std::move(mlock_mmap));
             }
             mappings.emplace_back(std::move(mapping));
+        }
+        if (n_skipped > 0) {
+            LLAMA_LOG_INFO("%s: prefetched %zu of %zu files, %zu skipped (deferred tables stay on disk)\n",
+                    __func__, n_prefetched, files.size(), n_skipped);
         }
     }
 
