@@ -608,8 +608,9 @@ if (GGML_RPC)
         set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} ws2_32)
     endif()
 
-    set(GGML_HEADERS_RPC ../include/ggml-rpc.h)
-    set(GGML_SOURCES_RPC ggml-rpc.cpp)
+    set(GGML_HEADERS_RPC ../include/ggml-rpc.h ggml-rpc-transport.h)
+    set(GGML_SOURCES_RPC ggml-rpc.cpp ggml-rpc-transport.cpp)
+		
 endif()
 
 function(detect_host_compiler)
@@ -1349,8 +1350,6 @@ add_library(ggml
             ggml-quants.h
             ggml-utils.h
             ggml-impl.h
-            ggml-rpc-transport.h
-            ggml-rpc-transport.cpp
             ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}
             ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
             ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}
