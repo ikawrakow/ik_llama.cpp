@@ -653,7 +653,10 @@ ggml_cgraph * llm_build_context::build_glm5next() {
     // Collapse the mHC streams before the shared output head.
     {
         auto flat = ggml_reshape_2d(ctx0, inpL, n_embd * hc, n_tokens);
-        const int64_t n_out = n_tokens;
+        if (!lctx.cparams.mtp && n_outputs != n_tokens) {
+            flat = ggml_get_rows(ctx0, flat, inp_out_ids);
+        }
+        const int64_t n_out = flat->ne[1];
         // sum the hc streams
         ggml_tensor * summed = nullptr;
         for (int64_t s = 0; s < hc; ++s) {
@@ -674,7 +677,7 @@ ggml_cgraph * llm_build_context::build_glm5next() {
         }
     }
 
-    if (n_outputs != n_tokens) {
+    if (lctx.cparams.mtp && n_outputs != n_tokens) {
         inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
     }
 
