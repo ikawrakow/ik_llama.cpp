@@ -647,6 +647,7 @@ struct llama_context {
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
     std::vector<struct ggml_tensor *> inp_engram_rows; // I32 [n_cols*n_batch], one per engram layer
     std::vector<struct ggml_tensor *> inp_engram_gate_ids; // I32 [hc]: 0..hc-1, dequantizes the gate scales via get_rows
+    struct ggml_tensor * inp_engram_gate_mask = nullptr; // F32 [n_batch]: 0 at image tokens (engram gate shut), 1 elsewhere
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
     struct ggml_tensor * inp_pos;         // I32 [n_batch]
     struct ggml_tensor * inp_out_ids;     // I32 [n_outputs]

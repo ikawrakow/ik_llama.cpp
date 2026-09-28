@@ -996,7 +996,16 @@ static void ds4_build_comp(ggml_tensor * cur, llm_build_context & llm, ggml_cont
 // plus a shared value, gate the value with the normalized key.query dot product and add it
 // into every stream. Row ids come from llama_set_engram_rows; the table is only ever read
 // through get_rows, so it stays in the file mapping.
-static ggml_tensor * ds4_build_engram(ggml_context * ctx0, llm_build_context & llm, ggml_tensor * x, int il, int eg) {
+static ggml_tensor * ds4_build_engram_gate_mask(ggml_context * ctx0, llm_build_context & llm, int64_t n_tokens) {
+    ggml_tensor * t = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
+    ggml_set_input(t);
+    ggml_set_name(t, "engram_gate_mask");
+    llm.lctx.inp_engram_gate_mask = t;
+    return t;
+}
+
+static ggml_tensor * ds4_build_engram(ggml_context * ctx0, llm_build_context & llm, ggml_tensor * x, int il, int eg,
+        ggml_tensor * gate_mask) {
     const auto & model   = llm.model;
     const auto & hparams = model.hparams;
     const auto & layer   = model.layers[il];
@@ -1051,6 +1060,9 @@ static ggml_tensor * ds4_build_engram(ggml_context * ctx0, llm_build_context & l
     // signed square root before the sigmoid, as in the training kernel
     ggml_tensor * mag  = ggml_sqrt(ctx0, ggml_clamp(ctx0, ggml_abs(ctx0, s), 1e-6f, INFINITY));
     ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_mul(ctx0, ggml_sgn(ctx0, s), mag));
+    if (gate_mask != nullptr) {
+        gate = ggml_mul(ctx0, gate, ggml_reshape_3d(ctx0, gate_mask, 1, 1, nt));
+    }
     cb(gate, "engram_gate", il);
 
     ggml_tensor * v = ggml_reshape_3d(ctx0, value, n_embd, 1, nt);
@@ -1571,13 +1583,17 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
 
     ggml_tensor * comp_kv   = nullptr;
     ggml_tensor * comp_mask = nullptr;
+    ggml_tensor * engram_gate_mask = nullptr;
 
     for (int il = n_layer_begin; il < n_layer_end; ++il) {
 
         if (model.layers[il].engram_embd) {
             const int eg = hparams.engram_index(il);
             GGML_ASSERT(eg >= 0 && "engram tensor on a layer the metadata does not list");
-            inpL = ds4_build_engram(ctx0, *this, inpL, il, eg);
+            if (engram_gate_mask == nullptr) {
+                engram_gate_mask = ds4_build_engram_gate_mask(ctx0, *this, n_tokens);
+            }
+            inpL = ds4_build_engram(ctx0, *this, inpL, il, eg, engram_gate_mask);
         }
 
         ggml_tensor * hc_attn_pre = nullptr;
@@ -2601,6 +2617,7 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
 
     ggml_tensor * cand_carry_v = nullptr;
     ggml_tensor ** cand_carry = &cand_carry_v;
+    ggml_tensor * engram_gate_mask = nullptr;
 
     ggml_tensor * hc_pre_mix = ggml_concat(ctx0,
             ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens), 1.0f),
@@ -2614,7 +2631,10 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
         if (layer.engram_embd != nullptr) {
             const int eg = hparams.engram_index(il);
             GGML_ASSERT(eg >= 0 && "engram tensor on a layer the metadata does not list");
-            inpL = ds4_build_engram(ctx0, *this, inpL, il, eg);
+            if (engram_gate_mask == nullptr) {
+                engram_gate_mask = ds4_build_engram_gate_mask(ctx0, *this, n_tokens);
+            }
+            inpL = ds4_build_engram(ctx0, *this, inpL, il, eg, engram_gate_mask);
         }
 
         if (lctx.dflash.capture) {
