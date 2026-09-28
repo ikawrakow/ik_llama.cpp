@@ -214,7 +214,9 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ3_KS        = 154, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ2_KL        = 155, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ1_KT        = 156, // except 1d tensors
-                                                //
+
+        LLAMA_FTYPE_MOSTLY_Q1_0_G128_R8  = 160, // except 1d tensors, 38 to be compatible with mainline
+
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q5_0_R4       = 208, // except 1d tensors
@@ -434,7 +436,7 @@ extern "C" {
         bool dry_run;       // skip loading tensors
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
-        bool defer_ple;        // keep the per-layer token embedding on the file instead of resident in memory (Linux only)
+        bool defer_ple;        // keep the per-layer token embedding on the file instead of resident in memory (Linux and Windows only)
         bool swa_compress;     // must match llama_context_params::swa_compress; the fit also assumes that context's n_ubatch
     };
 
@@ -498,6 +500,7 @@ extern "C" {
         bool dsa;               // enable GLM DSA sparse attention (off by default) [EXPERIMENTAL]
         bool fused_idx_topk;    // enable the fused indexer topk op (on by default) [EXPERIMENTAL]
         bool swa_compress;      // allocate sliding-window layers at window size instead of n_ctx (off by default) [EXPERIMENTAL]
+        bool dsv4_legacy_state; // write DeepSeek-V4 state in the legacy full-slice layout (no MAGIC), byte-identical to main [EXPERIMENTAL]
         int  dsa_top_k;         // DSA top-k override (<0 => model's configured indexer_top_k) [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
@@ -549,6 +552,7 @@ extern "C" {
         bool only_repack;                    // Only repack tensors
         bool dry_run;                        //
         bool partial_requant;                // quantize only missing split files in the split quantized .gguf destination directory
+        size_t slab_size;                    // tensors larger than this many bytes of f32 are processed in slabs of up to this size (at least one slice or row group), 0 = never
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules

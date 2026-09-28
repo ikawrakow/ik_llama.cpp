@@ -1055,6 +1055,38 @@ static uint8_t * serialize_graph(uint32_t device, const ggml_cgraph * cgraph, co
     dest += sizeof(n_tensors);
     rpc_tensor * out_tensors = (rpc_tensor *)dest;
     memcpy(out_tensors, tensors.data(), n_tensors * sizeof(rpc_tensor));
+    //printf("Graph size: %zu\n", *output_size);
+    return output;
+}
+
+static uint8_t * serialize_viewoff(uint32_t device, const ggml_cgraph * cgraph, size_t * output_size) {
+    uint32_t n_nodes = cgraph->n_nodes;
+
+    // count CPY nodes
+    uint32_t n_view_offs = 0;
+    for (uint32_t i = 0; i < n_nodes; i++) {
+        if (cgraph->nodes[i]->op == GGML_OP_CPY) {
+            n_view_offs++;
+        }
+    }
+
+    // serialization format:
+    // | device (4 bytes) | n_view_offs (4 bytes) | view_offs (n_view_offs * sizeof(size_t)) |
+    *output_size = sizeof(uint32_t) + sizeof(uint32_t) + n_view_offs * sizeof(size_t);
+    uint8_t * output = new uint8_t[*output_size]();
+    uint8_t * dest = output;
+    memcpy(dest, &device, sizeof(device));
+    dest += sizeof(device);
+    memcpy(dest, &n_view_offs, sizeof(n_view_offs));
+    dest += sizeof(n_view_offs);
+    for (uint32_t i = 0; i < n_nodes; i++) {
+        if (cgraph->nodes[i]->op == GGML_OP_CPY) {
+            size_t view_offs = cgraph->nodes[i]->view_offs;
+            memcpy(dest, &view_offs, sizeof(view_offs));
+            dest += sizeof(view_offs);
+        }
+    }
+    //printf("View off size: %zu\n", *output_size);
     return output;
 }
 
@@ -1063,11 +1095,12 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
     ggml_backend_rpc_device_context * rpc_dev_ctx = (ggml_backend_rpc_device_context *)backend->context;
     GGML_ASSERT(cgraph->n_nodes > 0);
     bool reuse = cgraph->uid != 0 && rpc_dev_ctx->last_graph_uid == cgraph->uid;
-    reuse = false;
     if (reuse) {
-        auto request = std::make_shared<rpc_msg_graph_recompute_req>();
-        request->device = rpc_ctx->device;
-        rpc_ctx->dispatcher->send_async(RPC_CMD_GRAPH_RECOMPUTE, request, sizeof(*request));
+        size_t input_size = 0;
+        // For graph recompute, we need to send kv view again
+        uint8_t * input = serialize_viewoff(rpc_ctx->device, cgraph, &input_size);
+        std::shared_ptr<uint8_t> input_ptr(input, std::default_delete<uint8_t[]>());
+        rpc_ctx->dispatcher->send_async(RPC_CMD_GRAPH_RECOMPUTE, input_ptr, input_size);
     } else {
         rpc_dev_ctx->last_graph_uid = cgraph->uid;
         size_t input_size = 0;
@@ -1259,7 +1292,7 @@ public:
     bool get_tensor(const rpc_msg_get_tensor_req & request, std::vector<uint8_t> & response);
     bool copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_copy_tensor_rsp & response);
     bool graph_compute(const std::vector<uint8_t> & input);
-    bool graph_recompute(const rpc_msg_graph_recompute_req & request);
+    bool graph_recompute(const std::vector<uint8_t> & input);
     bool init_tensor(const rpc_msg_init_tensor_req & request);
     bool get_alloc_size(const rpc_msg_get_alloc_size_req & request, rpc_msg_get_alloc_size_rsp & response);
     bool get_device_memory(const rpc_msg_get_device_memory_req & request, rpc_msg_get_device_memory_rsp & response);
@@ -1884,8 +1917,14 @@ bool rpc_server::graph_compute(const std::vector<uint8_t>& input) {
 }
 
 
-bool rpc_server::graph_recompute(const rpc_msg_graph_recompute_req & request) {
-    uint32_t device = request.device;
+bool rpc_server::graph_recompute(const std::vector<uint8_t> & input) {
+    if (input.size() < 2 * sizeof(uint32_t)) {
+        return false;
+    }
+    const uint8_t * src = input.data();
+    uint32_t device;
+    memcpy(&device, src, sizeof(device));
+    src += sizeof(device);
     if (device >= backends.size()) {
         return false;
     }
@@ -1893,6 +1932,36 @@ bool rpc_server::graph_recompute(const rpc_msg_graph_recompute_req & request) {
         return false;
     }
     ggml_cgraph * graph = stored_graphs[device].graph;
+    uint32_t n_view_offs;
+    memcpy(&n_view_offs, src, sizeof(n_view_offs));
+    src += sizeof(n_view_offs);
+
+    int n_nodes = graph->n_nodes;
+    uint32_t idx = 0;
+    for (int i = 0; i < n_nodes; i++) {
+        auto node = graph->nodes[i];
+        if (node->op == GGML_OP_CPY) {
+            size_t view_offs;
+            memcpy(&view_offs, src, sizeof(view_offs));
+            src += sizeof(view_offs);
+            if (view_offs != node->view_offs) {
+                node->view_offs = view_offs;
+                node->src[1]->data = (char *)node->view_src->data + view_offs;
+                node->data = node->src[1]->data;
+            }
+            /*
+            auto offset = (ptrdiff_t)view_offs - (ptrdiff_t)node->view_offs;
+            if (offset != 0) {
+                node->view_offs = view_offs;
+                node->src[1]->data = (char *)node->src[1]->data + offset;
+                node->data = node->src[1]->data;
+            }*/
+            idx++;
+            if (idx >= n_view_offs) {
+                break;
+            }
+        }
+    }
     LOG_DBG("[%s] device: %u\n", __func__, device);
     ggml_status status = ggml_backend_graph_compute(backends[device], graph);
     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
@@ -2121,11 +2190,11 @@ static void rpc_serve_client(const std::vector<ggml_backend_t>& backends, const 
             break;
         }
         case RPC_CMD_GRAPH_RECOMPUTE: {
-            rpc_msg_graph_recompute_req request;
-            if (!recv_msg(sock, &request, sizeof(request))) {
+            std::vector<uint8_t> input;
+            if (!recv_msg(sock, input)) {
                 return;
             }
-            if (!server.graph_recompute(request)) {
+            if (!server.graph_recompute(input)) {
                 return;
             }
             break;

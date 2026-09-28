@@ -579,6 +579,7 @@ struct llama_context {
             std::vector<int32_t> state_persist_dst_idxs;
             std::vector<int32_t> state_read_idxs;
             std::vector<int64_t> state_write_idxs;
+            std::vector<int64_t> state_write_idxs_lid;
             std::vector<int32_t> state_write_pos;
             std::vector<int32_t> n_visible;
             int64_t n_stream = 1;
@@ -591,6 +592,8 @@ struct llama_context {
             struct ggml_tensor * state_persist_dst_idxs = nullptr;
             struct ggml_tensor * state_read_idxs = nullptr;
             struct ggml_tensor * state_write_idxs = nullptr;
+            struct ggml_tensor * state_write_idxs_lid = nullptr;
+            struct ggml_tensor * cand_pin = nullptr;
             struct ggml_tensor * state_write_pos = nullptr;
             struct ggml_tensor * kq_mask = nullptr;
         };
@@ -644,6 +647,7 @@ struct llama_context {
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
     std::vector<struct ggml_tensor *> inp_engram_rows; // I32 [n_cols*n_batch], one per engram layer
     std::vector<struct ggml_tensor *> inp_engram_gate_ids; // I32 [hc]: 0..hc-1, dequantizes the gate scales via get_rows
+    struct ggml_tensor * inp_engram_gate_mask = nullptr; // F32 [n_batch]: 0 at image tokens (engram gate shut), 1 elsewhere
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
     struct ggml_tensor * inp_pos;         // I32 [n_batch]
     struct ggml_tensor * inp_out_ids;     // I32 [n_outputs]

@@ -432,6 +432,7 @@ struct gpt_params {
     bool dsa               = false; // enable GLM DSA sparse attention (off by default; opt-in via --dsa)
     bool fused_idx_topk    = true;  // enable the fused indexer topk op (on by default; -no-fidx or --no-fused-indexer-topk turns it off)
     bool swa_compress      = false;
+    bool dsv4_legacy_state = false; // if true, write DeepSeek-V4 state in the legacy full-slice layout (no MAGIC), byte-identical to main
     int  dsa_top_k         = -1;    // DSA top-k override (<0 => use the model's configured indexer_top_k)
     int  min_experts       = -1;
     float thresh_experts   = 0;
@@ -456,7 +457,7 @@ struct gpt_params {
     bool merge_qkv         = false; // if true, merge separate Q, K, V tensors into a single, contiguous tensor
     bool merge_up_gate_exps= false; // if true, merge ffn_up_exps and ffn_gate_exps into a single, contiguous tensor
     bool defer_experts     = false; // if true, defer expert mmap residency to speed up model loading (Linux only)
-    bool defer_ple         = false; // if true, keep the per-layer token embedding on the file (Linux only)
+    bool defer_ple         = false; // if true, keep the per-layer token embedding on the file (Linux and Windows only)
     bool prefetch_experts  = false; // if true, stream mmap'd MoE expert weights into the page cache (Linux only)
     int  prefetch_experts_threads = 0; // number of expert prefetch workers (<=0 = auto)
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
@@ -694,6 +695,8 @@ std::string string_unescape(const std::string& str);
 std::vector<std::string> string_extract(const std::string& str, const char c, std::vector<size_t>& posi);
 
 bool string_is_found(const std::string& window, const std::string& str, size_t& pos);
+
+void string_assign_append(std::string& dst, const std::string_view& sv, const std::string& str, const int32_t pos);
 
 //
 // Filesystem utils

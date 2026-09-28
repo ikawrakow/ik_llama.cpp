@@ -1351,7 +1351,6 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_DOWN_SHEXP,         "blk.%d.ffn_down_shexp" },
             { LLM_TENSOR_FFN_UP_SHEXP,           "blk.%d.ffn_up_shexp" },
 	        { LLM_TENSOR_FFN_EXP_PROBS_B,        "blk.%d.exp_probs_b" },
-            { LLM_TENSOR_FFN_EXP_PROBS_B_VL,     "blk.%d.exp_probs_b_vl" },
             { LLM_TENSOR_FFN_GATE_TID2EID,       "blk.%d.ffn_gate_tid2eid" },
             { LLM_TENSOR_INDEXER_K_NORM,         "blk.%d.indexer.k_norm" },
             { LLM_TENSOR_INDEXER_PROJ,           "blk.%d.indexer.proj" },
@@ -2063,6 +2062,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
             { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
             { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_QKV,        "blk.%d.attn_qkv" },
             { LLM_TENSOR_ATTN_SINKS,      "blk.%d.attn_sinks" },
             { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
             { LLM_TENSOR_FFN_NORM,        "blk.%d.ffn_norm" },
@@ -2074,6 +2074,10 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_DOWN_EXPS,   "blk.%d.ffn_down_exps" },
             { LLM_TENSOR_FFN_UP_EXPS,     "blk.%d.ffn_up_exps" },
             { LLM_TENSOR_FFN_GATE_UP_EXPS,"blk.%d.ffn_gate_up_exps" },
+            { LLM_TENSOR_NEXTN_EH_PROJ,      "blk.%d.nextn.eh_proj" },
+            { LLM_TENSOR_NEXTN_ENORM,        "blk.%d.nextn.enorm" },
+            { LLM_TENSOR_NEXTN_HNORM,        "blk.%d.nextn.hnorm" },
+            { LLM_TENSOR_LAYER_OUT_NORM,     "blk.%d.layer_output_norm" },
 	        { LLM_TENSOR_FFN_EXP_PROBS_B, "blk.%d.exp_probs_b" },
         },
     },
@@ -2455,6 +2459,7 @@ std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q8_0_R8:  return "Q8_0_R8 - 8.5 bpw";
         case LLAMA_FTYPE_MOSTLY_MXFP4:    return "MXFP4 - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_Q1_0_G128:return "Q1_0_G128 - 1.125 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q1_0_G128_R8:return "Q1_0_G128_R8";
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:   return "IQ4_XS - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KS:   return "IQ4_KS - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KS_R4:return "IQ4_KS_R4 - 4.25 bpw";

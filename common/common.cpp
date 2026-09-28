@@ -1947,6 +1947,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.swa_compress = true;
         return true;
     }
+    if (arg == "-dsv4ls" || arg == "--dsv4-legacy-state") {
+        params.dsv4_legacy_state = true;
+        return true;
+    }
     if (arg == "-dsatk" || arg == "--dsa-top-k") {
         CHECK_ARG
         params.dsa_top_k = std::stoi(argv[i]);
@@ -3099,6 +3103,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-fidx,  --fused-indexer-topk",  "enable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fidx, --no-fused-indexer-topk", "disable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
     options.push_back({ "*",           "        --swa-compress",         "allocate sliding-window layers at window size instead of n_ctx (default: %s)", params.swa_compress ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-dsv4ls, --dsv4-legacy-state",   "write DeepSeek-V4 state in the legacy full-slice layout, byte-identical to main (default: %d)", params.dsv4_legacy_state });
     options.push_back({ "*",           "-dsatk, --dsa-top-k",           "DSA top-k override; <0 uses the model's configured indexer_top_k (default: %d)", params.dsa_top_k });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
     options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
@@ -3327,7 +3332,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
     options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
-    options.push_back({ "*",           "       --defer-ple",            "keep the per-layer token embedding on the file instead of resident in memory (Linux)"});
+    options.push_back({ "*",           "       --defer-ple",            "keep the per-layer token embedding on the file instead of resident in memory (Linux, Windows)"});
     options.push_back({ "*",           "       --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
     options.push_back({ "*",           "       --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
@@ -3842,6 +3847,15 @@ bool string_is_found(const std::string& window, const std::string& str, size_t& 
     }
     pos = window.find(str);
     return pos != std::string::npos;
+}
+
+void string_assign_append(std::string& dst, const std::string_view& sv, const std::string& str, const int32_t pos) {
+    const int32_t margin = SSIZE(sv) - pos;
+    if (margin > 0) {
+        dst.assign(sv, pos).append(str);
+    } else {
+        dst.assign(str, -margin);
+    }
 }
 
 //
@@ -4387,6 +4401,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.dsa               = params.dsa;
     cparams.fused_idx_topk    = params.fused_idx_topk;
     cparams.swa_compress      = params.swa_compress;
+    cparams.dsv4_legacy_state = params.dsv4_legacy_state;
     cparams.dsa_top_k         = params.dsa_top_k;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
     cparams.v_cache_hadamard  = params.v_cache_hadamard;
@@ -5559,7 +5574,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             static const std::vector<std::string> names = { X_COMMON_PARAMS_SAMPLING };
 
             std::vector<float> addsubs(names.size(), 0.0f);
-            bool is_sb = false;
+            bool is_epb = false;
 
             // (... : SPARAM ...)
             const auto window = line.substr(last_qq_pos + 1);
@@ -5575,7 +5590,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                     auto sub = string_strip(window.substr(pos, next_pos - pos));
                     if (sub[0] == '~') {
                         addsubs[j] += std::stof(sub.substr(1));
-                        is_sb = true;
+                        is_epb = true;
                         LLAMA_LOG_DEBUG("%s: line %zu: bias = %f\n", __func__, i, addsubs[j]);
                     }
                 }
@@ -5583,18 +5598,19 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
 
             auto& phrases = extracts;
             if (phrases.empty()) {
-                if (is_sb) {
+                if (is_epb) {
                     phrases.push_back("");
                 } else {
                     continue;   // next line
                 }
             }
 
+            int32_t max_keyword_len = 0;
             const auto n_phrase = phrases.size();
             std::vector<float> biases;
             bool is_range = false;
 
-            if (!is_sb) {
+            if (!is_epb) {
                 // (... : BIAS ...)
                 const auto cln_rpos = line.rfind(':');
                 auto sub = line.substr(cln_rpos + 1, n_char - cln_rpos - 2);
@@ -5618,20 +5634,19 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 if (biases.empty()) {
                     continue;   // next line
                 }
+            } else {
+                for (const auto& keyword: phrases) {
+                    LLAMA_LOG_DEBUG("%s: line %zu: keyword = \"%s\"\n", __func__, i, keyword.c_str());
+                    max_keyword_len = std::max(SSIZE(keyword), max_keyword_len);
+                }
+                LLAMA_LOG_DEBUG("%s: line %zu: max_keyword_len = %d\n", __func__, i, max_keyword_len);
             }
-
-            size_t max_phrase_len = 0;
-            for (const auto& phrase: phrases) {
-                LLAMA_LOG_DEBUG("%s: line %zu: phrase = \"%s\"\n", __func__, i, phrase.c_str());
-                max_phrase_len = std::max(phrase.length(), max_phrase_len);
-            }
-            LLAMA_LOG_DEBUG("%s: line %zu: max_phrase_len = %zu\n", __func__, i, max_phrase_len);
 
             common_params_sampling::elb_param::elb_entry entry = {
-                std::vector<size_t>(n_phrase, 0),
+                max_keyword_len,
+                std::vector<int32_t>(n_phrase, 0),
                 std::move(addsubs),
                 std::vector<bool>(n_phrase, false),
-                max_phrase_len,
                 std::move(phrases),
                 std::move(biases),
                 duration,

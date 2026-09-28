@@ -467,9 +467,10 @@ ggml_cgraph * llm_build_context::build_defrag(const std::vector<uint32_t> & ids)
 struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd) {
     struct ggml_tensor * cur = nullptr;
 
+    lctx.inp_engram_gate_mask = nullptr;
+    lctx.inp_engram_rows.clear();
+    lctx.inp_engram_gate_ids.clear();
     if (batch.token) {
-        lctx.inp_engram_rows.clear();
-        lctx.inp_engram_gate_ids.clear();
         lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
 
         cb(lctx.inp_tokens, "inp_tokens", -1);
@@ -902,9 +903,10 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
 
     struct ggml_tensor * inpL;
 
+    lctx.inp_engram_gate_mask = nullptr;
+    lctx.inp_engram_rows.clear();
+    lctx.inp_engram_gate_ids.clear();
     if (batch.token) {
-        lctx.inp_engram_rows.clear();
-        lctx.inp_engram_gate_ids.clear();
         lctx.inp_tokens = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, batch.n_tokens);
         cb(lctx.inp_tokens, "inp_tokens", -1);
         ggml_set_input(lctx.inp_tokens);
@@ -2965,9 +2967,13 @@ ggml_cgraph * llm_build_context::llama_build_graph(
                 result = llm.build_deepseek2();
             } break;
         case LLM_ARCH_DEEPSEEK4:
-        case LLM_ARCH_DEEPSEEK41:
             {
                 result = llm.build_deepseek4();
+            } break;
+        case LLM_ARCH_DEEPSEEK41:
+            {
+                static const bool v41_separate = getenv("V41_SEPARATE") != nullptr;
+                result = v41_separate ? llm.build_deepseek41() : llm.build_deepseek4();
             } break;
         case LLM_ARCH_OPENPANGU:
             {

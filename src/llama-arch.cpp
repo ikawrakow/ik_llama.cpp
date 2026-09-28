@@ -87,6 +87,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LAGUNA,          "laguna"       },
     { LLM_ARCH_GLM_DSA,         "glm-dsa"      },
     { LLM_ARCH_GLM5NEXT,        "glm5next"     },
+    { LLM_ARCH_GLM5NEXT_DASHED, "glm5-next"    },
     { LLM_ARCH_MISTRAL4,        "mistral4"     },
     { LLM_ARCH_GEMMA4,          "gemma4"       },
     { LLM_ARCH_GEMMA4_MTP,      "gemma4_mtp"   },
@@ -158,7 +159,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_GROUPNORM_GROUPS,       "%s.attention.group_norm_groups"        },
     { LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,     "%s.attention.value_expert_count"       },
     { LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT,"%s.attention.value_expert_used_count"  },
-    
+
     { LLM_KV_NEXTN_PREDICT_LAYERS,              "%s.nextn_predict_layers"              },
     { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                },
     { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                      },
@@ -250,6 +251,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ENGRAM_OFFSETS,         "%s.engram.offsets" },
     { LLM_KV_ENGRAM_TOKEN_MAP,       "%s.engram.token_map" },
     { LLM_KV_ENGRAM_PAD_ID,          "%s.engram.pad_id" },
+    { LLM_KV_CANDIDATE_SOURCE_LAYER,         "%s.attention.candidate_source_layer_id" },
+    { LLM_KV_CANDIDATE_BLOCK_SIZE,           "%s.attention.candidate_block_size"      },
+    { LLM_KV_CANDIDATE_TOPK_BLOCKS,          "%s.attention.candidate_topk_blocks"     },
 
     { LLM_KV_ROPE_DIMENSION_COUNT,          "%s.rope.dimension_count"                 },
     { LLM_KV_ROPE_DIMENSION_COUNT_SWA,      "%s.rope.dimension_count_swa"             },
