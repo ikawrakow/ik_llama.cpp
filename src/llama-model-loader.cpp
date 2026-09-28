@@ -722,6 +722,30 @@ void llama_model_loader::apply_ple_mmap_policy() const {
     }
 }
 
+bool llama_model_loader::file_has_deferred_ple(int idx) const {
+    if (idx < 0 || (size_t) idx >= ple_tensor_index.file_ranges.size()) {
+        return false;
+    }
+    for (const auto & range : ple_tensor_index.file_ranges[(size_t) idx]) {
+        if (!range.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool llama_model_loader::ple_range_overlaps(int idx, size_t first, size_t last) const {
+    if (idx < 0 || (size_t) idx >= ple_tensor_index.file_ranges.size()) {
+        return false;
+    }
+    for (const auto & range : ple_tensor_index.file_ranges[(size_t) idx]) {
+        if (first < range.last && range.first < last) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template<typename T>
 typename std::enable_if<std::is_integral<T>::value, bool>::type
 llama_model_loader::get_arr_n(const std::string & key, T & result, const bool required) {
@@ -1068,8 +1092,13 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
     if (use_mmap) {
         mappings.reserve(files.size());
         mmaps_used.reserve(files.size());
-        for (const auto & file : files) {
-            std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), prefetch ? -1 : 0, ggml_is_numa(), use_thp));
+        for (size_t fi = 0; fi < files.size(); ++fi) {
+            const auto & file = files[fi];
+            // Files holding deferred sparse tables (PLE) are never bulk-prefetched:
+            // faulting tens of GB upfront only to evict them right after wastes
+            // IO and page cache. Dense shards keep the bulk prefetch.
+            const size_t file_prefetch = (prefetch && !file_has_deferred_ple((int) fi)) ? (size_t) -1 : 0;
+            std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), file_prefetch, ggml_is_numa(), use_thp));
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());

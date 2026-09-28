@@ -51,6 +51,10 @@ struct llama_mmap {
 
     void random_fragment(size_t first, size_t last);
 
+    // queue [first, last) into the page cache without faulting the whole file:
+    // selective warmup for host-needed ranges (deferred/VRAM-bound ranges stay cold)
+    void prefetch_fragment(size_t first, size_t last);
+
     void unmap_fragment(size_t first, size_t last);
 
     static const bool SUPPORTED;

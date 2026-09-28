@@ -201,6 +201,12 @@ struct llama_model_loader {
 
     void apply_ple_mmap_policy() const;
 
+    // true when file idx holds a deferred sparse range (PLE, engram): bulk
+    // prefetch and CUDA host pinning must skip it, it faults on demand instead
+    bool file_has_deferred_ple(int idx) const;
+
+    bool ple_range_overlaps(int idx, size_t first, size_t last) const;
+
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 
     // for backwards compatibility, does not support ggml-backend
