@@ -579,6 +579,8 @@ LLM_ARCH_LAGUNA,
 
 ## Tested configurations
 
+Configurations in this section were measured by users on specific hardware. Add your tested configuration in a pull request. Include the GPU, the CPU, the model, the context size, and the measured prompt processing and token generation speeds.
+
 ### 27B hybrid (linear attention + full attention, MTP) at 128k context on 24 GB VRAM
 
 `Swift-1.5-Qwen3.8-27B-IQ4_XS` is a Qwen3.5-class hybrid model. It has 65 layers, and only every 4th layer is full attention (16 layers). The other layers use linear attention (Gated DeltaNet). The model also has one MTP (multi-token prediction) head. The KV cache keeps only the 16 full attention layers, so a 128k context fits in 24 GB with the whole model.
@@ -600,6 +602,7 @@ MODEL=$(hf download ukisai/Swift-1.5-Qwen3.8-27B-GGUF Swift-1.5-Qwen3.8-27B-IQ4_
 
 ./build/bin/llama-server \
   -m "$MODEL" \
+  --alias Swift-1.5-Qwen3.8-27B-IQ4_XS \
   -fa on --jinja -ngl 99 -c 128000 \
   --spec-type mtp:n_max=3 \
   -ctk q8_0 -ctv q8_0 \
@@ -612,3 +615,53 @@ Notes, measured on the machine above:
 - `--jinja` is required for the correct chat template of this thinking model. The model emits `reasoning_content`.
 - The model is trained on 262k context, so 128k is inside its range. At 108k context, the generation speed is about 40% below the short context speed.
 - The batch size (`-b`/`-ub`) and the `GGML_CUDA_F16` build flag made no measurable difference for this model on this GPU.
+
+### Flash-Next hybrid MoE (linear attention + sparse experts) at 192k context on 24 GB VRAM
+
+`Swift-1.5-Qwen3.8-Flash-Next` is a hybrid MoE model. It combines linear attention (Gated DeltaNet) layers, full attention layers, and sparse MoE feed-forward layers. The IQ4_NL quant is split into 3 GGUF files. llama-server takes only the first part and reads the other parts from the same directory.
+
+| Item | Value |
+| - | - |
+| GPU | 1x NVIDIA TITAN RTX 24 GB (Turing, sm_75) |
+| CPU / RAM | Xeon E5-2660 v3 (AVX2), 125 GB |
+| Model | [ukisai/Swift-1.5-Qwen3.8-Flash-Next-GGUF](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-Flash-Next-GGUF) IQ4_NL, 3 parts |
+| Context | 192k |
+| Prompt processing | 244.91 t/s, weighted over 215,985 prompt tokens |
+| Token generation | 20.47 t/s, weighted over 54,325 generated tokens |
+
+The first line downloads the model if it is not present. It sets `MODEL` to the first shard in the Hugging Face cache.
+
+```bash
+# Downloads the model if it is not present. Sets MODEL to the first shard in the cache.
+MODEL=$(hf download ukisai/Swift-1.5-Qwen3.8-Flash-Next-GGUF \
+  IQ4_NL/Swift-1.5-Qwen3.8-Flash-Next-IQ4_NL-00001-of-00003.gguf \
+  IQ4_NL/Swift-1.5-Qwen3.8-Flash-Next-IQ4_NL-00002-of-00003.gguf \
+  IQ4_NL/Swift-1.5-Qwen3.8-Flash-Next-IQ4_NL-00003-of-00003.gguf \
+  | grep -oE '/[^ ]+\.gguf' | head -1)
+
+./build/bin/llama-server \
+  -m "$MODEL" \
+  --alias Swift-1.5-Qwen3.8-Flash-Next \
+  -ngl 999 \
+  -ncmoe 40 \
+  -fa on \
+  -c 196608 \
+  -ub 2048 \
+  -ctk q8_0 -ctv q8_0 \
+  -np 1 \
+  -t 10 -tb 20 \
+  --jinja \
+  -muge \
+  --spec-type ngram-mod:ngram_size_n=24 \
+  --spec-autotune \
+  --spec-ckpt-mode gpu-fallback \
+  --host 0.0.0.0 --port 8080
+```
+
+Notes, measured on the machine above:
+- The speeds are weighted totals over one long real-use session (215,985 prompt tokens, 54,325 generated tokens). They are not a short controlled benchmark.
+- `-ncmoe 40` keeps the MoE weights of the first 40 layers in RAM. This is the main lever to fit an MoE model into 24 GB. Adjust the number to fill your VRAM.
+- `-muge` merges the `ffn_up`/`ffn_gate` expert tensors. It speeds up MoE models.
+- `--spec-type ngram-mod:ngram_size_n=24` with `--spec-autotune` runs self-speculation, no draft model. The autotuner tunes the ngram parameters at runtime.
+- `--spec-ckpt-mode gpu-fallback` keeps the recurrent state checkpoints on the GPU. Models with linear attention layers need state checkpoints for speculation.
+- The model repo also has a shared MTP head (`MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf`). Pass it with `-md` and a `--spec-type mtp:...` stage to test MTP speculation on this model.
