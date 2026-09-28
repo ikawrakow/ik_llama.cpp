@@ -446,7 +446,7 @@ auto res_err = [](httplib::Response& res, json error_data) {
 };
 
 auto res_ok = [](httplib::Response& res, const json& data) {
-    res.set_content(data.dump(), "application/json; charset=utf-8");
+    res.set_content(safe_json_to_str(data), "application/json; charset=utf-8");
     res.status = 200;
 };
 
@@ -1505,7 +1505,7 @@ int main(int argc, char ** argv) {
         }
 
         const json data = format_detokenized_response(content);
-        return res.set_content(data.dump(), "application/json; charset=utf-8");
+        return res.set_content(safe_json_to_str(data), "application/json; charset=utf-8");
     };
 
     const auto handle_embeddings_impl = [&ctx_server](const httplib::Request& req, httplib::Response& res, oaicompat_type oaicompat) {
