@@ -664,4 +664,4 @@ Notes, measured on the machine above:
 - `-muge` merges the `ffn_up`/`ffn_gate` expert tensors. It speeds up MoE models.
 - `--spec-type ngram-mod:ngram_size_n=24` with `--spec-autotune` runs self-speculation, no draft model. The autotuner tunes the ngram parameters at runtime.
 - `--spec-ckpt-mode gpu-fallback` keeps the recurrent state checkpoints on the GPU. Models with linear attention layers need state checkpoints for speculation.
-- The model repo also has a shared MTP head (`MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf`). Pass it with `-md` and a `--spec-type mtp:...` stage to test MTP speculation on this model.
+- The model repo also has a shared MTP head (`MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf`). Pass it with `-md` and a `--spec-type mtp:...` stage to test MTP speculation on this model. Measured here, `--spec-type ngram-mod:ngram_size_n=24` with `--spec-autotune` was much faster than MTP, the opposite of the 27B model above.
