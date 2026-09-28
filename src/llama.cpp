@@ -4998,7 +4998,18 @@ static bool llm_load_tensors(
     }
 
     use_mmap_buffer = cth->create_tensors();
-    if (!use_mmap_buffer) {
+    // --defer-ple with an indexed sparse table keeps the file mappings alive
+    // even when merges / host overrides / -rtr dropped the mmap buffer path:
+    // the deferred tables stay zero-copy on the file while everything else
+    // uses malloc/staging copies sourced from the same mapping.
+    bool keep_ple_mapping = false;
+    if (!use_mmap_buffer && ml.defer_ple && !ml.ple_tensor_index.empty()) {
+        keep_ple_mapping = true;
+        ml.use_mmap = true;
+        LLAMA_LOG_INFO("%s: keeping file mappings for %.2f GiB of deferred tables although the mmap buffer path is off (e.g. -rtr)\n",
+                __func__, ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
+    }
+    if (!use_mmap_buffer && !keep_ple_mapping) {
         ml.use_mmap = false;
     }
 
@@ -5062,7 +5073,7 @@ static bool llm_load_tensors(
         // only the mmap region containing the tensors in the model is mapped to the backend buffer
         // this is important for metal with apple silicon: if the entire model could be mapped to a metal buffer, then we could just use metal for all layers
         // this allows using partial offloading when the model size exceeds the metal buffer size, but not the RAM size
-        if (ml.use_mmap && use_mmap_buffer && (buft == llama_default_buffer_type_cpu(true) || buft == ggml_backend_cpu_buffer_type())) {
+        if (ml.use_mmap && (use_mmap_buffer || keep_ple_mapping) && (buft == llama_default_buffer_type_cpu(true) || buft == ggml_backend_cpu_buffer_type())) {
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 void * addr = nullptr;
                 size_t first, last;
@@ -5231,7 +5242,7 @@ static bool llm_load_tensors(
         llm_requantize_output_tensor(model, extra_output_type);
     }
 
-    if (use_mmap_buffer) {
+    if (use_mmap_buffer || keep_ple_mapping) {
         for (auto & mapping : ml.mappings) {
             model.mappings.emplace_back(std::move(mapping));
         }
@@ -5268,6 +5279,8 @@ static bool llm_load_tensors(
                 ml.expert_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
+    // skipped while mappings are kept for deferred tables: file-aliased
+    // tensors must never be repacked in place into a read-only view
     if (!ml.use_mmap && ml.repack_tensors) {
         int n_repacked = 0;
         for (auto& it : model.tensors_by_name) {
@@ -5365,13 +5378,13 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         }
         if (params.defer_ple) {
 #if defined(__linux__) || defined(_WIN32)
-            if (!params.use_mmap) {
-                LLAMA_LOG_WARN("%s: --defer-ple had no effect: mmap is disabled\n", __func__);
-            } else {
-                ml.build_ple_tensor_index();
-                if (ml.ple_tensor_index.empty()) {
-                    LLAMA_LOG_WARN("%s: --defer-ple had no effect: no per-layer token embedding\n", __func__);
-                }
+            ml.build_ple_tensor_index();
+            if (ml.ple_tensor_index.empty()) {
+                LLAMA_LOG_WARN("%s: --defer-ple had no effect: no per-layer token embedding\n", __func__);
+            } else if (!params.use_mmap) {
+                // -rtr / --no-mmap: mappings are kept for the deferred tables
+                // in llm_load_tensors, everything else is copied to RAM/VRAM
+                LLAMA_LOG_INFO("%s: mmap is disabled, file mappings will be kept for the deferred tables only\n", __func__);
             }
 #else
             LLAMA_LOG_WARN("%s: deferred per-layer token embedding is only supported on Linux and Windows; ignoring defer_ple\n", __func__);
