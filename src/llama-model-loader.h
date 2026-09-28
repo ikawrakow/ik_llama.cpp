@@ -144,6 +144,9 @@ struct llama_model_loader {
                     get_tensor_meta("selector_hidden.weight") != nullptr) {
                 resolved_arch = LLM_ARCH_DFLASH2;
             }
+            if (resolved_arch == LLM_ARCH_GLM5NEXT_DASHED) {
+                resolved_arch = LLM_ARCH_GLM5NEXT;
+            }
             arch_resolved = true;
         }
         return resolved_arch;

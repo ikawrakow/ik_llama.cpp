@@ -87,6 +87,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LAGUNA,          "laguna"       },
     { LLM_ARCH_GLM_DSA,         "glm-dsa"      },
     { LLM_ARCH_GLM5NEXT,        "glm5next"     },
+    { LLM_ARCH_GLM5NEXT_DASHED, "glm5-next"    },
     { LLM_ARCH_MISTRAL4,        "mistral4"     },
     { LLM_ARCH_GEMMA4,          "gemma4"       },
     { LLM_ARCH_GEMMA4_MTP,      "gemma4_mtp"   },
@@ -158,7 +159,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_GROUPNORM_GROUPS,       "%s.attention.group_norm_groups"        },
     { LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,     "%s.attention.value_expert_count"       },
     { LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT,"%s.attention.value_expert_used_count"  },
-    
+
     { LLM_KV_NEXTN_PREDICT_LAYERS,              "%s.nextn_predict_layers"              },
     { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                },
     { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                      },

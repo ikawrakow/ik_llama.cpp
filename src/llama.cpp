@@ -1179,6 +1179,7 @@ static inline bool llama_kv_qnext_seq_id_in_range(const llama_kv_cache & cache, 
 static bool llama_mtp_tail_uses_layer_cache(const llama_model & model) {
     return model.hparams.nextn_predict_layers > 0 &&
         (model.arch == LLM_ARCH_GLM_DSA ||
+         model.arch == LLM_ARCH_GLM5NEXT ||
          model.arch == LLM_ARCH_QWEN35MOE ||
          model.arch == LLM_ARCH_QWEN4EXP ||
          model.arch == LLM_ARCH_STEP35);
@@ -1476,7 +1477,8 @@ static bool llama_kv_cache_init(
             // indexer keys in F16 so a decoded token can score against ALL past keys.
             // GLM5NEXT's k-pool indexer packs [key; gate] per token (gate depends on the hidden
             // state and cannot be recomputed from the cache), so its row is 2*indexer_head_size.
-            if (has_glm_dsa_indexer && model.layers[i].indexer_attn_k && hparams.indexer_is_full[i] && !is_mtp_tail_layer) {
+            if (has_glm_dsa_indexer && model.layers[i].indexer_attn_k && hparams.indexer_is_full[i] &&
+                    (!is_mtp_tail_layer || (model.arch == LLM_ARCH_GLM5NEXT && cparams.dsa))) {
                 const uint32_t idx_row = (model.arch == LLM_ARCH_GLM5NEXT)
                     ? 2 * hparams.indexer_head_size : hparams.indexer_head_size;
                 ggml_tensor * kr = ggml_new_tensor_2d(ctx, idx_type_k, idx_row, kv_size);
@@ -9262,6 +9264,7 @@ struct llama_context * llama_init_from_model(
     if (model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_QWEN35 &&
         model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GEMMA4 &&
         model->arch != LLM_ARCH_GEMMA4_MTP && model->arch != LLM_ARCH_GLM_DSA &&
+        model->arch != LLM_ARCH_GLM5NEXT &&
         !llm_arch_is_dsv4(model->arch) &&
         model->arch != LLM_ARCH_STEP35 &&
         model->arch != LLM_ARCH_GEMMA4_ASSISTANT &&
@@ -9831,6 +9834,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_T5ENCODER:
         case LLM_ARCH_JAIS:
         case LLM_ARCH_GLM5NEXT:
+        case LLM_ARCH_GLM5NEXT_DASHED:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
