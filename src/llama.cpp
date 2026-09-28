@@ -4999,15 +4999,21 @@ static bool llm_load_tensors(
 
     use_mmap_buffer = cth->create_tensors();
     // --defer-ple with an indexed sparse table keeps the file mappings alive
-    // even when merges / host overrides / -rtr dropped the mmap buffer path:
-    // the deferred tables stay zero-copy on the file while everything else
-    // uses malloc/staging copies sourced from the same mapping.
+    // whenever the mmap path is off for any reason (--no-mmap, -rtr, merges,
+    // host overrides): the deferred tables stay zero-copy on the file while
+    // everything else uses malloc/staging copies sourced from the same mapping.
     bool keep_ple_mapping = false;
-    if (!use_mmap_buffer && ml.defer_ple && !ml.ple_tensor_index.empty()) {
+    const bool mmap_disabled = !ml.use_mmap; // --no-mmap / -rtr
+    if (ml.defer_ple && !ml.ple_tensor_index.empty() && (!use_mmap_buffer || mmap_disabled)) {
         keep_ple_mapping = true;
         ml.use_mmap = true;
-        LLAMA_LOG_INFO("%s: keeping file mappings for %.2f GiB of deferred tables although the mmap buffer path is off (e.g. -rtr)\n",
-                __func__, ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
+        if (mmap_disabled) {
+            LLAMA_LOG_WARN("%s: --no-mmap is partially overridden: file mappings are kept for %.2f GiB of deferred tables, the rest is copied\n",
+                    __func__, ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
+        } else {
+            LLAMA_LOG_INFO("%s: keeping file mappings for %.2f GiB of deferred tables although the mmap buffer path is off (e.g. -rtr with merges)\n",
+                    __func__, ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
+        }
     }
     if (!use_mmap_buffer && !keep_ple_mapping) {
         ml.use_mmap = false;
