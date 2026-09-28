@@ -5024,7 +5024,7 @@ static bool llm_load_tensors(
         keep_ple_mapping = true;
         ml.use_mmap = true;
         if (mmap_disabled) {
-            LLAMA_LOG_WARN("%s: --no-mmap is partially overridden: file mappings are kept for %.2f GiB of deferred tables, the rest is copied\n",
+            LLAMA_LOG_WARN("%s: mmap is disabled (--no-mmap/-rtr), but file mappings are kept for %.2f GiB of deferred tables, the rest is copied\n",
                     __func__, ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
         } else {
             LLAMA_LOG_INFO("%s: keeping file mappings for %.2f GiB of deferred tables although the mmap buffer path is off (e.g. -rtr with merges)\n",
@@ -5214,8 +5214,22 @@ static bool llm_load_tensors(
     }
 
     // print memory requirements
+    // (file-backed alias buffers only reserve address space over the model
+    // files; they commit no RAM until pages fault on access)
     for (ggml_backend_buffer_t buf : model.bufs) {
-        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
+        const char * residency = "";
+        if (ggml_backend_buffer_is_host(buf)) {
+            const auto * base = (const uint8_t *) ggml_backend_buffer_get_base(buf);
+            const size_t size = ggml_backend_buffer_get_size(buf);
+            for (const auto & mapping : ml.mappings) {
+                const auto * begin = (const uint8_t *) mapping->addr();
+                if (size > 0 && base >= begin && base + size <= begin + mapping->size()) {
+                    residency = " (file-backed, not committed to RAM)";
+                    break;
+                }
+            }
+        }
+        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB%s\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, residency);
     }
 
     // populate tensors_by_name
