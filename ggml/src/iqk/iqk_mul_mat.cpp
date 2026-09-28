@@ -769,10 +769,8 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
     //if (etypeB != GGML_TYPE_F32) {
     //    if (ith == 0) printf("%s: typeA = %s, typeB = %s, dequant_type = %s\n", __func__, ggml_type_name(etypeA), ggml_type_name(etypeB), ggml_type_name(dequant_type));
     //}
-    if (dequant_type != etypeA) {
-        if (!MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
-            return false;
-        }
+    if (dequant_type != etypeA && Nx%MulMat::num_rows(dequant_type) == 0 &&
+        MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
 
         constexpr int k_x_step = 32;
 
