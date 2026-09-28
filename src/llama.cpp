@@ -552,6 +552,22 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     ggml_backend_cann_get_device_memory(device, &free, &total);
     return free;
 #else
+    // CPU-only build: the single "device" is the host itself, so report free
+    // system RAM instead of the legacy 1-byte placeholder (which tripped the
+    // safety-margin and compute-buffer warnings on every CPU-only load).
+#if defined(_WIN32)
+    MEMORYSTATUSEX st = {};
+    st.dwLength = sizeof(st);
+    if (GlobalMemoryStatusEx(&st)) {
+        return (size_t) st.ullAvailPhys;
+    }
+#elif defined(__linux__) || defined(__APPLE__)
+    const long avphys = sysconf(_SC_AVPHYS_PAGES);
+    const long pagesz = sysconf(_SC_PAGESIZE);
+    if (avphys > 0 && pagesz > 0) {
+        return (size_t) avphys * (size_t) pagesz;
+    }
+#endif
     return 1;
 #endif
     GGML_UNUSED(model);
@@ -4716,7 +4732,7 @@ static bool llm_load_tensors(
             if (device_mem[id] > max_compute) {
                 available_mem += device_mem[id] - max_compute;
             } else {
-                LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the required compute buffer size %g MiB\n", device_mem[id]/(1024*1024), id, max_compute/(1024*1024));
+                LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the required compute buffer size %g MiB\n", device_mem[id]/(1024*1024), model.devices[id], max_compute/(1024*1024));
             }
         }
         LLAMA_LOG_INFO("Memory required for model tensors + cache: %.f MiB\n", required_mem/(1024.*1024.));
