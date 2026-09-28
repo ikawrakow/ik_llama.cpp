@@ -632,12 +632,13 @@ Notes, measured on the machine above:
 The first command downloads the model if it is not present. The second sets `MODEL` to the first shard in the Hugging Face cache.
 
 ```bash
-# Downloads the model if it is not present. With several files, hf download prints the snapshot directory, not the file paths.
+
 hf download ukisai/Swift-1.5-Qwen3.8-Flash-Next-GGUF \
   IQ4_NL/Swift-1.5-Qwen3.8-Flash-Next-IQ4_NL-00001-of-00003.gguf \
   IQ4_NL/Swift-1.5-Qwen3.8-Flash-Next-IQ4_NL-00002-of-00003.gguf \
   IQ4_NL/Swift-1.5-Qwen3.8-Flash-Next-IQ4_NL-00003-of-00003.gguf
-# Sets MODEL to the first shard. llama-server reads the other parts from the same directory.
+
+# Sets MODEL to the first shard. 
 MODEL=$(hf download ukisai/Swift-1.5-Qwen3.8-Flash-Next-GGUF IQ4_NL/Swift-1.5-Qwen3.8-Flash-Next-IQ4_NL-00001-of-00003.gguf | grep -oE '/[^ ]+\.gguf' | tail -1)
 
 ./build/bin/llama-server \
