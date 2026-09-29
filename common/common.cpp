@@ -2192,11 +2192,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.defer_ple = true;
         return true;
     }
-    if (arg == "--prefetch-experts") {
+    if (arg == "-prexp" || arg == "--prefetch-experts") {
         params.prefetch_experts = true;
         return true;
     }
-    if (arg == "--prefetch-experts-threads") {
+    if (arg == "-prexp-t" || arg == "--prefetch-experts-threads") {
         CHECK_ARG;
         params.prefetch_experts_threads = std::stoi(argv[i]);
         return true;
@@ -3333,8 +3333,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
     options.push_back({ "*",           "-dexp,  --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
     options.push_back({ "*",           "-dple,  --defer-ple",            "keep the per-layer token embedding on the file instead of resident in memory (Linux, Windows)"});
-    options.push_back({ "*",           "       --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
-    options.push_back({ "*",           "       --prefetch-experts-threads N",
+    options.push_back({ "*",           "-prexp, --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
+    options.push_back({ "*",           "-prexp-t, --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
     options.push_back({ "*",           "-gfm,  --gpu-fit-margin N",     "per-layer GPU fit margin as layer_id,margin pairs, comma-separated" });
