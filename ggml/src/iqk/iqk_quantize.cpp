@@ -10908,7 +10908,8 @@ void quantize_row_pq2_0_r8(const float * x, void * vy, int64_t n) {
 }
 void quantize_row_pq2_0_r8_ref(const float * x, block_pq2_0_r8 * y, int64_t n) { quantize_row_pq2_0_r8(x, (void *)y, n); }
 
-static void ptq1_0_to_iq1_bn(const block_ptq1_0 & b, block_iq1_bn * out) {
+static void ptq1_0_to_iq1_bn([[maybe_unused]] const block_ptq1_0 & b, [[maybe_unused]] block_iq1_bn * out) {
+#ifdef __AVX2__
     static const int k_nb[6] = {1, 3, 9, 27, 81, 243};
     alignas(16) uint8_t trit[QK_PTQ1_0];
     auto digits16 = [](__m128i v, int kn) -> __m128i {
@@ -10940,6 +10941,9 @@ static void ptq1_0_to_iq1_bn(const block_ptq1_0 & b, block_iq1_bn * out) {
         }
         o.extra = (uint8_t)((256*v13 + k_nb[5] - 1)/k_nb[5]);
     }
+#else
+    GGML_ABORT("Not implemented");
+#endif
 }
 
 void repack_ptq1_0_r8(int nrows, int n_per_row, const block_ptq1_0 * GGML_RESTRICT x, block_ptq1_0_r8 * GGML_RESTRICT y, bool online) {
