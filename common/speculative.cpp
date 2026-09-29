@@ -2022,6 +2022,15 @@ bool common_speculative_load_draft_model(
     params_dft.cache_type_v     = params.cache_type_v.empty() ? params_base.cache_type_v : params.cache_type_v;
 
 
+    // We likely don't want to inherit offload policy for MTP
+    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
+        params_dft.ncmoe = 0;
+        params_dft.tensor_buft_overrides.clear();
+        params_dft.offload_policy.clear();
+        LOG_INF("%s: MTP draft ignores target CPU-MoE/tensor placement overrides\n",
+                __func__);
+    }
+
     if (!params.params.empty()) {
         while (!params_dft.kv_overrides.empty() && params_dft.kv_overrides.back().key[0] == 0) {
             params_dft.kv_overrides.pop_back();
@@ -2042,15 +2051,6 @@ bool common_speculative_load_draft_model(
             return false;
         }
         free_command_line(argc, argv);
-    }
-
-    // We likely don't want to inherit offload policy for MTP
-    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
-        params_dft.ncmoe = 0;
-        params_dft.tensor_buft_overrides.clear();
-        params_dft.offload_policy.clear();
-        LOG_INF("%s: MTP draft ignores target CPU-MoE/tensor placement overrides\n",
-                __func__);
     }
 
     LOG_INF("%s: loading draft model '%s'\n", __func__, params_dft.model.c_str());
