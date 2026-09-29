@@ -5370,10 +5370,32 @@ static bool llm_load_tensors(
         }
     }
 
-    if (!ml.use_mmap) {
+    // With mappings kept for deferred tables, file-aliased tensors are read-only:
+    // in-place mutation (IQK fixups, run-time repack) must skip anything whose
+    // data points into a mapping, and only touch the malloc'd copies. This covers
+    // the deferred tables and their aliased neighbours alike.
+    // NOTE: ml.mappings was moved into model.mappings above, so scan that.
+    auto tensor_is_file_aliased = [&](const struct ggml_tensor * t) -> bool {
+        if (!keep_ple_mapping || t->data == nullptr) {
+            return false;
+        }
+        const auto * p = (const uint8_t *) t->data;
+        for (const auto & mapping : model.mappings) {
+            const auto * begin = (const uint8_t *) mapping->addr();
+            if (p >= begin && p < begin + mapping->size()) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    if (!ml.use_mmap || keep_ple_mapping) {
         int n_modified = 0;
         for (auto& it : model.tensors_by_name) {
             if (ggml_backend_buffer_is_host(it.second->buffer)) {
+                if (tensor_is_file_aliased(it.second)) {
+                    continue;
+                }
                 if (iqk_modify_tensor(it.second)) ++n_modified;
             }
         }
@@ -5401,22 +5423,28 @@ static bool llm_load_tensors(
                 ml.expert_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
-    // skipped while mappings are kept for deferred tables: file-aliased
-    // tensors must never be repacked in place into a read-only view
-    if (keep_ple_mapping && ml.repack_tensors) {
-        LLAMA_LOG_WARN("%s: run-time repack is disabled while file mappings are kept for deferred tables (--defer-ple)\n", __func__);
-    }
-    if (!ml.use_mmap && ml.repack_tensors) {
+    // Deferred tables stay file-aliased (read-only) and are skipped inside the
+    // loop; the malloc'd copies above are safe to repack in place.
+    // The result line always prints when -rtr is set, so a silent run-in
+    // (flag lost) vs zero candidates vs aliased-skips stay distinguishable.
+    if (ml.repack_tensors) {
         int n_repacked = 0;
-        for (auto& it : model.tensors_by_name) {
-            if (ggml_backend_buffer_is_host(it.second->buffer)) {
-                auto orig_type = it.second->type;
-                if (it.second->view_src) continue;
-                iqk_repack_tensor(it.second);
-                if (it.second->type != orig_type) ++n_repacked;
+        int n_skipped = 0;
+        if (!ml.use_mmap || keep_ple_mapping) {
+            for (auto& it : model.tensors_by_name) {
+                if (ggml_backend_buffer_is_host(it.second->buffer)) {
+                    auto orig_type = it.second->type;
+                    if (it.second->view_src) continue;
+                    if (tensor_is_file_aliased(it.second)) {
+                        ++n_skipped;
+                        continue;
+                    }
+                    iqk_repack_tensor(it.second);
+                    if (it.second->type != orig_type) ++n_repacked;
+                }
             }
         }
-        if (n_repacked > 0) LLAMA_LOG_INFO("============ Repacked %d tensors\n", n_repacked);
+        LLAMA_LOG_INFO("============ Repacked %d tensors (%d skipped file-aliased)\n", n_repacked, n_skipped);
     }
 
     if (model.arch == LLM_ARCH_BITNET) {
