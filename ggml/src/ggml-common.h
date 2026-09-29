@@ -608,7 +608,7 @@ static_assert(sizeof(block_iq1_bn) == 13, "wrong iq1_bn block size/padding");
 #define QK_PTQ1_0_R8_ROWS 8
 typedef struct {
     ggml_half    d[QK_PTQ1_0_R8_ROWS];
-    block_iq1_bn qs[QK_PTQ1_0_R8_ROWS][QK_PTQ1_0/QK_IQ1BN];
+    block_iq1_bn qs[QK_PTQ1_0_R8_ROWS*QK_PTQ1_0/QK_IQ1BN];
 } block_ptq1_0_r8;
 static_assert(sizeof(block_ptq1_0_r8) == QK_PTQ1_0_R8_ROWS*sizeof(block_ptq1_0), "wrong ptq1_0_r8 block size/padding");
 //

@@ -166,6 +166,7 @@ struct IQ1BNQuantizer {
         }
         return max_in_row;
     }
+    static void pack_1bn(const int8_t * q, block_iq1_bn & y);
     // The Makefile has issues dwaling with this?
     //static constexpr uint8_t k_mult[5] = {81, 27, 9, 3, 1};
     static const uint8_t k_mult[5];
@@ -173,9 +174,27 @@ struct IQ1BNQuantizer {
 
 const uint8_t IQ1BNQuantizer::k_mult[5] = {81, 27, 9, 3, 1};
 
+void IQ1BNQuantizer::pack_1bn(const int8_t * q, block_iq1_bn & y) {
+    static const int k_nb[6] = {1, 3, 9, 27, 81, 243};
+    std::memset(&y, 0, sizeof(block_iq1_bn));
+    int v13 = 0;
+    for (int i16 = 0; i16 < QK_IQ1BN/16; ++i16) {
+        for (int k = 0; k < 3; ++k) {
+            int idx = 0;
+            for (int j = 0; j < 5; ++j) {
+                idx += k_nb[j]*q[16*i16 + 5*k + j];
+            }
+            idx = (256*idx + k_nb[5] - 1)/k_nb[5];
+            y.ql[3*i16 + k] = idx;
+        }
+        v13 += k_nb[i16]*q[16*i16 + 15];
+    }
+    y.extra = (256*v13 + k_nb[5] - 1)/k_nb[5];
+}
+
 void IQ1BNQuantizer::quantize_one_row_1bn(const float * src, block_iq1_bn * y, int n_per_row, const float * imatrix) {
 
-    static const int k_nb[6] = {1, 3, 9, 27, 81, 243};
+    //static const int k_nb[6] = {1, 3, 9, 27, 81, 243};
     (void)imatrix;
 
     const int nblock = n_per_row/QK_IQ1BN;
@@ -193,23 +212,28 @@ void IQ1BNQuantizer::quantize_one_row_1bn(const float * src, block_iq1_bn * y, i
     for (int ib = 0; ib < nblock; ++ib) {
         std::memset(&y[ib], 0, sizeof(block_iq1_bn));
         auto xb = src + ib*QK_IQ1BN;
-        int v13 = 0;
-        for (int i16 = 0; i16 < QK_IQ1BN/16; ++i16) {
-            for (int k = 0; k < 3; ++k) {
-                int idx = 0;
-                for (int j = 0; j < 5; ++j) {
-                    float v = xb[16*i16 + 5*k + j];
-                    int q = fabsf(v) < thresh ? 1 : v < 0 ? 0 : 2;
-                    idx += k_nb[j]*q;
-                }
-                idx = (256*idx + k_nb[5] - 1)/k_nb[5];
-                y[ib].ql[3*i16 + k] = idx;
-            }
-            float v = xb[16*i16 + 15];
-            int q = fabsf(v) < thresh ? 1 : v < 0 ? 0 : 2;
-            v13 += k_nb[i16]*q;
+        for (int j = 0; j < QK_IQ1BN; ++j) {
+            float v = xb[j];
+            L[j] = fabsf(v) < thresh ? 1 : v < 0 ? 0 : 2;
         }
-        y[ib].extra = (256*v13 + k_nb[5] - 1)/k_nb[5];
+        pack_1bn(L, y[ib]);
+        //int v13 = 0;
+        //for (int i16 = 0; i16 < QK_IQ1BN/16; ++i16) {
+        //    for (int k = 0; k < 3; ++k) {
+        //        int idx = 0;
+        //        for (int j = 0; j < 5; ++j) {
+        //            float v = xb[16*i16 + 5*k + j];
+        //            int q = fabsf(v) < thresh ? 1 : v < 0 ? 0 : 2;
+        //            idx += k_nb[j]*q;
+        //        }
+        //        idx = (256*idx + k_nb[5] - 1)/k_nb[5];
+        //        y[ib].ql[3*i16 + k] = idx;
+        //    }
+        //    float v = xb[16*i16 + 15];
+        //    int q = fabsf(v) < thresh ? 1 : v < 0 ? 0 : 2;
+        //    v13 += k_nb[i16]*q;
+        //}
+        //y[ib].extra = (256*v13 + k_nb[5] - 1)/k_nb[5];
     }
 }
 
@@ -10958,18 +10982,55 @@ static void ptq1_0_to_iq1_bn([[maybe_unused]] const block_ptq1_0 & b, [[maybe_un
 #endif
 }
 
+namespace {
+void dequant_block_ptq1_0(const block_ptq1_0 & x, uint8_t * y) {
+
+    static const uint8_t pow3[6] = {1, 3, 9, 27, 81, 243};
+    static const size_t ptq1_0_stages[2] = {16, 8};
+
+    size_t j = 0;
+    for (size_t s = 0; s < 2; ++s) {
+        const size_t c = ptq1_0_stages[s];
+        for (; j + c <= sizeof(x.qs); j += c) {
+            for (size_t n = 0; n < 5; ++n) {
+                for (size_t m = 0; m < c; ++m) {
+                    uint8_t q = x.qs[j + m] * pow3[n];
+                    int16_t xi = ((uint16_t) q * 3) >> 8;
+                    *y++ = xi;
+                }
+            }
+        }
+    }
+    for (size_t n = 0; n < 4; ++n) {
+        for (size_t h = 0; h < sizeof(x.qh); ++h) {
+            uint8_t q = x.qh[h] * pow3[n];
+            int16_t xi = ((uint16_t) q * 3) >> 8;
+            *y++ = xi;
+        }
+    }
+}
+}
+
 void repack_ptq1_0_r8(int nrows, int n_per_row, const block_ptq1_0 * GGML_RESTRICT x, block_ptq1_0_r8 * GGML_RESTRICT y, bool online) {
     GGML_UNUSED(online);
     GGML_ASSERT(nrows % QK_PTQ1_0_R8_ROWS == 0);
+    constexpr int kn4 = QK_PTQ1_0/sizeof(uint32_t);
     const int nblock = n_per_row/QK_PTQ1_0;
     const block_ptq1_0 * xr[QK_PTQ1_0_R8_ROWS];
+    uint32_t quants[kn4*QK_PTQ1_0_R8_ROWS];
+    uint32_t quants_r[kn4*QK_PTQ1_0_R8_ROWS];
     for (int row = 0; row < nrows; row += QK_PTQ1_0_R8_ROWS) {
         for (int k = 0; k < QK_PTQ1_0_R8_ROWS; ++k) xr[k] = x + (size_t)k*nblock;
         for (int ib = 0; ib < nblock; ++ib) {
-            auto yb = y + ib;
             for (int k = 0; k < QK_PTQ1_0_R8_ROWS; ++k) {
-                yb->d[k] = xr[k][ib].d;
-                ptq1_0_to_iq1_bn(xr[k][ib], yb->qs[k]);
+                y[ib].d[k] = xr[k][ib].d;
+                dequant_block_ptq1_0(xr[k][ib], (uint8_t *)(quants + k*kn4));
+            }
+            for (int j = 0; j < kn4; ++j) {
+                for (int k = 0; k < QK_PTQ1_0_R8_ROWS; ++k) quants_r[QK_PTQ1_0_R8_ROWS*j + k] = quants[k*kn4 + j];
+            }
+            for (int j = 0; j < QK_PTQ1_0_R8_ROWS*QK_PTQ1_0/QK_IQ1BN; ++j) {
+                IQ1BNQuantizer::pack_1bn((const int8_t *)quants_r + QK_IQ1BN*j, y[ib].qs[j]);
             }
         }
         x += (size_t)QK_PTQ1_0_R8_ROWS*nblock;
@@ -10978,27 +11039,18 @@ void repack_ptq1_0_r8(int nrows, int n_per_row, const block_ptq1_0 * GGML_RESTRI
 }
 
 void dequantize_row_ptq1_0_r8(const block_ptq1_0_r8 * x, float * GGML_RESTRICT y, int64_t n) {
-    static const int k_nb[6] = {1, 3, 9, 27, 81, 243};
     const int n_per_row = (int)(n/QK_PTQ1_0_R8_ROWS);
     GGML_ASSERT(n_per_row % QK_PTQ1_0 == 0);
     const int nblock = n_per_row/QK_PTQ1_0;
-    for (int r = 0; r < QK_PTQ1_0_R8_ROWS; ++r) {
-        float * yr = y + (int64_t)r*n_per_row;
-        for (int ib = 0; ib < nblock; ++ib) {
-            const float d = GGML_FP16_TO_FP32(x[ib].d[r]);
-            float * yb = yr + (int64_t)ib*QK_PTQ1_0;
-            for (int sub = 0; sub < QK_PTQ1_0/QK_IQ1BN; ++sub) {
-                const auto & o = x[ib].qs[r][sub];
-                for (int i16 = 0; i16 < QK_IQ1BN/16; ++i16) {
-                    for (int kk = 0; kk < 3; ++kk) {
-                        uint8_t byte = o.ql[3*i16 + kk];
-                        for (int j = 0; j < 5; ++j) {
-                            uint8_t q = (uint8_t)(byte*k_nb[j]);
-                            *yb++ = (float)((int)(((uint16_t)q*3) >> 8) - 1)*d;
-                        }
-                    }
-                    uint8_t q = (uint8_t)(o.extra*k_nb[i16]);
-                    *yb++ = (float)((int)(((uint16_t)q*3) >> 8) - 1)*d;
+    float ftmp[QK_PTQ1_0*QK_PTQ1_0_R8_ROWS];
+    for (int ib = 0; ib < nblock; ++ib) {
+        dequantize_row_iq1_bn(x[ib].qs, ftmp, QK_PTQ1_0*QK_PTQ1_0_R8_ROWS);
+        for (int k = 0; k < QK_PTQ1_0_R8_ROWS; ++k) {
+            float d = GGML_FP16_TO_FP32(x[ib].d[k]);
+            float * yr = y + (int64_t)k*n_per_row + ib*QK_PTQ1_0;
+            for (int j = 0; j < QK_PTQ1_0/4; ++j) {
+                for (int i = 0; i < 4; ++i) {
+                    yr[4*j + i] = d * ftmp[32*j + 4*k + i];
                 }
             }
         }

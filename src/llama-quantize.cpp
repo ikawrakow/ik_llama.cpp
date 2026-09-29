@@ -1529,6 +1529,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         bool quantize = tensor->type != GGML_TYPE_I32 &&
                         tensor->type != GGML_TYPE_I64 &&
                         tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_BF16_R16 &&
                         tensor->type != GGML_TYPE_I8; // i.e., do not quantize tensors holding int values
 
         // This used to be a regex, but <regex> has an extreme cost to compile times.
