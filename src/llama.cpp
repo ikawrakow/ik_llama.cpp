@@ -5014,10 +5014,9 @@ static bool llm_load_tensors(
     }
 
     use_mmap_buffer = cth->create_tensors();
-    // --defer-ple with an indexed sparse table keeps the file mappings alive
-    // whenever the mmap path is off for any reason (--no-mmap, -rtr, merges,
-    // host overrides): the deferred tables stay zero-copy on the file while
-    // everything else uses malloc/staging copies sourced from the same mapping.
+    // --defer-ple with an indexed sparse table keeps the file mappings alive when the
+    // mmap path is off (--no-mmap, -rtr, merges, host overrides): deferred tables stay
+    // zero-copy on the file, everything else is copied from the same mapping.
     bool keep_ple_mapping = false;
     const bool mmap_disabled = !ml.use_mmap; // --no-mmap / -rtr
     if (ml.defer_ple && !ml.ple_tensor_index.empty() && (!use_mmap_buffer || mmap_disabled)) {
@@ -5239,17 +5238,19 @@ static bool llm_load_tensors(
     double cpu_resident_total = 0.0;
     int cpu_resident_n = 0;
     for (ggml_backend_buffer_t buf : model.bufs) {
-        if (ggml_backend_buffer_is_host(buf) && !buf_is_deferred_ple(buf)) {
+        const bool deferred = buf_is_deferred_ple(buf);
+        if (ggml_backend_buffer_is_host(buf) && !deferred) {
             cpu_resident_total += ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0;
             cpu_resident_n += 1;
             continue;
         }
-        const char * residency = buf_is_deferred_ple(buf) ? " (file-backed, not committed to RAM)" : "";
+        const char * residency = deferred ? " (file-backed, not committed to RAM)" : "";
         LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB%s\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, residency);
     }
     if (cpu_resident_n > 0) {
         LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB (total of %d resident buffers)\n", __func__, "CPU", cpu_resident_total, cpu_resident_n);
     }
+#ifndef NDEBUG
     bool first_group = true;
     for (auto & it : ctx_bufs) {
         bool group_open = false;
@@ -5268,6 +5269,7 @@ static bool llm_load_tensors(
             LLAMA_LOG_DEBUG("%s: %10s buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
         }
     }
+#endif
 
     // populate tensors_by_name
     for (ggml_context * ctx : model.ctxs) {
@@ -5294,11 +5296,8 @@ static bool llm_load_tensors(
             ml.apply_ple_mmap_policy();
         }
 #if defined(_WIN32)
-        // Windows MapViewOfFile is demand-paged and PrefetchVirtualMemory is
-        // best-effort/trimmable, so a sparsely-accessed PLE table faults from
-        // the file on every miss even without --defer-ple (de facto deferred).
-        // Fault it in synchronously to match Linux MAP_POPULATE default.
-        // Only for host-mapped tensors; CUDA-offloaded PLE is already copied to VRAM.
+        // Without --defer-ple the PLE table must be resident: fault it in
+        // synchronously (bulk prefetch is best-effort, unlike MAP_POPULATE).
         if (ml.use_mmap && use_mmap_buffer && !defer_ple_mmap &&
                 model.tok_embd_per_layer && model.tok_embd_per_layer->data &&
                 model.tok_embd_per_layer->buffer &&
@@ -5313,9 +5312,8 @@ static bool llm_load_tensors(
         }
 #endif
 #if defined(_WIN32)
-        // Bulk prefetch is skipped above when device tensors exist and those
-        // stream from disk, so explicitly warm the host-aliased ranges (CPU
-        // layers, token embeddings, resident PLE). Deferred PLE stays cold.
+        // Bulk prefetch was skipped above: warm the host-aliased ranges so CPU
+        // layers and resident PLE don't fault on first use. Deferred PLE stays cold.
         if (ml.use_mmap && !use_mlock && win_skip_bulk_prefetch) {
             struct host_range { uint32_t idx; size_t first; size_t last; };
             std::vector<host_range> host_ranges;
@@ -5405,6 +5403,9 @@ static bool llm_load_tensors(
 
     // skipped while mappings are kept for deferred tables: file-aliased
     // tensors must never be repacked in place into a read-only view
+    if (keep_ple_mapping && ml.repack_tensors) {
+        LLAMA_LOG_WARN("%s: run-time repack is disabled while file mappings are kept for deferred tables (--defer-ple)\n", __func__);
+    }
     if (!ml.use_mmap && ml.repack_tensors) {
         int n_repacked = 0;
         for (auto& it : model.tensors_by_name) {

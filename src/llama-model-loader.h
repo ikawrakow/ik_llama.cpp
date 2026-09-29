@@ -203,11 +203,11 @@ struct llama_model_loader {
 
     // true while --defer-ple manages residency: pages copied out of the
     // mapping (e.g. H2D uploads) are released right after the copy so
-    // VRAM-bound weights do not linger in the process working set
+    // VRAM-bound weights do not linger (MADV_DONTNEED; no-op on Windows)
     bool should_release_copied_pages() const;
 
-    // true when file idx holds a deferred sparse range (PLE, engram): bulk
-    // prefetch and CUDA host pinning must skip it, it faults on demand instead
+    // true when file idx holds a deferred sparse range (PLE): bulk
+    // prefetch and CUDA host pinning skip it, it faults on demand instead
     bool file_has_deferred_ple(int idx) const;
 
     bool ple_range_overlaps(int idx, size_t first, size_t last) const;

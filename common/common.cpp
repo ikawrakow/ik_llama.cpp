@@ -2217,7 +2217,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.worst_graph_tokens = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "-nmm" ||arg == "--no-mmap") {
+    if (arg == "-nmm" || arg == "--no-mmap") {
         params.use_mmap = false;
         return true;
     }

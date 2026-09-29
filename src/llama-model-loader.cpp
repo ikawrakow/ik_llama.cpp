@@ -1096,19 +1096,16 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
     if (use_mmap) {
         mappings.reserve(files.size());
         mmaps_used.reserve(files.size());
-        size_t n_prefetched = 0;
-        size_t n_skipped = 0;
+        size_t n_deferred = 0;
         for (size_t fi = 0; fi < files.size(); ++fi) {
             const auto & file = files[fi];
-            // Files holding deferred sparse tables (PLE) are never bulk-prefetched:
-            // faulting tens of GB upfront only to evict them right after wastes
-            // IO and page cache. Dense shards keep the bulk prefetch.
-            const size_t file_prefetch = (prefetch && !file_has_deferred_ple((int) fi)) ? (size_t) -1 : 0;
-            if (file_prefetch > 0) {
-                ++n_prefetched;
-            } else {
-                ++n_skipped;
+            // Deferred sparse tables (PLE) stay cold: faulting tens of GB upfront
+            // only to evict them wastes IO and page cache.
+            const bool deferred_file = file_has_deferred_ple((int) fi);
+            if (deferred_file) {
+                ++n_deferred;
             }
+            const size_t file_prefetch = (prefetch && !deferred_file) ? (size_t) -1 : 0;
             std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), file_prefetch, ggml_is_numa(), use_thp));
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
@@ -1118,9 +1115,9 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
             }
             mappings.emplace_back(std::move(mapping));
         }
-        if (n_skipped > 0) {
-            LLAMA_LOG_INFO("%s: prefetched %zu of %zu files, %zu skipped (deferred tables stay on disk)\n",
-                    __func__, n_prefetched, files.size(), n_skipped);
+        if (n_deferred > 0) {
+            LLAMA_LOG_INFO("%s: %zu of %zu files hold deferred tables and skip bulk prefetch\n",
+                    __func__, n_deferred, files.size());
         }
     }
 
@@ -1259,11 +1256,10 @@ bool llama_model_loader::load_all_data(
         if (use_mmap) {
             std::lock_guard<std::mutex> lock(load_mutex);
 #if defined(_WIN32)
-            // Device-destined tensors stream from the file so VRAM-owned bytes
-            // never enter the process working set: no per-range immediate
+            // Stream device-bound tensors from the file: no per-range immediate
             // discard exists for READONLY views (Offer is lazy, Discard needs
-            // WRITECOPY, unmap is view-wide). Host tensors keep the zero-copy
-            // alias below. Same file-read shape as the rest path.
+            // WRITECOPY), so mapping-sourced H2D copies would pin VRAM-owned
+            // bytes in the working set. Host keeps zero-copy.
             if (cur->buffer != nullptr && !ggml_backend_buffer_is_host(cur->buffer)) {
                 auto & read_buf = read_bufs[thread_idx];
                 read_buf.resize(n_size);
