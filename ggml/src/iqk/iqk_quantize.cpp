@@ -10863,14 +10863,19 @@ void repack_pq2_0_r8(int nrows, int n_per_row, const block_pq2_0 * GGML_RESTRICT
     const block_pq2_0 * xr[QK_PQ2_0_R8_ROWS];
     for (int row = 0; row < nrows; row += QK_PQ2_0_R8_ROWS) {
         for (int k = 0; k < QK_PQ2_0_R8_ROWS; ++k) xr[k] = x + (size_t)k*nblock;
-        for (int ib = 0; ib < nblock; ++ib) {
-            auto yb = y + ib;
+        for (int ib128 = 0; ib128 < nblock; ++ib128) {
+            auto yb = y + ib128;
             memset(yb, 0, sizeof(*yb));
-            for (int k = 0; k < QK_PQ2_0_R8_ROWS; ++k) {
-                yb->d[k] = xr[k][ib].d;
-                for (int p = 0; p < QK_PQ2_0; ++p) {
-                    const int q = (xr[k][ib].qs[p>>2] >> (2*(p&3))) & 3;
-                    yb->qs[32*k + (p&31)] |= (uint8_t)(q << (2*(p>>5)));
+            for (int k = 0; k < QK_PQ2_0_R8_ROWS; ++k) yb->d[k] = xr[k][ib128].d;
+            for (int ib32 = 0; ib32 < QK_PQ2_0/32; ++ib32) {
+                for (int l = 0; l < 8; ++l) {
+                    for (int k = 0; k < QK_PQ2_0_R8_ROWS; ++k) {
+                        for (int i = 0; i < 4; ++i) {
+                            int p = 32*ib32 + 4*l + i;
+                            int q = (xr[k][ib128].qs[p>>2] >> (2*(p&3))) & 3;
+                            yb->qs[64*ib32 + 32*(l/4) + 4*k + i] |= (q << 2*(l%4));
+                        }
+                    }
                 }
             }
         }
