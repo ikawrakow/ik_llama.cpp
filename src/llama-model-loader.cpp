@@ -696,12 +696,11 @@ void llama_model_loader::drop_mmap_expert_pages() const {
 
 void llama_model_loader::build_ple_tensor_index() {
     ple_tensor_index = {};
+    ple_tensor_index.file_ranges.resize(files.size());
 
     const auto * weight = get_weight(LLM_TN(get_arch())(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").c_str());
     if (weight != nullptr) {
         const size_t tensor_bytes = ggml_nbytes(weight->tensor);
-
-        ple_tensor_index.file_ranges.resize(files.size());
         ple_tensor_index.file_ranges.at(weight->idx).push_back({ weight->offs, weight->offs + tensor_bytes });
         ple_tensor_index.deferred_bytes = tensor_bytes;
     }
@@ -718,9 +717,6 @@ void llama_model_loader::build_ple_tensor_index() {
             continue;
         }
         const size_t tensor_bytes = ggml_nbytes(ew->tensor);
-        if (ple_tensor_index.file_ranges.size() < files.size()) {
-            ple_tensor_index.file_ranges.resize(files.size());
-        }
         ple_tensor_index.file_ranges.at(ew->idx).push_back({ ew->offs, ew->offs + tensor_bytes });
         ple_tensor_index.deferred_bytes += tensor_bytes;
         ++n_engram;
@@ -1348,11 +1344,8 @@ bool llama_model_loader::load_all_data(
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
                 if (!ggml_backend_buffer_is_host(cur->buffer) && should_release_copied_pages()) {
-                    // the destination (VRAM) owns the bytes now: drop the file
-                    // source pages so VRAM-bound weights do not linger in the
-                    // process working set (unmap is a no-op on Windows).
-                    // Shared ranges (tied/duplicated weights) fault back from
-                    // the file on demand; zero-copy aliases never take this path.
+                    // VRAM owns these bytes now: drop the file source (shared ranges
+                    // fault back on demand; zero-copy aliases never take this path).
                     mappings.at(weight->idx)->dontneed_fragment(weight->offs, weight->offs + n_size);
                 }
             }
