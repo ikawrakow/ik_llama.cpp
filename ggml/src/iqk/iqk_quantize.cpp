@@ -10890,11 +10890,18 @@ void dequantize_row_pq2_0_r8(const block_pq2_0_r8 * x, float * GGML_RESTRICT y, 
     const int nblock = n_per_row/QK_PQ2_0;
     for (int r = 0; r < QK_PQ2_0_R8_ROWS; ++r) {
         float * yr = y + (int64_t)r*n_per_row;
-        for (int ib = 0; ib < nblock; ++ib) {
-            const float d = GGML_FP16_TO_FP32(x[ib].d[r]);
-            for (int p = 0; p < QK_PQ2_0; ++p) {
-                const int q = (x[ib].qs[32*r + (p&31)] >> (2*(p>>5))) & 3;
-                yr[(int64_t)ib*QK_PQ2_0 + p] = (float)(q-1)*d;
+        for (int ib128 = 0; ib128 < nblock; ++ib128) {
+            const float d = GGML_FP16_TO_FP32(x[ib128].d[r]);
+            for (int ib32 = 0; ib32 < QK_PQ2_0/32; ++ib32) {
+                for (int l = 0; l < 8; l += 4) {
+                    for (int i = 0; i < 4; ++i) {
+                        int q = x[ib128].qs[64*ib32 + 32*(l/4) + 4*r + i];
+                        yr[(int64_t)ib128*QK_PQ2_0 + 32*ib32 + 4*l + i +  0] = d * (((q >> 0) & 3) - 1);
+                        yr[(int64_t)ib128*QK_PQ2_0 + 32*ib32 + 4*l + i +  4] = d * (((q >> 2) & 3) - 1);
+                        yr[(int64_t)ib128*QK_PQ2_0 + 32*ib32 + 4*l + i +  8] = d * (((q >> 4) & 3) - 1);
+                        yr[(int64_t)ib128*QK_PQ2_0 + 32*ib32 + 4*l + i + 12] = d * (((q >> 6) & 3) - 1);
+                    }
+                }
             }
         }
     }
