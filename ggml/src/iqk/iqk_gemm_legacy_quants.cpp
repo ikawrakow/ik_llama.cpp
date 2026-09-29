@@ -2590,7 +2590,7 @@ void iqk_convert_qX_1_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int 
 // Activations: block_q8_0_x4 (4 consecutive Q8_0 blocks).
 
 template <int nrc_y>
-static void mul_mat_iq3ks_r16_q8_0_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_iq3ks_r16_q8_0_x4_scalar(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
     GGML_ASSERT(n%QK3KS_G128 == 0);
     Q8<nrc_y, block_q8_0_x4> q8(info);
@@ -2635,6 +2635,96 @@ static void mul_mat_iq3ks_r16_q8_0_x4(int n, const void * vx, size_t bx, const D
             for (int iy = 0; iy < nrc_y; ++iy)
                 info.store(ix + k, iy, acc[k][iy]);
     }
+}
+
+#ifdef __AVX2__
+// AVX2 dot-product kernel for IQ3KS_R16
+template <int nrc_y>
+static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    static_assert(QK3KS_G128 == 128, "assumed 128-weight superblocks");
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+    const int ntiles = n / QK3KS_G128;
+
+    // 16-entry values table (two 8-entry codebooks), duplicated into both 128-bit lanes
+    const __m256i values = MM256_SET1_M128I(_mm_loadu_si128((const __m128i *)iq3nl_values));
+    const __m256i m3     = _mm256_set1_epi8(0x3);
+    const __m256i m1     = _mm256_set1_epi8(0x7f);
+    const __m256i m1i    = _mm256_set1_epi16(1);
+
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        const ggml_half * dptr = (const ggml_half *)((const char *)vx + ix*bx);
+        const block_iq3ks_r16 * tiles = (const block_iq3ks_r16 *)(dptr + 16);
+        float d[16];
+        for (int k = 0; k < 16; ++k) d[k] = GGML_FP16_TO_FP32(dptr[k]);
+        float acc[16][nrc_y];
+        for (int k = 0; k < 16; ++k)
+            for (int iy = 0; iy < nrc_y; ++iy) acc[k][iy] = 0.f;
+        for (int t = 0; t < ntiles; ++t) {
+            const block_q3ks_g128 * sb0 = tiles[t].sb;
+            float d8[nrc_y][4];
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const ggml_half * yd4 = ((const block_q8_0_x4 *)q8.y[iy] + t)->d;
+                for (int l = 0; l < 4; ++l) d8[iy][l] = GGML_FP16_TO_FP32(yd4[l]);
+            }
+            for (int k = 0; k < 16; ++k) {
+                const block_q3ks_g128 * sb = sb0 + k;
+                // unpack the 3-bit codes of the 4 groups of 32 weights:
+                //   low 2 bits  at bit-pair 2*ib of byte j   of qs
+                //   high bit    at bit (ib + 4*(j&1)) of byte j/2 of qh
+                //   codebook    at bit (4 + ib) of extra (adds +8 to the 3-bit code)
+                const __m256i ql = _mm256_loadu_si256((const __m256i *)sb->qs);
+                const __m128i qh8 = _mm_loadu_si128((const __m128i *)sb->qh);
+                const __m128i nlo = _mm_and_si128(qh8, _mm_set1_epi8(0xf));
+                const __m128i nhi = _mm_and_si128(_mm_srli_epi16(qh8, 4), _mm_set1_epi8(0xf));
+                // interleave: byte j holds the nibble of qh[j/2], lo-nibble for even j, hi-nibble for odd j
+                const __m256i hb = _mm256_set_m128i(_mm_unpackhi_epi8(nlo, nhi), _mm_unpacklo_epi8(nlo, nhi));
+                __m256i v[4];
+                for (int ib = 0; ib < 4; ++ib) {
+                    const __m256i l2  = _mm256_and_si256(_mm256_srli_epi16(ql, 2*ib), m3);
+                    const __m256i hi  = _mm256_and_si256(_mm256_srli_epi16(hb, ib), _mm256_set1_epi8(1));
+                    const __m256i idx = _mm256_or_si256(l2, _mm256_slli_epi16(hi, 2));
+                    const __m256i cbv = _mm256_set1_epi8(((sb->extra >> (4 + ib)) & 1) << 3);
+                    v[ib] = _mm256_shuffle_epi8(values, _mm256_or_si256(idx, cbv));
+                }
+                float dl[4];
+                for (int ib = 0; ib < 4; ++ib) {
+                    int ul;
+                    switch (ib) {
+                        case 0: ul = (sb->scales[0] & 0xf) | (((sb->extra >> 0) & 1) << 4); break;
+                        case 1: ul = (sb->scales[0] >> 4)  | (((sb->extra >> 1) & 1) << 4); break;
+                        case 2: ul = (sb->scales[1] & 0xf) | (((sb->extra >> 2) & 1) << 4); break;
+                        default: ul = (sb->scales[1] >> 4) | (((sb->extra >> 3) & 1) << 4); break;
+                    }
+                    dl[ib] = d[k]*(ul - 16);
+                }
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    const int8_t * qs8 = ((const block_q8_0_x4 *)q8.y[iy] + t)->qs;
+                    for (int ib = 0; ib < 4; ++ib) {
+                        const __m256i yv = _mm256_loadu_si256((const __m256i *)(qs8 + 32*ib));
+                        const __m256i s = _mm256_maddubs_epi16(_mm256_and_si256(v[ib], m1), _mm256_sign_epi8(yv, v[ib]));
+                        const __m256i p = _mm256_madd_epi16(m1i, s);
+                        __m128i p2 = _mm_add_epi32(_mm256_castsi256_si128(p), _mm256_extracti128_si256(p, 1));
+                        p2 = _mm_add_epi32(p2, _mm_shuffle_epi32(p2, 0x4e));
+                        acc[k][iy] += dl[ib]*d8[iy][ib]*(float)_mm_cvtsi128_si32(p2);
+                    }
+                }
+            }
+        }
+        for (int k = 0; k < 16; ++k)
+            for (int iy = 0; iy < nrc_y; ++iy)
+                info.store(ix + k, iy, acc[k][iy]);
+    }
+}
+#endif
+
+// dispatcher: AVX2 dot-product kernel when available, portable scalar otherwise
+template <int nrc_y>
+static void mul_mat_iq3ks_r16_q8_0_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+#ifdef __AVX2__
+    mul_mat_iq3ks_r16_q8_0_x4_avx2<nrc_y>(n, vx, bx, info, nrc_x);
+#else
+    mul_mat_iq3ks_r16_q8_0_x4_scalar<nrc_y>(n, vx, bx, info, nrc_x);
+#endif
 }
 
 template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
