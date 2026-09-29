@@ -5221,10 +5221,15 @@ static bool llm_load_tensors(
         if (ggml_backend_buffer_is_host(buf)) {
             const auto * base = (const uint8_t *) ggml_backend_buffer_get_base(buf);
             const size_t size = ggml_backend_buffer_get_size(buf);
-            for (const auto & mapping : ml.mappings) {
+            for (size_t mi = 0; mi < ml.mappings.size(); ++mi) {
+                const auto & mapping = ml.mappings[mi];
                 const auto * begin = (const uint8_t *) mapping->addr();
                 if (size > 0 && base >= begin && base + size <= begin + mapping->size()) {
-                    residency = " (file-backed, not committed to RAM)";
+                    // Only the PLE range is deferred; dense file-backed aliases
+                    // are resident like any other mmap'd weights.
+                    if (defer_ple_mmap && ml.ple_range_overlaps((int) mi, base - begin, base - begin + size)) {
+                        residency = " (file-backed, not committed to RAM)";
+                    }
                     break;
                 }
             }
