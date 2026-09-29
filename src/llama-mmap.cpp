@@ -536,36 +536,8 @@ struct llama_mmap::impl {
     }
 
     void dontneed_fragment(size_t first, size_t last) {
-        // Windows counterpart of MADV_DONTNEED for read-only file views.
-        // OfferVirtualMemory lets the OS discard the clean pages; they are
-        // faulted back from the file on demand, never written back.
-        // (DiscardVirtualMemory is not usable here: it requires PAGE_READWRITE.)
-        const size_t page_size = win_page_size();
-        win_align_range(&first, &last, page_size);
-        const size_t len = last - first;
-
-        if (len == 0) {
-            return;
-        }
-
-#if _WIN32_WINNT >= 0x602
-        DWORD (WINAPI * pOfferVirtualMemory) (PVOID, SIZE_T);
-        HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
-
-        pOfferVirtualMemory = (decltype(pOfferVirtualMemory))(void *) GetProcAddress(hKernel32, "OfferVirtualMemory");
-
-        if (pOfferVirtualMemory) {
-            const DWORD err = pOfferVirtualMemory((uint8_t *) addr + first, len);
-            if (err != ERROR_SUCCESS) {
-                LLAMA_LOG_WARN("warning: OfferVirtualMemory failed: %s\n",
-                        llama_format_win_err(err).c_str());
-            }
-            return;
-        }
-        LLAMA_LOG_DEBUG("OfferVirtualMemory not available, pages left resident\n");
-#else
-        LLAMA_LOG_DEBUG("skipping OfferVirtualMemory because _WIN32_WINNT < 0x602\n");
-#endif
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
     }
 
     void random_fragment(size_t first, size_t last) {
