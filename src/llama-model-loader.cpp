@@ -1258,6 +1258,24 @@ bool llama_model_loader::load_all_data(
         // mmap. Serialized.
         if (use_mmap) {
             std::lock_guard<std::mutex> lock(load_mutex);
+#if defined(_WIN32)
+            // Device-destined tensors stream from the file so VRAM-owned bytes
+            // never enter the process working set: no per-range immediate
+            // discard exists for READONLY views (Offer is lazy, Discard needs
+            // WRITECOPY, unmap is view-wide). Host tensors keep the zero-copy
+            // alias below. Same file-read shape as the rest path.
+            if (cur->buffer != nullptr && !ggml_backend_buffer_is_host(cur->buffer)) {
+                auto & read_buf = read_bufs[thread_idx];
+                read_buf.resize(n_size);
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(read_buf.data(), n_size);
+                ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+                if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
+                    throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+                }
+                return n_size;
+            }
+#endif
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
             if (bufs_mmap.count(weight->idx)) {

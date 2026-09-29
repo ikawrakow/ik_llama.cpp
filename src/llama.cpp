@@ -5056,8 +5056,25 @@ static bool llm_load_tensors(
 
     ml.done_getting_tensors();
 
+#if defined(_WIN32)
+    // Device-bound tensors stream from disk (see load_all_data), so bulk
+    // prefetch would only pollute the working set with VRAM-owned bytes.
+    // Host ranges are warmed explicitly after load instead.
+    bool win_skip_bulk_prefetch = false;
+    for (auto & it : ctx_map) {
+        if (it.first != llama_default_buffer_type_cpu(true) && it.first != ggml_backend_cpu_buffer_type()) {
+            win_skip_bulk_prefetch = true;
+            break;
+        }
+    }
+#endif
+
     // --dry-run skips MAP_POPULATE/WILLNEED — tensor data is never read.
-    ml.init_mappings(!defer_expert_mmap && !defer_ple_mmap && !dry_run, use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
+    ml.init_mappings(!defer_expert_mmap && !defer_ple_mmap && !dry_run
+#if defined(_WIN32)
+        && !win_skip_bulk_prefetch
+#endif
+        , use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
 
     // dropping a range discards an anonymous huge-page mapping, so test the mapping and not the -thp flag
     if (ml.has_anonymous_mapping()) {
@@ -5245,23 +5262,16 @@ static bool llm_load_tensors(
         }
 #endif
 #if defined(_WIN32)
-        // With mmap + GPU offload, every H2D copy faults its file source into the
-        // process working set and no per-range immediate discard exists for READONLY
-        // views (OfferVirtualMemory is lazy; Discard needs WRITECOPY). Trim once,
-        // then re-warm only the host-aliased ranges so VRAM-owned bytes stop
-        // duplicating RAM. Deferred PLE ranges stay cold; mlock keeps all pinned.
-        if (ml.use_mmap && !use_mlock) {
+        // Bulk prefetch is skipped above when device tensors exist and those
+        // stream from disk, so explicitly warm the host-aliased ranges (CPU
+        // layers, token embeddings, resident PLE). Deferred PLE stays cold.
+        if (ml.use_mmap && !use_mlock && win_skip_bulk_prefetch) {
             struct host_range { uint32_t idx; size_t first; size_t last; };
             std::vector<host_range> host_ranges;
-            bool has_device_copy = false;
             for (auto & it : ctx_bufs) {
                 ggml_context * ctx = it.first;
                 for (auto * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
-                    if (cur->buffer == nullptr) {
-                        continue;
-                    }
-                    if (!ggml_backend_buffer_is_host(cur->buffer)) {
-                        has_device_copy = true;
+                    if (cur->buffer == nullptr || !ggml_backend_buffer_is_host(cur->buffer)) {
                         continue;
                     }
                     const auto * weight = ml.get_weight(ggml_get_name(cur));
@@ -5276,17 +5286,11 @@ static bool llm_load_tensors(
                     host_ranges.push_back({ weight->idx, first, last });
                 }
             }
-            if (has_device_copy) {
-                // (SIZE_T)-1 trims without changing quotas; needs kernel32 only.
-                if (SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T) -1, (SIZE_T) -1)) {
-                    LLAMA_LOG_INFO("%s: trimmed working set after H2D copies, re-warming %zu host ranges\n",
-                            __func__, host_ranges.size());
-                    for (const auto & r : host_ranges) {
-                        ml.mappings.at(r.idx)->prefetch_fragment(r.first, r.last);
-                    }
-                } else {
-                    LLAMA_LOG_WARN("%s: working set trim failed (%lu)\n",
-                            __func__, (unsigned long) GetLastError());
+            if (!host_ranges.empty()) {
+                LLAMA_LOG_INFO("%s: warming %zu host ranges (device tensors streamed from disk)\n",
+                        __func__, host_ranges.size());
+                for (const auto & r : host_ranges) {
+                    ml.mappings.at(r.idx)->prefetch_fragment(r.first, r.last);
                 }
             }
         }
