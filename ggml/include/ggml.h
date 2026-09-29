@@ -440,8 +440,9 @@ extern "C" {
         GGML_TYPE_IQ4_K   = 139,
         GGML_TYPE_IQ5_K   = 140,
         GGML_TYPE_IQ6_K   = 141,
-        // depricated: GGML_TYPE_IQ2_TN  = 142,
-        // depricated: GGML_TYPE_IQ1_TN  = 143,
+        // Prism ternary (ids match PrismML-Eng/llama.cpp)
+        GGML_TYPE_PQ2_0   = 142,
+        GGML_TYPE_PTQ1_0  = 143,
         GGML_TYPE_IQ4_KS  = 144,
         GGML_TYPE_IQ2_KS  = 145,
         GGML_TYPE_IQ4_KSS = 146,
@@ -459,6 +460,8 @@ extern "C" {
         GGML_TYPE_IQ1_KT  = 158,
 
         GGML_TYPE_Q1_0_G128_R8 = 159, // 8-row repacked Q1_0_G128 (Bonsai), vec_dot_type = Q8_K128
+        GGML_TYPE_PQ2_0_R8   = 160, // 8-row repacked PQ2_0 (Prism ternary)
+        GGML_TYPE_PTQ1_0_R8  = 161, // 8-row repacked PTQ1_0 (Prism ternary, base-3)
 
         GGML_TYPE_Q4_0_R8   = 202,
         GGML_TYPE_Q5_0_R4   = 206,
@@ -559,6 +562,8 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ3_KS  = 145, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_KL  = 146, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_KT  = 147, // except 1d tensors
+        GGML_FTYPE_MOSTLY_PQ2_0   = 148, // except 1d tensors (Prism ternary)
+        GGML_FTYPE_MOSTLY_PTQ1_0  = 149, // except 1d tensors (Prism ternary)
                                          //
         GGML_FTYPE_MOSTLY_Q4_0_R8   = 202, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q8_0_R8   = 207, // except 1d tensors

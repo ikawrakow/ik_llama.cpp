@@ -892,6 +892,47 @@ ggml_tensor * llm_build_context::llm_build_pos_bias(struct ggml_tensor * pos_buc
     return pos_bias;
 }
 
+// Prism ternary Hadamard transform (forward: H(Dx), inverse: D(Hz))
+static struct ggml_tensor * llm_build_hadamard_rotate(
+        struct ggml_context * ctx0,
+        struct ggml_tensor * cur,
+        const llama_hadamard_transform & t,
+        bool inverse = false) {
+    if (t.block_size == 0) {
+        return cur;
+    }
+    struct ggml_tensor * res = cur;
+    if (res->type != GGML_TYPE_F32) {
+        res = ggml_cast(ctx0, res, GGML_TYPE_F32);
+    }
+    if (!inverse && t.perm_rep > 1) {
+        // tiled [hd, nk, rep] -> grouped [hd, rep, nk] feature order (GDN v-grouped)
+        struct ggml_tensor * x = ggml_is_contiguous(res) ? res : ggml_cont(ctx0, res);
+        const int64_t ne1 = x->ne[1], ne2 = x->ne[2], ne3 = x->ne[3];
+        x = ggml_reshape_4d(ctx0, x, t.perm_hd, t.perm_nk, t.perm_rep, ne1*ne2*ne3);
+        x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));
+        res = ggml_reshape_4d(ctx0, x, t.perm_hd*t.perm_nk*t.perm_rep, ne1, ne2, ne3);
+    }
+    const bool signs_first = !inverse;
+    if (signs_first && t.signs) {
+        res = ggml_mul(ctx0, res, t.signs);
+    }
+    const int64_t n = t.block_size;
+    GGML_ASSERT(n > 0 && ggml_nelements(res) % n == 0);
+    struct ggml_tensor * rot;
+    if (!ggml_is_contiguous(res)) {
+        rot = ggml_cont_2d(ctx0, res, n, ggml_nelements(res)/n);
+    } else {
+        rot = ggml_reshape_2d(ctx0, res, n, ggml_nelements(res)/n);
+    }
+    rot = ggml_hadamard(ctx0, rot, (int) n);
+    struct ggml_tensor * out = ggml_reshape_4d(ctx0, rot, res->ne[0], res->ne[1], res->ne[2], res->ne[3]);
+    if (!signs_first && t.signs) {
+        out = ggml_mul(ctx0, out, t.signs);
+    }
+    return out;
+}
+
 ggml_tensor * llm_build_context::llm_build_inp_embd(
         struct ggml_context * ctx,
        struct llama_context & lctx,
@@ -912,6 +953,11 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
         ggml_set_input(lctx.inp_tokens);
 
         inpL = ggml_get_rows(ctx, tok_embd, lctx.inp_tokens);
+
+        // undo the Hadamard rotation of the embedding table
+        if (auto rot = lctx.model.hadamard_rotation(tok_embd); rot != nullptr) {
+            inpL = llm_build_hadamard_rotate(ctx, inpL, *rot, true);
+        }
     } else {
        lctx.inp_embd = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, batch.n_tokens);
         inpL = lctx.inp_embd;
@@ -996,7 +1042,11 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
          struct ggml_context * ctx0,
           struct ggml_tensor * w,
           struct ggml_tensor * cur) {
-    struct ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
+    struct ggml_tensor * cur_mm = cur;
+    if (auto rot = lctx.model.hadamard_rotation(w); rot != nullptr) {
+        cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+    }
+    struct ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
     for (auto & it : lctx.lora_adapters) {
         struct llama_lora_weight * lora = it.first->get_weight(w);
         if (lora == nullptr) {
@@ -1042,7 +1092,11 @@ ggml_tensor * llm_build_context::llm_build_lora_mm_id(
           struct ggml_tensor * w,   // struct ggml_tensor * as
           struct ggml_tensor * cur, // struct ggml_tensor * b
           struct ggml_tensor * ids) {
-    struct ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
+    struct ggml_tensor * cur_mm = cur;
+    if (auto rot = lctx.model.hadamard_rotation(w); rot != nullptr) {
+        cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+    }
+    struct ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur_mm, ids);
     for (auto & it : lctx.lora_adapters) {
         struct llama_lora_weight * lora = it.first->get_weight(w);
         if (lora == nullptr) {
@@ -1265,7 +1319,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     }
 
     if (lctx.cparams.fused_up_gate &&
-        up && gate && !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
+        up && gate && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
+        up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
+        !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :

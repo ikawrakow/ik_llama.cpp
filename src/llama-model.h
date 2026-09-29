@@ -513,6 +513,15 @@ struct rpc_device {
 
 struct llama_cparams;
 
+// Prism ternary activation-side Hadamard transform
+struct llama_hadamard_transform {
+    struct ggml_tensor * signs = nullptr; // [ne0]
+    int64_t block_size = 0;               // Hadamard block size, applied with ggml_hadamard
+    int64_t perm_hd  = 1;                 // GDN v-grouped reshape (head dim)
+    int64_t perm_nk  = 1;                 // GDN v-grouped reshape (n groups)
+    int64_t perm_rep = 1;                 // GDN v-grouped reshape (repeat count)
+};
+
 struct llama_model {
     e_model     type  = MODEL_UNKNOWN;
     llm_arch    arch  = LLM_ARCH_UNKNOWN;
@@ -522,6 +531,10 @@ struct llama_model {
 
     llama_hparams hparams = {};
     llama_vocab   vocab;
+
+    // Prism ternary Hadamard rotations, keyed by GGUF weight name (empty for other models)
+    std::unordered_map<std::string, llama_hadamard_transform> hadamard_map;
+    const llama_hadamard_transform * hadamard_rotation(const struct ggml_tensor * t) const;
 
     struct ggml_tensor * tok_embd;
     struct ggml_tensor * type_embd;
@@ -646,7 +659,7 @@ struct llama_model {
 
     bool tensor_overrides;
 
-    // Set by llm_apply_khad_pretransform once H is folded into wv_b/wk_b_pp.
+    // Set by llm_apply_khad_pretransform once H is folded into wv_b/kv_b_pp.
     bool khad_pretransformed = false;
 
     ~llama_model();

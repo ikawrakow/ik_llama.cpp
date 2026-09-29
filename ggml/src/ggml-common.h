@@ -570,6 +570,30 @@ typedef struct {
 } block_q1_0_g128_r8;
 static_assert(sizeof(block_q1_0_g128_r8) == QK1_0_G128_R8_ROWS*sizeof(ggml_half) + QK1_0_G128, "wrong q1_0_g128_r8 block size/padding");
 
+// Prism ternary formats (PQ2_0 / PTQ1_0)
+#define QK_PQ2_0 128
+typedef struct {
+    ggml_half d;                  // delta (scale)
+    uint8_t   qs[QK_PQ2_0 / 4];   // 2 bits per weight
+} block_pq2_0;
+static_assert(sizeof(block_pq2_0) == sizeof(ggml_half) + QK_PQ2_0 / 4, "wrong pq2_0 block size/padding");
+
+#define QK_PTQ1_0 128
+typedef struct {
+    uint8_t   qs[(QK_PTQ1_0 - 4*QK_PTQ1_0/64)/5]; // 5 base-3 trits per byte
+    uint8_t   qh[QK_PTQ1_0/64];                    // high trits
+    ggml_half d;                                   // delta (scale)
+} block_ptq1_0;
+static_assert(sizeof(block_ptq1_0) == 28, "wrong ptq1_0 block size/padding");
+
+// 8-row repacked PQ2_0 (Prism ternary, 2-bit); bit pair j maps onto a Q8_K128 32-element plane.
+#define QK_PQ2_0_R8_ROWS 8
+typedef struct {
+    ggml_half d[QK_PQ2_0_R8_ROWS];
+    uint8_t   qs[QK_PQ2_0_R8_ROWS*(QK_PQ2_0/4)];
+} block_pq2_0_r8;
+static_assert(sizeof(block_pq2_0_r8) == QK_PQ2_0_R8_ROWS*sizeof(block_pq2_0), "wrong pq2_0_r8 block size/padding");
+
 //
 // Bitnet and TriLM - implemented as 1.625 bpw
 //
@@ -579,6 +603,14 @@ typedef struct {
     uint8_t extra;
 } block_iq1_bn;
 static_assert(sizeof(block_iq1_bn) == 13, "wrong iq1_bn block size/padding");
+
+// 8-row repacked PTQ1_0 (Prism ternary, base-3); each row is two IQ1_BN sub-blocks.
+#define QK_PTQ1_0_R8_ROWS 8
+typedef struct {
+    ggml_half    d[QK_PTQ1_0_R8_ROWS];
+    block_iq1_bn qs[QK_PTQ1_0_R8_ROWS][QK_PTQ1_0/QK_IQ1BN];
+} block_ptq1_0_r8;
+static_assert(sizeof(block_ptq1_0_r8) == QK_PTQ1_0_R8_ROWS*sizeof(block_ptq1_0), "wrong ptq1_0_r8 block size/padding");
 //
 // Bitnet and TriLM - implemented as 2.0 bpw
 //

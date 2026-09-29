@@ -113,6 +113,8 @@ std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
         { GGML_TYPE_IQ5_KS_R4,   { GGML_TYPE_IQ5_KS, 4} },
         { GGML_TYPE_IQ5_K_R4,    { GGML_TYPE_IQ5_K, 4} },
         { GGML_TYPE_MXFP4_R8,    { GGML_TYPE_MXFP4, 8} },
+        { GGML_TYPE_PQ2_0_R8,    { GGML_TYPE_PQ2_0, 8} },
+        { GGML_TYPE_PTQ1_0_R8,   { GGML_TYPE_PTQ1_0, 8} },
         { GGML_TYPE_Q8_KV_R8,    { GGML_TYPE_Q8_KV, 8} },
         { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_0, 8} },
         { GGML_TYPE_BF16_R16,    { GGML_TYPE_BF16, 16} },
@@ -1122,6 +1124,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_IQ2_XS_R4:default_type = GGML_TYPE_IQ2_XS_R4;  break;
         case LLAMA_FTYPE_MOSTLY_IQ2_KS:  default_type = GGML_TYPE_IQ2_KS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ1_KT:  default_type = GGML_TYPE_IQ1_KT;  break;
+        case LLAMA_FTYPE_MOSTLY_PQ2_0:   default_type = GGML_TYPE_PQ2_0;   break;
+        case LLAMA_FTYPE_MOSTLY_PTQ1_0:  default_type = GGML_TYPE_PTQ1_0;  break;
         case LLAMA_FTYPE_MOSTLY_IQ2_KT:  default_type = GGML_TYPE_IQ2_KT;  break;
         case LLAMA_FTYPE_MOSTLY_IQ2_S:   default_type = GGML_TYPE_IQ2_XS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ2_M:   default_type = GGML_TYPE_IQ2_S;   break;
