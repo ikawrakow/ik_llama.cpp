@@ -2867,16 +2867,14 @@ static void mul_mat_pq2_0_r8_q8_k128(int n, const void * vx, size_t bx, const Da
                     }
                     for (int iy = 0; iy < nrc_y; ++iy) {
                         auto qy = vld1q_s8(q8.y[iy][ib].qs + 32*k + 16*j);
-                        auto s0 = vdotq_laneq_s32(vdupq_n_s32(0), qx[0].val[0], qy, 0);
-                        auto s1 = vdotq_laneq_s32(vdupq_n_s32(0), qx[0].val[1], qy, 0);
-                        s0 = vdotq_laneq_s32(s0, qx[1].val[0], qy, 1);
-                        s1 = vdotq_laneq_s32(s1, qx[1].val[1], qy, 1);
-                        s0 = vdotq_laneq_s32(s0, qx[2].val[0], qy, 2);
-                        s1 = vdotq_laneq_s32(s1, qx[2].val[1], qy, 2);
-                        s0 = vdotq_laneq_s32(s0, qx[3].val[0], qy, 3);
-                        s1 = vdotq_laneq_s32(s1, qx[3].val[1], qy, 3);
-                        sumi[iy].val[0] = vaddq_s32(sumi[iy].val[0], s0);
-                        sumi[iy].val[1] = vaddq_s32(sumi[iy].val[1], s1);
+                        sumi[iy].val[0] = vdotq_laneq_s32(sumi[iy].val[0], qx[0].val[0], qy, 0);
+                        sumi[iy].val[1] = vdotq_laneq_s32(sumi[iy].val[1], qx[0].val[1], qy, 0);
+                        sumi[iy].val[0] = vdotq_laneq_s32(sumi[iy].val[0], qx[1].val[0], qy, 1);
+                        sumi[iy].val[1] = vdotq_laneq_s32(sumi[iy].val[1], qx[1].val[1], qy, 1);
+                        sumi[iy].val[0] = vdotq_laneq_s32(sumi[iy].val[0], qx[2].val[0], qy, 2);
+                        sumi[iy].val[1] = vdotq_laneq_s32(sumi[iy].val[1], qx[2].val[1], qy, 2);
+                        sumi[iy].val[0] = vdotq_laneq_s32(sumi[iy].val[0], qx[3].val[0], qy, 3);
+                        sumi[iy].val[1] = vdotq_laneq_s32(sumi[iy].val[1], qx[3].val[1], qy, 3);
                     }
                 }
             }
