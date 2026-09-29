@@ -684,6 +684,15 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_KS> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ3KS_R16> {
+    // per 256-col iteration = 2 consecutive 128-weight superblocks (the type's
+    // tiles are 16 rows x 128 cols); row addressing is band-interleaved.
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR4_XS;
+    static constexpr int qi = QI4_XS;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ4_K> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR4_XS;

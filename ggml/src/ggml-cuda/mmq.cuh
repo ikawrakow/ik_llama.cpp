@@ -91,6 +91,7 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ2_KL:
         case GGML_TYPE_IQ3_KS:
+        case GGML_TYPE_IQ3KS_R16:
         case GGML_TYPE_IQ3_K_R4:
         case GGML_TYPE_IQ4_KSS:
         case GGML_TYPE_IQ4_KS:
@@ -212,6 +213,7 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
         case GGML_TYPE_MXFP4   : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ2_KL  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ3_KS  : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_IQ3KS_R16: return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_KSS : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_KS  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_KS_R4  : return MMQ_DP4A_TXS_Q8_0;
@@ -272,6 +274,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_MXFP4   : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ2_KL  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ3_KS  : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_IQ3KS_R16: return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_KSS : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_KS  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_KS_R4  : return MMQ_MMA_TILE_X_K_Q8_0;
@@ -2881,6 +2884,92 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     }
 }
 
+// IQ3KS_R16 (type 46): 16-row interleaved K1 superblocks. Same dequant math as
+// IQ3_KS, but rows are interleaved in 16-row bands:
+//   band = [16 x fp16 d] + (n/128) tiles of 16 row-major block_q3ks_g128.
+// Per 256-col iteration (qk = QK_K) the tile covers 2 consecutive superblocks;
+// the shared-memory layout written here is identical to load_tiles_iq3_ks so
+// the shared vec_dot_q8_0_q8_1_{dp4a,mma} kernels can be reused.
+template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq3ks_r16(
+    const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride) {
+
+#ifdef INT8_MMA_AVAILABLE
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + WARP_SIZE*2);
+#else
+    constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q8_0_16;
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + txs.qs);
+#endif // INT8_MMA_AVAILABLE
+
+    constexpr int qstep = 8;
+    const int kqsx = threadIdx.x % qstep;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * WARP_SIZE/qstep) {
+        int i = i0 + threadIdx.y*(WARP_SIZE/qstep) + threadIdx.x/qstep;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const int ir = i % 16;                     // row within the band
+        const char * band = x + (i - ir)*stride;   // band base = 16*stride bytes
+        const float d = __half2float(((const half *)band)[ir]);
+
+#pragma unroll
+        for (int l = 0; l < 2; ++l) {
+            const block_q3ks_g128 * sb = (const block_q3ks_g128 *)(band + 32 + (2*kbx0 + l)*16*sizeof(block_q3ks_g128)) + ir;
+
+            // byte-wise read: the R16 rows have odd byte offsets (51 B), so the
+            // 2-byte-aligned get_int_b2 would fault (misaligned address)
+            const int ql = get_int_b1(sb->qs, kqsx);
+
+            // our nibble-packed qh -> IQ3_KS-style byte: byte m = group p's high
+            // bit of weight (4*kqsx+m); row offsets are odd (51 B), read bytes
+            // individually to stay 2-byte aligned.
+            const uint32_t h0 = sb->qh[2*kqsx + 0];
+            const uint32_t h1 = sb->qh[2*kqsx + 1];
+            // qh nibble assembly: byte m of qhk = the 4-bit code (per group) of
+        // weight (4*kqsx+m). Byte1 = h0's HIGH nibble -> <<4; byte2 = h1's LOW
+        // nibble -> <<16; byte3 = h1's HIGH nibble -> <<20. (Earlier <<8/<<12
+        // collided with byte1's bits and misassigned the nibbles.)
+        const uint32_t qhk = (h0 & 0xf) | ((h0 & 0xf0) << 4) | ((h1 & 0x0f) << 16) | ((h1 & 0xf0) << 20);
+
+            const uint32_t cb32 = uint32_t((sb->extra >> 4) & 0xf) * 0x01010101;
+
+            uint32_t val1 = ((ql >> 0) & 0x33333333) | ((qhk << 2) & 0x04040404) | ((cb32 << 3) & 0x08080808)
+                                                     | ((qhk << 4) & 0x40404040) | ((cb32 << 5) & 0x80808080);
+            uint32_t val2 = ((ql >> 2) & 0x33333333) | ((qhk << 1) & 0x04040404) | ((cb32 << 2) & 0x08080808)
+                                                     | ((qhk << 3) & 0x40404040) | ((cb32 << 4) & 0x80808080);
+            int2 v1 = get_int_from_table_16(val1, iq3nl_values);
+            int2 v2 = get_int_from_table_16(val2, iq3nl_values);
+
+#ifdef INT8_MMA_AVAILABLE
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 32*l +  0] = v1.x;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 32*l +  8] = v2.x;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 32*l + 16] = v1.y;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 32*l + 24] = v2.y;
+#else
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l +  0] = v1.x;
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l +  8] = v2.x;
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l + 16] = v1.y;
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l + 24] = v2.y;
+#endif // INT8_MMA_AVAILABLE
+        }
+
+        // scale of group kqsx: SB = 2*kbx0 + kqsx/4, group within SB = kqsx%4
+        const block_q3ks_g128 * sbg = (const block_q3ks_g128 *)(band + 32 + (2*kbx0 + kqsx/4)*16*sizeof(block_q3ks_g128)) + ir;
+        const int ulg = (int)((sbg->scales[(kqsx%4)/2] >> 4*((kqsx%4)%2)) & 0xf) | (((sbg->extra >> (kqsx%4)) & 1) << 4);
+
+#ifdef INT8_MMA_AVAILABLE
+        x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx] = d * (ulg - 16);
+#else
+        x_df[i*(WARP_SIZE/4) + i/4   + kqsx] = d * (ulg - 16);
+#endif // INT8_MMA_AVAILABLE
+    }
+}
+
 template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq4_ks(
     const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride) {
 
@@ -3795,6 +3884,13 @@ struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ3_KS> {
 };
 
 template <int mmq_x, int mmq_y, int nwarps, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ3KS_R16> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq3ks_r16<mmq_y, nwarps, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, nwarps, MMQ_Q8_1_DS_LAYOUT_D4>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
+};
+
+template <int mmq_x, int mmq_y, int nwarps, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ4_KS> {
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq4_ks<mmq_y, nwarps, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, nwarps, MMQ_Q8_1_DS_LAYOUT_D4>;
@@ -4315,6 +4411,7 @@ extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ2_KL);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ3_KS);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ3KS_R16);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_KSS);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_KS);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_KS_R4);
