@@ -2023,6 +2023,18 @@ bool common_speculative_load_draft_model(
 
 
     if (!params.params.empty()) {
+        while (!params_dft.kv_overrides.empty() && params_dft.kv_overrides.back().key[0] == 0) {
+            params_dft.kv_overrides.pop_back();
+        }
+        while (!params_dft.tensor_buft_overrides.empty() && params_dft.tensor_buft_overrides.back().pattern == nullptr) {
+            params_dft.tensor_buft_overrides.pop_back();
+        }
+        while (params_dft.fit_margin_array.size() >= 2 &&
+                params_dft.fit_margin_array[params_dft.fit_margin_array.size()-2] == -1 &&
+                params_dft.fit_margin_array.back() == 0) {
+            params_dft.fit_margin_array.pop_back();
+            params_dft.fit_margin_array.pop_back();
+        }
         auto [argc, argv] = parse_command_line("llama-server " + params.params);
         if (!gpt_params_parse(argc, argv, params_dft)) {
             gpt_params_print_usage(argc, argv, params_dft);
