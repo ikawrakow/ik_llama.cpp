@@ -119,6 +119,9 @@ Some often used terms.
 | `--ctx-checkpoints-interval N` | Minimum number of tokens between each context checkpoint. | 512 |  If you want to create the checkpoint more frequently, set it to a small value. If it's set to positive number, it saves checkpoints during TG at this interval. During PP, it can only save checkpoint every batch size, so it becomes minimum number of tokens between each context checkpoint. [PR 1310](https://github.com/ikawrakow/ik_llama.cpp/pull/1310) |
 | `--ctx-checkpoints-tolerance N` | The number of tokens before the full prompt to create the checkpoint | 5 | Creates the checkpoint N tokens before the prompt is fully processed to reduce prompt process for Qwen 3.5 thinking models. [PR 1346](https://github.com/ikawrakow/ik_llama.cpp/pull/1346) |
 | `--ctx-checkpoints-eviction NAME` | Eviction strategy for checkpoint. | `variance` | Accepts `fifo`, `variance` and `auto`. `Variance` preserves coverage and maintains uniform interval. [PR 2020](https://github.com/ikawrakow/ik_llama.cpp/pull/2020) |
+| `--ctx-ckpt-spill-dir DIR, --ctx-checkpoints-spill-dir DIR` | Spill evicted checkpoints to DIR (NVMe) instead of dropping them | - | Checkpoints beyond the RAM-retained cap are written to `DIR` instead of being discarded, so long conversations keep their checkpoints under tight RAM. [PR 2446](https://github.com/ikawrakow/ik_llama.cpp/pull/2446) |
+| `--ctx-ckpt-live-n N, --ctx-checkpoints-live-n N` | Max checkpoints with resident data when spill is on | 2 | [PR 2446](https://github.com/ikawrakow/ik_llama.cpp/pull/2446) |
+| `-dsv4ls, --dsv4-legacy-state` | Write DeepSeek-V4 state in the legacy full-slice layout, byte-identical to main | off | Since [PR 2538](https://github.com/ikawrakow/ik_llama.cpp/pull/2538) DSv4 checkpoints store only the used K rows (smaller and faster). Pass this flag to keep the previous full-state checkpoint behavior. |
 
 ## Speculative Decoding
 
@@ -229,7 +232,7 @@ Use multimodal models.
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `--mmproj FILE` | path to a multimodal projector file | - | Usually separate `.gguf` files are available for download, e.g. [mmproj-Qwen_Qwen3.6-35B-A3B-f16.gguf](https://huggingface.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/blob/main/mmproj-Qwen_Qwen3.6-35B-A3B-f16.gguf) for Qwen3.6-35B-A3B |
+| `--mmproj FILE` | path to a multimodal projector file | - | Usually separate `.gguf` files are available for download, e.g. [mmproj-Qwen_Qwen3.6-35B-A3B-f16.gguf](https://huggingface.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/blob/main/mmproj-Qwen_Qwen3.6-35B-A3B-f16.gguf) for Qwen3.6-35B-A3B. Sharded `mmproj` GGUFs are supported, specify only the first part [PR 2421](https://github.com/ikawrakow/ik_llama.cpp/pull/2421) |
 | `--image-min-tokens N` | Minimum number of tokens each image can take, only used by vision models with dynamic resolution | read from model | - |
 | `--image-max-tokens N` | Maximum number of tokens each image can take, only used by vision models with dynamic resolution | read from model | - |
 | `--no-mmproj-offload` | Disable GPU offloading for multimodal projector | enabled | See `--threads-mtmd` |
@@ -492,6 +495,7 @@ llama-gguf-split --split --split-max-size 1G --no-tensor-first-split /models/mod
 | `--slow-iq2ks` | Use the original very slow IQ2_KS quantization method | - | Alternative to the compile-time option [PR 1677](https://github.com/ikawrakow/ik_llama.cpp/pull/1677) |
 | `--extra-output-tensor ggml_type` | Requantize and add output tensor of that type. | - | [PR 1810](https://github.com/ikawrakow/ik_llama.cpp/pull/1810) see `--mtp-requantize-output-tensor type` as on-the-fly alternative. |
 | `--fudge-factor` | Value to undo the built-in fudge factors of certain quant types | - | Some quant types now carry built-in fudge factors; supply the matching value from the PR's type/factor table to undo them. [PR 2361](https://github.com/ikawrakow/ik_llama.cpp/pull/2361) |
+| `--slab-size N` | Process tensors larger than N MiB in slabs to limit peak memory | 1024 | `--slab-size 0` disables slab processing (previous behavior). [PR 2537](https://github.com/ikawrakow/ik_llama.cpp/pull/2537) |
 
 ### Build Arguments
 
