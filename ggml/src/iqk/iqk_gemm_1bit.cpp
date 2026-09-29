@@ -2893,6 +2893,58 @@ static void mul_mat_pq2_0_r8_q8_k128(int n, const void * vx, size_t bx, const Da
 }
 
 template <int nrc_y>
+static void mul_mat_ptq1_0_r8_q8_k128(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    static_assert(QK_PTQ1_0_R8_ROWS == 8);
+    GGML_ASSERT(nrc_x%QK_PTQ1_0_R8_ROWS == 0);
+    Q8<nrc_y, block_q8_K128> q8(info);
+    int nb = n / QK_PQ2_0;
+    float32x4x2_t acc[nrc_y] = {};
+    int32x4x2_t sumi[nrc_y] = {};
+    int8x16x4_t qx[2];
+    DequantizerIQ1BN deq;
+    for (int ix = 0; ix < nrc_x; ix += QK_PQ2_0_R8_ROWS) {
+        auto iq1 = (const block_ptq1_0_r8 *)((const char *)vx + ix*bx);
+        for (int ib = 0; ib < nb; ++ib) {
+            auto d16 = vld1q_f16((const float16_t *)iq1[ib].d);
+            float32x4x2_t vd = { vcvt_f32_f16(vget_low_f16(d16)), vcvt_f32_f16(vget_high_f16(d16)) };
+            for (int k = 0; k < QK_PTQ1_0/32; ++k) {
+                for (int j = 0; j < 2; ++j) {
+                    deq.prepare_iq1bn_quants_nosub(iq1[ib].qs + 4*k + 2*j + 0, qx[0]);
+                    deq.prepare_iq1bn_quants_nosub(iq1[ib].qs + 4*k + 2*j + 1, qx[1]);
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto qy = vld1q_s8(q8.y[iy][ib].qs + 32*k + 16*j);
+                        sumi[iy].val[0] = vdotq_laneq_s32(sumi[iy].val[0], qx[0].val[0], qy, 0);
+                        sumi[iy].val[1] = vdotq_laneq_s32(sumi[iy].val[1], qx[0].val[1], qy, 0);
+                        sumi[iy].val[0] = vdotq_laneq_s32(sumi[iy].val[0], qx[0].val[2], qy, 1);
+                        sumi[iy].val[1] = vdotq_laneq_s32(sumi[iy].val[1], qx[0].val[3], qy, 1);
+                        sumi[iy].val[0] = vdotq_laneq_s32(sumi[iy].val[0], qx[1].val[0], qy, 2);
+                        sumi[iy].val[1] = vdotq_laneq_s32(sumi[iy].val[1], qx[1].val[1], qy, 2);
+                        sumi[iy].val[0] = vdotq_laneq_s32(sumi[iy].val[0], qx[1].val[2], qy, 3);
+                        sumi[iy].val[1] = vdotq_laneq_s32(sumi[iy].val[1], qx[1].val[3], qy, 3);
+                    }
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto sub = vdupq_n_s32(q8.y[iy][ib].s);
+                sumi[iy].val[0] = vsubq_s32(sumi[iy].val[0], sub);
+                sumi[iy].val[1] = vsubq_s32(sumi[iy].val[1], sub);
+                auto d8 = vdupq_n_f32(q8.y[iy][ib].d);
+                auto dxy1 = vmulq_f32(vd.val[0], d8);
+                auto dxy2 = vmulq_f32(vd.val[1], d8);
+                acc[iy].val[0] = vfmaq_f32(acc[iy].val[0], dxy1, vcvtq_f32_s32(sumi[iy].val[0]));
+                acc[iy].val[1] = vfmaq_f32(acc[iy].val[1], dxy2, vcvtq_f32_s32(sumi[iy].val[1]));
+                sumi[iy].val[0] = sumi[iy].val[1] = vdupq_n_s32(0);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix+0, iy, acc[iy].val[0]);
+            info.store(ix+4, iy, acc[iy].val[1]);
+            acc[iy].val[0] = acc[iy].val[1] = vdupq_n_f32(0.0f);
+        }
+    }
+}
+
+template <int nrc_y>
 static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_K128> q8(info);
@@ -3457,6 +3509,10 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
         case GGML_TYPE_PQ2_0_R8:
             expected_Btype = GGML_TYPE_Q8_K128;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_pq2_0_r8_q8_k128, funcs);
+            break;
+        case GGML_TYPE_PTQ1_0_R8:
+            expected_Btype = GGML_TYPE_Q8_K128;
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_ptq1_0_r8_q8_k128, funcs);
             break;
         default:
             return false;
