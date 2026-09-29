@@ -1035,7 +1035,7 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
 }
 
 static void do_quantize_slabbed(int nthread, const ggml_tensor * tensor, ggml_type new_type,
-        std::vector<no_init<float>> & f32_buf, std::vector<no_init<uint8_t>> & work, std::ofstream & fout,
+        std::vector<no_init<float>> & f32_buf, std::vector<no_init<uint8_t>> & work, std::ostream & fout,
         const float * imatrix, std::vector<std::thread> & workers, size_t & new_size, int chunk_size_multiplier,
         const llama_model_quantize_params * params) {
     const int64_t n_per_row = tensor->ne[0];
