@@ -5084,7 +5084,7 @@ static bool llm_load_tensors(
         }
     }
     if (defer_ple_mmap && !dry_run) {
-        LLAMA_LOG_INFO("%s: deferring %.2f GiB of per-layer token embedding to the file\n", __func__,
+        LLAMA_LOG_INFO("%s: deferring %.2f GiB of sparse tables to the file\n", __func__,
                 ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
@@ -5536,7 +5536,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #if defined(__linux__) || defined(_WIN32)
             ml.build_ple_tensor_index();
             if (ml.ple_tensor_index.empty()) {
-                LLAMA_LOG_WARN("%s: --defer-ple had no effect: no per-layer token embedding\n", __func__);
+                LLAMA_LOG_WARN("%s: --defer-ple had no effect: no per-layer token embedding or engram tables\n", __func__);
             } else if (!params.use_mmap) {
                 // -rtr / --no-mmap: mappings are kept for the deferred tables
                 // in llm_load_tensors, everything else is copied to RAM/VRAM

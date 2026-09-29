@@ -698,15 +698,36 @@ void llama_model_loader::build_ple_tensor_index() {
     ple_tensor_index = {};
 
     const auto * weight = get_weight(LLM_TN(get_arch())(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").c_str());
-    if (weight == nullptr) {
-        return;
+    if (weight != nullptr) {
+        const size_t tensor_bytes = ggml_nbytes(weight->tensor);
+
+        ple_tensor_index.file_ranges.resize(files.size());
+        ple_tensor_index.file_ranges.at(weight->idx).push_back({ weight->offs, weight->offs + tensor_bytes });
+        ple_tensor_index.deferred_bytes = tensor_bytes;
     }
 
-    const size_t tensor_bytes = ggml_nbytes(weight->tensor);
-
-    ple_tensor_index.file_ranges.resize(files.size());
-    ple_tensor_index.file_ranges.at(weight->idx).push_back({ weight->offs, weight->offs + tensor_bytes });
-    ple_tensor_index.deferred_bytes = tensor_bytes;
+    // Engram tables are hash-indexed sparse lookups like PLE; the dense k/q/wkv stay prefetched.
+    int n_engram = 0;
+    for (int i = 0; i < n_tensors; ++i) {
+        const std::string name = get_tensor_name(i);
+        if (name.find("engram_embd.weight") == std::string::npos) {
+            continue;
+        }
+        const auto * ew = get_weight(name.c_str());
+        if (ew == nullptr) {
+            continue;
+        }
+        const size_t tensor_bytes = ggml_nbytes(ew->tensor);
+        if (ple_tensor_index.file_ranges.size() < files.size()) {
+            ple_tensor_index.file_ranges.resize(files.size());
+        }
+        ple_tensor_index.file_ranges.at(ew->idx).push_back({ ew->offs, ew->offs + tensor_bytes });
+        ple_tensor_index.deferred_bytes += tensor_bytes;
+        ++n_engram;
+    }
+    if (n_engram > 0) {
+        LLAMA_LOG_INFO("%s: indexed %d engram tables for deferred loading\n", __func__, n_engram);
+    }
 }
 
 bool llama_model_loader::should_defer_ple_mmaps() const {
@@ -1260,6 +1281,7 @@ bool llama_model_loader::load_all_data(
             // streamed from the file (skip those with views); the rest stays aliased.
             if (repack_tensors && defer_ple && !ple_tensor_index.empty() &&
                     cur->buffer == nullptr && cur->view_src == nullptr &&
+                    !ple_range_overlaps(weight->idx, weight->offs, weight->offs + n_size) &&
                     (ggml_type) iqk_repacked_type(cur) != cur->type) {
                 bool has_views = false;
                 for (auto * v = ggml_get_first_tensor(ctx); v != NULL; v = ggml_get_next_tensor(ctx, v)) {
