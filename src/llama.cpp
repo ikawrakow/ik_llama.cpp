@@ -5186,6 +5186,25 @@ static bool llm_load_tensors(
         if (defer_ple_mmap) {
             ml.apply_ple_mmap_policy();
         }
+#if defined(_WIN32)
+        // Windows MapViewOfFile is demand-paged and PrefetchVirtualMemory is
+        // best-effort/trimmable, so a sparsely-accessed PLE table faults from
+        // the file on every miss even without --defer-ple (de facto deferred).
+        // Fault it in synchronously to match Linux MAP_POPULATE default.
+        // Only for host-mapped tensors; CUDA-offloaded PLE is already copied to VRAM.
+        if (ml.use_mmap && use_mmap_buffer && !defer_ple_mmap &&
+                model.tok_embd_per_layer && model.tok_embd_per_layer->data &&
+                model.tok_embd_per_layer->buffer &&
+                ggml_backend_buffer_is_host(model.tok_embd_per_layer->buffer)) {
+            const size_t n = ggml_nbytes(model.tok_embd_per_layer);
+            volatile const char * p = (volatile const char *) model.tok_embd_per_layer->data;
+            volatile size_t acc = 0;
+            for (size_t i = 0; i < n; i += 4096) {
+                acc += p[i];
+            }
+            (void) acc;
+        }
+#endif
     }
 
     if (model.is_mla_model()) {

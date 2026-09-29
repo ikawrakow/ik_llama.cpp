@@ -157,3 +157,11 @@ endif()
 if (GGML_MAX_SRC)
   add_compile_definitions(GGML_MAX_SRC=${GGML_MAX_SRC})
 endif()
+if (WIN32 AND DEFINED GGML_WIN_VER)
+    # Ensure PrefetchVirtualMemory path in llama-mmap.cpp is compiled in.
+    # ggml targets get this via ggml/src/CMakeLists.txt, but the llama
+    # target did not, so _WIN32_WINNT was undefined (0) and the
+    # `#if _WIN32_WINNT >= 0x602` gate silently disabled all prefetching,
+    # leaving PLE file-backed even without --defer-ple.
+    target_compile_definitions(llama PRIVATE _WIN32_WINNT=${GGML_WIN_VER})
+endif()
