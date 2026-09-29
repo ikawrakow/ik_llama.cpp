@@ -1256,38 +1256,37 @@ bool llama_model_loader::load_all_data(
         // mmap. Serialized.
         if (use_mmap) {
             std::lock_guard<std::mutex> lock(load_mutex);
-            // -rtr needs writable storage but the file alias is read-only: a tensor
-            // with a repacked form gets an owned buffer streamed from the file, so
-            // the mapping is never touched for it. Anything without a repacked form
-            // (deferred tables included) keeps the zero-copy alias below. Views
-            // follow view_src, so repoint any views of the moved tensor.
+            // -rtr needs writable storage: repackable tensors get an owned buffer
+            // streamed from the file (skip those with views); the rest stays aliased.
             if (repack_tensors && defer_ple && !ple_tensor_index.empty() &&
                     cur->buffer == nullptr && cur->view_src == nullptr &&
                     (ggml_type) iqk_repacked_type(cur) != cur->type) {
-                ggml_backend_buffer_t owned = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), n_size);
-                if (owned == nullptr) {
-                    throw std::runtime_error(format("unable to allocate repack buffer for tensor '%s'", ggml_get_name(cur)));
-                }
-                uint8_t * base = (uint8_t *) ggml_backend_buffer_get_base(owned);
-                file->seek(weight->offs, SEEK_SET);
-                file->read_raw(base, n_size);
-                if (check_tensors && !ggml_validate_row_data(cur->type, base, n_size)) {
-                    throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
-                }
-                ggml_backend_tensor_alloc(owned, cur, base);
-                model->bufs.push_back(owned);
+                bool has_views = false;
                 for (auto * v = ggml_get_first_tensor(ctx); v != NULL; v = ggml_get_next_tensor(ctx, v)) {
                     if (v->view_src == cur) {
-                        v->data = (char *) base + v->view_offs;
+                        has_views = true;
+                        break;
                     }
                 }
-                return n_size;
+                if (!has_views) {
+                    ggml_backend_buffer_t owned = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), n_size);
+                    if (owned == nullptr) {
+                        throw std::runtime_error(format("unable to allocate repack buffer for tensor '%s'", ggml_get_name(cur)));
+                    }
+                    uint8_t * base = (uint8_t *) ggml_backend_buffer_get_base(owned);
+                    file->seek(weight->offs, SEEK_SET);
+                    file->read_raw(base, n_size);
+                    if (check_tensors && !ggml_validate_row_data(cur->type, base, n_size)) {
+                        throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+                    }
+                    ggml_backend_tensor_alloc(owned, cur, base);
+                    model->bufs.push_back(owned);
+                    return n_size;
+                }
             }
 #if defined(_WIN32)
-            // Stream device-bound tensors from the file: no per-range immediate
-            // discard exists for READONLY views (Offer is lazy, Discard needs
-            // WRITECOPY), so mapping-sourced H2D copies would pin VRAM-owned
-            // bytes in the working set. Host keeps zero-copy.
+            // No immediate per-range discard exists for READONLY views, so stream
+            // device-bound tensors from the file instead of pinning them in RAM.
             if (cur->buffer != nullptr && !ggml_backend_buffer_is_host(cur->buffer)) {
                 auto & read_buf = read_bufs[thread_idx];
                 read_buf.resize(n_size);

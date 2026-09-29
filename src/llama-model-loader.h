@@ -201,9 +201,8 @@ struct llama_model_loader {
 
     void apply_ple_mmap_policy() const;
 
-    // true while --defer-ple manages residency: pages copied out of the
-    // mapping (e.g. H2D uploads) are released right after the copy so
-    // VRAM-bound weights do not linger (MADV_DONTNEED; no-op on Windows)
+    // While --defer-ple manages residency, release H2D-copied source pages
+    // right after the copy (MADV_DONTNEED; no-op on Windows)
     bool should_release_copied_pages() const;
 
     // true when file idx holds a deferred sparse range (PLE): bulk

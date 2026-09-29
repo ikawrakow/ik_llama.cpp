@@ -552,9 +552,8 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     ggml_backend_cann_get_device_memory(device, &free, &total);
     return free;
 #else
-    // CPU-only build: the single "device" is the host itself, so report free
-    // system RAM instead of the legacy 1-byte placeholder (which tripped the
-    // safety-margin and compute-buffer warnings on every CPU-only load).
+    // CPU-only build: the host is the device, so report free system RAM
+    // instead of the legacy 1-byte placeholder that tripped every warning.
 #if defined(_WIN32)
     MEMORYSTATUSEX st = {};
     st.dwLength = sizeof(st);
@@ -5014,9 +5013,8 @@ static bool llm_load_tensors(
     }
 
     use_mmap_buffer = cth->create_tensors();
-    // --defer-ple with an indexed sparse table keeps the file mappings alive when the
-    // mmap path is off (--no-mmap, -rtr, merges, host overrides): deferred tables stay
-    // zero-copy on the file, everything else is copied from the same mapping.
+    // --defer-ple keeps file mappings alive when the mmap path is off (--no-mmap,
+    // -rtr, merges, host overrides): deferred tables stay zero-copy, rest is copied.
     bool keep_ple_mapping = false;
     const bool mmap_disabled = !ml.use_mmap; // --no-mmap / -rtr
     if (ml.defer_ple && !ml.ple_tensor_index.empty() && (!use_mmap_buffer || mmap_disabled)) {
@@ -5056,9 +5054,8 @@ static bool llm_load_tensors(
     ml.done_getting_tensors();
 
 #if defined(_WIN32)
-    // Device-bound tensors stream from disk (see load_all_data), so bulk
-    // prefetch would only pollute the working set with VRAM-owned bytes.
-    // Host ranges are warmed explicitly after load instead.
+    // Device-bound tensors stream from disk, so bulk prefetch would only
+    // pollute the working set; host ranges are warmed after load instead.
     bool win_skip_bulk_prefetch = false;
     for (auto & it : ctx_map) {
         if (it.first != llama_default_buffer_type_cpu(true) && it.first != ggml_backend_cpu_buffer_type()) {
@@ -5126,9 +5123,8 @@ static bool llm_load_tensors(
                 model.bufs.push_back(buf);
                 bufs.emplace(idx, buf);
 #ifdef GGML_USE_CUDA
-                // A dense range spanning a deferred sparse table (PLE) must not be
-                // pinned: cudaHostRegister would lock the deferred pages resident.
-                // The overlapping dense tensors fall back to staging copies.
+                // Never pin a range spanning deferred tables: cudaHostRegister
+                // would lock those pages resident; affected tensors use staging copies.
                 if (n_layer >= n_gpu_layers && !ml.ple_range_overlaps(idx, first, last)) {
                     ggml_backend_cuda_register_host_buffer(
                         ggml_backend_buffer_get_base(buf),
@@ -5213,11 +5209,8 @@ static bool llm_load_tensors(
     }
 
     // print memory requirements
-    // (file-backed alias buffers only reserve address space over the model
-    // files; they commit no RAM until pages fault on access.
-    // Release logs totalize the resident CPU aliases into one line and keep
-    // one line per deferred/device buffer; debug builds also list every
-    // resident CPU buffer, grouped by context.)
+    // File-backed aliases reserve address space but commit no RAM until faulted.
+    // Release totalizes resident CPU aliases; debug lists every buffer per context.
     auto buf_is_deferred_ple = [&](ggml_backend_buffer_t buf) -> bool {
         if (!ggml_backend_buffer_is_host(buf)) {
             return false;
@@ -5320,7 +5313,7 @@ static bool llm_load_tensors(
             for (auto & it : ctx_bufs) {
                 ggml_context * ctx = it.first;
                 for (auto * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
-                    if (cur->buffer == nullptr || !ggml_backend_buffer_is_host(cur->buffer)) {
+                    if (cur->buffer == nullptr || !ggml_backend_buffer_is_host(cur->buffer) || cur->data == nullptr) {
                         continue;
                     }
                     const auto * weight = ml.get_weight(ggml_get_name(cur));
@@ -5330,6 +5323,19 @@ static bool llm_load_tensors(
                     const size_t first = weight->offs;
                     const size_t last  = weight->offs + ggml_nbytes(cur);
                     if (defer_ple_mmap && ml.ple_range_overlaps(weight->idx, first, last)) {
+                        continue;
+                    }
+                    // Owned/malloc'd copies are already resident; warm file aliases only.
+                    const auto * dp = (const uint8_t *) cur->data;
+                    bool aliased = false;
+                    for (const auto & mapping : ml.mappings) {
+                        const auto * begin = (const uint8_t *) mapping->addr();
+                        if (dp >= begin && dp < begin + mapping->size()) {
+                            aliased = true;
+                            break;
+                        }
+                    }
+                    if (!aliased) {
                         continue;
                     }
                     host_ranges.push_back({ weight->idx, first, last });
@@ -5370,11 +5376,8 @@ static bool llm_load_tensors(
         }
     }
 
-    // With mappings kept for deferred tables, file-aliased tensors are read-only:
-    // in-place mutation (IQK fixups, run-time repack) must skip anything whose
-    // data points into a mapping, and only touch the malloc'd copies. This covers
-    // the deferred tables and their aliased neighbours alike.
-    // NOTE: ml.mappings was moved into model.mappings above, so scan that.
+    // File-aliased tensors are read-only: skip anything whose data points into
+    // model.mappings (ml.mappings was moved there above) when mutating in place.
     auto tensor_is_file_aliased = [&](const struct ggml_tensor * t) -> bool {
         if (!keep_ple_mapping || t->data == nullptr) {
             return false;
@@ -5423,10 +5426,8 @@ static bool llm_load_tensors(
                 ml.expert_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
-    // Deferred tables stay file-aliased (read-only) and are skipped inside the
-    // loop; the malloc'd copies above are safe to repack in place.
-    // The result line always prints when -rtr is set, so a silent run-in
-    // (flag lost) vs zero candidates vs aliased-skips stay distinguishable.
+    // File-aliased tensors are skipped inside; the result line always prints
+    // with -rtr so a lost flag vs zero candidates stays distinguishable.
     if (ml.repack_tensors) {
         int n_repacked = 0;
         int n_skipped = 0;
@@ -5436,7 +5437,9 @@ static bool llm_load_tensors(
                     auto orig_type = it.second->type;
                     if (it.second->view_src) continue;
                     if (tensor_is_file_aliased(it.second)) {
-                        ++n_skipped;
+                        if ((ggml_type) iqk_repacked_type(it.second) != it.second->type) {
+                            ++n_skipped;
+                        }
                         continue;
                     }
                     iqk_repack_tensor(it.second);
