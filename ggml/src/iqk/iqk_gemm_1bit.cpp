@@ -2842,6 +2842,65 @@ static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const D
 }
 
 template <int nrc_y>
+static void mul_mat_pq2_0_r8_q8_k128(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    static_assert(QK_PQ2_0_R8_ROWS == 8);
+    GGML_ASSERT(nrc_x%QK_PQ2_0_R8_ROWS == 0);
+    Q8<nrc_y, block_q8_K128> q8(info);
+    int nb = n / QK_PQ2_0;
+    auto m3 = vdupq_n_u8(0x3);
+    float32x4x2_t acc[nrc_y] = {};
+    int32x4x2_t sumi[nrc_y] = {};
+    int8x16x2_t qx[4];
+    for (int ix = 0; ix < nrc_x; ix += QK_PQ2_0_R8_ROWS) {
+        auto iq2 = (const block_pq2_0_r8 *)((const char *)vx + ix*bx);
+        for (int ib = 0; ib < nb; ++ib) {
+            auto d16 = vld1q_f16((const float16_t *)iq2[ib].d);
+            float32x4x2_t vd = { vcvt_f32_f16(vget_low_f16(d16)), vcvt_f32_f16(vget_high_f16(d16)) };
+            for (int k = 0; k < QK_PQ2_0/32; ++k) {
+                for (int j = 0; j < 2; ++j) {
+                    auto bits = vld1q_u8_x2(iq2[ib].qs + 64*k+32*j);
+                    for (int i = 0; i < 2; ++i) {
+                        qx[0].val[i] = vreinterpretq_s8_u8(vandq_u8(bits.val[i], m3));
+                        qx[1].val[i] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[i], 2), m3));
+                        qx[2].val[i] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[i], 4), m3));
+                        qx[3].val[i] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits.val[i], 6), m3));
+                    }
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto qy = vld1q_s8(q8.y[iy][ib].qs + 32*k + 16*j);
+                        auto s0 = vdotq_laneq_s32(vdupq_n_s32(0), qx[0].val[0], qy, 0);
+                        auto s1 = vdotq_laneq_s32(vdupq_n_s32(0), qx[0].val[1], qy, 0);
+                        s0 = vdotq_laneq_s32(s0, qx[1].val[0], qy, 1);
+                        s1 = vdotq_laneq_s32(s1, qx[1].val[1], qy, 1);
+                        s0 = vdotq_laneq_s32(s0, qx[2].val[0], qy, 2);
+                        s1 = vdotq_laneq_s32(s1, qx[2].val[1], qy, 2);
+                        s0 = vdotq_laneq_s32(s0, qx[3].val[0], qy, 3);
+                        s1 = vdotq_laneq_s32(s1, qx[3].val[1], qy, 3);
+                        sumi[iy].val[0] = vaddq_s32(sumi[iy].val[0], s0);
+                        sumi[iy].val[1] = vaddq_s32(sumi[iy].val[1], s1);
+                    }
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto sub = vdupq_n_s32(q8.y[iy][ib].s);
+                sumi[iy].val[0] = vsubq_s32(sumi[iy].val[0], sub);
+                sumi[iy].val[1] = vsubq_s32(sumi[iy].val[1], sub);
+                auto d8 = vdupq_n_f32(q8.y[iy][ib].d);
+                auto dxy1 = vmulq_f32(vd.val[0], d8);
+                auto dxy2 = vmulq_f32(vd.val[1], d8);
+                acc[iy].val[0] = vfmaq_f32(acc[iy].val[0], dxy1, vcvtq_f32_s32(sumi[iy].val[0]));
+                acc[iy].val[1] = vfmaq_f32(acc[iy].val[1], dxy2, vcvtq_f32_s32(sumi[iy].val[1]));
+                sumi[iy].val[0] = sumi[iy].val[1] = vdupq_n_s32(0);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix+0, iy, acc[iy].val[0]);
+            info.store(ix+4, iy, acc[iy].val[1]);
+            acc[iy].val[0] = acc[iy].val[1] = vdupq_n_f32(0.0f);
+        }
+    }
+}
+
+template <int nrc_y>
 static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_K128> q8(info);
@@ -3402,6 +3461,10 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
             if (ne00 % QK1_0_G128 != 0) return false;
             expected_Btype = GGML_TYPE_Q8_K128;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q1_0_g128_r8_q8_k, funcs);
+            break;
+        case GGML_TYPE_PQ2_0_R8:
+            expected_Btype = GGML_TYPE_Q8_K128;
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_pq2_0_r8_q8_k128, funcs);
             break;
         default:
             return false;
