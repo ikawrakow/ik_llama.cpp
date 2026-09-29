@@ -5244,6 +5244,53 @@ static bool llm_load_tensors(
             (void) acc;
         }
 #endif
+#if defined(_WIN32)
+        // With mmap + GPU offload, every H2D copy faults its file source into the
+        // process working set and no per-range immediate discard exists for READONLY
+        // views (OfferVirtualMemory is lazy; Discard needs WRITECOPY). Trim once,
+        // then re-warm only the host-aliased ranges so VRAM-owned bytes stop
+        // duplicating RAM. Deferred PLE ranges stay cold; mlock keeps all pinned.
+        if (ml.use_mmap && !use_mlock) {
+            struct host_range { uint32_t idx; size_t first; size_t last; };
+            std::vector<host_range> host_ranges;
+            bool has_device_copy = false;
+            for (auto & it : ctx_bufs) {
+                ggml_context * ctx = it.first;
+                for (auto * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+                    if (cur->buffer == nullptr) {
+                        continue;
+                    }
+                    if (!ggml_backend_buffer_is_host(cur->buffer)) {
+                        has_device_copy = true;
+                        continue;
+                    }
+                    const auto * weight = ml.get_weight(ggml_get_name(cur));
+                    if (weight == nullptr) {
+                        continue;
+                    }
+                    const size_t first = weight->offs;
+                    const size_t last  = weight->offs + ggml_nbytes(cur);
+                    if (defer_ple_mmap && ml.ple_range_overlaps(weight->idx, first, last)) {
+                        continue;
+                    }
+                    host_ranges.push_back({ weight->idx, first, last });
+                }
+            }
+            if (has_device_copy) {
+                // (SIZE_T)-1 trims without changing quotas; needs kernel32 only.
+                if (SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T) -1, (SIZE_T) -1)) {
+                    LLAMA_LOG_INFO("%s: trimmed working set after H2D copies, re-warming %zu host ranges\n",
+                            __func__, host_ranges.size());
+                    for (const auto & r : host_ranges) {
+                        ml.mappings.at(r.idx)->prefetch_fragment(r.first, r.last);
+                    }
+                } else {
+                    LLAMA_LOG_WARN("%s: working set trim failed (%lu)\n",
+                            __func__, (unsigned long) GetLastError());
+                }
+            }
+        }
+#endif
     }
 
     if (model.is_mla_model()) {
