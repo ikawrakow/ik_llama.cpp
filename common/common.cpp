@@ -2217,7 +2217,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.worst_graph_tokens = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--no-mmap") {
+    if (arg == "-nmm" ||arg == "--no-mmap") {
         params.use_mmap = false;
         return true;
     }
@@ -3325,7 +3325,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
     if (llama_supports_mmap()) {
-        options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
+        options.push_back({ "*",       "-nmm,   --no-mmap",               "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
     options.push_back({ "*",           "-rtr,   --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
