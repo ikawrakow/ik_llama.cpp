@@ -1688,14 +1688,6 @@ static void mul_mat_q1_0_g128_r8_q8_k(int n, const void * vx, size_t bx, const D
     }
 }
 
-IQK_ALWAYS_INLINE __m256i iqk_reduce_8x8_epi32(const __m256i * s) {
-    auto g0 = _mm256_hadd_epi32(_mm256_hadd_epi32(s[0], s[1]), _mm256_hadd_epi32(s[2], s[3]));
-    auto g1 = _mm256_hadd_epi32(_mm256_hadd_epi32(s[4], s[5]), _mm256_hadd_epi32(s[6], s[7]));
-    auto q0 = _mm_add_epi32(_mm256_castsi256_si128(g0), _mm256_extracti128_si256(g0, 1));
-    auto q1 = _mm_add_epi32(_mm256_castsi256_si128(g1), _mm256_extracti128_si256(g1, 1));
-    return _mm256_inserti128_si256(_mm256_castsi128_si256(q0), q1, 1);
-}
-
 template <typename Deq, typename Block, int nrc_y>
 static void mul_mat_T_q8_k128(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x, const Deq & deq) {
     Q8<nrc_y, block_q8_K128> q8(info);

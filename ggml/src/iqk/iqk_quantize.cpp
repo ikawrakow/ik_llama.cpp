@@ -10982,6 +10982,7 @@ static void ptq1_0_to_iq1_bn([[maybe_unused]] const block_ptq1_0 & b, [[maybe_un
 #endif
 }
 
+namespace {
 void dequant_block_ptq1_0(const block_ptq1_0 & x, uint8_t * y) {
 
     static const uint8_t pow3[6] = {1, 3, 9, 27, 81, 243};
@@ -11007,6 +11008,7 @@ void dequant_block_ptq1_0(const block_ptq1_0 & x, uint8_t * y) {
             *y++ = xi;
         }
     }
+}
 }
 
 void repack_ptq1_0_r8(int nrows, int n_per_row, const block_ptq1_0 * GGML_RESTRICT x, block_ptq1_0_r8 * GGML_RESTRICT y, bool online) {
@@ -11044,10 +11046,11 @@ void dequantize_row_ptq1_0_r8(const block_ptq1_0_r8 * x, float * GGML_RESTRICT y
     for (int ib = 0; ib < nblock; ++ib) {
         dequantize_row_iq1_bn(x[ib].qs, ftmp, QK_PTQ1_0*QK_PTQ1_0_R8_ROWS);
         for (int k = 0; k < QK_PTQ1_0_R8_ROWS; ++k) {
+            float d = GGML_FP16_TO_FP32(x[ib].d[k]);
             float * yr = y + (int64_t)k*n_per_row + ib*QK_PTQ1_0;
             for (int j = 0; j < QK_PTQ1_0/4; ++j) {
                 for (int i = 0; i < 4; ++i) {
-                    yr[4*j + i] = ftmp[32*j + 8*k + i];
+                    yr[4*j + i] = d * ftmp[32*j + 4*k + i];
                 }
             }
         }
