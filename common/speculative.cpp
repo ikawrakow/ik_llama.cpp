@@ -2065,6 +2065,9 @@ bool common_speculative_load_draft_model(
 
     params.model_dft = loaded_model;
     params.cparams_dft = common_context_params_to_llama(params_dft);
+    // params_dft is a local copy: point the affinity at params_base, which outlives it
+    params.cparams_dft.cpu_affinity   = params_base.cpu_affinity.empty() ? nullptr : params_base.cpu_affinity.data();
+    params.cparams_dft.n_cpu_affinity = (int32_t) params_base.cpu_affinity.size();
     return true;
 }
 
@@ -2106,6 +2109,9 @@ bool common_speculative_prepare_mtp_runtime(
         gpt_params params_mtp = params_base;
         params_mtp.pooling_type = LLAMA_POOLING_TYPE_NONE;
         params.cparams_dft = common_context_params_to_llama(params_mtp);
+        // params_mtp is a local copy: point the affinity at params_base, which outlives it
+        params.cparams_dft.cpu_affinity   = params_base.cpu_affinity.empty() ? nullptr : params_base.cpu_affinity.data();
+        params.cparams_dft.n_cpu_affinity = (int32_t) params_base.cpu_affinity.size();
     }
 
     params.cparams_dft.mtp         = true;

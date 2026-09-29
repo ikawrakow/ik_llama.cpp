@@ -841,6 +841,9 @@ extern "C" {
 
     // the compute plan that needs to be prepared for ggml_graph_compute()
     // since https://github.com/ggerganov/ggml/issues/287
+    // maximum number of logical CPU ids that can be pinned via ggml_cplan.cpu_affinity
+    #define GGML_MAX_CPU_AFFINITY 1024
+
     struct ggml_cplan {
         size_t    work_size; // size of work buffer, calculated by `ggml_graph_plan()`
         uint8_t * work_data; // work buffer, to be allocated by caller before calling to `ggml_graph_compute()`
@@ -853,6 +856,10 @@ extern "C" {
 
         // read-ahead selected MoE expert weights in the CPU matmul-id kernels
         bool moe_expert_prefetch;
+
+        // optional CPU affinity: pin worker ith to cpu_affinity[ith % n_cpu_affinity]
+        const int32_t * cpu_affinity;
+        int32_t         n_cpu_affinity;
     };
 
     enum ggml_cgraph_eval_order {
