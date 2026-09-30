@@ -426,8 +426,7 @@ extern "C" {
         GGML_TYPE_I2_S      = 36,  // So we are able to consume MS BitNet I2_S quants
         GGML_TYPE_MXFP4     = 39,  // so we are compatible with mainline
         GGML_TYPE_Q1_0_G128 = 41,  // Bonsai 1-bit quants
-        GGML_TYPE_Q3KS_G128 = 45,  // iq3ks-class dual-codebook 3-bit, superblock 128 (dual 8-entry codebooks, gs32)
-        GGML_TYPE_IQ3KS_R16 = 46,  // 16-row interleaved iq3ks-class codebook 3-bit (K1 superblocks, per-row d hoisted to band header)
+        GGML_TYPE_IQ3KS_R16 = 354, // 16-row interleaved iq3ks-class codebook 3-bit (K1 superblocks, per-row d hoisted to band header)
         //
         //
         GGML_TYPE_Q8_0_X4 = 97,
@@ -542,8 +541,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_Q4_0_4_8 = 27, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q4_0_8_8 = 28, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q1_0_128 = 29, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q3KS_128 = 33, // except 1d tensors (iq3ks-class codebook 3-bit, sb128)
-        GGML_FTYPE_MOSTLY_Q3KS_R16 = 34, // except 1d tensors (16-row interleaved iq3ks-class codebook 3-bit)
+        GGML_FTYPE_MOSTLY_Q3KS_R16 = 400, // except 1d tensors (16-row interleaved iq3ks-class codebook 3-bit)
         //
         GGML_FTYPE_MOSTLY_Q6_0    = 127, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_BN  = 128, // except 1d tensors

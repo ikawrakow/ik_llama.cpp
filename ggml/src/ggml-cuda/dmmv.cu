@@ -807,66 +807,6 @@ static void dequantize_mul_mat_vec_iq4_kt_cuda(const void * vx, const dfloat * y
 
 // one 8-weight slice (3 bytes, lsb-first 3-bit codes) of the 128-weight groups.
 // QAT iq3ks-codebook 3-bit, superblock 128 (row meta fp16 d at offset 0)
-static __global__ void dequantize_mul_mat_vec_q3ks_g128(const void * __restrict__ vx, const float * __restrict__ yy,
-        float * __restrict__ dst, const int ncols, int nrows, const int64_t row_stride) {
-
-    const int row = blockIdx.x*blockDim.y + threadIdx.y;
-    if (row >= nrows) return;
-
-    const char * xr = (const char *)vx + (int64_t)row*row_stride;
-    // row_stride (359 B) is odd -> row start may be at an odd address; load the
-    // fp16 d byte-wise to avoid misaligned half loads.
-    ggml_half dh = __ushort_as_half((unsigned short)(((uint16_t)(uint8_t)xr[0]) | ((uint16_t)(uint8_t)xr[1] << 8)));
-    const float d = __half2float(dh);
-    const block_q3ks_g128 * x = (const block_q3ks_g128 *)(xr + sizeof(ggml_half));
-    const int nslices = ncols / 8;               // 16 slices per 128-superblock
-
-    float tmp = 0.0f;
-
-    for (int i = threadIdx.x; i < nslices; i += 32) {
-        const int ibl = i >> 4;
-        const int s  = i & 15;                   // 8-weight slice within the superblock
-        const int g  = s >> 2;                   // codebook group 0..3
-        const block_q3ks_g128 * b = x + ibl;
-        const uint8_t ex = b->extra;
-        int ul;
-        switch (g) {
-            case 0: ul = ((b->scales[0]      ) & 0xf) | ((ex & 1) << 4); break;
-            case 1: ul = ((b->scales[0] >>  4)      ) | ((ex & 2) << 3); break;
-            case 2: ul = ((b->scales[1]      ) & 0xf) | ((ex & 4) << 2); break;
-            default: ul = ((b->scales[1] >> 4)      ) | ((ex & 8) << 1); break;
-        }
-        const float dl = d * (ul - 16);
-        const int8_t * values = iq3nl_values + (((ex >> (4 + g)) & 1) << 3);
-        const int j0 = (s & 3) * 8;              // within-group start (0..24)
-        const int t0 = g * 32 + j0;              // weight offset within the superblock
-        const uint8_t * qs = b->qs + j0;         // qs byte = within-group position j
-        const uint8_t * qh = b->qh + (j0 >> 1);  // qh byte = j>>1, bit = g + 4*(j&1)
-        const float * y = yy + ibl*QK3KS_G128 + t0;
-        float sum = 0.0f;
-#pragma unroll
-        for (int k = 0; k < 8; ++k) {
-            const int idx = ((qs[k] >> 2*g) & 3) | (((qh[k >> 1] >> (g + 4*(k & 1))) & 1) << 2);
-            sum += values[idx] * y[k];
-        }
-        tmp += dl * sum;
-    }
-
-    tmp = warp_reduce_sum(tmp);
-
-    if (threadIdx.x == 0) {
-        dst[row] = tmp;
-    }
-}
-
-static void dequantize_mul_mat_vec_q3ks_g128_cuda(const void * vx, const float * y, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
-    GGML_ASSERT(ncols % QK3KS_G128 == 0);
-    const int64_t row_stride = ggml_row_size(GGML_TYPE_Q3KS_G128, ncols);
-    const dim3 block_dims(32, GGML_CUDA_MMV_Y, 1);
-    const dim3 block_nums((nrows + GGML_CUDA_MMV_Y - 1) / GGML_CUDA_MMV_Y, 1, 1);
-    dequantize_mul_mat_vec_q3ks_g128<<<block_nums, block_dims, 0, stream>>>(vx, y, dst, ncols, nrows, row_stride);
-}
-
 // IQ3KS_R16 (type 46): 16-row interleaved K1 superblocks; per row the d lives in
 // the band header at offset 2*(row%16) and the row's superblocks at
 // band + 32 + tile*816 + (row%16)*51 (odd stride — byte loads only).
@@ -1033,9 +973,6 @@ void ggml_cuda_op_dequantize_mul_mat_vec(
             break;
         case GGML_TYPE_Q3_K:
             dequantize_mul_mat_vec_q3_K_cuda(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
-            break;
-        case GGML_TYPE_Q3KS_G128:
-            dequantize_mul_mat_vec_q3ks_g128_cuda(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             break;
         case GGML_TYPE_IQ3KS_R16:
             dequantize_mul_mat_vec_iq3ks_r16_cuda(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);

@@ -118,7 +118,7 @@ std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
         { GGML_TYPE_Q8_KV_R8,    { GGML_TYPE_Q8_KV, 8} },
         { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_0, 8} },
         { GGML_TYPE_BF16_R16,    { GGML_TYPE_BF16, 16} },
-        { GGML_TYPE_IQ3KS_R16,   { GGML_TYPE_Q3KS_G128, 16} },
+        { GGML_TYPE_IQ3KS_R16,   { GGML_TYPE_IQ3_KT, 16} },
     };
     if (auto it = k_map.find(type); it != k_map.end()) return it->second;
     return {type, 1};
@@ -295,7 +295,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             // Disable GGML_TYPE_IQ4_KS_R16 until we have CUDA implementation for it
             //case GGML_TYPE_IQ4_XS: new_type = ny % 16 == 0 ? GGML_TYPE_IQ4_KS_R16 : GGML_TYPE_IQ4_NL; break;
             case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
-            case GGML_TYPE_IQ3KS_R16: new_type = GGML_TYPE_Q3KS_G128; break;
+            case GGML_TYPE_IQ3KS_R16: new_type = GGML_TYPE_IQ3_KT; break;
             case GGML_TYPE_IQ4_K:
             case GGML_TYPE_IQ4_K_R4:
             case GGML_TYPE_Q4_K_R4:
@@ -1120,7 +1120,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_F16:  default_type = GGML_TYPE_F16;  break;
         case LLAMA_FTYPE_MOSTLY_BF16: default_type = GGML_TYPE_BF16; break;
         case LLAMA_FTYPE_MOSTLY_BF16_R16: default_type = GGML_TYPE_BF16_R16; break;
-        case LLAMA_FTYPE_MOSTLY_Q3KS_G128: default_type = GGML_TYPE_Q3KS_G128; break;
         case LLAMA_FTYPE_MOSTLY_Q3KS_R16:  default_type = GGML_TYPE_IQ3KS_R16; break;
         case LLAMA_FTYPE_ALL_F32:     default_type = GGML_TYPE_F32;  break;
 

@@ -2123,8 +2123,7 @@ class GGMLQuantizationType(IntEnum):
     IQ3_KS    = 156
     IQ2_KL    = 157
     IQ1_KT    = 158
-    Q3KS_G128 = 45
-    IQ3KS_R16 = 46
+    IQ3KS_R16 = 354
     Q4_0_R8   = 202
     Q5_0_R4   = 206
     Q8_0_R8   = 208
@@ -2390,6 +2389,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ5_K_R4    : ( 256,  176),
     GGMLQuantizationType.IQ4_KS_R4   : ( 256,  136),
     GGMLQuantizationType.IQ5_KS_R4   : ( 256,  168),
+    GGMLQuantizationType.IQ3KS_R16   : ( 128,   51),
     GGMLQuantizationType.Q8_KV_R8    : (  32,   32),
     GGMLQuantizationType.Q8_K_R8     : ( 256,  258),
 }
@@ -2409,6 +2409,7 @@ GGML_ROW_META_SIZES: dict[GGMLQuantizationType, int] = {
     GGMLQuantizationType.IQ4_KSS     :  4,
     GGMLQuantizationType.IQ5_KS      :  4,
     GGMLQuantizationType.IQ5_KS_R4   :  4,
+    GGMLQuantizationType.IQ3KS_R16   :  2,
     GGMLQuantizationType.IQ1_KT      :  4,
     GGMLQuantizationType.IQ2_KT      :  4,
     GGMLQuantizationType.IQ3_KT      :  4,
