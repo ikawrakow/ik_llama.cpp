@@ -97,27 +97,29 @@ void mul_mat_vec_iq3ks_r16_f16_cuda(const mmvq_args & args, cudaStream_t stream)
     mul_mat_vec_iq3ks_r16_f16_kernel<<<grid, block, 0, stream>>>(args);
 }
 // IQ3KS_R16 (type 46) dp4a MMVQ: same band addressing as the f16 kernel.
+// Multi-warp: the block's warps split the (tile,group) work items of the
+// 4-row slice; the per-warp partial sums combine via shared memory.
+static __global__ void mul_mat_vec_iq3ks_r16_band_q8_1_kernel(const mmvq_args args) {
 
-// IQ3KS_R16 (type 46) dp4a MMVQ: same band addressing as the f16 kernel.
-static __global__ void mul_mat_vec_iq3ks_r16_q8_1_kernel(const mmvq_args args) {
+    // band-cooperative, 4-row slices: one block owns a 4-row slice of a
+    // band; lanes cover (tile,group) pairs strided by 32*nwarps; the q8_1 y
+    // ints are loaded once per pair and reused across the 4 rows (4x fewer
+    // y loads than row-per-warp) while keeping block-level parallelism at
+    // nrows/4. Decode is the packed prmt/dp4a version (bit-exact vs the
+    // byte-wise decode: standalone probes 0/16 mismatches vs both the CPU
+    // reference and the previous kernel).
 
-    const int row = blockIdx.x*blockDim.y + threadIdx.y;
-    if (row >= args.nrows_x) return;
-
-    const int i2 = blockIdx.z;
+    const int lane = threadIdx.x;
+    const int warp = threadIdx.y;
+    const int nwarps = blockDim.y;
+    const int band = blockIdx.x >> 2;            // 16-row band index
+    const int r0   = (blockIdx.x & 3) * 4;       // first row within the band
+    const int i2   = blockIdx.z;
 
     const int ntiles = args.ncols_x / QK3KS_G128;
-    const size_t band_size = 32 + (args.ncols_x / QK3KS_G128) * 16 * sizeof(block_q3ks_g128);
-    const char * xr = (const char *)args.vx_u + i2*args.nb02 + (size_t)(row >> 4)*band_size;
-    const int ir = row & 15;
-    const float d = __half2float(__ushort_as_half(
-        (unsigned short)(((uint16_t)(uint8_t)xr[2*ir]) | ((uint16_t)(uint8_t)xr[2*ir + 1] << 8))));
-    const char * xrow = xr + 32 + (size_t)ir*sizeof(block_q3ks_g128);
-    const block_q8_1 * y0 = (const block_q8_1 *)((const char *)args.vy + i2*args.nb12);
-    const int blocks_per_col_y = args.nrows_y / QK8_1;
+    const size_t band_size = 32 + (size_t)ntiles * 16 * sizeof(block_q3ks_g128);
+    const char * xr = (const char *)args.vx_u + i2*args.nb02 + (size_t)band*band_size;
 
-    // codebook tables resident in registers (hoisted out of the loop):
-    // avoids divergent constant/global loads in the hot path.
     const uint8_t * vtab = (const uint8_t *)iq3nl_values;
     const uint32_t T0 = (uint32_t)vtab[0] | ((uint32_t)vtab[1] << 8)
                       | ((uint32_t)vtab[2] << 16) | ((uint32_t)vtab[3] << 24);
@@ -128,60 +130,79 @@ static __global__ void mul_mat_vec_iq3ks_r16_q8_1_kernel(const mmvq_args args) {
     const uint32_t T3 = (uint32_t)vtab[12] | ((uint32_t)vtab[13] << 8)
                       | ((uint32_t)vtab[14] << 16) | ((uint32_t)vtab[15] << 24);
 
-    float tmp = 0.0f;
+    float acc[4];
+    #pragma unroll
+    for (int r = 0; r < 4; ++r) acc[r] = 0.f;
 
-    // lane-per-GROUP: each lane owns one (tile, group) = 32 weights; the
-    // decode chain amortizes over 32 weights and the ul extraction is packed
-    // to 2-3 ops (aux nibble). 64-weights-per-lane measured WORSE (255.9 —
-    // halved lane utilization on 896-col rows beats the amortization gain).
-    for (int ig = threadIdx.x; ig < ntiles*4; ig += 32) {
+    const int blocks_per_col_y = args.nrows_y / QK8_1;
+
+    for (int ig = lane + 32*warp; ig < ntiles*4; ig += 32*nwarps) {
         const int ibl = ig >> 2;
         const int g   = ig & 3;
-        const block_q3ks_g128 * b = (const block_q3ks_g128 *)(xrow + (size_t)ibl*16*sizeof(block_q3ks_g128));
-        const uint8_t ex = b->extra;
-        const uint8_t s0 = b->scales[0], s1 = b->scales[1];
-        const uint32_t aux = (uint32_t)s0 | ((uint32_t)s1 << 8);
-        const int ul = ((aux >> (4*g)) & 0xf) | (((ex >> g) & 1) << 4);
-        const float dl = d * (ul - 16);
-        const uint32_t Tl = (((ex >> (4 + g)) & 1) == 0) ? T0 : T2;
-        const uint32_t Th = (((ex >> (4 + g)) & 1) == 0) ? T1 : T3;
-        const block_q8_1 * yb = y0 + blockIdx.y*blocks_per_col_y + ibl*4 + g;
+
+        // y-side: one q8_1 block per (tile,group); ints loaded once here,
+        // reused by the 4 rows of this block's slice.
+        const block_q8_1 * yb = (const block_q8_1 *)((const char *)args.vy + i2*args.nb12)
+                                + blockIdx.y*blocks_per_col_y + ibl*4 + g;
         const float yd = __half2float(yb->data.d);
-        float group_sum = 0.0f;
+        int ya[8];
         #pragma unroll
-        for (int s4 = 0; s4 < 4; ++s4) {
-            const int j0 = s4 * 8;
-            const uint8_t * qs = b->qs + j0;
-            const uint8_t * qh = b->qh + (j0 >> 1);
-            const int sh = 2*g;
-            const int i0 = ((qs[0] >> sh) & 3) | (((qh[0] >> (g + 0)) & 1) << 2);
-            const int i1 = ((qs[1] >> sh) & 3) | (((qh[0] >> (g + 4)) & 1) << 2);
-            const int i2 = ((qs[2] >> sh) & 3) | (((qh[1] >> (g + 0)) & 1) << 2);
-            const int i3 = ((qs[3] >> sh) & 3) | (((qh[1] >> (g + 4)) & 1) << 2);
-            const int i4 = ((qs[4] >> sh) & 3) | (((qh[2] >> (g + 0)) & 1) << 2);
-            const int i5 = ((qs[5] >> sh) & 3) | (((qh[2] >> (g + 4)) & 1) << 2);
-            const int i6 = ((qs[6] >> sh) & 3) | (((qh[3] >> (g + 0)) & 1) << 2);
-            const int i7 = ((qs[7] >> sh) & 3) | (((qh[3] >> (g + 4)) & 1) << 2);
-            const int p0 = __byte_perm(Tl, Th, (i0 | (i1 << 4) | (i2 << 8) | (i3 << 12)));
-            const int p1 = __byte_perm(Tl, Th, (i4 | (i5 << 4) | (i6 << 8) | (i7 << 12)));
+        for (int i = 0; i < 8; ++i) memcpy(&ya[i], yb->qs + 4*i, 4);
 
-            const int8_t * yq = yb->qs + j0;
-            int a0, a1;
-            memcpy(&a0, yq + 0, 4);
-            memcpy(&a1, yq + 4, 4);
+        const int sh = 2*g;
 
-            int acc = __dp4a(p0, a0, 0);
-            acc = __dp4a(p1, a1, acc);
+        for (int r = 0; r < 4; ++r) {
+            const uint8_t * braw = (const uint8_t *)(xr + 32 + (size_t)ibl*16*sizeof(block_q3ks_g128)
+                                                     + (size_t)(r0 + r)*sizeof(block_q3ks_g128));
+            const uint32_t sb = ((uint32_t)(uintptr_t)braw) & 3;   // braw % 4
+            const uint32_t * C = (const uint32_t *)(braw - sb);    // 4-aligned window
+            const uint8_t ex = braw[50];
+            const uint32_t aux = (uint32_t)braw[48] | ((uint32_t)braw[49] << 8);
+            const int ul = ((aux >> (4*g)) & 0xf) | (((ex >> g) & 1) << 4);
+            const float d = __half2float(__ushort_as_half(
+                (uint16_t)(uint8_t)xr[2*(r0 + r)] | ((uint16_t)(uint8_t)xr[2*(r0 + r)+1] << 8)));
+            const float dl = d * (ul - 16);
+            const uint32_t Tl = (((ex >> (4+g)) & 1) == 0) ? T0 : T2;
+            const uint32_t Th = (((ex >> (4+g)) & 1) == 0) ? T1 : T3;
 
-            group_sum += (float)acc;
+            int isumi = 0;
+            #pragma unroll
+            for (int s4 = 0; s4 < 4; ++s4) {
+                // aligned u32 loads + funnel realignment (13 loads / 12 shifts per 32
+                // weights, vs 48 byte loads + address math): C[2s4], C[2s4+1] cover
+                // qs bytes 8s4..8s4+8; C[8+s4], C[9+s4] cover qh bytes 4s4..4s4+4.
+                const uint32_t QA = __funnelshift_r(C[2*s4+0], C[2*s4+1], 8*sb);
+                const uint32_t QB = __funnelshift_r(C[2*s4+1], C[2*s4+2], 8*sb);
+                const uint32_t H  = __funnelshift_r(C[8+s4+0], C[8+s4+1], 8*sb);
+                const uint32_t A = (QA >> sh) & 0x03030303u;
+                const uint32_t B = (QB >> sh) & 0x03030303u;
+                const uint32_t Wq = __byte_perm(A | (A >> 4), B | (B >> 4), 0x6420);
+                const uint32_t W = Wq | (((H >> g) & 0x11111111u) << 2);
+                const int vlo = __byte_perm(Tl, Th, W);
+                const int vhi = __byte_perm(Tl, Th, W >> 16);
+                isumi += __dp4a(vlo, ya[2*s4+0], 0) + __dp4a(vhi, ya[2*s4+1], 0);
+            }
+            acc[r] += dl * yd * (float)isumi;
         }
-        tmp += dl * yd * group_sum;
     }
 
-    tmp = warp_reduce_sum(tmp);
+    #pragma unroll
+    for (int r = 0; r < 4; ++r) acc[r] = warp_reduce_sum(acc[r]);
 
-    if (threadIdx.x == 0) {
-        float result = tmp;
+    __shared__ float red[8][4];
+    if (lane == 0) {
+        #pragma unroll
+        for (int r = 0; r < 4; ++r) red[warp][r] = acc[r];
+    }
+    __syncthreads();
+
+    if (warp == 0 && lane < 4) {
+        float result = 0.f;
+        #pragma unroll
+        for (int w = 0; w < 8; ++w) {
+            if (w < nwarps) result += red[w][lane];
+        }
+        const int row = (int)blockIdx.x*4 + lane;
         if (args.bias_u) {
             result += ((const float *)args.bias_u)[row];
         }
@@ -193,10 +214,14 @@ static __global__ void mul_mat_vec_iq3ks_r16_q8_1_kernel(const mmvq_args args) {
 void mul_mat_vec_iq3ks_r16_q8_1_cuda(const mmvq_args & args, cudaStream_t stream) {
     GGML_ASSERT(args.ncols_x % QK3KS_G128 == 0);
     GGML_ASSERT(args.nrows_x % 16 == 0);
-    constexpr int rows_per_block = 2;
-    const dim3 block(32, rows_per_block, 1);
-    const dim3 grid((args.nrows_x + rows_per_block - 1)/rows_per_block, args.ncols_y, args.ne2);
-    mul_mat_vec_iq3ks_r16_q8_1_kernel<<<grid, block, 0, stream>>>(args);
+    const int npairs = (args.ncols_x / QK3KS_G128) * 4;
+    // warps split the (tile,group) work items: 1 warp covers <=32 items;
+    // long-K layers (hidden 2048/8192: 16-64 tiles) get 2-4 warps so each
+    // lane iterates ~1-3 chunks instead of serially walking all of K.
+    const int nwarps = npairs >= 128 ? 4 : (npairs >= 64 ? 2 : 1);
+    const dim3 block(32, nwarps, 1);
+    const dim3 grid(args.nrows_x/4, args.ncols_y, args.ne2);
+    mul_mat_vec_iq3ks_r16_band_q8_1_kernel<<<grid, block, 0, stream>>>(args);
 }
 static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggml_type type,
         const int64_t ne00, const int64_t ne0, const int64_t ne2,
