@@ -757,15 +757,7 @@ bool llama_model_loader::file_has_deferred_ple(int idx) const {
 }
 
 bool llama_model_loader::ple_range_overlaps(int idx, size_t first, size_t last) const {
-    if (idx < 0 || (size_t) idx >= ple_tensor_index.file_ranges.size()) {
-        return false;
-    }
-    for (const auto & range : ple_tensor_index.file_ranges[(size_t) idx]) {
-        if (first < range.last && range.first < last) {
-            return true;
-        }
-    }
-    return false;
+    return ple_deferred_bytes_in(idx, first, last) > 0;
 }
 
 size_t llama_model_loader::ple_deferred_bytes_in(int idx, size_t first, size_t last) const {
@@ -1132,8 +1124,7 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
         size_t n_deferred = 0;
         for (size_t fi = 0; fi < files.size(); ++fi) {
             const auto & file = files[fi];
-            // Deferred sparse tables (PLE) stay cold: faulting tens of GB upfront
-            // only to evict them wastes IO and page cache.
+            // Deferred sparse tables (PLE, engram) stay cold; faulting GBs upfront wastes IO.
             const bool deferred_file = file_has_deferred_ple((int) fi);
             if (deferred_file) {
                 ++n_deferred;
@@ -1288,10 +1279,9 @@ bool llama_model_loader::load_all_data(
         // mmap. Serialized.
         if (use_mmap) {
             std::lock_guard<std::mutex> lock(load_mutex);
-            // -rtr needs writable storage: repackable tensors get an owned buffer
-            // streamed from the file (skip those with views); the rest stays aliased.
+            // -rtr needs writable RAM: stream repackables (sans views) into owned buffers.
             if (repack_tensors && defer_ple && !ple_tensor_index.empty() && lmlocks == nullptr &&
-                    cur->buffer == nullptr && cur->view_src == nullptr &&
+                    cur->buffer == nullptr && cur->view_src == nullptr && n_size > 0 &&
                     !ple_range_overlaps(weight->idx, weight->offs, weight->offs + n_size) &&
                     (ggml_type) iqk_repacked_type(cur) != cur->type) {
                 bool has_views = false;
@@ -1318,8 +1308,7 @@ bool llama_model_loader::load_all_data(
                 }
             }
 #if defined(_WIN32)
-            // No immediate per-range discard exists for READONLY views, so stream
-            // device-bound tensors from the file instead of pinning them in RAM.
+            // No per-range discard for READONLY views: stream device tensors from disk.
             if (cur->buffer != nullptr && !ggml_backend_buffer_is_host(cur->buffer)) {
                 auto & read_buf = read_bufs[thread_idx];
                 read_buf.resize(n_size);
@@ -1359,8 +1348,7 @@ bool llama_model_loader::load_all_data(
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
                 if (!ggml_backend_buffer_is_host(cur->buffer) && lmlocks == nullptr && should_release_copied_pages()) {
-                    // VRAM owns these bytes now: drop the file source (shared ranges
-                    // fault back on demand; zero-copy aliases never take this path).
+                    // VRAM owns these now: drop file sources (shared ranges fault back).
                     mappings.at(weight->idx)->dontneed_fragment(weight->offs, weight->offs + n_size);
                 }
             }

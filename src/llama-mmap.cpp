@@ -541,15 +541,13 @@ struct llama_mmap::impl {
     }
 
     void random_fragment(size_t first, size_t last) {
-        // No Windows counterpart to POSIX_MADV_RANDOM exists for mapped views;
-        // demand paging already fetches only touched pages, so nothing to do.
+        // No Windows MADV_RANDOM equivalent; demand paging fetches on touch only.
         GGML_UNUSED(first);
         GGML_UNUSED(last);
     }
 
     void prefetch_fragment(size_t first, size_t last) {
-        // Queue only [first, last): deferred or VRAM-bound weights must not be
-        // faulted upfront into the working set; they stream from disk on demand.
+        // Warm [first,last) only; deferred/VRAM-bound weights stream on demand.
         const size_t page_size = win_page_size();
         win_align_range(&first, &last, page_size);
         const size_t len = last - first;

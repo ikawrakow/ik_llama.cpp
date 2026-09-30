@@ -158,7 +158,6 @@ if (GGML_MAX_SRC)
   add_compile_definitions(GGML_MAX_SRC=${GGML_MAX_SRC})
 endif()
 if (WIN32 AND DEFINED GGML_WIN_VER)
-    # The llama target needs this too (ggml/src already has it): without it the
-    # _WIN32_WINNT >= 0x602 gate in llama-mmap.cpp is false and prefetch is skipped.
+    # llama needs this too (ggml/src has it) or the _WIN32_WINNT>=0x602 gate kills prefetch.
     target_compile_definitions(llama PRIVATE _WIN32_WINNT=${GGML_WIN_VER})
 endif()

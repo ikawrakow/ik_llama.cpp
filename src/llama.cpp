@@ -552,8 +552,7 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     ggml_backend_cann_get_device_memory(device, &free, &total);
     return free;
 #else
-    // CPU-only build: the host is the device, so report free system RAM
-    // instead of the legacy 1-byte placeholder that tripped every warning.
+    // CPU-only build: report free host RAM instead of the 1-byte placeholder.
 #if defined(_WIN32)
     MEMORYSTATUSEX st = {};
     st.dwLength = sizeof(st);
@@ -5013,8 +5012,7 @@ static bool llm_load_tensors(
     }
 
     use_mmap_buffer = cth->create_tensors();
-    // --defer-ple keeps file mappings alive when the mmap path is off (--no-mmap,
-    // -rtr, merges, host overrides): deferred tables stay zero-copy, rest is copied.
+    // --defer-ple keeps mappings alive when mmap is off (--no-mmap/-rtr/merges/overrides).
     bool keep_ple_mapping = false;
     const bool mmap_disabled = !ml.use_mmap; // --no-mmap / -rtr
     if (ml.defer_ple && !ml.ple_tensor_index.empty() && (!use_mmap_buffer || mmap_disabled)) {
@@ -5054,8 +5052,7 @@ static bool llm_load_tensors(
     ml.done_getting_tensors();
 
 #if defined(_WIN32)
-    // Device-bound tensors stream from disk, so bulk prefetch would only
-    // pollute the working set; host ranges are warmed after load instead.
+    // Device tensors stream from disk; bulk prefetch would only pollute RAM.
     bool win_skip_bulk_prefetch = false;
     for (auto & it : ctx_map) {
         if (it.first != llama_default_buffer_type_cpu(true) && it.first != ggml_backend_cpu_buffer_type()) {
@@ -5123,8 +5120,7 @@ static bool llm_load_tensors(
                 model.bufs.push_back(buf);
                 bufs.emplace(idx, buf);
 #ifdef GGML_USE_CUDA
-                // Never pin a range spanning deferred tables: cudaHostRegister
-                // would lock those pages resident; affected tensors use staging copies.
+                // Never pin ranges over deferred tables; those tensors use staging copies.
                 if (n_layer >= n_gpu_layers && !ml.ple_range_overlaps(idx, first, last)) {
                     ggml_backend_cuda_register_host_buffer(
                         ggml_backend_buffer_get_base(buf),
@@ -5209,8 +5205,7 @@ static bool llm_load_tensors(
     }
 
     // print memory requirements
-    // Split display: deferred bytes get their own line (stays on file), the rest
-    // counts as resident RAM; release totalizes, debug details per context.
+    // Split display: deferred bytes get their own line, the rest counts as resident.
     auto buf_deferred_mib = [&](ggml_backend_buffer_t buf) -> double {
         if (!ggml_backend_buffer_is_host(buf)) {
             return 0.0;
@@ -5308,8 +5303,7 @@ static bool llm_load_tensors(
             ml.apply_ple_mmap_policy();
         }
 #if defined(_WIN32)
-        // Without --defer-ple sparse tables must be resident: fault them in
-        // synchronously (bulk prefetch is best-effort, unlike MAP_POPULATE).
+        // Without --defer-ple, fault sparse tables in synchronously (prefetch is best-effort).
         auto touch_host = [](struct ggml_tensor * t) {
             if (t && t->data && t->buffer && ggml_backend_buffer_is_host(t->buffer)) {
                 volatile const char * p = (volatile const char *) t->data;
@@ -5328,8 +5322,7 @@ static bool llm_load_tensors(
         }
 #endif
 #if defined(_WIN32)
-        // Bulk prefetch was skipped above: warm the host-aliased ranges so CPU
-        // layers and resident tables don't fault on first use. Deferred ones stay cold.
+        // Bulk prefetch was skipped: warm file-aliased host ranges, deferred stay cold.
         if (ml.use_mmap && !use_mlock && win_skip_bulk_prefetch) {
             struct host_range { uint32_t idx; size_t first; size_t last; };
             std::vector<host_range> host_ranges;
@@ -5348,7 +5341,7 @@ static bool llm_load_tensors(
                     if (defer_ple_mmap && ml.ple_range_overlaps(weight->idx, first, last)) {
                         continue;
                     }
-                    // Owned/malloc'd copies are already resident; warm file aliases only.
+                    // Owned/malloc'd copies are resident; warm file aliases only.
                     const auto * dp = (const uint8_t *) cur->data;
                     bool aliased = false;
                     for (const auto & mapping : ml.mappings) {
@@ -5399,8 +5392,7 @@ static bool llm_load_tensors(
         }
     }
 
-    // File-aliased tensors are read-only: skip anything whose data points into
-    // model.mappings (ml.mappings was moved there above) when mutating in place.
+    // Read-only check against model.mappings (ml.mappings was moved there above).
     auto tensor_is_file_aliased = [&](const struct ggml_tensor * t) -> bool {
         if (!keep_ple_mapping || t->data == nullptr) {
             return false;
@@ -5449,8 +5441,7 @@ static bool llm_load_tensors(
                 ml.expert_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
-    // File-aliased tensors are skipped inside; the result line always prints
-    // with -rtr so a lost flag vs zero candidates stays distinguishable.
+    // Skipped aliases inside; result always prints with -rtr to expose lost flags.
     if (ml.repack_tensors) {
         int n_repacked = 0;
         int n_skipped = 0;
@@ -5561,8 +5552,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             if (ml.ple_tensor_index.empty()) {
                 LLAMA_LOG_WARN("%s: --defer-ple had no effect: no per-layer token embedding or engram tables\n", __func__);
             } else if (!params.use_mmap) {
-                // -rtr / --no-mmap: mappings are kept for the deferred tables
-                // in llm_load_tensors, everything else is copied to RAM/VRAM
+                // Mappings are kept for deferred tables; everything else is copied.
                 LLAMA_LOG_INFO("%s: mmap is disabled, file mappings will be kept for the deferred tables only\n", __func__);
             }
 #else
