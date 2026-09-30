@@ -3213,6 +3213,42 @@ void vec_dot_iq3ks_r16_q8_2(int n, float * s, size_t bs, const void * vx, size_t
     GGML_UNUSED(bs);
     GGML_UNUSED(bx);
     GGML_UNUSED(by);
+
+    // scalar fallback for builds without the IQK mul-mat machinery
+    const ggml_half * dptr = (const ggml_half *)vx;
+    const block_iq3ks_r16 * tiles = (const block_iq3ks_r16 *)(dptr + 16);
+    const int ntiles = n / QK3KS_G128;
+
+    float d[16];
+    for (int k = 0; k < 16; ++k) d[k] = GGML_FP16_TO_FP32(dptr[k]);
+
+    float sumf = 0;
+    for (int t = 0; t < ntiles; ++t) {
+        for (int k = 0; k < 16; ++k) {
+            const block_q3ks_g128 * sb = tiles[t].sb + k;
+            const block_q8_0_x4 * y4 = (const block_q8_0_x4 *)vy + t;
+            for (int ib = 0; ib < 4; ++ib) {
+                int ul;
+                switch (ib) {
+                    case 0: ul = (sb->scales[0] & 0xf) | (((sb->extra >> 0) & 1) << 4); break;
+                    case 1: ul = (sb->scales[0] >> 4)  | (((sb->extra >> 1) & 1) << 4); break;
+                    case 2: ul = (sb->scales[1] & 0xf) | (((sb->extra >> 2) & 1) << 4); break;
+                    default: ul = (sb->scales[1] >> 4) | (((sb->extra >> 3) & 1) << 4); break;
+                }
+                const float dl = d[k]*(ul - 16);
+                const int8_t * values = iq3nl_values + (((sb->extra >> (4 + ib)) & 1) << 3);
+                const int8_t * qs8 = y4->qs + 32*ib;
+                int sumi = 0;
+                for (int j = 0; j < 32; ++j) {
+                    const int idx = ((sb->qs[j] >> (2*ib)) & 3) | (((sb->qh[j >> 1] >> (ib + 4*(j & 1))) & 1) << 2);
+                    int yb = (int)qs8[j]; if (yb < -127) yb = -127;   // same clamp as the SIMD kernels
+                    sumi += (int)values[idx] * yb;
+                }
+                sumf += dl * GGML_FP16_TO_FP32(y4->d[ib]) * (float)sumi;
+            }
+        }
+    }
+    *s = sumf;
 }
 
 // ============================================== iq4_K
