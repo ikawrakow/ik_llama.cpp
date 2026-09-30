@@ -2022,16 +2022,6 @@ bool common_speculative_load_draft_model(
     params_dft.cache_type_v     = params.cache_type_v.empty() ? params_base.cache_type_v : params.cache_type_v;
 
 
-    if (!params.params.empty()) {
-        auto [argc, argv] = parse_command_line("llama-server " + params.params);
-        if (!gpt_params_parse(argc, argv, params_dft)) {
-            gpt_params_print_usage(argc, argv, params_dft);
-            free_command_line(argc, argv);
-            return false;
-        }
-        free_command_line(argc, argv);
-    }
-
     // We likely don't want to inherit offload policy for MTP
     if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         params_dft.ncmoe = 0;
@@ -2039,6 +2029,28 @@ bool common_speculative_load_draft_model(
         params_dft.offload_policy.clear();
         LOG_INF("%s: MTP draft ignores target CPU-MoE/tensor placement overrides\n",
                 __func__);
+    }
+
+    if (!params.params.empty()) {
+        while (!params_dft.kv_overrides.empty() && params_dft.kv_overrides.back().key[0] == 0) {
+            params_dft.kv_overrides.pop_back();
+        }
+        while (!params_dft.tensor_buft_overrides.empty() && params_dft.tensor_buft_overrides.back().pattern == nullptr) {
+            params_dft.tensor_buft_overrides.pop_back();
+        }
+        while (params_dft.fit_margin_array.size() >= 2 &&
+                params_dft.fit_margin_array[params_dft.fit_margin_array.size()-2] == -1 &&
+                params_dft.fit_margin_array.back() == 0) {
+            params_dft.fit_margin_array.pop_back();
+            params_dft.fit_margin_array.pop_back();
+        }
+        auto [argc, argv] = parse_command_line("llama-server " + params.params);
+        if (!gpt_params_parse(argc, argv, params_dft)) {
+            gpt_params_print_usage(argc, argv, params_dft);
+            free_command_line(argc, argv);
+            return false;
+        }
+        free_command_line(argc, argv);
     }
 
     LOG_INF("%s: loading draft model '%s'\n", __func__, params_dft.model.c_str());
