@@ -41,12 +41,7 @@ template <> struct mmq_kt_tail<GGML_TYPE_IQ3KS_R16> {
             const block_q3ks_g128 * sb = (const block_q3ks_g128 *)(band + 32 + (2*kbx0)*16*sizeof(block_q3ks_g128)) + ir;
 
             // byte-wise read: odd row offsets (51 B) misalign get_int_b2
-            // ql via the aligned-word + __byte_perm splice (see mmq.cuh)
-            const uint32_t mis = (uint32_t)((uintptr_t)sb & 3);
-            const uint32_t * al = (const uint32_t *)((uintptr_t)sb & ~(uintptr_t)3);
-            const uint32_t a   = mis + 4*kqsx;
-            const uint32_t sel = 0x3210 + 0x1111*(a & 3);
-            const int ql = (int)__byte_perm(al[a >> 2], al[(a >> 2) + 1], sel);
+            const int ql = get_int_b1(sb->qs, kqsx);
 
             const uint32_t h0 = sb->qh[2*kqsx + 0];
             const uint32_t h1 = sb->qh[2*kqsx + 1];
