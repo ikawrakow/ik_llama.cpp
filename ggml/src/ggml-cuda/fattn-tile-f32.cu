@@ -353,7 +353,7 @@ static __global__ void flash_attn_tile_ext_f32(
 }
 
 template <int cols_per_block, int parallel_blocks, bool use_softcap>
-void launch_fattn_tile_f32_64_128(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+void launch_fattn_tile_f32_64_128_256(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q = dst->src[0];
     switch (Q->ne[0]) {
         case  64: {
@@ -368,8 +368,19 @@ void launch_fattn_tile_f32_64_128(ggml_backend_cuda_context & ctx, ggml_tensor *
             fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f32<D, cols_per_block, nwarps, parallel_blocks, use_softcap>;
             launch_fattn<D, D, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         } break;
+        case 256: {
+            // 32 columns would need 53376 B of shared memory, more than the 48 KiB per-block limit.
+            if constexpr (cols_per_block <= 16) {
+                constexpr int      D = 256;
+                constexpr int nwarps = 8;
+                fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f32<D, cols_per_block, nwarps, parallel_blocks, use_softcap>;
+                launch_fattn<D, D, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
+            } else {
+                GGML_ABORT("tile_f32 D == 256 requires cols_per_block <= 16 (shared-memory budget).");
+            }
+        } break;
         default: {
-            GGML_ABORT("FlashAttention without tensor cores only supports head sizes 64 and 128.");
+            GGML_ABORT("FlashAttention without tensor cores only supports head sizes 64, 128 and 256.");
         } break;
     }
 }
@@ -384,9 +395,20 @@ void ggml_cuda_flash_attn_ext_tile_f32(ggml_backend_cuda_context & ctx, ggml_ten
         constexpr int cols_per_block = 16;
         constexpr int parallel_blocks = 4;
         if (softcap == 0.0f) {
-            launch_fattn_tile_f32_64_128<cols_per_block, parallel_blocks, false>(ctx, dst);
+            launch_fattn_tile_f32_64_128_256<cols_per_block, parallel_blocks, false>(ctx, dst);
         } else {
-            launch_fattn_tile_f32_64_128<cols_per_block, parallel_blocks, true>(ctx, dst);
+            launch_fattn_tile_f32_64_128_256<cols_per_block, parallel_blocks, true>(ctx, dst);
+        }
+        return;
+    }
+
+    if (Q->ne[0] == 256) {
+        constexpr int cols_per_block = 16;
+        constexpr int parallel_blocks = 1;
+        if (softcap == 0.0f) {
+            launch_fattn_tile_f32_64_128_256<cols_per_block, parallel_blocks, false>(ctx, dst);
+        } else {
+            launch_fattn_tile_f32_64_128_256<cols_per_block, parallel_blocks, true>(ctx, dst);
         }
         return;
     }
@@ -395,9 +417,9 @@ void ggml_cuda_flash_attn_ext_tile_f32(ggml_backend_cuda_context & ctx, ggml_ten
         constexpr int cols_per_block = 32;
         constexpr int parallel_blocks = 4;
         if (softcap == 0.0f) {
-            launch_fattn_tile_f32_64_128<cols_per_block, parallel_blocks, false>(ctx, dst);
+            launch_fattn_tile_f32_64_128_256<cols_per_block, parallel_blocks, false>(ctx, dst);
         } else {
-            launch_fattn_tile_f32_64_128<cols_per_block, parallel_blocks, true>(ctx, dst);
+            launch_fattn_tile_f32_64_128_256<cols_per_block, parallel_blocks, true>(ctx, dst);
         }
         return;
     }
@@ -405,9 +427,9 @@ void ggml_cuda_flash_attn_ext_tile_f32(ggml_backend_cuda_context & ctx, ggml_ten
     constexpr int cols_per_block = 32;
     constexpr int parallel_blocks = 1;
     if (softcap == 0.0f) {
-        launch_fattn_tile_f32_64_128<cols_per_block, parallel_blocks, false>(ctx, dst);
+        launch_fattn_tile_f32_64_128_256<cols_per_block, parallel_blocks, false>(ctx, dst);
     } else {
-        launch_fattn_tile_f32_64_128<cols_per_block, parallel_blocks, true>(ctx, dst);
+        launch_fattn_tile_f32_64_128_256<cols_per_block, parallel_blocks, true>(ctx, dst);
     }
 }
 
@@ -415,5 +437,5 @@ bool ggml_cuda_fattn_tile_f32_is_supported([[maybe_unused]] ggml_backend_cuda_co
     auto K = dst->src[1];
     auto V = dst->src[2];
     if (K->ne[0] != V->ne[0]) return false;
-    return K->ne[0] == 64 || K->ne[0] == 128;
+    return K->ne[0] == 64 || K->ne[0] == 128 || K->ne[0] == 256;
 }
