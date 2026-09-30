@@ -3066,6 +3066,94 @@ void iqk_convert_iq4_xs_r8_q8_k_r16(int n, const void * vx, size_t bx, void * vy
     }
 }
 
+#ifdef HAVE_FANCY_SIMD
+static inline IQK_ALWAYS_INLINE float convert_to_q8_k_r8_staged(float d0, __m256i * qx, const int16_t * scales) {
+    auto max_i16 = _mm256_setzero_si256();
+    __m256i qs[16];
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        qs[2*ib32+0] = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(qx[ib32]));
+        qs[2*ib32+1] = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(qx[ib32], 1));
+        qs[2*ib32+0] = _mm256_mullo_epi16(qs[2*ib32+0], _mm256_set1_epi16(scales[2*ib32+0]));
+        qs[2*ib32+1] = _mm256_mullo_epi16(qs[2*ib32+1], _mm256_set1_epi16(scales[2*ib32+1]));
+        max_i16 = _mm256_max_epi16(max_i16, _mm256_sign_epi16(qs[2*ib32+0], qs[2*ib32+0]));
+        max_i16 = _mm256_max_epi16(max_i16, _mm256_sign_epi16(qs[2*ib32+1], qs[2*ib32+1]));
+    }
+    auto max_q32 = _mm256_cvtepi16_epi32(_mm_max_epi16(_mm256_castsi256_si128(max_i16), _mm256_extracti128_si256(max_i16, 1)));
+    auto imax4 = _mm_max_epi32(_mm256_castsi256_si128(max_q32), _mm256_extracti128_si256(max_q32, 1));
+    bool needs_scaling = true;
+    float dnew = hmax_float_4(_mm_cvtepi32_ps(imax4)) * d0;
+    if (dnew < 1.f) {
+        dnew = 1.f; needs_scaling = false;
+    }
+    auto scale = _mm256_set1_ps(std::abs(dnew) > 1e-9f ? 1/dnew : 0.f);
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        if (needs_scaling) {
+            auto i0 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(qs[2*ib32+0]));
+            auto i1 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(qs[2*ib32+0], 1));
+            auto i2 = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(qs[2*ib32+1]));
+            auto i3 = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(qs[2*ib32+1], 1));
+            i0 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i0)), _MM_ROUND_NEAREST));
+            i1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i1)), _MM_ROUND_NEAREST));
+            i2 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i2)), _MM_ROUND_NEAREST));
+            i3 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(scale, _mm256_cvtepi32_ps(i3)), _MM_ROUND_NEAREST));
+            i0 = _mm256_packs_epi32(i0, i1);
+            i2 = _mm256_packs_epi32(i2, i3);
+            qx[ib32] = _mm256_packs_epi16(i0, i2);
+        } else {
+            auto i0 = _mm256_packs_epi16(qs[2*ib32+0], qs[2*ib32+1]);
+            auto i0_l = _mm256_castsi256_si128(i0);
+            auto i0_h = _mm256_extracti128_si256(i0, 1);
+            auto t0 = _mm_unpacklo_epi32(i0_l, i0_h);
+            auto t1 = _mm_unpackhi_epi32(i0_l, i0_h);
+            qx[ib32] = MM256_SET_M128I(_mm_unpackhi_epi64(t0, t1), _mm_unpacklo_epi64(t0, t1));
+        }
+    }
+    return dnew;
+}
+
+static inline void iqk_transpose_xor_q8_k_r16(const __m256i * stage, int8_t * qs) {
+    const auto ia0 = _mm512_setr_epi32(0, 16, 2, 18, 4, 20, 6, 22, 8, 24, 10, 26, 12, 28, 14, 30);
+    const auto ia1 = _mm512_setr_epi32(1, 17, 3, 19, 5, 21, 7, 23, 9, 25, 11, 27, 13, 29, 15, 31);
+    const auto ib0 = _mm512_setr_epi32(0, 1, 16, 17, 4, 5, 20, 21, 8, 9, 24, 25, 12, 13, 28, 29);
+    const auto ib1 = _mm512_setr_epi32(2, 3, 18, 19, 6, 7, 22, 23, 10, 11, 26, 27, 14, 15, 30, 31);
+    const auto ic0 = _mm512_setr_epi32(0, 8, 1, 9, 2, 10, 3, 11, 16, 24, 17, 25, 18, 26, 19, 27);
+    const auto ic1 = _mm512_setr_epi32(4, 12, 5, 13, 6, 14, 7, 15, 20, 28, 21, 29, 22, 30, 23, 31);
+    const auto flip = _mm512_set1_epi8(-128);
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        auto in = (const __m512i *)(stage + 16*ib32);
+        __m512i z[8];
+        for (int j = 0; j < 8; ++j) z[j] = _mm512_load_si512(in + j);
+        __m512i a[8];
+        a[0] = _mm512_permutex2var_epi32(z[0], ia0, z[1]);
+        a[1] = _mm512_permutex2var_epi32(z[0], ia1, z[1]);
+        a[2] = _mm512_permutex2var_epi32(z[2], ia0, z[3]);
+        a[3] = _mm512_permutex2var_epi32(z[2], ia1, z[3]);
+        a[4] = _mm512_permutex2var_epi32(z[4], ia0, z[5]);
+        a[5] = _mm512_permutex2var_epi32(z[4], ia1, z[5]);
+        a[6] = _mm512_permutex2var_epi32(z[6], ia0, z[7]);
+        a[7] = _mm512_permutex2var_epi32(z[6], ia1, z[7]);
+        __m512i b[8];
+        b[0] = _mm512_permutex2var_epi32(a[0], ib0, a[2]);
+        b[1] = _mm512_permutex2var_epi32(a[1], ib0, a[3]);
+        b[2] = _mm512_permutex2var_epi32(a[0], ib1, a[2]);
+        b[3] = _mm512_permutex2var_epi32(a[1], ib1, a[3]);
+        b[4] = _mm512_permutex2var_epi32(a[4], ib0, a[6]);
+        b[5] = _mm512_permutex2var_epi32(a[5], ib0, a[7]);
+        b[6] = _mm512_permutex2var_epi32(a[4], ib1, a[6]);
+        b[7] = _mm512_permutex2var_epi32(a[5], ib1, a[7]);
+        auto out = (__m512i *)qs + 8*ib32;
+        _mm512_storeu_si512(out + 0, _mm512_xor_si512(_mm512_permutex2var_epi32(b[0], ic0, b[4]), flip));
+        _mm512_storeu_si512(out + 1, _mm512_xor_si512(_mm512_permutex2var_epi32(b[0], ic1, b[4]), flip));
+        _mm512_storeu_si512(out + 2, _mm512_xor_si512(_mm512_permutex2var_epi32(b[1], ic0, b[5]), flip));
+        _mm512_storeu_si512(out + 3, _mm512_xor_si512(_mm512_permutex2var_epi32(b[1], ic1, b[5]), flip));
+        _mm512_storeu_si512(out + 4, _mm512_xor_si512(_mm512_permutex2var_epi32(b[2], ic0, b[6]), flip));
+        _mm512_storeu_si512(out + 5, _mm512_xor_si512(_mm512_permutex2var_epi32(b[2], ic1, b[6]), flip));
+        _mm512_storeu_si512(out + 6, _mm512_xor_si512(_mm512_permutex2var_epi32(b[3], ic0, b[7]), flip));
+        _mm512_storeu_si512(out + 7, _mm512_xor_si512(_mm512_permutex2var_epi32(b[3], ic1, b[7]), flip));
+    }
+}
+#endif
+
 void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
 
 #ifdef HAVE_FANCY_SIMD
@@ -3089,8 +3177,12 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
 
     int16_t  ls[16];
     float    dnew[k_nr];
-    uint32_t block[8];
     __m256i  xv[8];
+#ifdef HAVE_FANCY_SIMD
+    alignas(64) __m256i stage[8*k_nr];
+#else
+    uint32_t block[8];
+#endif
 
     for (int ix = 0; ix < nrc_x; ix += k_nr) {
         for (int k = 0; k < k_nr; ++k) x8[k] = (const block_iq4_xs *)((const char *)vx + (ix + k)*bx);
@@ -3103,14 +3195,16 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
                     xv[ib32] = _mm256_and_si256(MM256_SET_M128I(_mm_srli_epi16(bits, 4), bits), _mm256_set1_epi8(0xf));
                     xv[ib32] = _mm256_shuffle_epi8(values, xv[ib32]);
                 }
+#ifdef HAVE_FANCY_SIMD
+                dnew[k] = d * convert_to_q8_k_r8_staged(1.f/127, xv, ls);
+                for (int ib32 = 0; ib32 < 8; ++ib32) _mm256_store_si256(stage + k_nr*ib32 + k, xv[ib32]);
+#else
                 dnew[k] = d * convert_to_q8_k_r8<k_nr>(k, 1.f/127, xv, ls, block, y[i].qs);
+#endif
             }
 #ifdef HAVE_FANCY_SIMD
             _mm512_storeu_ps(y[i].d, _mm512_loadu_ps(dnew));
-            for (int l = 0; l < 64; ++l) {
-                auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[i].qs + l), _mm512_set1_epi8(-128));
-                _mm512_storeu_si512((__m512i *)y[i].qs + l, v);
-            }
+            iqk_transpose_xor_q8_k_r16(stage, y[i].qs);
 #else
             _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_loadu_ps(dnew), _MM_ROUND_NEAREST));
 #endif
