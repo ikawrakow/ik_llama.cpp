@@ -279,7 +279,7 @@ struct cmd_params {
     output_formats output_format;
     output_formats output_format_stderr;
     std::vector<int32_t> cpu_affinity;
-    bool cpu_affinity_auto = false;
+    int cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -330,7 +330,7 @@ static const cmd_params cmd_params_defaults = {
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
     /* cpu_affinity         */ {},
-    /* cpu_affinity_auto    */ false,
+    /* cpu_affinity_mode    */ LLAMA_CPU_AFFINITY_DISABLED,
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -351,9 +351,16 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -tgb, --threads-gen-batch <n1,n2>   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  --n-cpu-moe <n>                     (default: none)\n");
-    printf("  --cpu-affinity                      pin threads to the physical P-cores (hybrid CPUs)\n");
-    printf("  -cm, --cpu-mask <mask>              pin threads to CPUs in bitmask (e.g. 0x55, 64 CPUs max)\n");
-    printf("  -cr, --cpu-range <list>             pin threads to CPUs (e.g. 0-3,8,10-11)\n");
+    printf("  -cm, --cpu-mask <mask>              opt-in: pin threads to CPUs in bitmask (e.g. 0x55, 64 CPUs max; both PP+TG)\n");
+    printf("  -cr, --cpu-range <list>             opt-in: pin threads to CPUs (e.g. 0-3,8,10-11; both PP+TG)\n");
+    printf("  --cpu-affinity                      opt-in: auto-pin threads to physical P-cores (alias of -ca)\n");
+    printf("  -ca, --cpu-affinity-auto            opt-in: auto-pin threads to physical P-cores (both PP+TG)\n");
+    printf("  -capp, --cpu-affinity-pp-auto       opt-in: auto-pin threads to physical P-cores for PP only\n");
+    printf("  -catg, --cpu-affinity-tg-auto       opt-in: auto-pin threads to physical P-cores for TG only\n");
+    printf("  -caf, --cpu-affinity-fill           opt-in: pin P-cores first, then E-cores up to -t threads (both PP+TG)\n");
+    printf("  -cafpp, --cpu-affinity-fill-pp      opt-in: P-first P+E fill for PP only\n");
+    printf("  -caftg, --cpu-affinity-fill-tg      opt-in: P-first P+E fill for TG only\n");
+    printf("  --no-cpu-affinity                   disable CPU affinity pinning (default: disabled, kept for compat)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
     printf("  -sm, --split-mode <none|layer|graph>(default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
@@ -920,7 +927,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 invalid_param = true;
                 break;
             }
-            params.cpu_affinity_auto = false;
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
         } else if (arg == "-cr" || arg == "--cpu-range") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -931,10 +938,32 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 invalid_param = true;
                 break;
             }
-            params.cpu_affinity_auto = false;
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
         } else if (arg == "--cpu-affinity") {
+            // alias of -ca, kept for upstream (PR 2565) compatibility
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_ALL;
+        } else if (arg == "-ca" || arg == "--cpu-affinity-auto") {
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_ALL;
+        } else if (arg == "-capp" || arg == "--cpu-affinity-pp-auto") {
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_PP;
+        } else if (arg == "-catg" || arg == "--cpu-affinity-tg-auto") {
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_TG;
+        } else if (arg == "-caf" || arg == "--cpu-affinity-fill") {
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_FILL_ALL;
+        } else if (arg == "-cafpp" || arg == "--cpu-affinity-fill-pp") {
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_FILL_PP;
+        } else if (arg == "-caftg" || arg == "--cpu-affinity-fill-tg") {
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_FILL_TG;
+        } else if (arg == "--no-cpu-affinity") {
             params.cpu_affinity.clear();
-            params.cpu_affinity_auto = true;
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
         } else {
             invalid_param = true;
             break;
@@ -970,7 +999,16 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.use_mmap.empty())     { params.use_mmap = cmd_params_defaults.use_mmap; }
     if (params.embeddings.empty())   { params.embeddings = cmd_params_defaults.embeddings; }
     if (params.n_threads.empty())    { params.n_threads = cmd_params_defaults.n_threads; }
-    params.cpu_affinity = cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
+    {
+        // resolve explicit list, P-core auto, or P-first P+E fill; per-phase -t guard lives in
+        // llama_graph_compute (a phase with more threads than P-cores stays unpinned,
+        // fill truncates the combined list to the graph's thread count instead)
+        params.cpu_affinity = cpu_affinity_resolve_mode(
+            params.cpu_affinity, params.cpu_affinity_mode);
+        if (params.cpu_affinity_mode != LLAMA_CPU_AFFINITY_DISABLED && params.cpu_affinity.empty()) {
+            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
+        }
+    }
     if (!params.buft_overrides.empty()) params.buft_overrides.emplace_back(llama_model_tensor_buft_override{nullptr, nullptr});
 
     return params;
@@ -1027,6 +1065,7 @@ struct cmd_params_instance {
     int  fit_margin = 0;
     const llama_model_tensor_buft_override* buft_overrides;
     std::vector<int32_t> cpu_affinity;
+    int cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1097,8 +1136,12 @@ struct cmd_params_instance {
         cparams.embeddings = embeddings;
         cparams.cuda_params = (void *)cuda_params.data();
         cparams.scheduler_async = sas;
-        cparams.cpu_affinity    = cpu_affinity.empty() ? nullptr : cpu_affinity.data();
-        cparams.n_cpu_affinity  = (int32_t) cpu_affinity.size();
+        // only an explicit -cm/-cr list goes through cparams: an auto list is installed
+        // after context creation with llama_set_cpu_affinity_auto, otherwise it would be
+        // taken as explicit and skip the per-phase (PP/TG) trisection
+        const bool cpu_affinity_explicit = cpu_affinity_mode == LLAMA_CPU_AFFINITY_DISABLED;
+        cparams.cpu_affinity    = (cpu_affinity_explicit && !cpu_affinity.empty()) ? cpu_affinity.data() : nullptr;
+        cparams.n_cpu_affinity  = cpu_affinity_explicit ? (int32_t) cpu_affinity.size() : 0;
 
         return cparams;
     }
@@ -2231,7 +2274,8 @@ int main(int argc, char ** argv) {
     std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
 
     for (auto & inst : params_instances) {
-        inst.cpu_affinity = params.cpu_affinity;
+        inst.cpu_affinity      = params.cpu_affinity;
+        inst.cpu_affinity_mode = params.cpu_affinity_mode;
     }
 
     llama_model * lmodel = nullptr;
@@ -2257,6 +2301,12 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
             llama_free_model(lmodel);
             return 1;
+        }
+
+        if (!inst.cpu_affinity.empty() && inst.cpu_affinity_mode == LLAMA_CPU_AFFINITY_DISABLED) {
+            llama_set_cpu_affinity(ctx, inst.cpu_affinity.data(), (int) inst.cpu_affinity.size());
+        } else if (inst.cpu_affinity_mode != LLAMA_CPU_AFFINITY_DISABLED && !inst.cpu_affinity.empty()) {
+            llama_set_cpu_affinity_auto(ctx, inst.cpu_affinity.data(), (int) inst.cpu_affinity.size(), inst.cpu_affinity_mode);
         }
 
         test t(inst, lmodel, ctx);

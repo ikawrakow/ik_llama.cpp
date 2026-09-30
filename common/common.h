@@ -81,6 +81,8 @@ int32_t cpu_get_num_physical_cores();
 int32_t cpu_get_num_math();
 
 // P-cores, one thread per physical core (no E-cores, no SMT siblings)
+// Linux: CPUID + thread_siblings_list. Windows: EfficiencyClass (highest=P),
+// flat ids in RelationProcessorCore order, as in ggml.c. Empty = no hybrid/opt-out.
 std::vector<int32_t> cpu_get_math_cpus();
 
 // E-cores, one per physical core (Intel hybrid)
@@ -91,6 +93,10 @@ std::vector<int32_t> cpu_affinity_resolve(const std::vector<int32_t> & cpus, boo
 
 // explicit affinity, else auto-detected E-cores
 std::vector<int32_t> cpu_affinity_resolve_draft(const std::vector<int32_t> & cpus, bool auto_detect);
+
+// mode-aware resolve: FILL modes return P-first P+E combined list (truncated
+// per graph to n_threads), other modes behave like cpu_affinity_resolve
+std::vector<int32_t> cpu_affinity_resolve_mode(const std::vector<int32_t> & cpus, int mode);
 
 bool cpu_affinity_parse_mask (const std::string & value, std::vector<int32_t> & cpus);
 bool cpu_affinity_parse_range(const std::string & value, std::vector<int32_t> & cpus);
@@ -275,6 +281,7 @@ struct common_params_speculative {
     // draft affinity from --draft-params; empty = inherit the target
     std::vector<int32_t> cpu_affinity;
     bool cpu_affinity_configured = false; // a draft affinity was requested
+    std::vector<int32_t> cpu_affinity_inherited; // stable storage for inherited draft affinity
 
     int32_t n_ctx = 0;  // draft context size
     int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
@@ -316,8 +323,10 @@ struct gpt_params {
     int32_t n_threads             = cpu_get_num_math();
     int32_t n_threads_batch       =      -1; // number of threads to use for batch processing (-1 = use n_threads)
     std::vector<int32_t> cpu_affinity;       // logical CPU ids to pin worker threads to (empty = no explicit pinning)
-    bool    cpu_affinity_auto     = false;   // pin to hybrid P-cores when cpu_affinity is empty (--cpu-affinity)
+    bool    cpu_affinity_auto     = false;   // pin to hybrid P-cores when cpu_affinity is empty (--cpu-affinity/-ca)
     bool    cpu_affinity_configured = false; // a CPU affinity option was given
+    int     cpu_affinity_mode     = LLAMA_CPU_AFFINITY_DISABLED; // opt-in auto phases: ALL/-ca, PP/-capp, TG/-catg, FILL/-caf, FILL_PP/-cafpp, FILL_TG/-caftg (see llama.h)
+
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)

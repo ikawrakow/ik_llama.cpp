@@ -233,6 +233,7 @@ static void llama_graph_compute_sched(
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
+        llama_cpu_affinity_apply(lctx, n_threads);
     }
 
     ggml_backend_sched_graph_compute_async(sched, gf);

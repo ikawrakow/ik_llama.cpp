@@ -7302,6 +7302,60 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     return llama_output_reserve(lctx, n_outputs, n_outputs, n_outputs);
 }
 
+// apply CPU affinity trisection for this graph: explicit list wins (both phases),
+// otherwise auto list applies per mode (ALL/PP/TG) based on the graph's thread
+// count vs cparams TG/PP counts. A phase with more threads than auto CPUs is left
+// unpinned so E-cores can join instead of oversubscribing P-cores; ggml restores
+// each worker's virgin affinity there, so persistent (OpenMP) workers cannot leak
+// a previous phase's pinning.
+// shared with llama-dflash.cpp (its sched graph helper applies the same trisection)
+void llama_cpu_affinity_apply(llama_context & lctx, int n_threads) {
+    if (lctx.backend_cpu == nullptr) {
+        return;
+    }
+
+    if (!lctx.cpu_affinity_explicit.empty()) {
+        ggml_backend_cpu_set_cpu_affinity(lctx.backend_cpu,
+            lctx.cpu_affinity_explicit.data(), (int) lctx.cpu_affinity_explicit.size());
+        return;
+    }
+
+    if (lctx.cpu_affinity_auto_cpus.empty() ||
+        lctx.cpu_affinity_mode == LLAMA_CPU_AFFINITY_DISABLED) {
+        ggml_backend_cpu_set_cpu_affinity(lctx.backend_cpu, nullptr, 0);
+        return;
+    }
+
+    const bool is_tg = (n_threads == (int) lctx.cparams.n_threads);
+    const bool is_pp = (n_threads == (int) lctx.cparams.n_threads_batch);
+    // equal TG/PP counts are indistinguishable: pin for either PP or TG mode
+    bool pin  = false;
+    bool fill = false;
+    switch (lctx.cpu_affinity_mode) {
+        case LLAMA_CPU_AFFINITY_AUTO_ALL: pin = true;  break;
+        case LLAMA_CPU_AFFINITY_AUTO_PP:  pin = is_pp; break;
+        case LLAMA_CPU_AFFINITY_AUTO_TG:  pin = is_tg; break;
+        case LLAMA_CPU_AFFINITY_FILL_ALL: pin = true;  fill = true; break;
+        case LLAMA_CPU_AFFINITY_FILL_PP:  pin = is_pp; fill = true; break;
+        case LLAMA_CPU_AFFINITY_FILL_TG:  pin = is_tg; fill = true; break;
+        default: pin = false; break;
+    }
+    if (pin && n_threads > (int) lctx.cpu_affinity_auto_cpus.size()) {
+        pin = false; // let E-cores join instead of oversubscribing P-cores
+    }
+
+    if (pin) {
+        // fill: P-first list, pin the first n_threads entries (8P+10E for -t 18)
+        const int n_pin = fill ? std::min(n_threads, (int) lctx.cpu_affinity_auto_cpus.size())
+                               : (int) lctx.cpu_affinity_auto_cpus.size();
+        ggml_backend_cpu_set_cpu_affinity(lctx.backend_cpu,
+            lctx.cpu_affinity_auto_cpus.data(), n_pin);
+    } else {
+        // ggml restores each worker's virgin affinity (see set_cpu_thread_affinity)
+        ggml_backend_cpu_set_cpu_affinity(lctx.backend_cpu, nullptr, 0);
+    }
+}
+
 static void llama_graph_compute(
         llama_context & lctx,
           ggml_cgraph * gf,
@@ -7316,6 +7370,7 @@ static void llama_graph_compute(
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
+        llama_cpu_affinity_apply(lctx, n_threads);
     }
 
     ggml_backend_sched_graph_compute_async(lctx.sched, gf);
@@ -7338,6 +7393,7 @@ static void llama_graph_compute_sched(
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
+        llama_cpu_affinity_apply(lctx, n_threads);
     }
 
     ggml_backend_sched_graph_compute_async(sched, gf);
@@ -13313,11 +13369,37 @@ void llama_set_n_threads(struct llama_context * ctx, uint32_t n_threads, uint32_
 }
 
 void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus) {
+    ctx->cpu_affinity_explicit.clear();
+    if (n_cpus > 0 && cpus != nullptr) {
+        ctx->cpu_affinity_explicit.assign(cpus, cpus + n_cpus);
+    }
+    // explicit wins over auto: drop any auto list so apply() cannot revive it
+    ctx->cpu_affinity_auto_cpus.clear();
+    ctx->cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
+
     if (ctx->backend_cpu == nullptr) {
         return;
     }
 
     ggml_backend_cpu_set_cpu_affinity(ctx->backend_cpu, cpus, n_cpus);
+}
+
+void llama_set_cpu_affinity_auto(struct llama_context * ctx, const int32_t * cpus, int n_cpus, int mode) {
+    ctx->cpu_affinity_auto_cpus.clear();
+    if (n_cpus > 0 && cpus != nullptr) {
+        ctx->cpu_affinity_auto_cpus.assign(cpus, cpus + n_cpus);
+    }
+    ctx->cpu_affinity_mode =
+        (mode == LLAMA_CPU_AFFINITY_AUTO_ALL  ||
+         mode == LLAMA_CPU_AFFINITY_AUTO_PP   ||
+         mode == LLAMA_CPU_AFFINITY_AUTO_TG   ||
+         mode == LLAMA_CPU_AFFINITY_FILL_ALL  ||
+         mode == LLAMA_CPU_AFFINITY_FILL_PP   ||
+         mode == LLAMA_CPU_AFFINITY_FILL_TG) ? mode : LLAMA_CPU_AFFINITY_DISABLED;
+    if (ctx->cpu_affinity_mode != LLAMA_CPU_AFFINITY_DISABLED) {
+        ctx->cpu_affinity_explicit.clear(); // auto wins over explicit
+    }
+    // backend affinity is (re)applied per graph compute via llama_cpu_affinity_apply
 }
 
 uint32_t llama_n_threads(struct llama_context * ctx) {
