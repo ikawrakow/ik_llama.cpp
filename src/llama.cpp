@@ -10,6 +10,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
 #include "llama-vocab.h"
 #include "llama-grammar.h"
 #include "llama-sampling.h"
@@ -559,11 +562,19 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     if (GlobalMemoryStatusEx(&st)) {
         return (size_t) st.ullAvailPhys;
     }
-#elif defined(__linux__) || defined(__APPLE__)
+#elif defined(__linux__)
     const long avphys = sysconf(_SC_AVPHYS_PAGES);
     const long pagesz = sysconf(_SC_PAGESIZE);
     if (avphys > 0 && pagesz > 0) {
         return (size_t) avphys * (size_t) pagesz;
+    }
+#elif defined(__APPLE__)
+    vm_statistics64_data_t vmstat;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    vm_size_t page_size = 0;
+    if (host_page_size(mach_host_self(), &page_size) == KERN_SUCCESS &&
+            host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t) &vmstat, &count) == KERN_SUCCESS) {
+        return (size_t) vmstat.free_count * (size_t) page_size;
     }
 #endif
     return 1;
