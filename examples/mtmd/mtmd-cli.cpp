@@ -264,6 +264,7 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, bool add_
 
     mtmd_input_text text;
     text.text          = formatted_chat.prompt.c_str();
+    text.text_len      = formatted_chat.prompt.size();
     text.add_special   = add_bos;
     text.parse_special = true;
 
