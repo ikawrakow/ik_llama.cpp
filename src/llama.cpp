@@ -5217,6 +5217,7 @@ static bool llm_load_tensors(
 
     // print memory requirements
     // Split display: deferred bytes get their own line, the rest counts as resident.
+    // Resident totals are grouped by backend name since is_host covers CUDA_Host too.
     auto buf_deferred_mib = [&](ggml_backend_buffer_t buf) -> double {
         if (!ggml_backend_buffer_is_host(buf)) {
             return 0.0;
@@ -5233,8 +5234,7 @@ static bool llm_load_tensors(
         }
         return 0.0;
     };
-    double cpu_resident_total = 0.0;
-    int cpu_resident_n = 0;
+    std::map<std::string, std::pair<double, int>> host_totals;
     for (ggml_backend_buffer_t buf : model.bufs) {
         if (!ggml_backend_buffer_is_host(buf)) {
             continue;
@@ -5245,12 +5245,13 @@ static bool llm_load_tensors(
             LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB (deferred, stays on file)\n", __func__, ggml_backend_buffer_name(buf), deferred_mib);
         }
         if (size_mib > deferred_mib) {
-            cpu_resident_total += size_mib - deferred_mib;
-            cpu_resident_n += 1;
+            auto & slot = host_totals[ggml_backend_buffer_name(buf)];
+            slot.first += size_mib - deferred_mib;
+            slot.second += 1;
         }
     }
-    if (cpu_resident_n > 0) {
-        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB (total of %d resident buffers)\n", __func__, "CPU", cpu_resident_total, cpu_resident_n);
+    for (const auto & kv : host_totals) {
+        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB (total of %d resident buffers)\n", __func__, kv.first.c_str(), kv.second.first, kv.second.second);
     }
     for (ggml_backend_buffer_t buf : model.bufs) {
         if (ggml_backend_buffer_is_host(buf)) {
