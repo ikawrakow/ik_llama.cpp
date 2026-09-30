@@ -5209,8 +5209,8 @@ static bool llm_load_tensors(
     }
 
     // print memory requirements
-    // File-backed aliases reserve address space but commit no RAM until faulted.
-    // Release totalizes resident CPU aliases; debug lists every buffer per context.
+    // Split display: deferred bytes get their own line (stays on file), the rest
+    // counts as resident RAM; release totalizes, debug details per context.
     auto buf_deferred_mib = [&](ggml_backend_buffer_t buf) -> double {
         if (!ggml_backend_buffer_is_host(buf)) {
             return 0.0;
@@ -5230,17 +5230,27 @@ static bool llm_load_tensors(
     double cpu_resident_total = 0.0;
     int cpu_resident_n = 0;
     for (ggml_backend_buffer_t buf : model.bufs) {
-        const double deferred_mib = buf_deferred_mib(buf);
-        if (ggml_backend_buffer_is_host(buf) && deferred_mib == 0.0) {
-            cpu_resident_total += ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0;
-            cpu_resident_n += 1;
+        if (!ggml_backend_buffer_is_host(buf)) {
             continue;
         }
-        const std::string residency = deferred_mib > 0.0 ? format(" (file-backed; %.2f MiB of it deferred, the rest faults in on first use)", deferred_mib) : "";
-        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB%s\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, residency.c_str());
+        const double deferred_mib = buf_deferred_mib(buf);
+        const double size_mib = ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0;
+        if (deferred_mib > 0.0) {
+            LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB (deferred, stays on file)\n", __func__, ggml_backend_buffer_name(buf), deferred_mib);
+        }
+        if (size_mib > deferred_mib) {
+            cpu_resident_total += size_mib - deferred_mib;
+            cpu_resident_n += 1;
+        }
     }
     if (cpu_resident_n > 0) {
         LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB (total of %d resident buffers)\n", __func__, "CPU", cpu_resident_total, cpu_resident_n);
+    }
+    for (ggml_backend_buffer_t buf : model.bufs) {
+        if (ggml_backend_buffer_is_host(buf)) {
+            continue;
+        }
+        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
     }
 #ifndef NDEBUG
     bool first_group = true;
@@ -5248,7 +5258,12 @@ static bool llm_load_tensors(
         bool group_open = false;
         for (auto & kv : it.second) {
             ggml_backend_buffer_t buf = kv.second;
-            if (!ggml_backend_buffer_is_host(buf) || buf_deferred_mib(buf) > 0.0) {
+            if (!ggml_backend_buffer_is_host(buf)) {
+                continue;
+            }
+            const double deferred_mib = buf_deferred_mib(buf);
+            const double size_mib = ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0;
+            if (size_mib == 0.0) {
                 continue;
             }
             if (!group_open) {
@@ -5258,7 +5273,12 @@ static bool llm_load_tensors(
                 group_open = true;
                 first_group = false;
             }
-            LLAMA_LOG_DEBUG("%s: %10s buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
+            if (deferred_mib > 0.0) {
+                LLAMA_LOG_DEBUG("%s: %10s buffer size = %8.2f MiB (deferred, stays on file)\n", __func__, ggml_backend_buffer_name(buf), deferred_mib);
+            }
+            if (size_mib > deferred_mib) {
+                LLAMA_LOG_DEBUG("%s: %10s buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), size_mib - deferred_mib);
+            }
         }
     }
 #endif
