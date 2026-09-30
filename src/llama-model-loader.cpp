@@ -1519,12 +1519,6 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
         return;
     }
 
-    if (model.n_gpu_layers > 0) {
-        LLAMA_LOG_WARN("%s: Prism ternary Hadamard rotations are CPU-only; the requested GPU "
-                       "offload (n_gpu_layers=%d) is not supported for this model and may crash\n",
-                       __func__, model.n_gpu_layers);
-    }
-
     std::vector<int32_t> sign_widths;
     std::vector<int32_t> sign_values;
     ml.get_arr("prism.hadamard.sign_widths", sign_widths, false);
@@ -1555,10 +1549,25 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
     bool gdn_v_grouped = false;
     ml.get_key("prism.hadamard.gdn_v_grouped", gdn_v_grouped, false);
 
-    std::map<int64_t,  ggml_tensor *> sign_tensors;
+    std::set<std::string> rotated_names(weight_names.begin(), weight_names.end());
+    rotated_names.insert(inverse_names.begin(), inverse_names.end());
 
-    const auto make_signs = [&](int64_t width) -> ggml_tensor * {
-        const auto it = sign_tensors.find(width);
+    // Signs are created on the same buffer type (device) as the weight.
+    std::map<std::string, ggml_backend_buffer_type_t> weight_buft;
+    for (const auto & kv : model.tensors_by_name) {
+        if (kv.second == nullptr || kv.second->buffer == nullptr || rotated_names.find(kv.first) == rotated_names.end()) {
+            continue;
+        }
+        ggml_backend_buffer_type_t wb = ggml_backend_buffer_get_type(kv.second->buffer);
+        weight_buft[kv.first] = ggml_backend_buft_is_host(wb) ? llama_default_buffer_type_cpu(true) : wb;
+    }
+
+    // One signs tensor per (width, device).
+    std::map<std::pair<int64_t, ggml_backend_buffer_type_t>, ggml_tensor *> sign_tensors;
+
+    const auto make_signs = [&](int64_t width, ggml_backend_buffer_type_t buft) -> ggml_tensor * {
+        const auto key = std::make_pair(width, buft);
+        const auto it = sign_tensors.find(key);
         if (it != sign_tensors.end()) {
             return it->second;
         }
@@ -1573,7 +1582,7 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
         }
         ggml_tensor * signs = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, width);
         ggml_set_name(signs, ("prism.hadamard.signs." + std::to_string(width)).c_str());
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, ggml_backend_cpu_buffer_type());
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
         if (buf == nullptr) {
             ggml_free(ctx);
             return nullptr;
@@ -1583,7 +1592,7 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
 
         model.ctxs.push_back(ctx);
         model.bufs.push_back(buf);
-        sign_tensors[width] = signs;
+        sign_tensors[key] = signs;
         return signs;
     };
 
@@ -1602,7 +1611,11 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
         }
         t.block_size = block_size;
         if (!signs_by_width.empty()) {
-            t.signs = make_signs(width);
+            ggml_backend_buffer_type_t buft = llama_default_buffer_type_cpu(true);
+            if (const auto wb = weight_buft.find(name); wb != weight_buft.end()) {
+                buft = wb->second;
+            }
+            t.signs = make_signs(width, buft);
             if (t.signs == nullptr) {
                 LLAMA_LOG_WARN("%s: prism.hadamard has no sign vector of width %lld for %s\n",
                         __func__, (long long) width, name.c_str());
