@@ -2921,9 +2921,16 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         for (int l = 0; l < 2; ++l) {
             const block_q3ks_g128 * sb = (const block_q3ks_g128 *)(band + 32 + (2*kbx0 + l)*16*sizeof(block_q3ks_g128)) + ir;
 
-            // byte-wise read: the R16 rows have odd byte offsets (51 B), so the
-            // 2-byte-aligned get_int_b2 would fault (misaligned address)
-            const int ql = get_int_b1(sb->qs, kqsx);
+            // ql = 4 bytes of qs at byte offset 4*kqsx; the SB base can be
+            // misaligned (odd 51 B row offsets), so fetch two ALIGNED words and
+            // splice with __byte_perm instead of four separate byte loads.
+            const uint32_t mis = (uint32_t)((uintptr_t)sb & 3);
+            const uint32_t * al = (const uint32_t *)((uintptr_t)sb & ~(uintptr_t)3);
+            const uint32_t a   = mis + 4*kqsx;                  // qs[4*kqsx] from the aligned base
+            const uint32_t w0  = al[a >> 2];
+            const uint32_t w1  = al[(a >> 2) + 1];
+            const uint32_t sel = 0x3210 + 0x1111*(a & 3);       // picks bytes a&3 .. a&3+3
+            const int ql = (int)__byte_perm(w0, w1, sel);
 
             // our nibble-packed qh -> IQ3_KS-style byte: byte m = group p's high
             // bit of weight (4*kqsx+m); row offsets are odd (51 B), read bytes
