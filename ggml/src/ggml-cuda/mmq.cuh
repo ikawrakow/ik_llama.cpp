@@ -4020,8 +4020,14 @@ static __device__ void mul_mat_q_process_tile(
     if constexpr (has_tail) {
         if (kb0 < kb0_stop) {
             mmq_kt_tail<type>::template load<mmq_y, nwarps, need_check>(x + int64_t(stride01)*it*mmq_y, tile_x, kb0, tile_x_max_i, stride01, (ne00 % qk)/32);
+            // the second vec_dot covers columns qk/2..qk of the tail block; it
+            // only carries data when the tail is longer than half a block
+            // (nt > 4). Otherwise it sums zeros against the next row's padding
+            // and can be skipped entirely.
+            const bool second_half = (ne00 % qk) > qk/2;
 #pragma unroll
             for (int k = 0; k < 2; ++k) {
+                if (k == 1 && !second_half) break;
                 const int * by0 = y + stride11*(kb0*(qk*sizeof(block_q8_1_mmq) / (4*QK8_1*sizeof(int))) + k*sizeof(block_q8_1_mmq)/sizeof(int));
 #pragma unroll
                 for (int l0 = 0; l0 < mmq_x*MMQ_TILE_Y_K; l0 += nwarps*WARP_SIZE) {
