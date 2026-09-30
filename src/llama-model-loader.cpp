@@ -730,10 +730,6 @@ bool llama_model_loader::should_defer_ple_mmaps() const {
     return defer_ple && use_mmap && !ple_tensor_index.empty();
 }
 
-bool llama_model_loader::should_release_copied_pages() const {
-    return defer_ple && !ple_tensor_index.empty() && use_mmap;
-}
-
 void llama_model_loader::apply_ple_mmap_policy() const {
     for (size_t idx = 0; idx < ple_tensor_index.file_ranges.size(); ++idx) {
         for (const auto & range : ple_tensor_index.file_ranges[idx]) {
@@ -1347,10 +1343,6 @@ bool llama_model_loader::load_all_data(
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
-                if (!ggml_backend_buffer_is_host(cur->buffer) && lmlocks == nullptr && should_release_copied_pages()) {
-                    // VRAM owns these now: drop file sources (shared ranges fault back).
-                    mappings.at(weight->idx)->dontneed_fragment(weight->offs, weight->offs + n_size);
-                }
             }
             return n_size;
         }

@@ -201,9 +201,6 @@ struct llama_model_loader {
 
     void apply_ple_mmap_policy() const;
 
-    // Release H2D-copied sources while --defer-ple manages residency (no-op on Windows)
-    bool should_release_copied_pages() const;
-
     // File holds deferred ranges (PLE, engram): skip prefetch and pinning for it.
     bool file_has_deferred_ple(int idx) const;
 
