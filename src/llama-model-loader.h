@@ -205,7 +205,7 @@ struct llama_model_loader {
     // right after the copy (MADV_DONTNEED; no-op on Windows)
     bool should_release_copied_pages() const;
 
-    // true when file idx holds a deferred sparse range (PLE): bulk
+    // true when file idx holds a deferred sparse range (PLE, engram): bulk
     // prefetch and CUDA host pinning skip it, it faults on demand instead
     bool file_has_deferred_ple(int idx) const;
 

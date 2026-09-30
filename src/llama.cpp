@@ -5289,24 +5289,28 @@ static bool llm_load_tensors(
             ml.apply_ple_mmap_policy();
         }
 #if defined(_WIN32)
-        // Without --defer-ple the PLE table must be resident: fault it in
+        // Without --defer-ple sparse tables must be resident: fault them in
         // synchronously (bulk prefetch is best-effort, unlike MAP_POPULATE).
-        if (ml.use_mmap && use_mmap_buffer && !defer_ple_mmap &&
-                model.tok_embd_per_layer && model.tok_embd_per_layer->data &&
-                model.tok_embd_per_layer->buffer &&
-                ggml_backend_buffer_is_host(model.tok_embd_per_layer->buffer)) {
-            const size_t n = ggml_nbytes(model.tok_embd_per_layer);
-            volatile const char * p = (volatile const char *) model.tok_embd_per_layer->data;
-            volatile size_t acc = 0;
-            for (size_t i = 0; i < n; i += 4096) {
-                acc += p[i];
+        auto touch_host = [](struct ggml_tensor * t) {
+            if (t && t->data && t->buffer && ggml_backend_buffer_is_host(t->buffer)) {
+                volatile const char * p = (volatile const char *) t->data;
+                volatile size_t acc = 0;
+                for (size_t i = 0, n = ggml_nbytes(t); i < n; i += 4096) {
+                    acc += p[i];
+                }
+                (void) acc;
             }
-            (void) acc;
+        };
+        if (ml.use_mmap && use_mmap_buffer && !defer_ple_mmap) {
+            touch_host(model.tok_embd_per_layer);
+            for (auto & layer : model.layers) {
+                touch_host(layer.engram_embd);
+            }
         }
 #endif
 #if defined(_WIN32)
         // Bulk prefetch was skipped above: warm the host-aliased ranges so CPU
-        // layers and resident PLE don't fault on first use. Deferred PLE stays cold.
+        // layers and resident tables don't fault on first use. Deferred ones stay cold.
         if (ml.use_mmap && !use_mlock && win_skip_bulk_prefetch) {
             struct host_range { uint32_t idx; size_t first; size_t last; };
             std::vector<host_range> host_ranges;
