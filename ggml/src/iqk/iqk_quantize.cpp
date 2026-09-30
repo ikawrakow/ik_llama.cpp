@@ -10459,6 +10459,7 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
             quantizer2.find_best_match(scales[ib], xaux, weight, best_idx);
             auto [d, score] = quantizer2.find_best_scale(xaux, weight, best_idx);
             if (score > best) {
+                best = score;
                 scales[ib] = d;
                 y[ibl].qs[ib] = 1;
             }
