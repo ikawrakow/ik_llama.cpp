@@ -754,6 +754,38 @@ static __global__ void dequantize_block_iq2_bn(const void * __restrict__ vx, dst
     }
 }
 
+template<typename dst_t>
+static __global__ void dequantize_block_pq2_0(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nblock) {
+
+    int64_t ib = 2*blockIdx.x + threadIdx.x/16;
+    if (ib >= nblock) {
+        return;
+    }
+    int tid = threadIdx.x % 16;
+
+    dst_t * y = yy + 128*ib + 8*tid;
+
+    auto x = (const block_pq2_0 *)vx;
+    float d = (float )x[ib].d;
+    float m = -d;
+    auto qs = x[ib].qs + 2*tid;
+    if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
+        for (int j = 0; j < 2; ++j) {
+            y[4*j+0] = __float2bfloat16(d * ((qs[j] >> 0) & 3) + m);
+            y[4*j+1] = __float2bfloat16(d * ((qs[j] >> 2) & 3) + m);
+            y[4*j+2] = __float2bfloat16(d * ((qs[j] >> 4) & 3) + m);
+            y[4*j+3] = __float2bfloat16(d * ((qs[j] >> 6) & 3) + m);
+        }
+    } else {
+        for (int j = 0; j < 2; ++j) {
+            y[4*j+0] = (dst_t)(d * ((qs[j] >> 0) & 3) + m);
+            y[4*j+1] = (dst_t)(d * ((qs[j] >> 2) & 3) + m);
+            y[4*j+2] = (dst_t)(d * ((qs[j] >> 4) & 3) + m);
+            y[4*j+3] = (dst_t)(d * ((qs[j] >> 6) & 3) + m);
+        }
+    }
+}
+
 
 template<typename dst_t>
 static __global__ void dequantize_block_iq4_nl(const void * __restrict__ vx, dst_t * __restrict__ yy) {
@@ -1698,6 +1730,14 @@ static void dequantize_row_iq2_bn_cuda(const void * vx, dst_t * y, const int64_t
 }
 
 template<typename dst_t>
+static void dequantize_row_pq2_0_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
+    const int nb = (k + 255) / 256;
+    const int64_t nblock = k / 128;
+    dequantize_block_pq2_0<<<nb, 32, 0, stream>>>(vx, y, nblock);
+}
+
+template<typename dst_t>
 static void dequantize_row_iq4_xs_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
     const int64_t k = nrows * n_per_row;
     const int nb = (k + QK_K - 1) / QK_K;
@@ -1944,6 +1984,8 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
             return dequantize_row_iq1_s_r4_cuda<nv_bfloat16>;
         case GGML_TYPE_IQ1_M_R4:
             return dequantize_row_iq1_m_r4_cuda<nv_bfloat16>;
+        case GGML_TYPE_PQ2_0:
+            return dequantize_row_pq2_0_cuda<nv_bfloat16>;
         default:
             return nullptr;
     }
@@ -2004,6 +2046,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq1_bn_cuda;
         case GGML_TYPE_IQ2_BN:
             return dequantize_row_iq2_bn_cuda;
+        case GGML_TYPE_PQ2_0:
+            return dequantize_row_pq2_0_cuda;
         case GGML_TYPE_IQ4_NL:
             return dequantize_row_iq4_nl_cuda;
         case GGML_TYPE_MXFP4:
@@ -2107,6 +2151,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq1_bn_cuda;
         case GGML_TYPE_IQ2_BN:
             return dequantize_row_iq2_bn_cuda;
+        case GGML_TYPE_PQ2_0:
+            return dequantize_row_pq2_0_cuda;
         case GGML_TYPE_IQ4_NL:
             return dequantize_row_iq4_nl_cuda;
         case GGML_TYPE_MXFP4:

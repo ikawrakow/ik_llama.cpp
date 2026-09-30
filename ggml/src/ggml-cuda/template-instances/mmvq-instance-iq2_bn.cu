@@ -41,7 +41,50 @@ __device__ __forceinline__ void vec_dot_iq2_bn_q8_1(
 #endif
 }
 
+__device__ __forceinline__ void vec_dot_pq2_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
+
+    auto bq2 = (const block_pq2_0 *)vbq + kbx;
+
+    // iqs is 0...3
+    int sumi1 = 0, sumi2 = 0, sumi3 = 0, sumi4 = 0;
+    auto q8a = (const int *)bq8_1[0].qs + 2*iqs;
+    auto q8b = (const int *)bq8_1[1].qs + 2*iqs;
+    auto q8c = (const int *)bq8_1[1].qs + 2*iqs;
+    auto q8d = (const int *)bq8_1[1].qs + 2*iqs;
+    auto d8a = __half22float2(bq8_1[0].ds);
+    auto d8b = __half22float2(bq8_1[1].ds);
+    auto d8c = __half22float2(bq8_1[2].ds);
+    auto d8d = __half22float2(bq8_1[3].ds);
+#if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
+    int qs[2];
+    memcpy(qs, bq2->qs + 8*iqs, 2*sizeof(int));
+    for (int j = 0; j < 2; ++j) {
+        int vl = qs[j];
+        int vh = qs[j] >> 4;
+        sumi1 = ggml_cuda_dp4a(vl & 0x03030303, q8a[j], sumi1);
+        sumi2 = ggml_cuda_dp4a(vl & 0x0c0c0c0c, q8b[j], sumi2);
+        sumi3 = ggml_cuda_dp4a(vh & 0x03030303, q8c[j], sumi3);
+        sumi4 = ggml_cuda_dp4a(vh & 0x0c0c0c0c, q8d[j], sumi4);
+    }
+    *result += (float)bq2->d * (d8a.x * sumi1 - 0.5f * d8a.y + 0.25f * d8b.x * sumi2 - 0.5f * d8b.y + d8c.x * sumi3 - 0.5f * d8c.y + 0.25f * d8d.x * sumi4 - 0.5f * d8d.y);
+#else
+    auto qs  = bq2->qs + 8*iqs;
+    for (int j = 0; j < 8; ++j) {
+        sumi1 += q8a[j] * (qs[j] & 0x03);
+        sumi2 += q8b[j] * (qs[j] & 0x0c);
+        sumi3 += q8c[j] * (qs[j] & 0x30);
+        sumi4 += q8d[j] * (qs[j] & 0xc0);
+    }
+    *result += (float)bq2->d * (d8a.x*sumi1 + 0.25f*d8b.x*sumi2 + 0.0625f*d8c.x*sumi3 + 0.03125f*d8d.x*sumi4 - 0.5f*d8a.y - 0.5f*d8b.y - 0.5f*d8c.y - 0.5f*d8d.y);
+#endif
+}
+
 void mul_mat_vec_iq2_bn_q8_1_cuda(const mmvq_args & args, cudaStream_t stream) {
     iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ2_BN, 1, vec_dot_iq2_bn_q8_1>(args, stream);
+}
+
+void mul_mat_vec_pq2_0_q8_1_cuda(const mmvq_args & args, cudaStream_t stream) {
+    iqk_mul_mat_vec_q_cuda<GGML_TYPE_PQ2_0, 1, vec_dot_pq2_0_q8_1>(args, stream);
 }
 

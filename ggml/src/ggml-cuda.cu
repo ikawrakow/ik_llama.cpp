@@ -4942,6 +4942,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_IQ6_K:
                     case GGML_TYPE_IQ1_BN:
                     case GGML_TYPE_IQ2_BN:
+                    case GGML_TYPE_PQ2_0:
                     case GGML_TYPE_IQ2_K_R4:
                     case GGML_TYPE_IQ3_K_R4:
                     case GGML_TYPE_IQ4_K_R4:
@@ -5049,7 +5050,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_ARGMAX:
             return true;
         case GGML_OP_HADAMARD: {
-            if (!(op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256 || op->op_params[0] == 512)) return false;
+            if (!(op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256 || op->op_params[0] == 512 || op->op_params[0] == 1024)) return false;
             if (op->ne[0] % op->op_params[0] != 0) return false;
             if (op->type != GGML_TYPE_F32) return false;
             switch (op->src[0]->type) {
