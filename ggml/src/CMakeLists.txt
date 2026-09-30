@@ -1266,6 +1266,7 @@ if (GGML_CUDA)
     endif()
 
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>")
+    set_source_files_properties(ggml-cuda/kt-encoder.cu PROPERTIES COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:-ftz=false>")
 endif()
 
 if (MINGW)
