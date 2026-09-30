@@ -1164,6 +1164,52 @@ static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4) {
     return get_int_from_table_16(q4, kvalues_iq4nl);
 }
 
+#ifdef INT8_MMA_AVAILABLE
+// get_int_from_table_16 with each value v replaced by q = round((v + 1152 + bias)*r): a table byte (biased by 128) under a
+// 0x64 high byte is the half 1152 + v, and 1280 + q is in [1024, 2048), where the half ulp is 1 and the low byte is q.
+static __device__ __forceinline__ int2 get_int_from_table_16_q8(const int & q4, const int8_t * values,
+        const uint32_t & bias_x, const half2 & r_x, const uint32_t & bias_y, const half2 & r_y) {
+    const uint32_t * values32 = (const uint32_t *)values;
+    const uint32_t t0 = values32[0] ^ 0x80808080;
+    const uint32_t t1 = values32[1] ^ 0x80808080;
+    const uint32_t t2 = values32[2] ^ 0x80808080;
+    const uint32_t t3 = values32[3] ^ 0x80808080;
+    const half2 magic = __float2half2_rn(1280.0f);
+
+    const uint32_t mask = 0x32103210 | ((q4 & 0x88888888) >> 1);
+    // bytes of v3: low nibble 0, high nibble 0, low nibble 1, high nibble 1
+    const uint32_t v3 = __byte_perm(__byte_perm(t0, t1, q4),       __byte_perm(t2, t3, q4),       mask);
+    const uint32_t v4 = __byte_perm(__byte_perm(t0, t1, q4 >> 16), __byte_perm(t2, t3, q4 >> 16), mask >> 16);
+
+    uint32_t x01 = __byte_perm(v3, 0x64646464, 0x4240);
+    uint32_t y01 = __byte_perm(v3, 0x64646464, 0x4341);
+    uint32_t x23 = __byte_perm(v4, 0x64646464, 0x4240);
+    uint32_t y23 = __byte_perm(v4, 0x64646464, 0x4341);
+
+    *(half2 *)&x01 = __hfma2(__hadd2(*(half2 *)&x01, *(const half2 *)&bias_x), r_x, magic);
+    *(half2 *)&x23 = __hfma2(__hadd2(*(half2 *)&x23, *(const half2 *)&bias_x), r_x, magic);
+    *(half2 *)&y01 = __hfma2(__hadd2(*(half2 *)&y01, *(const half2 *)&bias_y), r_y, magic);
+    *(half2 *)&y23 = __hfma2(__hadd2(*(half2 *)&y23, *(const half2 *)&bias_y), r_y, magic);
+
+    return make_int2(__byte_perm(x01, x23, 0x6420), __byte_perm(y01, y23, 0x6420));
+}
+
+// round(v*r) for 4 int8 values the same way, r equal in both halves, results must fit int8
+static __device__ __forceinline__ int requant_int_q8(const int & v, const half2 & r) {
+    const uint32_t u = v ^ 0x80808080;
+    const uint32_t bias = 0xe480e480; // -1152
+    const half2 magic = __float2half2_rn(1280.0f);
+
+    uint32_t x02 = __byte_perm(u, 0x64646464, 0x4240);
+    uint32_t x13 = __byte_perm(u, 0x64646464, 0x4341);
+
+    *(half2 *)&x02 = __hfma2(__hadd2(*(half2 *)&x02, *(const half2 *)&bias), r, magic);
+    *(half2 *)&x13 = __hfma2(__hadd2(*(half2 *)&x13, *(const half2 *)&bias), r, magic);
+
+    return __byte_perm(x02, x13, 0x6240);
+}
+#endif // INT8_MMA_AVAILABLE
+
 #define VDR_IQ4_NL_Q8_1_MMVQ 2
 #define VDR_IQ4_NL_Q8_1_MMQ  4
 
