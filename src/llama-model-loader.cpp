@@ -768,6 +768,21 @@ bool llama_model_loader::ple_range_overlaps(int idx, size_t first, size_t last) 
     return false;
 }
 
+size_t llama_model_loader::ple_deferred_bytes_in(int idx, size_t first, size_t last) const {
+    if (idx < 0 || (size_t) idx >= ple_tensor_index.file_ranges.size() || first >= last) {
+        return 0;
+    }
+    size_t bytes = 0;
+    for (const auto & range : ple_tensor_index.file_ranges[(size_t) idx]) {
+        const size_t lo = std::max(first, range.first);
+        const size_t hi = std::min(last, range.last);
+        if (hi > lo) {
+            bytes += hi - lo;
+        }
+    }
+    return bytes;
+}
+
 template<typename T>
 typename std::enable_if<std::is_integral<T>::value, bool>::type
 llama_model_loader::get_arr_n(const std::string & key, T & result, const bool required) {

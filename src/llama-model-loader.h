@@ -211,6 +211,9 @@ struct llama_model_loader {
 
     bool ple_range_overlaps(int idx, size_t first, size_t last) const;
 
+    // deferred bytes of the index inside [first, last) of file idx
+    size_t ple_deferred_bytes_in(int idx, size_t first, size_t last) const;
+
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 
     // for backwards compatibility, does not support ggml-backend

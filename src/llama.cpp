@@ -5211,9 +5211,9 @@ static bool llm_load_tensors(
     // print memory requirements
     // File-backed aliases reserve address space but commit no RAM until faulted.
     // Release totalizes resident CPU aliases; debug lists every buffer per context.
-    auto buf_is_deferred_ple = [&](ggml_backend_buffer_t buf) -> bool {
+    auto buf_deferred_mib = [&](ggml_backend_buffer_t buf) -> double {
         if (!ggml_backend_buffer_is_host(buf)) {
-            return false;
+            return 0.0;
         }
         const auto * base = (const uint8_t *) ggml_backend_buffer_get_base(buf);
         const size_t size = ggml_backend_buffer_get_size(buf);
@@ -5221,24 +5221,23 @@ static bool llm_load_tensors(
             const auto & mapping = ml.mappings[mi];
             const auto * begin = (const uint8_t *) mapping->addr();
             if (size > 0 && base >= begin && base + size <= begin + mapping->size()) {
-                // Only the PLE range is deferred; dense file-backed aliases
-                // are resident like any other mmap'd weights.
-                return defer_ple_mmap && ml.ple_range_overlaps((int) mi, base - begin, base - begin + size);
+                // Only genuinely deferred ranges count; dense neighbours share the span.
+                return defer_ple_mmap ? ml.ple_deferred_bytes_in((int) mi, base - begin, base - begin + size) / 1024.0 / 1024.0 : 0.0;
             }
         }
-        return false;
+        return 0.0;
     };
     double cpu_resident_total = 0.0;
     int cpu_resident_n = 0;
     for (ggml_backend_buffer_t buf : model.bufs) {
-        const bool deferred = buf_is_deferred_ple(buf);
-        if (ggml_backend_buffer_is_host(buf) && !deferred) {
+        const double deferred_mib = buf_deferred_mib(buf);
+        if (ggml_backend_buffer_is_host(buf) && deferred_mib == 0.0) {
             cpu_resident_total += ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0;
             cpu_resident_n += 1;
             continue;
         }
-        const char * residency = deferred ? " (file-backed, not committed to RAM)" : "";
-        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB%s\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, residency);
+        const std::string residency = deferred_mib > 0.0 ? format(" (file-backed; %.2f MiB of it deferred, the rest faults in on first use)", deferred_mib) : "";
+        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB%s\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, residency.c_str());
     }
     if (cpu_resident_n > 0) {
         LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB (total of %d resident buffers)\n", __func__, "CPU", cpu_resident_total, cpu_resident_n);
@@ -5249,7 +5248,7 @@ static bool llm_load_tensors(
         bool group_open = false;
         for (auto & kv : it.second) {
             ggml_backend_buffer_t buf = kv.second;
-            if (!ggml_backend_buffer_is_host(buf) || buf_is_deferred_ple(buf)) {
+            if (!ggml_backend_buffer_is_host(buf) || buf_deferred_mib(buf) > 0.0) {
                 continue;
             }
             if (!group_open) {
