@@ -641,7 +641,8 @@ static __device__ float make_qkx3_quants_device(int n, int nmax, const float * x
         float gmax = 0;
         int best_j = -1, dir = 0;
         for (int j = 0; j < n; ++j) {
-            float g = __double2float_rn(__dsub_rn(__dsub_rn((double)x[j], __dmul_rn((double)scale, (double)L[j])), (double)min));
+            // NOTE float (not double): CPU computes g in float32.
+            const float g = __fsub_rn(__fsub_rn(x[j], __fmul_rn(scale, (float)L[j])), min);
             if (g > 0 && L[j] < nmax && g > gmax) {
                 gmax = g; best_j = j; dir = 1;
             }

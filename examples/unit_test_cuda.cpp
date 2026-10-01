@@ -88,6 +88,11 @@ struct quant_spec {
     bool         nan_d_equal; // treat fp16 NaN scale (d) as equal even if sign/payload differs
 };
 
+// The local refs below replay ggml-quants.c bit-for-bit. The CPU side carries
+// #pragma STDC FP_CONTRACT OFF, so forbid contraction here too (clang would
+// otherwise fuse e.g. sum_xl += w*l*x and drift ~1 ulp on degenerate blocks).
+#pragma STDC FP_CONTRACT OFF
+
 // Local copy of quantize_row_q8_0_ref (ggml/src/ggml-quants.c). The fp16
 // conversion uses __float2half_rn (nearest-even), what GGML_FP32_TO_FP16 maps
 // to and what the CUDA kernel stores via __half_as_ushort. HEAD CPU stores
@@ -1410,6 +1415,8 @@ static int print_devices(void) {
 // main
 // ---------------------------------------------------------------------------
 
+#pragma STDC FP_CONTRACT ON // local refs above replay CPU bit-for-bit; re-enable contraction for the harness below
+
 int main(int argc, char ** argv) {
     int device = -1; // default: first enumerated device
     bool all_devices = false;
@@ -1498,7 +1505,7 @@ int main(int argc, char ** argv) {
         { "q8_0-imatrix", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), cuda_wraps::q8_0, ref_quantize_q8_0,
                 true, cuda_wraps::q8_0_imatrix, ref_quantize_q8_0_imatrix_plain, false },
         { "q6_0", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_wraps::q6_0, ref_quantize_q6_0,
-                false, nullptr, nullptr },
+                false, nullptr, nullptr, true }, // OLS can yield NaN scale on degenerate blocks (payload is vendor-defined)
         { "q6_0-imatrix", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_wraps::q6_0, ref_quantize_q6_0,
                 true, cuda_wraps::q6_0_imatrix, ref_quantize_q6_0_imatrix, true },
         // --- Removable Q5_0 specs ---
