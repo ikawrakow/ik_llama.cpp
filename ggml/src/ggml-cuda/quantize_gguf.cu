@@ -280,8 +280,8 @@ static __global__ void quantize_q5_1_kernel(
 
         block_q5_1 * y = (block_q5_1 *)vy;
         if (lane == 0) {
-            y[ib].d = __float2half_rn(d);
-            y[ib].m = __float2half_rn(bmin);
+            // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
+            y[ib].dm = __floats2half2_rn(d, bmin);
         }
 
         // byte j (0..15): low nibble = element j, high nibble = element j+16.
@@ -334,8 +334,8 @@ static __global__ void quantize_q4_1_kernel(
 
         block_q4_1 * y = (block_q4_1 *)vy;
         if (lane == 0) {
-            y[ib].d = __float2half_rn(d);
-            y[ib].m = __float2half_rn(bmin);
+            // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
+            y[ib].dm = __floats2half2_rn(d, bmin);
         }
 
         // byte j (0..15): low nibble = element j, high nibble = element j+16.
@@ -741,8 +741,8 @@ static __global__ void quantize_q4_1_imatrix_kernel(
     const float d = make_qkx3_quants_device(QK4_1, 15, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
 
     block_q4_1 * y = (block_q4_1 *)vy;
-    y[ib].d = __float2half_rn(d);
-    y[ib].m = __float2half_rn(-the_min);
+    // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
+    y[ib].dm = __floats2half2_rn(d, -the_min);
     for (int j = 0; j < QK4_1/2; ++j) {
         y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_1/2] << 4));
     }
@@ -1134,8 +1134,8 @@ static __global__ void quantize_q5_1_imatrix_kernel(
     const float d = make_qkx3_quants_device(QK5_1, 31, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
 
     block_q5_1 * y = (block_q5_1 *)vy;
-    y[ib].d = __float2half_rn(d);
-    y[ib].m = __float2half_rn(-the_min);
+    // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
+    y[ib].dm = __floats2half2_rn(d, -the_min);
 
     uint32_t qh = 0;
     for (int j = 0; j < QK5_1/2; ++j) {
