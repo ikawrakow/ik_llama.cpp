@@ -1,6 +1,7 @@
 //
 // unit_test_cuda.cpp - byte-for-byte CUDA block-quant verification.
-// Order after Joel's KT: Q8_0, Q6_0, Q5_0, Q4_0 (+imatrix where CPU uses it).
+// Order after Joel's KT: Q8_0, Q6_0, Q5_0, Q4_0, Q5_1, Q4_1, IQ4_NL, IQ4_XS
+// (+imatrix where CPU uses it).
 // Dispatched in production through Joel's single ggml_cuda_quantize() entry
 // (kt-encoder.cu lead); this harness also exercises the per-type helpers
 // directly (ggml/src/ggml-cuda/quantize_gguf.cu).
@@ -349,6 +350,35 @@ static void ref_quantize_q4_0_imatrix(void * dst, const float * src, int64_t nro
     }
 }
 
+// Local copy of quantize_row_q4_1_ref (ggml-quants.c:718). No fudge, MIN(15)
+// clamp. Q4_1 ignores symmetric_q4_0 on the CPU.
+static void ref_quantize_q4_1(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    const int64_t nb = (nrows*n_per_row)/QK4_1;
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        const float * xb = src + ib*QK4_1;
+        block_q4_1 *  yb = (block_q4_1 *)dst + ib;
+
+        float mn = FLT_MAX;
+        float mx = -FLT_MAX;
+        for (int j = 0; j < QK4_1; ++j) {
+            if (xb[j] < mn) mn = xb[j];
+            if (xb[j] > mx) mx = xb[j];
+        }
+
+        const float d  = (mx - mn)/15.0f;
+        const float id = d ? 1.0f/d : 0.0f;
+
+        yb->d = (ggml_half)__half_as_ushort(__float2half_rn(d));
+        yb->m = (ggml_half)__half_as_ushort(__float2half_rn(mn));
+
+        for (int j = 0; j < QK4_1/2; ++j) {
+            const uint8_t xi0 = (uint8_t)std::min(15, (int)(int8_t)((xb[j] - mn)*id + 0.5f));
+            const uint8_t xi1 = (uint8_t)std::min(15, (int)(int8_t)((xb[j + QK4_1/2] - mn)*id + 0.5f));
+            yb->qs[j] = (uint8_t)(xi0 | (xi1 << 4));
+        }
+    }
+}
+
 // Local copy of quantize_row_q5_0_ref (ggml/src/ggml-quants.c:757). The 5-th
 // bit of every quant goes into the 4-byte LE qh bitmap, which the ref memcpys
 // from a native uint32.
@@ -660,6 +690,35 @@ static void ref_quantize_q5_1_imatrix(void * dst, const float * src, int64_t nro
                 qh |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + QK5_1/2);
             }
             memcpy(y[ib].qh, &qh, sizeof(qh));
+        }
+    }
+}
+
+// Local copy of quantize_row_q4_1_impl: make_qkx3 (nmax=15), no fudge.
+static void ref_quantize_q4_1_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    for (int64_t irow = 0; irow < nrows; ++irow) {
+        const float * x = src + irow*n_per_row;
+        block_q4_1 * y = (block_q4_1 *)dst + irow*(n_per_row/QK4_1);
+
+        float sum_x2 = 0;
+        for (int64_t j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
+        float sigma2 = sum_x2/n_per_row;
+
+        float weight[QK4_1];
+        uint8_t L[QK4_1], Laux[QK4_1];
+        const int64_t nb = n_per_row/QK4_1;
+        for (int64_t ib = 0; ib < nb; ++ib) {
+            const float * xb = x + QK4_1*ib;
+            const float * qw = imatrix + QK4_1*ib;
+            for (int j = 0; j < QK4_1; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+            float the_min;
+            float d = ref_make_qkx3_quants(QK4_1, 15, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
+            y[ib].d = (ggml_half)__half_as_ushort(__float2half_rn(d));
+            y[ib].m = (ggml_half)__half_as_ushort(__float2half_rn(-the_min));
+            for (int j = 0; j < QK4_1/2; ++j) {
+                y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_1/2] << 4));
+            }
         }
     }
 }
@@ -1148,6 +1207,12 @@ int main(int argc, char ** argv) {
         static size_t q5_1_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
             return ggml_cuda_quantize(0, GGML_TYPE_Q5_1, s, d, r, n, 1, im);
         }
+        static size_t q4_1(const float * s, void * d, int64_t r, int64_t n) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q4_1, s, d, r, n, 1, nullptr);
+        }
+        static size_t q4_1_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q4_1, s, d, r, n, 1, im);
+        }
     };
 
     const quant_spec specs[] = {
@@ -1173,6 +1238,10 @@ int main(int argc, char ** argv) {
                 false, nullptr, nullptr },
         { "q5_1-imatrix", GGML_TYPE_Q5_1, QK5_1, sizeof(block_q5_1), cuda_wraps::q5_1, ref_quantize_q5_1,
                 true, cuda_wraps::q5_1_imatrix, ref_quantize_q5_1_imatrix, true },
+        { "q4_1", GGML_TYPE_Q4_1, QK4_1, sizeof(block_q4_1), cuda_wraps::q4_1, ref_quantize_q4_1,
+                false, nullptr, nullptr },
+        { "q4_1-imatrix", GGML_TYPE_Q4_1, QK4_1, sizeof(block_q4_1), cuda_wraps::q4_1, ref_quantize_q4_1,
+                true, cuda_wraps::q4_1_imatrix, ref_quantize_q4_1_imatrix, true },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);
 

@@ -303,6 +303,51 @@ static __global__ void quantize_q5_1_kernel(
 }
 
 // ---------------------------------------------------------------------------
+// Q4_1: quantize_row_q4_1_ref (ggml-quants.c:718). No fudge. MIN(15) clamp.
+// Q4_1 ignores symmetric_q4_0 on the CPU, so no symmetric guard is needed.
+// ---------------------------------------------------------------------------
+
+static __global__ void quantize_q4_1_kernel(
+        const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
+    (void) fudge; // no fudge for Q4_1 (matches CPU ref)
+    const int32_t lane = threadIdx.x; // 0 .. 31 == QK4_1
+
+    for (int64_t ib = blockIdx.x; ib < nblocks; ib += gridDim.x) {
+        const float xi = x[ib*QK4_1 + lane];
+
+        // min/max reductions (values only; order-independent).
+        float bmin = xi;
+        float bmax = xi;
+#pragma unroll
+        for (int m = 16; m > 0; m >>= 1) {
+            bmin = fminf(bmin, __shfl_xor_sync(0xffffffffu, bmin, m));
+            bmax = fmaxf(bmax, __shfl_xor_sync(0xffffffffu, bmax, m));
+        }
+
+        const float d  = __fdiv_rn(bmax - bmin, 15.0f);
+        const float id = d ? __fdiv_rn(1.0f, d) : 0.0f;
+
+        // MIN(15, (int8_t)((x-min)*id + 0.5f)) truncation toward zero.
+        const float t = __fmul_rn(__fsub_rn(xi, bmin), id);
+        const int32_t v = (int32_t)(t + 0.5f);
+        const uint32_t q = (uint32_t)(v > 15 ? 15 : v);
+
+        block_q4_1 * y = (block_q4_1 *)vy;
+        if (lane == 0) {
+            y[ib].d = __float2half_rn(d);
+            y[ib].m = __float2half_rn(bmin);
+        }
+
+        // byte j (0..15): low nibble = element j, high nibble = element j+16.
+        const uint32_t my   = q & 0xF;
+        const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
+        if (lane < 16) {
+            y[ib].qs[lane] = (uint8_t)(my | (pair << 4));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Q6_0 OLS: quantize_q6_0 (ggml-quants.c:3668) via quantize_row_q6_0_impl.
 // OLS is KEPT. The kernel lives below with the make_qx_quants device port
 // (one thread per block, weight = x*x, FP16(d*fudge)). The old plain
@@ -672,6 +717,37 @@ static __global__ void quantize_q4_0_imatrix_kernel(
     }
 }
 
+// Q4_1 imatrix kernel: quantize_row_q4_1_impl via make_qkx3_quants (nmax=15).
+// No fudge. Stores d and -the_min like the CPU (y.m = FP16(-min)).
+static __global__ void quantize_q4_1_imatrix_kernel(
+        const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
+        void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row) {
+    const int64_t ib = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (ib >= nblocks) {
+        return;
+    }
+    const int64_t gb = base + ib;
+    const float * xb = x + ib*QK4_1;
+    const float * qb = qw + (int32_t)(gb % blocks_per_row)*QK4_1;
+    const float s2   = sigma2[gb / blocks_per_row];
+
+    float weight[QK4_1];
+    uint8_t L[QK4_1], Laux[QK4_1];
+    for (int j = 0; j < QK4_1; ++j) {
+        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
+    }
+
+    float the_min;
+    const float d = make_qkx3_quants_device(QK4_1, 15, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
+
+    block_q4_1 * y = (block_q4_1 *)vy;
+    y[ib].d = __float2half_rn(d);
+    y[ib].m = __float2half_rn(-the_min);
+    for (int j = 0; j < QK4_1/2; ++j) {
+        y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_1/2] << 4));
+    }
+}
+
 // Q5_0 imatrix kernel: identical shape to quantize_q4_0_imatrix_kernel, but
 // quantizes 32-value blocks with nmax == 16 and additionally packs each L's
 // 5th bit into the qh bitmap like quantize_row_q5_0_impl (ggml-quants.c:3577).
@@ -996,6 +1072,12 @@ size_t ggml_cuda_quantize_q4_0(const float * src, void * dst, int64_t nrows, int
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q4_0);
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
             QK4_0, sizeof(block_q4_0), quantize_q4_0_kernel, "q4_0", fudge);
+}
+
+// Q4_1 without imatrix (quantize_row_q4_1_ref). No fudge; ignores symmetric.
+size_t ggml_cuda_quantize_q4_1(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
+    return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
+            QK4_1, sizeof(block_q4_1), quantize_q4_1_kernel, "q4_1", 1.0f);
 }
 
 // Q4_0 with an importance matrix. `imatrix` holds n_per_row weights and is
@@ -1499,6 +1581,121 @@ size_t ggml_cuda_quantize_q5_1_imatrix(const float * src, void * dst, int64_t nr
     }
 
     return nblocks_total*sizeof(block_q5_1);
+}
+
+// Q4_1 with an importance matrix (quantize_row_q4_1_impl via make_qkx3).
+// Same chunked driver shape as Q5_1 imatrix. No fudge.
+size_t ggml_cuda_quantize_q4_1_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    GGML_ASSERT(nrows > 0);
+    GGML_ASSERT(n_per_row % QK4_1 == 0);
+
+    const int64_t nblocks_total = nrows*(n_per_row/QK4_1);
+    const int32_t blocks_per_row = (int32_t)(n_per_row/QK4_1);
+
+    int n_devices = 0;
+    if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
+        return 0;
+    }
+    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
+        return 0;
+    }
+
+    std::vector<float> sigma2(nrows);
+    for (int64_t irow = 0; irow < nrows; ++irow) {
+        const float * xr = src + irow*n_per_row;
+        float sum_x2 = 0.0f;
+        for (int64_t j = 0; j < n_per_row; ++j) {
+            sum_x2 += xr[j]*xr[j];
+        }
+        sigma2[irow] = sum_x2/n_per_row;
+    }
+
+    const int64_t chunk_blocks = 1 << 20;
+    const int64_t chunk_x      = chunk_blocks*QK4_1;
+    const int64_t chunk_y      = chunk_blocks*sizeof(block_q4_1);
+
+    float   * x_dev = nullptr;
+    float   * q_dev = nullptr;
+    float   * s_dev = nullptr;
+    uint8_t * y_dev = nullptr;
+
+    cudaError_t err = cudaMalloc(&x_dev, chunk_x*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q4_1_imatrix: cudaMalloc(x_dev): %s\n", __func__, cudaGetErrorString(err));
+        return 0;
+    }
+    err = cudaMalloc(&q_dev, n_per_row*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q4_1_imatrix: cudaMalloc(q_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        return 0;
+    }
+    err = cudaMalloc(&s_dev, nrows*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q4_1_imatrix: cudaMalloc(s_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        return 0;
+    }
+    err = cudaMalloc(&y_dev, chunk_y);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q4_1_imatrix: cudaMalloc(y_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        return 0;
+    }
+
+    err = cudaMemcpy(q_dev, imatrix, n_per_row*sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q4_1_imatrix: cudaMemcpy imatrix H2D: %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        cudaFree(y_dev);
+        return 0;
+    }
+    err = cudaMemcpy(s_dev, sigma2.data(), nrows*sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q4_1_imatrix: cudaMemcpy sigma2 H2D: %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        cudaFree(y_dev);
+        return 0;
+    }
+
+    const unsigned int block_size = 256;
+    for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
+        const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
+
+        err = cudaMemcpy(x_dev, src + base*QK4_1, nblocks*QK4_1*sizeof(float), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: q4_1_imatrix: cudaMemcpy H2D: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+
+        quantize_q4_1_imatrix_kernel<<<(unsigned)((nblocks + block_size - 1)/block_size), block_size>>>(
+                x_dev, q_dev, s_dev, y_dev, base, nblocks, blocks_per_row);
+
+        err = cudaMemcpy((char *)dst + base*sizeof(block_q4_1), y_dev, nblocks*sizeof(block_q4_1), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: q4_1_imatrix: cudaMemcpy D2H: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+    }
+
+    cudaFree(x_dev);
+    cudaFree(q_dev);
+    cudaFree(s_dev);
+    cudaFree(y_dev);
+
+    if (err != cudaSuccess) {
+        return 0;
+    }
+
+    return nblocks_total*sizeof(block_q4_1);
 }
 
 // Q6_0 OLS without imatrix (quantize_row_q6_0_impl, quant_weights == NULL).

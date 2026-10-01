@@ -66,3 +66,7 @@ size_t ggml_cuda_quantize_q4_0_imatrix(const float * src, void * dst, int64_t nr
 size_t ggml_cuda_quantize_q5_1(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
 size_t ggml_cuda_quantize_q5_1_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix);
+// Q4_1 (plain min/max ref, no fudge; imatrix via make_qkx3, no fudge)
+size_t ggml_cuda_quantize_q4_1(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
+size_t ggml_cuda_quantize_q4_1_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix);
