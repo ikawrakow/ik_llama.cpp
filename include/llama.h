@@ -526,6 +526,11 @@ extern "C" {
         void *              offload_policy;
         void *              cuda_params;
         int32_t             dflash_query_capacity; // internal DFlash query capacity override
+
+        // optional CPU affinity for the CPU worker threads (Linux only); thread t is
+        // pinned to cpu_affinity[t % n_cpu_affinity], NULL = no pinning
+        const int32_t * cpu_affinity;
+        int32_t         n_cpu_affinity;
     };
 
     // model quantization parameters
@@ -556,6 +561,7 @@ extern "C" {
         bool dry_run;                        //
         bool partial_requant;                // quantize only missing split files in the split quantized .gguf destination directory
         size_t slab_size;                    // tensors larger than this many bytes of f32 are processed in slabs of up to this size (at least one slice or row group), 0 = never
+        bool cuda_quantize;                  // quantize IQ4_KT and IQ3_KT on the first CUDA device
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules
@@ -1122,6 +1128,10 @@ extern "C" {
     // n_threads is the number of threads used for generation (single token)
     // n_threads_batch is the number of threads used for prompt and batch processing (multiple tokens)
     LLAMA_API void llama_set_n_threads(struct llama_context * ctx, uint32_t n_threads, uint32_t n_threads_batch);
+
+    // pin CPU worker threads to the given logical CPUs (Linux only); thread t ->
+    // cpus[t % n_cpus]. Configure before compute, n_cpus == 0 disables pinning.
+    LLAMA_API void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus);
 
     // Get the number of threads used for generation of a single token.
     LLAMA_API uint32_t llama_n_threads(struct llama_context * ctx);

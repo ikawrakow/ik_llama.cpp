@@ -15605,6 +15605,8 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_I2_S:
         case GGML_TYPE_PQ2_0:
         case GGML_TYPE_PTQ1_0:
+        case GGML_TYPE_PQ2_0_R8: break;
+        case GGML_TYPE_PTQ1_0_R8: break;
             // nothing to validate
             break;
         default:

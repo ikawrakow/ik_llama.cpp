@@ -1875,6 +1875,7 @@ server_tokens process_mtmd_prompt(mtmd_context* mctx, std::string prompt, std::v
     // multimodal
     mtmd_input_text inp_txt = {
         prompt.c_str(),
+        prompt.size(),
         /* add_special */   true,
         /* parse_special */ true,
     };

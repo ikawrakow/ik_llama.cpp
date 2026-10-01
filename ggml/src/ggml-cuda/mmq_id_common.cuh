@@ -471,7 +471,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_IQ5_KS_R4: return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ5_K   : return MMQ_MMA_TILE_X_K_Q3_K;
         case GGML_TYPE_IQ5_K_R4: return MMQ_MMA_TILE_X_K_Q3_K;
-        case GGML_TYPE_IQ6_K   : return MMQ_MMA_TILE_X_K_Q3_K;
+        case GGML_TYPE_IQ6_K   : return MMQ_MMA_TILE_X_K_Q6_K;
         case GGML_TYPE_IQ1_KT  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ2_KT  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ3_KT  : return MMQ_MMA_TILE_X_K_Q8_0;
