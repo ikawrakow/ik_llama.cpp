@@ -1289,7 +1289,7 @@ bool llama_model_loader::load_all_data(
                     }
                 }
                 if (!has_views) {
-                    ggml_backend_buffer_t owned = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), n_size);
+                    ggml_backend_buffer_t owned = ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), n_size);
                     if (owned == nullptr) {
                         throw std::runtime_error(format("unable to allocate repack buffer for tensor '%s'", ggml_get_name(cur)));
                     }
@@ -1338,7 +1338,7 @@ bool llama_model_loader::load_all_data(
                 struct ggml_tensor * base = cur->view_src;
                 if (base->buffer == nullptr) {
                     const size_t base_size = ggml_nbytes(base);
-                    ggml_backend_buffer_t bbuf = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), base_size);
+                    ggml_backend_buffer_t bbuf = ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), base_size);
                     if (bbuf == nullptr) {
                         throw std::runtime_error(format("unable to allocate merged base for tensor '%s'", ggml_get_name(cur)));
                     }
