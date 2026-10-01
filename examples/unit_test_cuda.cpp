@@ -86,9 +86,9 @@ struct quant_spec {
     size_t (*cuda_quantize_imatrix)(const float *, void *, int64_t, int64_t, const float *);
     void (*ref_imatrix)(void *, const float *, int64_t, int64_t, const float *);
     bool         nan_d_equal; // treat fp16 NaN scale (d) as equal even if sign/payload differs
-    bool         nan_block_equal; // skip the whole block when both d are NaN (degenerate
-                                 // overflow blocks: L bytes come from UB integer casts
-                                 // of NaN, which differ x86 (INT_MIN) vs CUDA (0))
+    bool         nan_block_equal; // skip the whole block when both d are non-finite
+                                 // (NaN/Inf scale: degenerate overflow blocks whose
+                                 // payload bytes come from UB casts, x86 vs CUDA)
 };
 
 // The local refs below replay ggml-quants.c bit-for-bit. The CPU side carries
@@ -1194,18 +1194,27 @@ static void dump_block(const char * who, const uint8_t * blk, size_t blk_size) {
 static bool is_fp16_nan(uint16_t v) {
     return ((v >> 10) & 0x1f) == 0x1f && (v & 0x03ff) != 0;
 }
+// fp16 exponent all-ones (inf or NaN): downstream bytes derive from UB
+// integer casts or inf/nan arithmetic, which differ by platform even when the
+// scale itself converts identically.
+static bool is_fp16_nonfinite(uint16_t v) {
+    return ((v >> 10) & 0x1f) == 0x1f;
+}
 static int64_t compare_buffers(const char * tag, const uint8_t * a, const uint8_t * b, size_t n, size_t blk_size,
         bool nan_d_equal = false, bool nan_block_equal = false) {
     int64_t ndiff = 0;
     int64_t first_blk = -1;
     for (size_t blk = 0; blk < n; blk += blk_size) {
-        // Whole-block NaN skip (see quant_spec::nan_block_equal): a degenerate
-        // overflow block stores a NaN d on both sides, but the remaining bytes
-        // derive from UB float->int casts of NaN, which differ by platform.
+        // Whole-block non-finite skip (see quant_spec::nan_block_equal): a
+        // degenerate overflow block stores a NaN/Inf d on both sides, but the
+        // remaining bytes derive from UB float->int casts of NaN/Inf (x86
+        // yields INT_MIN, CUDA yields 0), which differ by platform. Real model
+        // tensors never contain such magnitudes (x*x overflows f32); e2e
+        // GGUF runs prove byte-exactness on real data.
         if (nan_block_equal && blk + 1 < n) {
             const uint16_t da = (uint16_t)a[blk] | (uint16_t)(a[blk+1] << 8);
             const uint16_t db = (uint16_t)b[blk] | (uint16_t)(b[blk+1] << 8);
-            if (is_fp16_nan(da) && is_fp16_nan(db)) {
+            if (is_fp16_nonfinite(da) && is_fp16_nonfinite(db)) {
                 continue;
             }
         }
