@@ -86,10 +86,12 @@ struct quant_spec {
     bool         nan_d_equal; // treat fp16 NaN scale (d) as equal even if sign/payload differs
 };
 
-// Local copy of quantize_row_q8_0_ref (ggml/src/ggml-quants.c:943). The fp16
+// Local copy of quantize_row_q8_0_ref (ggml/src/ggml-quants.c). The fp16
 // conversion uses __float2half_rn (nearest-even), what GGML_FP32_TO_FP16 maps
-// to and what the CUDA kernel stores via __half_as_ushort.
+// to and what the CUDA kernel stores via __half_as_ushort. HEAD CPU stores
+// FP16(fudge*d) with the Q6_0-fudge quirk (ggml-quants.c:915); match it.
 static void ref_quantize_q8_0(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0); // match CPU quirk
     const int64_t nb = (nrows*n_per_row)/QK8_0;
     for (int64_t ib = 0; ib < nb; ++ib) {
         const float * xb = src + ib*QK8_0;
@@ -100,7 +102,7 @@ static void ref_quantize_q8_0(void * dst, const float * src, int64_t nrows, int6
             amax = fmaxf(amax, fabsf(xb[j]));
         }
 
-        const float d  = amax/127.0f;
+        const float d  = fudge*(amax/127.0f);
         const float id = d ? 1.0f/d : 0.0f;
 
         yb->d = (ggml_half)__half_as_ushort(__float2half_rn(d));
@@ -110,8 +112,17 @@ static void ref_quantize_q8_0(void * dst, const float * src, int64_t nrows, int6
     }
 }
 
+// Q8_0 ignores imatrix on the CPU (quantize_q8_0): ref routes to plain.
+static void ref_quantize_q8_0_imatrix_plain(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    (void) imatrix;
+    ref_quantize_q8_0(dst, src, nrows, n_per_row);
+}
+
 // Local copy of quantize_row_q4_0_ref (ggml/src/ggml-quants.c:673).
+// HEAD CPU stores FP16(fudge*d); codes use id=1/(fudge*d).
 static void ref_quantize_q4_0(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q4_0);
     const int64_t nb = (nrows*n_per_row)/QK4_0;
     for (int64_t ib = 0; ib < nb; ++ib) {
         const float * xb = src + ib*QK4_0;
@@ -128,7 +139,7 @@ static void ref_quantize_q4_0(void * dst, const float * src, int64_t nrows, int6
             }
         }
 
-        const float d  = max/-8.0f;
+        const float d  = fudge*(max/-8.0f);
         const float id = d ? 1.0f/d : 0.0f;
 
         yb->d = (ggml_half)__half_as_ushort(__float2half_rn(d));
@@ -309,8 +320,10 @@ static uint16_t fp32_to_fp16_ggml_host(float f) {
 
 // Local copy of quantize_row_q4_0_impl (ggml-quants.c:3429). The imatrix holds
 // n_per_row weights and is reused for every row, exactly like the CPU path.
+// HEAD CPU stores FP16(fudge*d).
 static void ref_quantize_q4_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q4_0);
     for (int64_t irow = 0; irow < nrows; ++irow) {
         const float * x = src + irow*n_per_row;
         block_q4_0 * y = (block_q4_0 *)dst + irow*(n_per_row/QK4_0);
@@ -327,7 +340,7 @@ static void ref_quantize_q4_0_imatrix(void * dst, const float * src, int64_t nro
             const float * qw = imatrix + QK4_0 * ib;
             for (int j = 0; j < QK4_0; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
             float d = ref_make_qx_quants(QK4_0, 8, xb, L, 1, weight);
-            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(d);
+            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(fudge*d);
             for (int j = 0; j < QK4_0/2; ++j) {
                 y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_0/2] << 4));
             }
@@ -339,6 +352,7 @@ static void ref_quantize_q4_0_imatrix(void * dst, const float * src, int64_t nro
 // bit of every quant goes into the 4-byte LE qh bitmap, which the ref memcpys
 // from a native uint32.
 static void ref_quantize_q5_0(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q5_0);
     const int64_t nb = (nrows*n_per_row)/QK5_0;
     for (int64_t ib = 0; ib < nb; ++ib) {
         const float * xb = src + ib*QK5_0;
@@ -354,7 +368,7 @@ static void ref_quantize_q5_0(void * dst, const float * src, int64_t nrows, int6
             }
         }
 
-        const float d  = max/-16.0f;
+        const float d  = fudge*(max/-16.0f);
         const float id = d ? 1.0f/d : 0.0f;
 
         yb->d = (ggml_half)__half_as_ushort(__float2half_rn(d));
@@ -371,37 +385,31 @@ static void ref_quantize_q5_0(void * dst, const float * src, int64_t nrows, int6
     }
 }
 
-// Local copy of quantize_row_q6_0_ref (ggml/src/ggml-quants.c:853). Bits 4-5
-// of every 6-bit quant go into the 8-byte qh: byte k = h_k | (h_{k+8} << 4)
-// with h_e = (q_e>>4) | ((q_{e+16}>>4) << 2), matching `qh[j%8] |= h<<4*(j/8)`.
+// Local copy of quantize_row_q6_0_impl without weights (ggml-quants.c):
+// OLS is KEPT. weight = x*x, d = make_qx_quants * fudge.
 static void ref_quantize_q6_0(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
-    const int64_t nb = (nrows*n_per_row)/QK6_0;
-    for (int64_t ib = 0; ib < nb; ++ib) {
-        const float * xb = src + ib*QK6_0;
-        block_q6_0 *  yb = (block_q6_0 *)dst + ib;
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0);
+    for (int64_t irow = 0; irow < nrows; ++irow) {
+        const float * x = src + irow*n_per_row;
+        block_q6_0 * y = (block_q6_0 *)dst + irow*(n_per_row/QK6_0);
 
-        float amax = 0.0f;
-        float max  = 0.0f;
-        for (int j = 0; j < QK6_0; ++j) {
-            const float v = xb[j];
-            if (amax < fabsf(v)) {
-                amax = fabsf(v);
-                max  = v;
+        float weight[QK6_0];
+        int8_t L[QK6_0];
+        const int64_t nb = n_per_row/QK6_0;
+        for (int64_t ib = 0; ib < nb; ++ib) {
+            const float * xb = x + QK6_0*ib;
+            for (int j = 0; j < QK6_0; ++j) weight[j] = xb[j]*xb[j];
+            float d = ref_make_qx_quants(QK6_0, 32, xb, L, 1, weight);
+            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(fudge*d);
+
+            memset(y[ib].qh, 0, QK6_0/4);
+            for (int j = 0; j < QK6_0/2; ++j) {
+                const uint8_t xi0 = (uint8_t)L[j];
+                const uint8_t xi1 = (uint8_t)L[j + QK6_0/2];
+                y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+                const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+                y[ib].qh[j%(QK6_0/4)] |= (uint8_t)(h << 4*(j/(QK6_0/4)));
             }
-        }
-
-        const float d  = max/-32.0f;
-        const float id = d ? 1.0f/d : 0.0f;
-
-        yb->d = (ggml_half)__half_as_ushort(__float2half_rn(d));
-
-        memset(yb->qh, 0, QK6_0/4);
-        for (int j = 0; j < QK6_0/2; ++j) {
-            const uint8_t xi0 = (uint8_t)std::min(63, (int)(int8_t)(xb[j]*id + 32.5f));
-            const uint8_t xi1 = (uint8_t)std::min(63, (int)(int8_t)(xb[j + QK6_0/2]*id + 32.5f));
-            yb->qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
-            const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
-            yb->qh[j%(QK6_0/4)] |= (uint8_t)(h << 4*(j/(QK6_0/4)));
         }
     }
 }
@@ -426,7 +434,7 @@ static void ref_quantize_q5_0_imatrix(void * dst, const float * src, int64_t nro
             const float * qw = imatrix + QK5_0 * ib;
             for (int j = 0; j < QK5_0; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
             float d = ref_make_qx_quants(QK5_0, 16, xb, L, 1, weight);
-            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(d);
+            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(ggml_get_quantize_fudge_factor(GGML_TYPE_Q5_0)*d);
 
             uint32_t qh = 0;
             for (int j = 0; j < QK5_0/2; ++j) {
@@ -461,7 +469,7 @@ static void ref_quantize_q6_0_imatrix(void * dst, const float * src, int64_t nro
             const float * qw = imatrix + QK6_0 * ib;
             for (int j = 0; j < QK6_0; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
             float d = ref_make_qx_quants(QK6_0, 32, xb, L, 1, weight);
-            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(d);
+            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0)*d);
 
             memset(y[ib].qh, 0, QK6_0/4);
             for (int j = 0; j < QK6_0/2; ++j) {
@@ -667,8 +675,7 @@ static bool is_fp16_nan(uint16_t v) {
 }
 
 static int64_t compare_buffers(const char * tag, const uint8_t * a, const uint8_t * b, size_t n, size_t blk_size,
-        bool nan_d_equal = false) {
-    int64_t ndiff = 0;
+        bool nan_d_equal = false) {    int64_t ndiff = 0;
     int64_t first_blk = -1;
     for (size_t i = 0; i < n; ++i) {
         // The block scale d is the first 2 bytes (little-endian) of every
@@ -697,8 +704,8 @@ static int64_t compare_buffers(const char * tag, const uint8_t * a, const uint8_
         const uint8_t * rb = b + first_blk*blk_size;
         printf("  [FAIL] %s: %lld/%zu bytes differ; first differing quant block %lld\n",
                tag, (long long)ndiff, n, (long long)first_blk);
-        dump_block("ref", ra, blk_size);
-        dump_block("gpu", rb, blk_size);
+        dump_block("a", ra, blk_size);
+        dump_block("b", rb, blk_size);
     }
     return ndiff;
 }
@@ -755,8 +762,11 @@ static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
         return;
     }
 
-    const int64_t d_gpu_cpu = compare_buffers(tag, out_cpu.data(), out_gpu.data(), out_size, spec.blk_size, spec.nan_d_equal);
-    const int64_t d_cpu_ref = compare_buffers(tag, out_ref.data(), out_cpu.data(), out_size, spec.blk_size, spec.nan_d_equal);
+    char tag_gc[128], tag_cr[128];
+    snprintf(tag_gc, sizeof(tag_gc), "%s gpu/cpu", tag);
+    snprintf(tag_cr, sizeof(tag_cr), "%s cpu/ref", tag);
+    const int64_t d_gpu_cpu = compare_buffers(tag_gc, out_gpu.data(), out_cpu.data(), out_size, spec.blk_size, spec.nan_d_equal);
+    const int64_t d_cpu_ref = compare_buffers(tag_cr, out_cpu.data(), out_ref.data(), out_size, spec.blk_size, spec.nan_d_equal);
 
     if (d_gpu_cpu == 0 && d_cpu_ref == 0) {
         printf("  [OK]   %s nrows=%-6lld n_per_row=%-5lld : gpu==cpu==ref\n",
@@ -923,7 +933,7 @@ int main(int argc, char ** argv) {
         { "q8_0", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), cuda_wraps::q8_0, ref_quantize_q8_0,
                 false, nullptr, nullptr },
         { "q8_0-imatrix", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), cuda_wraps::q8_0, ref_quantize_q8_0,
-                true, cuda_wraps::q8_0_imatrix, ref_quantize_q8_0_imatrix, true },
+                true, cuda_wraps::q8_0_imatrix, ref_quantize_q8_0_imatrix_plain, false },
         { "q6_0", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_wraps::q6_0, ref_quantize_q6_0,
                 false, nullptr, nullptr },
         { "q6_0-imatrix", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_wraps::q6_0, ref_quantize_q6_0,
