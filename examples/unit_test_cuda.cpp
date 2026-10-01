@@ -50,6 +50,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <cfloat>
 #include <cstdint>
 #include <cassert>
 #include <vector>
@@ -443,6 +444,220 @@ static void ref_quantize_q5_0_imatrix(void * dst, const float * src, int64_t nro
                 y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
                 qh |= ((uint32_t)((xi0 & 0x10u) >> 4)) << (j + 0);
                 qh |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + QK5_0/2);
+            }
+            memcpy(y[ib].qh, &qh, sizeof(qh));
+        }
+    }
+}
+
+// Local copy of quantize_row_q5_1_ref (ggml-quants.c:809). No fudge, no clamp
+// (bug-compatible). min/max values are order-independent.
+static void ref_quantize_q5_1(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    const int64_t nb = (nrows*n_per_row)/QK5_1;
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        const float * xb = src + ib*QK5_1;
+        block_q5_1 *  yb = (block_q5_1 *)dst + ib;
+
+        float mn = FLT_MAX;
+        float mx = -FLT_MAX;
+        for (int j = 0; j < QK5_1; ++j) {
+            if (xb[j] < mn) mn = xb[j];
+            if (xb[j] > mx) mx = xb[j];
+        }
+
+        const float d  = (mx - mn)/31.0f;
+        const float id = d ? 1.0f/d : 0.0f;
+
+        yb->d = (ggml_half)__half_as_ushort(__float2half_rn(d));
+        yb->m = (ggml_half)__half_as_ushort(__float2half_rn(mn));
+
+        uint32_t qh = 0;
+        for (int j = 0; j < QK5_1/2; ++j) {
+            const uint8_t xi0 = (uint8_t)((xb[j] - mn)*id + 0.5f);
+            const uint8_t xi1 = (uint8_t)((xb[j + QK5_1/2] - mn)*id + 0.5f);
+            yb->qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+            qh |= ((uint32_t)((xi0 & 0x10u) >> 4)) << (j + 0);
+            qh |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + QK5_1/2);
+        }
+        memcpy(yb->qh, &qh, sizeof(qh));
+    }
+}
+
+// Host copy of make_qkx3_quants (ggml-quants.c:2211) for the Q4_1/Q5_1 imatrix
+// refs. Verbatim order, double accumulators, nearest-even magic rounding.
+static inline int ref_kx3_nearest_int(float fval) {
+    float val = fval + 12582912.f;
+    int i; memcpy(&i, &val, sizeof(int));
+    return (i & 0x007fffff) - 0x00400000;
+}
+
+static float ref_make_qkx3_quants(int n, int nmax, const float * x, const float * weights,
+        uint8_t * L, float * the_min, uint8_t * Laux,
+        float rmin, float rdelta, int nstep, bool use_mad) {
+    float min = x[0];
+    float max = x[0];
+    double sum_w = weights ? (double)weights[0] : (double)(x[0]*x[0]);
+    double sum_x = sum_w * (double)x[0];
+    double sum_x2 = sum_w * (double)x[0] * (double)x[0];
+    for (int i = 1; i < n; ++i) {
+        if (x[i] < min) min = x[i];
+        if (x[i] > max) max = x[i];
+        float w = weights ? weights[i] : x[i]*x[i];
+        sum_w += (double)w;
+        sum_x += (double)w * (double)x[i];
+        sum_x2 += (double)w * (double)x[i] * (double)x[i];
+    }
+    if (min > 0) {
+        min = 0;
+    }
+    if (max - min < 1e-10f) {
+        memset(L, 0, n);
+        *the_min = -min;
+        return 0.f;
+    }
+    float iscale = nmax/(max - min);
+    float scale = 1/iscale;
+    double best_mad = 0;
+    for (int i = 0; i < n; ++i) {
+        int l = ref_kx3_nearest_int(iscale*(x[i] - min));
+        l = l > nmax ? nmax : (l < 0 ? 0 : l);
+        L[i] = (uint8_t)l;
+        double diff = (double)scale * L[i] + (double)min - (double)x[i];
+        diff = use_mad ? fabs(diff) : diff*diff;
+        double w = weights ? (double)weights[i] : (double)(x[i]*x[i]);
+        best_mad += w * diff;
+    }
+    if (nstep < 1) {
+        *the_min = -min;
+        return scale;
+    }
+    for (int is = 0; is <= nstep; ++is) {
+        iscale = (rmin + rdelta*is + nmax)/(max - min);
+        double sum_l = 0, sum_l2 = 0, sum_xl = 0;
+        for (int i = 0; i < n; ++i) {
+            int l = ref_kx3_nearest_int(iscale*(x[i] - min));
+            l = l > nmax ? nmax : (l < 0 ? 0 : l);
+            Laux[i] = (uint8_t)l;
+            float w = weights ? weights[i] : x[i]*x[i];
+            sum_l  += (double)w*l;
+            sum_l2 += (double)w*l*l;
+            sum_xl += (double)w*l*(double)x[i];
+        }
+        double D = sum_w * sum_l2 - sum_l * sum_l;
+        if (D > 0) {
+            double this_scale = (sum_w * sum_xl - sum_x * sum_l)/D;
+            double this_min   = (sum_l2 * sum_x - sum_l * sum_xl)/D;
+            if (this_min > 0) {
+                this_min = 0;
+                this_scale = sum_xl / sum_l2;
+            }
+            double mad = 0;
+            if (use_mad) {
+                for (int i = 0; i < n; ++i) {
+                    double diff = (double)this_scale * Laux[i] + (double)this_min - (double)x[i];
+                    diff = fabs(diff);
+                    double w = weights ? (double)weights[i] : (double)(x[i]*x[i]);
+                    mad += w * diff;
+                }
+            } else {
+                mad = sum_x2 - 2*this_scale*sum_xl - 2*this_min*sum_x + 2*this_scale*this_min*sum_l
+                    + this_scale*this_scale*sum_l2 + this_min*this_min*sum_w;
+            }
+            if (mad < best_mad) {
+                for (int i = 0; i < n; ++i) {
+                    L[i] = Laux[i];
+                }
+                best_mad = mad;
+                scale = (float)this_scale;
+                min = (float)this_min;
+            }
+        }
+    }
+    if (use_mad) {
+        *the_min = -min;
+        return scale;
+    }
+
+    double sum_l = 0, sum_l2 = 0, sum_xl = 0;
+    for (int i = 0; i < n; ++i) {
+        int l = L[i];
+        double w = weights ? (double)weights[i] : (double)(x[i]*x[i]);
+        sum_l  += w*l;
+        sum_l2 += w*l*l;
+        sum_xl += w*l*(double)x[i];
+    }
+    double best = 2*(double)scale*sum_xl + 2*(double)min*sum_x - 2*(double)scale*(double)min*sum_l
+                - (double)scale*(double)scale*sum_l2 - (double)min*(double)min*sum_w;
+    int last_j = -1, last_dir = 0;
+    for (int itry = 0; itry < nmax*n; ++itry) {
+        float gmax = 0;
+        int best_j = -1, dir = 0;
+        for (int j = 0; j < n; ++j) {
+            float g = (float)((double)x[j] - (double)scale*L[j] - (double)min);
+            if (g > 0 && L[j] < nmax && g > gmax) {
+                gmax = g; best_j = j; dir = 1;
+            }
+            else if (g < 0 && L[j] > 0 && -g > gmax) {
+                gmax = -g; best_j = j; dir = -1;
+            }
+        }
+        if (best_j < 0 || (best_j == last_j && dir == -last_dir)) break;
+        double w = weights ? (double)weights[best_j] : (double)(x[best_j]*x[best_j]);
+        sum_l  += w*dir;
+        sum_l2 += w*(2*L[best_j]*dir + 1);
+        sum_xl += w*(double)x[best_j]*dir;
+        double D = (double)sum_w * sum_l2 - sum_l * sum_l;
+        if (D <= 0) break;
+        double this_scale = ((double)sum_w * sum_xl - (double)sum_x * sum_l)/D;
+        double this_min   = (sum_l2 * (double)sum_x - sum_l * sum_xl)/D;
+        if (this_min > 0) {
+            this_min = 0;
+            this_scale = sum_xl / sum_l2;
+        }
+        if (this_scale < 0) break;
+        double score = 2*this_scale*sum_xl + 2*this_min*(double)sum_x - 2*this_scale*this_min*sum_l
+                     - this_scale*this_scale*sum_l2 - this_min*this_min*(double)sum_w;
+        if (score <= best) break;
+        best = score;
+        scale = (float)this_scale;
+        min = (float)this_min;
+        L[best_j] += dir;
+        last_j = best_j; last_dir = dir;
+    }
+    *the_min = -min;
+    return scale;
+}
+
+// Local copy of quantize_row_q5_1_impl: make_qkx3 (nmax=31), no fudge.
+static void ref_quantize_q5_1_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    for (int64_t irow = 0; irow < nrows; ++irow) {
+        const float * x = src + irow*n_per_row;
+        block_q5_1 * y = (block_q5_1 *)dst + irow*(n_per_row/QK5_1);
+
+        float sum_x2 = 0;
+        for (int64_t j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
+        float sigma2 = sum_x2/n_per_row;
+
+        float weight[QK5_1];
+        uint8_t L[QK5_1], Laux[QK5_1];
+        const int64_t nb = n_per_row/QK5_1;
+        for (int64_t ib = 0; ib < nb; ++ib) {
+            const float * xb = x + QK5_1*ib;
+            const float * qw = imatrix + QK5_1*ib;
+            for (int j = 0; j < QK5_1; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+            float the_min;
+            float d = ref_make_qkx3_quants(QK5_1, 31, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
+            y[ib].d = (ggml_half)__half_as_ushort(__float2half_rn(d));
+            y[ib].m = (ggml_half)__half_as_ushort(__float2half_rn(-the_min));
+
+            uint32_t qh = 0;
+            for (int j = 0; j < QK5_1/2; ++j) {
+                const uint8_t xi0 = L[j];
+                const uint8_t xi1 = L[j + QK5_1/2];
+                y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+                qh |= ((uint32_t)((xi0 & 0x10u) >> 4)) << (j + 0);
+                qh |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + QK5_1/2);
             }
             memcpy(y[ib].qh, &qh, sizeof(qh));
         }
@@ -927,6 +1142,12 @@ int main(int argc, char ** argv) {
         static size_t q4_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
             return ggml_cuda_quantize(0, GGML_TYPE_Q4_0, s, d, r, n, 1, im);
         }
+        static size_t q5_1(const float * s, void * d, int64_t r, int64_t n) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q5_1, s, d, r, n, 1, nullptr);
+        }
+        static size_t q5_1_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q5_1, s, d, r, n, 1, im);
+        }
     };
 
     const quant_spec specs[] = {
@@ -948,6 +1169,10 @@ int main(int argc, char ** argv) {
                 false, nullptr, nullptr },
         { "q4_0-imatrix", GGML_TYPE_Q4_0, QK4_0, sizeof(block_q4_0), cuda_wraps::q4_0, ref_quantize_q4_0,
                 true, cuda_wraps::q4_0_imatrix, ref_quantize_q4_0_imatrix, true },
+        { "q5_1", GGML_TYPE_Q5_1, QK5_1, sizeof(block_q5_1), cuda_wraps::q5_1, ref_quantize_q5_1,
+                false, nullptr, nullptr },
+        { "q5_1-imatrix", GGML_TYPE_Q5_1, QK5_1, sizeof(block_q5_1), cuda_wraps::q5_1, ref_quantize_q5_1,
+                true, cuda_wraps::q5_1_imatrix, ref_quantize_q5_1_imatrix, true },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);
 

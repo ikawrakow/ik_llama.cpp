@@ -584,9 +584,10 @@ static kt_codebook kt_get_codebook(int device, ggml_type type) {
 GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float * src, void * dst, int64_t nrows, int64_t n_per_row, int64_t nslice,
         const float * imatrix) {
     // Legacy block quants (Joel lead: single entry). Order after KT:
-    // Q8_0, Q6_0, Q5_0, Q4_0. Q5_0/Q4_0 cases are bannered for easy removal.
+    // Q8_0, Q6_0, Q5_0, Q4_0, Q5_1, Q4_1. Q5_0/Q4_0 cases are bannered for easy removal.
     // Q6_0 OLS is KEPT. Returns 0 to fall back to CPU when unsupported.
-    if (type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q4_0) {
+    if (type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q4_0 ||
+            type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q4_1) {
 #if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
         return 0;
 #else
@@ -614,10 +615,15 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
                 // --- Removable Q5_0 case (delete to drop Q5_0) ---
                 nb = s_im ? ggml_cuda_quantize_q5_0_imatrix(s_src, s_dst, nrows, n_per_row, s_im)
                           : ggml_cuda_quantize_q5_0(s_src, s_dst, nrows, n_per_row);
-            } else { // GGML_TYPE_Q4_0
+            } else if (type == GGML_TYPE_Q4_0) {
                 // --- Removable Q4_0 case (delete to drop Q4_0) ---
                 nb = s_im ? ggml_cuda_quantize_q4_0_imatrix(s_src, s_dst, nrows, n_per_row, s_im)
                           : ggml_cuda_quantize_q4_0(s_src, s_dst, nrows, n_per_row);
+            } else if (type == GGML_TYPE_Q5_1) {
+                nb = s_im ? ggml_cuda_quantize_q5_1_imatrix(s_src, s_dst, nrows, n_per_row, s_im)
+                          : ggml_cuda_quantize_q5_1(s_src, s_dst, nrows, n_per_row);
+            } else { // GGML_TYPE_Q4_1 (added next commit; fallback until then)
+                return 0;
             }
             if (nb == 0) {
                 return 0;

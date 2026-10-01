@@ -2208,6 +2208,10 @@ void quantize_row_q2_K(const float * restrict x, void * restrict vy, int64_t k) 
     quantize_row_q2_K_ref(x, vy, k);
 }
 
+// Byte-exact CUDA GGUF quantization (ggml-cuda/quantize_gguf.cu) replays this
+// affine optimizer bit-for-bit on the GPU with correctly-rounded intrinsics.
+// Forbid FMA contraction like make_qx_quants above.
+#pragma STDC FP_CONTRACT OFF
 static float make_qkx3_quants(int n, int nmax, const float * restrict x, const float * restrict weights,
         uint8_t * restrict L, float * restrict the_min, uint8_t * restrict Laux,
         float rmin, float rdelta, int nstep, bool use_mad) {
@@ -2348,6 +2352,7 @@ static float make_qkx3_quants(int n, int nmax, const float * restrict x, const f
     *the_min = -min;
     return scale;
 }
+#pragma STDC FP_CONTRACT ON
 
 static float make_qp_quants(int n, int nmax, const float * restrict x, uint8_t * restrict L, const float * quant_weights) {
     float max = 0;
@@ -3585,6 +3590,8 @@ size_t quantize_q5_0(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// See FP_CONTRACT note above make_qkx3_quants.
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q5_1_impl(const float * restrict x, block_q5_1 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK5_1 == 32, "QK5_1 must be 32");
 
@@ -3622,6 +3629,7 @@ static void quantize_row_q5_1_impl(const float * restrict x, block_q5_1 * restri
         memcpy(&y[ib].qh, &qh, sizeof(qh));
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 size_t quantize_q5_1(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {

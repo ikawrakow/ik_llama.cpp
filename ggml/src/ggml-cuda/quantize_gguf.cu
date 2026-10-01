@@ -78,6 +78,7 @@
 
 #include <cinttypes>
 #include <cstdio>
+#include <cmath>
 #include <algorithm>
 #include <vector>
 
@@ -244,6 +245,59 @@ static __global__ void quantize_q5_0_kernel(
             y[ib].qh[1] = (uint8_t)(qh >>  8);
             y[ib].qh[2] = (uint8_t)(qh >> 16);
             y[ib].qh[3] = (uint8_t)(qh >> 24);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Q5_1: quantize_row_q5_1_ref (ggml-quants.c:809). No fudge. No clamp
+// (bug-compatible: codes are raw (uint8_t)(x+0.5f), matching cpy-utils).
+// ---------------------------------------------------------------------------
+
+static __global__ void quantize_q5_1_kernel(
+        const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
+    (void) fudge; // no fudge for Q5_1 (matches CPU ref)
+    const int32_t lane = threadIdx.x; // 0 .. 31 == QK5_1
+
+    for (int64_t ib = blockIdx.x; ib < nblocks; ib += gridDim.x) {
+        const float xi = x[ib*QK5_1 + lane];
+
+        // min/max reductions (values only; order-independent).
+        float bmin = xi;
+        float bmax = xi;
+#pragma unroll
+        for (int m = 16; m > 0; m >>= 1) {
+            bmin = fminf(bmin, __shfl_xor_sync(0xffffffffu, bmin, m));
+            bmax = fmaxf(bmax, __shfl_xor_sync(0xffffffffu, bmax, m));
+        }
+
+        const float d  = __fdiv_rn(bmax - bmin, 31.0f);
+        const float id = d ? __fdiv_rn(1.0f, d) : 0.0f;
+
+        // (x-min)*id + 0.5f truncation toward zero, no clamp (matches ref).
+        const float t = __fmul_rn(__fsub_rn(xi, bmin), id);
+        const uint32_t q = (uint32_t)(int32_t)(t + 0.5f);
+
+        block_q5_1 * y = (block_q5_1 *)vy;
+        if (lane == 0) {
+            y[ib].d = __float2half_rn(d);
+            y[ib].m = __float2half_rn(bmin);
+        }
+
+        // byte j (0..15): low nibble = element j, high nibble = element j+16.
+        const uint32_t my   = q & 0xF;
+        const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
+        if (lane < 16) {
+            y[ib].qs[lane] = (uint8_t)(my | (pair << 4));
+        }
+
+        // 5th bit -> qh bitmap, LE uint32 (same as Q5_0 kernel).
+        const uint32_t qhb = __ballot_sync(0xffffffffu, (q >> 4) & 1);
+        if (lane == 0) {
+            y[ib].qh[0] = (uint8_t)(qhb >>  0);
+            y[ib].qh[1] = (uint8_t)(qhb >>  8);
+            y[ib].qh[2] = (uint8_t)(qhb >> 16);
+            y[ib].qh[3] = (uint8_t)(qhb >> 24);
         }
     }
 }
@@ -426,6 +480,159 @@ static __device__ float make_qx_quants_device(int n, int nmax, const float * x, 
     return scale;
 }
 
+// Byte-exact device port of make_qkx3_quants (ggml-quants.c:2211), used by the
+// Q4_1/Q5_1 imatrix quantizers (rmse path with min). One thread replays the
+// whole sequential algorithm in the exact CPU order. Double accumulators use
+// correctly-rounded intrinsics (__dadd_rn/__dmul_rn/__ddiv_rn) so the
+// -use_fast_math build cannot change a bit; float parts use __fdiv_rn/
+// __fmul_rn/__fadd_rn/__fsub_rn. Requires callers in ggml-quants.c to compile
+// with #pragma STDC FP_CONTRACT OFF (as they now do).
+static __device__ float make_qkx3_quants_device(int n, int nmax, const float * x, const float * weights,
+        uint8_t * L, float * the_min, uint8_t * Laux,
+        float rmin, float rdelta, int nstep, bool use_mad) {
+    float min = x[0];
+    float max = x[0];
+    double sum_w = weights ? (double)weights[0] : (double)(x[0]*x[0]);
+    double sum_x = sum_w * (double)x[0];
+    double sum_x2 = sum_w * (double)x[0] * (double)x[0];
+    for (int i = 1; i < n; ++i) {
+        if (x[i] < min) min = x[i];
+        if (x[i] > max) max = x[i];
+        float w = weights ? weights[i] : x[i]*x[i];
+        sum_w = __dadd_rn(sum_w, (double)w);
+        sum_x = __dadd_rn(sum_x, __dmul_rn((double)w, (double)x[i]));
+        sum_x2 = __dadd_rn(sum_x2, __dmul_rn(__dmul_rn((double)w, (double)x[i]), (double)x[i]));
+    }
+    if (min > 0) {
+        min = 0;
+    }
+    if (max - min < 1e-10f) {
+        for (int i = 0; i < n; ++i) L[i] = 0;
+        *the_min = -min;
+        return 0.f;
+    }
+    float iscale = __fdiv_rn((float)nmax, __fsub_rn(max, min));
+    float scale = __fdiv_rn(1.0f, iscale);
+    double best_mad = 0;
+    for (int i = 0; i < n; ++i) {
+        int l = nearest_int_device(__fmul_rn(iscale, __fsub_rn(x[i], min)));
+        l = l > nmax ? nmax : (l < 0 ? 0 : l);
+        L[i] = (uint8_t)l;
+        double diff = __dadd_rn(__dmul_rn((double)scale, (double)L[i]), (double)min);
+        diff = __dsub_rn(diff, (double)x[i]);
+        diff = use_mad ? fabs(diff) : __dmul_rn(diff, diff);
+        double w = weights ? (double)weights[i] : (double)(x[i]*x[i]);
+        best_mad = __dadd_rn(best_mad, __dmul_rn(w, diff));
+    }
+    if (nstep < 1) {
+        *the_min = -min;
+        return scale;
+    }
+    for (int is = 0; is <= nstep; ++is) {
+        iscale = __fdiv_rn(__fadd_rn(__fadd_rn(rmin, __fmul_rn(rdelta, (float)is)), (float)nmax), __fsub_rn(max, min));
+        double sum_l = 0, sum_l2 = 0, sum_xl = 0;
+        for (int i = 0; i < n; ++i) {
+            int l = nearest_int_device(__fmul_rn(iscale, __fsub_rn(x[i], min)));
+            l = l > nmax ? nmax : (l < 0 ? 0 : l);
+            Laux[i] = (uint8_t)l;
+            float w = weights ? weights[i] : x[i]*x[i];
+            sum_l  = __dadd_rn(sum_l, __dmul_rn((double)w, (double)l));
+            sum_l2 = __dadd_rn(sum_l2, __dmul_rn(__dmul_rn((double)w, (double)l), (double)l));
+            sum_xl = __dadd_rn(sum_xl, __dmul_rn(__dmul_rn((double)w, (double)l), (double)x[i]));
+        }
+        double D = __dsub_rn(__dmul_rn(sum_w, sum_l2), __dmul_rn(sum_l, sum_l));
+        if (D > 0) {
+            double this_scale = __ddiv_rn(__dsub_rn(__dmul_rn(sum_w, sum_xl), __dmul_rn(sum_x, sum_l)), D);
+            double this_min   = __ddiv_rn(__dsub_rn(__dmul_rn(sum_l2, sum_x), __dmul_rn(sum_l, sum_xl)), D);
+            if (this_min > 0) {
+                this_min = 0;
+                this_scale = __ddiv_rn(sum_xl, sum_l2);
+            }
+            double mad = 0;
+            if (use_mad) {
+                for (int i = 0; i < n; ++i) {
+                    double diff = __dadd_rn(__dmul_rn((double)this_scale, (double)Laux[i]), (double)this_min);
+                    diff = __dsub_rn(diff, (double)x[i]);
+                    diff = fabs(diff);
+                    double w = weights ? (double)weights[i] : (double)(x[i]*x[i]);
+                    mad = __dadd_rn(mad, __dmul_rn(w, diff));
+                }
+            } else {
+                mad = __dsub_rn(sum_x2, __dmul_rn(2*this_scale, sum_xl));
+                mad = __dsub_rn(mad, __dmul_rn(2*this_min, sum_x));
+                mad = __dadd_rn(mad, __dmul_rn(__dmul_rn(2*this_scale, this_min), sum_l));
+                mad = __dadd_rn(mad, __dmul_rn(__dmul_rn(this_scale, this_scale), sum_l2));
+                mad = __dadd_rn(mad, __dmul_rn(__dmul_rn(this_min, this_min), sum_w));
+            }
+            if (mad < best_mad) {
+                for (int i = 0; i < n; ++i) {
+                    L[i] = Laux[i];
+                }
+                best_mad = mad;
+                scale = (float)this_scale;
+                min = (float)this_min;
+            }
+        }
+    }
+    if (use_mad) {
+        *the_min = -min;
+        return scale;
+    }
+
+    double sum_l = 0, sum_l2 = 0, sum_xl = 0;
+    for (int i = 0; i < n; ++i) {
+        int l = L[i];
+        double w = weights ? (double)weights[i] : (double)(x[i]*x[i]);
+        sum_l  = __dadd_rn(sum_l, __dmul_rn(w, (double)l));
+        sum_l2 = __dadd_rn(sum_l2, __dmul_rn(__dmul_rn(w, (double)l), (double)l));
+        sum_xl = __dadd_rn(sum_xl, __dmul_rn(__dmul_rn(w, (double)l), (double)x[i]));
+    }
+    double best = __dsub_rn(__dadd_rn(__dmul_rn(__dmul_rn(2.0, (double)scale), sum_xl), __dmul_rn(__dmul_rn(2.0, (double)min), sum_x)),
+        __dmul_rn(__dmul_rn(__dmul_rn(2.0, (double)scale), (double)min), sum_l));
+    best = __dsub_rn(best, __dmul_rn(__dmul_rn((double)scale, (double)scale), sum_l2));
+    best = __dsub_rn(best, __dmul_rn(__dmul_rn((double)min, (double)min), sum_w));
+    int last_j = -1, last_dir = 0;
+    for (int itry = 0; itry < nmax*n; ++itry) {
+        float gmax = 0;
+        int best_j = -1, dir = 0;
+        for (int j = 0; j < n; ++j) {
+            float g = __double2float_rn(__dsub_rn(__dsub_rn((double)x[j], __dmul_rn((double)scale, (double)L[j])), (double)min));
+            if (g > 0 && L[j] < nmax && g > gmax) {
+                gmax = g; best_j = j; dir = 1;
+            }
+            else if (g < 0 && L[j] > 0 && -g > gmax) {
+                gmax = -g; best_j = j; dir = -1;
+            }
+        }
+        if (best_j < 0 || (best_j == last_j && dir == -last_dir)) break;
+        double w = weights ? (double)weights[best_j] : (double)(x[best_j]*x[best_j]);
+        sum_l  = __dadd_rn(sum_l, __dmul_rn(w, (double)dir));
+        sum_l2 = __dadd_rn(sum_l2, __dmul_rn(w, (double)(2*L[best_j]*dir + 1)));
+        sum_xl = __dadd_rn(sum_xl, __dmul_rn(__dmul_rn(w, (double)x[best_j]), (double)dir));
+        double D = __dsub_rn(__dmul_rn(sum_w, sum_l2), __dmul_rn(sum_l, sum_l));
+        if (D <= 0) break;
+        double this_scale = __ddiv_rn(__dsub_rn(__dmul_rn(sum_w, sum_xl), __dmul_rn(sum_x, sum_l)), D);
+        double this_min   = __ddiv_rn(__dsub_rn(__dmul_rn(sum_l2, sum_x), __dmul_rn(sum_l, sum_xl)), D);
+        if (this_min > 0) {
+            this_min = 0;
+            this_scale = __ddiv_rn(sum_xl, sum_l2);
+        }
+        if (this_scale < 0) break;
+        double score = __dadd_rn(__dmul_rn(2*this_scale, sum_xl), __dmul_rn(2*this_min, (double)sum_x));
+        score = __dsub_rn(score, __dmul_rn(__dmul_rn(2*this_scale, this_min), sum_l));
+        score = __dsub_rn(score, __dmul_rn(__dmul_rn(this_scale, this_scale), sum_l2));
+        score = __dsub_rn(score, __dmul_rn(__dmul_rn(this_min, this_min), sum_w));
+        if (score <= best) break;
+        best = score;
+        scale = (float)this_scale;
+        min = (float)this_min;
+        L[best_j] += (uint8_t)dir;
+        last_j = best_j; last_dir = dir;
+    }
+    *the_min = -min;
+    return scale;
+}
+
 // One thread per quant block: computes the per-block weights from the shared
 // row sigma2 and the (row-reused) importance weights, then runs
 // make_qx_quants. `base` is the chunk's first global quant block, so the
@@ -501,6 +708,47 @@ static __global__ void quantize_q5_0_imatrix_kernel(
         y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
         qh |= ((uint32_t)((xi0 & 0x10u) >> 4)) << (j + 0);
         qh |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + QK5_0/2);
+    }
+    y[ib].qh[0] = (uint8_t)(qh >>  0);
+    y[ib].qh[1] = (uint8_t)(qh >>  8);
+    y[ib].qh[2] = (uint8_t)(qh >> 16);
+    y[ib].qh[3] = (uint8_t)(qh >> 24);
+}
+
+// Q5_1 imatrix kernel: quantize_row_q5_1_impl via make_qkx3_quants (nmax=31).
+// No fudge. Stores d and -the_min like the CPU (y.m = FP16(-min)).
+static __global__ void quantize_q5_1_imatrix_kernel(
+        const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
+        void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row) {
+    const int64_t ib = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (ib >= nblocks) {
+        return;
+    }
+    const int64_t gb = base + ib;
+    const float * xb = x + ib*QK5_1;
+    const float * qb = qw + (int32_t)(gb % blocks_per_row)*QK5_1;
+    const float s2   = sigma2[gb / blocks_per_row];
+
+    float weight[QK5_1];
+    uint8_t L[QK5_1], Laux[QK5_1];
+    for (int j = 0; j < QK5_1; ++j) {
+        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
+    }
+
+    float the_min;
+    const float d = make_qkx3_quants_device(QK5_1, 31, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
+
+    block_q5_1 * y = (block_q5_1 *)vy;
+    y[ib].d = __float2half_rn(d);
+    y[ib].m = __float2half_rn(-the_min);
+
+    uint32_t qh = 0;
+    for (int j = 0; j < QK5_1/2; ++j) {
+        const uint8_t xi0 = L[j];
+        const uint8_t xi1 = L[j + QK5_1/2];
+        y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+        qh |= ((uint32_t)((xi0 & 0x10u) >> 4)) << (j + 0);
+        qh |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + QK5_1/2);
     }
     y[ib].qh[0] = (uint8_t)(qh >>  0);
     y[ib].qh[1] = (uint8_t)(qh >>  8);
@@ -1129,6 +1377,128 @@ size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nr
     }
 
     return nblocks_total*sizeof(block_q6_0);
+}
+
+// Q5_1 without imatrix (quantize_row_q5_1_ref). No fudge.
+size_t ggml_cuda_quantize_q5_1(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
+    return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
+            QK5_1, sizeof(block_q5_1), quantize_q5_1_kernel, "q5_1", 1.0f);
+}
+
+// Q5_1 with an importance matrix (quantize_row_q5_1_impl via make_qkx3).
+// Same chunked driver shape as the Q5_0 imatrix path, same host-computed row
+// sigma2 in the exact CPU summation order. No fudge.
+size_t ggml_cuda_quantize_q5_1_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    GGML_ASSERT(nrows > 0);
+    GGML_ASSERT(n_per_row % QK5_1 == 0);
+
+    const int64_t nblocks_total = nrows*(n_per_row/QK5_1);
+    const int32_t blocks_per_row = (int32_t)(n_per_row/QK5_1);
+
+    int n_devices = 0;
+    if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
+        return 0;
+    }
+    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
+        return 0;
+    }
+
+    std::vector<float> sigma2(nrows);
+    for (int64_t irow = 0; irow < nrows; ++irow) {
+        const float * xr = src + irow*n_per_row;
+        float sum_x2 = 0.0f;
+        for (int64_t j = 0; j < n_per_row; ++j) {
+            sum_x2 += xr[j]*xr[j];
+        }
+        sigma2[irow] = sum_x2/n_per_row;
+    }
+
+    const int64_t chunk_blocks = 1 << 20;
+    const int64_t chunk_x      = chunk_blocks*QK5_1;
+    const int64_t chunk_y      = chunk_blocks*sizeof(block_q5_1);
+
+    float   * x_dev = nullptr;
+    float   * q_dev = nullptr;
+    float   * s_dev = nullptr;
+    uint8_t * y_dev = nullptr;
+
+    cudaError_t err = cudaMalloc(&x_dev, chunk_x*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q5_1_imatrix: cudaMalloc(x_dev): %s\n", __func__, cudaGetErrorString(err));
+        return 0;
+    }
+    err = cudaMalloc(&q_dev, n_per_row*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q5_1_imatrix: cudaMalloc(q_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        return 0;
+    }
+    err = cudaMalloc(&s_dev, nrows*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q5_1_imatrix: cudaMalloc(s_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        return 0;
+    }
+    err = cudaMalloc(&y_dev, chunk_y);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q5_1_imatrix: cudaMalloc(y_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        return 0;
+    }
+
+    err = cudaMemcpy(q_dev, imatrix, n_per_row*sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q5_1_imatrix: cudaMemcpy imatrix H2D: %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        cudaFree(y_dev);
+        return 0;
+    }
+    err = cudaMemcpy(s_dev, sigma2.data(), nrows*sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: q5_1_imatrix: cudaMemcpy sigma2 H2D: %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        cudaFree(y_dev);
+        return 0;
+    }
+
+    const unsigned int block_size = 256;
+    for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
+        const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
+
+        err = cudaMemcpy(x_dev, src + base*QK5_1, nblocks*QK5_1*sizeof(float), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: q5_1_imatrix: cudaMemcpy H2D: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+
+        quantize_q5_1_imatrix_kernel<<<(unsigned)((nblocks + block_size - 1)/block_size), block_size>>>(
+                x_dev, q_dev, s_dev, y_dev, base, nblocks, blocks_per_row);
+
+        err = cudaMemcpy((char *)dst + base*sizeof(block_q5_1), y_dev, nblocks*sizeof(block_q5_1), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: q5_1_imatrix: cudaMemcpy D2H: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+    }
+
+    cudaFree(x_dev);
+    cudaFree(q_dev);
+    cudaFree(s_dev);
+    cudaFree(y_dev);
+
+    if (err != cudaSuccess) {
+        return 0;
+    }
+
+    return nblocks_total*sizeof(block_q5_1);
 }
 
 // Q6_0 OLS without imatrix (quantize_row_q6_0_impl, quant_weights == NULL).

@@ -2,9 +2,9 @@
 
 > Adaptation note (Oct 2026, onto Joel's PR 2572 `d9e2868` lead): production
 > dispatch is Joel's single `ggml_cuda_quantize(device,type,...,nslice,imatrix)`
-> entry in `ggml/src/ggml-cuda/kt-encoder.cu` (KT + legacy). Legacy order after
-> KT is **Q8_0, Q6_0, Q5_0, Q4_0**; Q5_0/Q4_0 sections are bannered for easy
-> removal once Ikawrakow confirms. **Q6_0 OLS is KEPT** (make_qx + fudge,
+> entry in `ggml/src/ggml-cuda/kt-encoder.cu` (KT + legacy). Legacy order:
+> **Q8_0, Q6_0, Q5_0, Q4_0, Q5_1, Q4_1, IQ4_NL, IQ4_XS**; Q5_0/Q4_0 sections are
+> bannered for easy removal once Ikawrakow confirms. **Q6_0 OLS is KEPT** (make_qx + fudge,
 > weight=x*x without imatrix) to match HEAD CPU `quantize_q6_0`; the old plain
 > max/-32 path is removed. All plain/imatrix scales store `FP16(fudge*d)`
 > (Q8_0 uses the HEAD `Q6_0`-fudge quirk to stay bit-exact). Q8_0 ignores
