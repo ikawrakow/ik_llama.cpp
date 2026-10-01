@@ -588,7 +588,7 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     // Q5_0/Q4_0 cases are bannered for easy removal.
     // Q6_0 OLS is KEPT. Returns 0 to fall back to CPU when unsupported.
     if (type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q4_0 ||
-            type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_IQ4_NL) {
+            type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_IQ4_XS) {
 #if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
         return 0;
 #else

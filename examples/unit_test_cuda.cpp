@@ -667,9 +667,9 @@ static float ref_make_qkx3_quants(int n, int nmax, const float * x, const float 
     *the_min = -min;
     return scale;
 }
-#pragma STDC FP_CONTRACT ON
 
 // Local copy of quantize_row_q5_1_impl: make_qkx3 (nmax=31), no fudge.
+// (FP_CONTRACT OFF region continues: sigma2/weight loops below must not fuse.)
 static void ref_quantize_q5_1_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     for (int64_t irow = 0; irow < nrows; ++irow) {
@@ -736,6 +736,7 @@ static void ref_quantize_q4_1_imatrix(void * dst, const float * src, int64_t nro
         }
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 // Local copy of quantize_iq4_nl plain path (qw == NULL, ntry = 7): codebook
 // grid search + hill-climb with w = x*x, dh = FP16(scale).
