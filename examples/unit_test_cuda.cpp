@@ -8,8 +8,8 @@
 // For each type, three producers of GGUF quantized bytes are compared on
 // identical input:
 //
-//   1. GPU : ggml_cuda_quantize_q8_0 / q6_0 / q5_0 / q4_0 (and *_imatrix)
-//            (ggml/src/ggml-cuda/quantize_gguf.cu)
+//   1. GPU : ggml_cuda_quantize(0,type,...,nslice=1,imatrix) (Joel single
+//            entry -> ggml/src/ggml-cuda/quantize_gguf.cu helpers)
 //   2. CPU : ggml_quantize_chunk       (the fork's real llama-quantize path;
 //            for Q4_0/Q5_0 without imatrix/symmetric this is the vanilla ref;
 //            Q6_0 always OLS make_qx; Q8_0 ignores imatrix)
@@ -885,25 +885,59 @@ int main(int argc, char ** argv) {
     const int ntest_dev  = all_devices ? nd : 1;
 
     // quantize always runs on device 0 in this POC; report which one is real.
-    printf("  [INFO] ggml_cuda_quantize_* runs on device 0 (POC); testing device %d\n", devices[0]);
+    printf("  [INFO] ggml_cuda_quantize runs on device 0; testing device %d\n", devices[0]);
+
+    // Joel-lead wrappers: exercise the production single entry
+    // ggml_cuda_quantize(device,type,...,nslice=1,imatrix) with the spec's
+    // (src,dst,nrows,n_per_row) signature. Order after KT: Q8_0, Q6_0, Q5_0, Q4_0.
+    struct cuda_wraps {
+        static size_t q8_0(const float * s, void * d, int64_t r, int64_t n) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q8_0, s, d, r, n, 1, nullptr);
+        }
+        static size_t q8_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q8_0, s, d, r, n, 1, im);
+        }
+        static size_t q6_0(const float * s, void * d, int64_t r, int64_t n) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q6_0, s, d, r, n, 1, nullptr);
+        }
+        static size_t q6_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q6_0, s, d, r, n, 1, im);
+        }
+        // --- Removable Q5_0 wrappers (delete to drop Q5_0) ---
+        static size_t q5_0(const float * s, void * d, int64_t r, int64_t n) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q5_0, s, d, r, n, 1, nullptr);
+        }
+        static size_t q5_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q5_0, s, d, r, n, 1, im);
+        }
+        // --- Removable Q4_0 wrappers (delete to drop Q4_0) ---
+        static size_t q4_0(const float * s, void * d, int64_t r, int64_t n) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q4_0, s, d, r, n, 1, nullptr);
+        }
+        static size_t q4_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
+            return ggml_cuda_quantize(0, GGML_TYPE_Q4_0, s, d, r, n, 1, im);
+        }
+    };
 
     const quant_spec specs[] = {
-        { "q8_0", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), ggml_cuda_quantize_q8_0, ref_quantize_q8_0,
+        { "q8_0", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), cuda_wraps::q8_0, ref_quantize_q8_0,
                 false, nullptr, nullptr },
-        { "q8_0-imatrix", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), ggml_cuda_quantize_q8_0, ref_quantize_q8_0,
-                true, ggml_cuda_quantize_q8_0_imatrix, ref_quantize_q8_0_imatrix, true },
-        { "q4_0", GGML_TYPE_Q4_0, QK4_0, sizeof(block_q4_0), ggml_cuda_quantize_q4_0, ref_quantize_q4_0,
+        { "q8_0-imatrix", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), cuda_wraps::q8_0, ref_quantize_q8_0,
+                true, cuda_wraps::q8_0_imatrix, ref_quantize_q8_0_imatrix, true },
+        { "q6_0", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_wraps::q6_0, ref_quantize_q6_0,
                 false, nullptr, nullptr },
-        { "q4_0-imatrix", GGML_TYPE_Q4_0, QK4_0, sizeof(block_q4_0), ggml_cuda_quantize_q4_0, ref_quantize_q4_0,
-                true, ggml_cuda_quantize_q4_0_imatrix, ref_quantize_q4_0_imatrix, true },
-        { "q5_0", GGML_TYPE_Q5_0, QK5_0, sizeof(block_q5_0), ggml_cuda_quantize_q5_0, ref_quantize_q5_0,
+        { "q6_0-imatrix", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_wraps::q6_0, ref_quantize_q6_0,
+                true, cuda_wraps::q6_0_imatrix, ref_quantize_q6_0_imatrix, true },
+        // --- Removable Q5_0 specs ---
+        { "q5_0", GGML_TYPE_Q5_0, QK5_0, sizeof(block_q5_0), cuda_wraps::q5_0, ref_quantize_q5_0,
                 false, nullptr, nullptr },
-        { "q5_0-imatrix", GGML_TYPE_Q5_0, QK5_0, sizeof(block_q5_0), ggml_cuda_quantize_q5_0, ref_quantize_q5_0,
-                true, ggml_cuda_quantize_q5_0_imatrix, ref_quantize_q5_0_imatrix, true },
-        { "q6_0", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), ggml_cuda_quantize_q6_0, ref_quantize_q6_0,
+        { "q5_0-imatrix", GGML_TYPE_Q5_0, QK5_0, sizeof(block_q5_0), cuda_wraps::q5_0, ref_quantize_q5_0,
+                true, cuda_wraps::q5_0_imatrix, ref_quantize_q5_0_imatrix, true },
+        // --- Removable Q4_0 specs ---
+        { "q4_0", GGML_TYPE_Q4_0, QK4_0, sizeof(block_q4_0), cuda_wraps::q4_0, ref_quantize_q4_0,
                 false, nullptr, nullptr },
-        { "q6_0-imatrix", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), ggml_cuda_quantize_q6_0, ref_quantize_q6_0,
-                true, ggml_cuda_quantize_q6_0_imatrix, ref_quantize_q6_0_imatrix, true },
+        { "q4_0-imatrix", GGML_TYPE_Q4_0, QK4_0, sizeof(block_q4_0), cuda_wraps::q4_0, ref_quantize_q4_0,
+                true, cuda_wraps::q4_0_imatrix, ref_quantize_q4_0_imatrix, true },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);
 
