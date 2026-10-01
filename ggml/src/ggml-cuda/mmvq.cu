@@ -7,6 +7,125 @@
 
 #include "mmvq-templates.cuh"
 
+// IQ3KS_R16 (type 46) dp4a MMVQ: same band addressing as the f16 kernel.
+// Multi-warp: the block's warps split the (tile,group) work items of the
+// 4-row slice; the per-warp partial sums combine via shared memory.
+static __global__ void mul_mat_vec_iq3ks_r16_band_q8_1_kernel(const mmvq_args args) {
+
+    // band-cooperative, 4-row slices: one block owns a 4-row slice of a
+    // band; lanes cover (tile,group) pairs strided by 32*nwarps; the q8_1 y
+    // ints are loaded once per pair and reused across the 4 rows (4x fewer
+    // y loads than row-per-warp) while keeping block-level parallelism at
+    // nrows/4. Decode is the packed prmt/dp4a version (bit-exact vs the
+    // byte-wise decode: standalone probes 0/16 mismatches vs both the CPU
+    // reference and the previous kernel).
+
+    const int lane = threadIdx.x;
+    const int warp = threadIdx.y;
+    const int nwarps = blockDim.y;
+    const int band = blockIdx.x >> 2;            // 16-row band index
+    const int r0   = (blockIdx.x & 3) * 4;       // first row within the band
+    const int i2   = blockIdx.z;
+
+    const int ntiles = args.ncols_x / QK3KS_G128;
+    const size_t band_size = 32 + (size_t)ntiles * 16 * sizeof(block_q3ks_g128);
+    const char * xr = (const char *)args.vx_u + i2*args.nb02 + (size_t)band*band_size;
+
+    const auto * vtab = (const uint32_t *)iq3nl_values;
+
+    float acc[4];
+    #pragma unroll
+    for (int r = 0; r < 4; ++r) acc[r] = 0.f;
+
+    const int blocks_per_col_y = args.nrows_y / QK8_1;
+
+    for (int ig = lane + 32*warp; ig < ntiles*4; ig += 32*nwarps) {
+        const int ibl = ig >> 2;
+        const int g   = ig & 3;
+
+        // y-side: one q8_1 block per (tile,group); ints loaded once here,
+        // reused by the 4 rows of this block's slice.
+        const block_q8_1 * yb = (const block_q8_1 *)((const char *)args.vy + i2*args.nb12)
+                                + blockIdx.y*blocks_per_col_y + ibl*4 + g;
+        const float yd = __half2float(yb->data.d);
+        const int * ya = (const int *)yb->qs;
+
+        const int sh = 2*g;
+
+        for (int r = 0; r < 4; ++r) {
+            const uint8_t * braw = (const uint8_t *)(xr + 32 + (size_t)ibl*16*sizeof(block_q3ks_g128)
+                                                     + (size_t)(r0 + r)*sizeof(block_q3ks_g128));
+            const uint32_t sb = ((uint32_t)(uintptr_t)braw) & 3;   // braw % 4
+            const uint32_t * C = (const uint32_t *)(braw - sb);    // 4-aligned window
+            const uint8_t ex = braw[50];
+            const uint32_t aux = (uint32_t)braw[48] | ((uint32_t)braw[49] << 8);
+            const int ul = ((aux >> (4*g)) & 0xf) | (((ex >> g) & 1) << 4);
+            const float d = __half2float(__ushort_as_half(
+                (uint16_t)(uint8_t)xr[2*(r0 + r)] | ((uint16_t)(uint8_t)xr[2*(r0 + r)+1] << 8)));
+            const float dl = d * (ul - 16);
+            const int it = ((ex >> (4+g)) & 1) << 1;
+            const uint32_t Tl = vtab[it+0];
+            const uint32_t Th = vtab[it+1];
+
+            int isumi1 = 0, isumi2 = 0;
+            #pragma unroll
+            for (int s4 = 0; s4 < 4; ++s4) {
+                // aligned u32 loads + funnel realignment (13 loads / 12 shifts per 32
+                // weights, vs 48 byte loads + address math): C[2s4], C[2s4+1] cover
+                // qs bytes 8s4..8s4+8; C[8+s4], C[9+s4] cover qh bytes 4s4..4s4+4.
+                const uint32_t QA = __funnelshift_r(C[2*s4+0], C[2*s4+1], 8*sb);
+                const uint32_t QB = __funnelshift_r(C[2*s4+1], C[2*s4+2], 8*sb);
+                const uint32_t H  = __funnelshift_r(C[8+s4+0], C[8+s4+1], 8*sb);
+                const uint32_t A = (QA >> sh) & 0x03030303u;
+                const uint32_t B = (QB >> sh) & 0x03030303u;
+                const uint32_t Wq = __byte_perm(A | (A >> 4), B | (B >> 4), 0x6420);
+                const uint32_t W = Wq | (((H >> g) & 0x11111111u) << 2);
+                const int vlo = __byte_perm(Tl, Th, W);
+                const int vhi = __byte_perm(Tl, Th, W >> 16);
+                isumi1 = ggml_cuda_dp4a(vlo, ya[2*s4+0], isumi1);
+                isumi2 = ggml_cuda_dp4a(vhi, ya[2*s4+1], isumi2);
+            }
+            acc[r] += dl * yd * (float)(isumi1 + isumi2);
+        }
+    }
+
+    #pragma unroll
+    for (int r = 0; r < 4; ++r) acc[r] = warp_reduce_sum(acc[r]);
+
+    __shared__ float red[8][4];
+    if (lane == 0) {
+        #pragma unroll
+        for (int r = 0; r < 4; ++r) red[warp][r] = acc[r];
+    }
+    __syncthreads();
+
+    if (warp == 0 && lane < 4) {
+        float result = 0.f;
+        #pragma unroll
+        for (int w = 0; w < 8; ++w) {
+            if (w < nwarps) result += red[w][lane];
+        }
+        const int row = (int)blockIdx.x*4 + lane;
+        if (args.bias_u) {
+            result += ((const float *)args.bias_u)[row];
+        }
+        float * dst = (float *)((char *)args.dst + i2*args.nb2);
+        dst[blockIdx.y*args.nrows_dst + row] = result;
+    }
+}
+
+void mul_mat_vec_iq3ks_r16_q8_1_cuda(const mmvq_args & args, cudaStream_t stream) {
+    GGML_ASSERT(args.ncols_x % QK3KS_G128 == 0);
+    GGML_ASSERT(args.nrows_x % 16 == 0);
+    const int npairs = (args.ncols_x / QK3KS_G128) * 4;
+    // warps split the (tile,group) work items: 1 warp covers <=32 items;
+    // long-K layers (hidden 2048/8192: 16-64 tiles) get 2-4 warps so each
+    // lane iterates ~1-3 chunks instead of serially walking all of K.
+    const int nwarps = npairs >= 128 ? 4 : (npairs >= 64 ? 2 : 1);
+    const dim3 block(32, nwarps, 1);
+    const dim3 grid(args.nrows_x/4, args.ncols_y, args.ne2);
+    mul_mat_vec_iq3ks_r16_band_q8_1_kernel<<<grid, block, 0, stream>>>(args);
+}
 static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggml_type type,
         const int64_t ne00, const int64_t ne0, const int64_t ne2,
         const int64_t nb02, const int64_t nb12, const int64_t nb2, const int64_t ids_nb0, const int64_t bias_nb1,
@@ -46,6 +165,9 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
     };
 
     switch (type) {
+        case GGML_TYPE_IQ3KS_R16:
+            mul_mat_vec_iq3ks_r16_q8_1_cuda(args, stream);
+            break;
         case GGML_TYPE_Q4_0:
             mul_mat_vec_q4_0_q8_1_cuda(args, stream);
             break;
@@ -134,7 +256,6 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
         case GGML_TYPE_IQ5_KS_R4:
         case GGML_TYPE_IQ1_S_R4:
         case GGML_TYPE_IQ1_M_R4:
-        case GGML_TYPE_IQ3KS_R16:
             iqk_mul_mat_vec_q(type, args, stream);
             break;
         default:
