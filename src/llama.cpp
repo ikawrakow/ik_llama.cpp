@@ -5133,13 +5133,14 @@ static bool llm_load_tensors(
                 model.bufs.push_back(buf);
                 bufs.emplace(idx, buf);
 #ifdef GGML_USE_CUDA
-                // Never pin ranges over deferred tables; those tensors use staging copies.
-                if (n_layer >= n_gpu_layers && !ml.ple_range_overlaps(idx, first, last)) {
+                // Pin only resident ranges: cudaHostRegister promises residency, which
+                // cold file pages break; unpinned ranges transparently use copies.
+                if (n_layer >= n_gpu_layers && !defer_ple_mmap && !ml.ple_range_overlaps(idx, first, last)) {
                     ggml_backend_cuda_register_host_buffer(
                         ggml_backend_buffer_get_base(buf),
                         ggml_backend_buffer_get_size(buf));
                 } else if (n_layer >= n_gpu_layers) {
-                    LLAMA_LOG_DEBUG("%s: skipped CUDA host pinning for buffer overlapping deferred tables (file %u)\n",
+                    LLAMA_LOG_DEBUG("%s: skipped CUDA host pinning for file %u (defer-ple residency: unpinned ranges copy instead)\n",
                             __func__, idx);
                 }
 #endif
