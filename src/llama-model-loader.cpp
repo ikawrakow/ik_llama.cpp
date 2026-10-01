@@ -1332,7 +1332,7 @@ bool llama_model_loader::load_all_data(
             }
 
             // Merged views share no file range: malloc the base once if needed,
-            // resolve the view into it, stream this slice from the mapping.
+            // resolve the view, stream this slice without faulting the mapping on Windows.
             if (cur->view_src != NULL && cur->buffer == nullptr) {
                 struct ggml_tensor * base = cur->view_src;
                 if (base->buffer == nullptr) {
@@ -1351,7 +1351,14 @@ bool llama_model_loader::load_all_data(
                     }
                 }
                 ggml_backend_view_init(cur);
+#if defined(_WIN32)
+                // File stream, not mapping: slice copies would pin tens of GB
+                // of fused-expert file pages in the working set for no benefit.
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(cur->data, n_size);
+#else
                 ggml_backend_tensor_set(cur, data, 0, n_size);
+#endif
                 return n_size;
             }
 
