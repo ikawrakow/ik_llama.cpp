@@ -806,6 +806,10 @@ struct ggml_backend_cpu_context {
     void *              abort_callback_data;
 
     bool moe_expert_prefetch;
+
+    // optional per-thread CPU affinity
+    int32_t cpu_affinity[GGML_MAX_CPU_AFFINITY];
+    int32_t n_cpu_affinity;
 };
 
 GGML_CALL static const char * ggml_backend_cpu_name(ggml_backend_t backend) {
@@ -851,6 +855,8 @@ GGML_CALL static ggml_backend_graph_plan_t ggml_backend_cpu_graph_plan_create(gg
     cpu_plan->cplan.abort_callback      = cpu_ctx->abort_callback;
     cpu_plan->cplan.abort_callback_data = cpu_ctx->abort_callback_data;
     cpu_plan->cplan.moe_expert_prefetch = cpu_ctx->moe_expert_prefetch;
+    cpu_plan->cplan.cpu_affinity        = cpu_ctx->cpu_affinity;
+    cpu_plan->cplan.n_cpu_affinity      = cpu_ctx->n_cpu_affinity;
 
     return cpu_plan;
 }
@@ -891,6 +897,8 @@ GGML_CALL static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t 
     cplan.abort_callback      = cpu_ctx->abort_callback;
     cplan.abort_callback_data = cpu_ctx->abort_callback_data;
     cplan.moe_expert_prefetch = cpu_ctx->moe_expert_prefetch;
+    cplan.cpu_affinity        = cpu_ctx->cpu_affinity;
+    cplan.n_cpu_affinity      = cpu_ctx->n_cpu_affinity;
 
     return ggml_graph_compute(cgraph, &cplan);
 }
@@ -970,6 +978,7 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     ctx->abort_callback      = NULL;
     ctx->abort_callback_data = NULL;
     ctx->moe_expert_prefetch = false;
+    ctx->n_cpu_affinity      = 0;
 
     ggml_backend_t cpu_backend = (ggml_backend_t)malloc(sizeof(struct ggml_backend));
     if (cpu_backend == NULL) {
@@ -1001,6 +1010,20 @@ void ggml_backend_cpu_set_moe_expert_prefetch(ggml_backend_t backend_cpu, bool e
 
     struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
     ctx->moe_expert_prefetch = enable;
+}
+
+void ggml_backend_cpu_set_cpu_affinity(ggml_backend_t backend_cpu, const int32_t * cpus, int n_cpus) {
+    GGML_ASSERT(ggml_backend_is_cpu(backend_cpu));
+    GGML_ASSERT(n_cpus >= 0 && n_cpus <= GGML_MAX_CPU_AFFINITY);
+    GGML_ASSERT(n_cpus == 0 || cpus != NULL);
+
+    struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
+
+    ctx->n_cpu_affinity = 0;
+    if (n_cpus > 0) {
+        memcpy(ctx->cpu_affinity, cpus, (size_t)n_cpus * sizeof(int32_t));
+        ctx->n_cpu_affinity = n_cpus;
+    }
 }
 
 void ggml_backend_cpu_set_abort_callback(ggml_backend_t backend_cpu, ggml_abort_callback abort_callback, void * abort_callback_data) {

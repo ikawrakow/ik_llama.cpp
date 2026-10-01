@@ -9506,6 +9506,10 @@ struct llama_context * llama_init_from_model(
         }
         ctx->backends.push_back(ctx->backend_cpu);
 
+        if (params.cpu_affinity != NULL && params.n_cpu_affinity > 0) {
+            llama_set_cpu_affinity(ctx, params.cpu_affinity, params.n_cpu_affinity);
+        }
+
         if (!llama_kv_cache_init(ctx->kv_self, ctx, type_k, type_v, params.idx_type_k, kv_size, cparams.offload_kqv,
                     params.type_k_first, params.type_k_last, params.type_v_first, params.type_v_last,
                     params.n_k_first, params.n_k_last, params.n_v_first, params.n_v_last)) {
@@ -12766,6 +12770,14 @@ size_t llama_state_seq_load_file(struct llama_context * ctx, const char * filepa
 void llama_set_n_threads(struct llama_context * ctx, uint32_t n_threads, uint32_t n_threads_batch) {
     ctx->cparams.n_threads       = n_threads;
     ctx->cparams.n_threads_batch = n_threads_batch;
+}
+
+void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus) {
+    if (ctx->backend_cpu == nullptr) {
+        return;
+    }
+
+    ggml_backend_cpu_set_cpu_affinity(ctx->backend_cpu, cpus, n_cpus);
 }
 
 uint32_t llama_n_threads(struct llama_context * ctx) {
