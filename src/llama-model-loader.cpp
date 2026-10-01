@@ -1300,6 +1300,7 @@ bool llama_model_loader::load_all_data(
                         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
                     }
                     ggml_backend_tensor_alloc(owned, cur, base);
+                    ggml_backend_buffer_set_usage(owned, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                     model->bufs.push_back(owned);
                     return n_size;
                 }
@@ -1342,6 +1343,7 @@ bool llama_model_loader::load_all_data(
                         throw std::runtime_error(format("unable to allocate merged base for tensor '%s'", ggml_get_name(cur)));
                     }
                     ggml_backend_tensor_alloc(bbuf, base, ggml_backend_buffer_get_base(bbuf));
+                    ggml_backend_buffer_set_usage(bbuf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                     model->bufs.push_back(bbuf);
                     if (lmlocks) {
                         model->mlock_bufs.emplace_back(new llama_mlock);
