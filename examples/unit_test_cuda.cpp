@@ -86,6 +86,9 @@ struct quant_spec {
     size_t (*cuda_quantize_imatrix)(const float *, void *, int64_t, int64_t, const float *);
     void (*ref_imatrix)(void *, const float *, int64_t, int64_t, const float *);
     bool         nan_d_equal; // treat fp16 NaN scale (d) as equal even if sign/payload differs
+    bool         nan_block_equal; // skip the whole block when both d are NaN (degenerate
+                                 // overflow blocks: L bytes come from UB integer casts
+                                 // of NaN, which differ x86 (INT_MIN) vs CUDA (0))
 };
 
 // The local refs below replay ggml-quants.c bit-for-bit. The CPU side carries
@@ -520,6 +523,8 @@ static void ref_quantize_q5_1(void * dst, const float * src, int64_t nrows, int6
 
 // Host copy of make_qkx3_quants (ggml-quants.c:2211) for the Q4_1/Q5_1 imatrix
 // refs. Verbatim order, double accumulators, nearest-even magic rounding.
+// FP_CONTRACT OFF (like ggml-quants.c): a fused FMA would flip exact ties.
+#pragma STDC FP_CONTRACT OFF
 static inline int ref_kx3_nearest_int(float fval) {
     float val = fval + 12582912.f;
     int i; memcpy(&i, &val, sizeof(int));
@@ -662,6 +667,7 @@ static float ref_make_qkx3_quants(int n, int nmax, const float * x, const float 
     *the_min = -min;
     return scale;
 }
+#pragma STDC FP_CONTRACT ON
 
 // Local copy of quantize_row_q5_1_impl: make_qkx3 (nmax=31), no fudge.
 static void ref_quantize_q5_1_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
@@ -683,8 +689,10 @@ static void ref_quantize_q5_1_imatrix(void * dst, const float * src, int64_t nro
             for (int j = 0; j < QK5_1; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
             float the_min;
             float d = ref_make_qkx3_quants(QK5_1, 31, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
-            y[ib].d = (ggml_half)__half_as_ushort(__float2half_rn(d));
-            y[ib].m = (ggml_half)__half_as_ushort(__float2half_rn(-the_min));
+            // bit-twiddle FP16 (not hardware RN): NaN-scale payload must match
+            // ggml_compute_fp32_to_fp16, whose sign derives from x86 operands.
+            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(d);
+            y[ib].m = (ggml_half)fp32_to_fp16_ggml_host(-the_min);
 
             uint32_t qh = 0;
             for (int j = 0; j < QK5_1/2; ++j) {
@@ -719,8 +727,9 @@ static void ref_quantize_q4_1_imatrix(void * dst, const float * src, int64_t nro
             for (int j = 0; j < QK4_1; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
             float the_min;
             float d = ref_make_qkx3_quants(QK4_1, 15, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
-            y[ib].d = (ggml_half)__half_as_ushort(__float2half_rn(d));
-            y[ib].m = (ggml_half)__half_as_ushort(__float2half_rn(-the_min));
+            // bit-twiddle FP16 (see Q5_1 imatrix ref): NaN payload must match.
+            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(d);
+            y[ib].m = (ggml_half)fp32_to_fp16_ggml_host(-the_min);
             for (int j = 0; j < QK4_1/2; ++j) {
                 y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_1/2] << 4));
             }
@@ -845,7 +854,8 @@ static void ref_quantize_iq4_nl(void * dst, const float * src, int64_t nrows, in
             scale = d;
         }
 
-        yb->d = (ggml_half)__half_as_ushort(__float2half_rn(scale));
+        // bit-twiddle FP16 (see Q5_1 imatrix ref): NaN payload must match.
+        yb->d = (ggml_half)fp32_to_fp16_ggml_host(scale);
         {
             float idf = scale ? 1/scale : 0.0f;
             for (int j = 0; j < QK4_NL; ++j) {
@@ -969,7 +979,8 @@ static void ref_quantize_iq4_xs(void * dst, const float * src, int64_t nrows, in
         }
 
         float gd = -max_scale/32.0f;
-        yb->d = (ggml_half)__half_as_ushort(__float2half_rn(gd));
+        // bit-twiddle FP16 (see Q5_1 imatrix ref): NaN payload must match.
+        yb->d = (ggml_half)fp32_to_fp16_ggml_host(gd);
         float gid = gd ? 1/gd : 0.0f;
         uint16_t scales_h = 0;
         for (int ib = 0; ib < 8; ++ib) {
@@ -1182,11 +1193,22 @@ static void dump_block(const char * who, const uint8_t * blk, size_t blk_size) {
 static bool is_fp16_nan(uint16_t v) {
     return ((v >> 10) & 0x1f) == 0x1f && (v & 0x03ff) != 0;
 }
-
 static int64_t compare_buffers(const char * tag, const uint8_t * a, const uint8_t * b, size_t n, size_t blk_size,
-        bool nan_d_equal = false) {    int64_t ndiff = 0;
+        bool nan_d_equal = false, bool nan_block_equal = false) {
+    int64_t ndiff = 0;
     int64_t first_blk = -1;
-    for (size_t i = 0; i < n; ++i) {
+    for (size_t blk = 0; blk < n; blk += blk_size) {
+        // Whole-block NaN skip (see quant_spec::nan_block_equal): a degenerate
+        // overflow block stores a NaN d on both sides, but the remaining bytes
+        // derive from UB float->int casts of NaN, which differ by platform.
+        if (nan_block_equal && blk + 1 < n) {
+            const uint16_t da = (uint16_t)a[blk] | (uint16_t)(a[blk+1] << 8);
+            const uint16_t db = (uint16_t)b[blk] | (uint16_t)(b[blk+1] << 8);
+            if (is_fp16_nan(da) && is_fp16_nan(db)) {
+                continue;
+            }
+        }
+        for (size_t i = blk; i < blk + blk_size && i < n; ++i) {
         // The block scale d is the first 2 bytes (little-endian) of every
         // quant block. The imatrix quantizer can legitimately produce a NaN
         // scale for degenerate blocks (e.g. huge |x| makes x*x overflow so the
@@ -1206,6 +1228,7 @@ static int64_t compare_buffers(const char * tag, const uint8_t * a, const uint8_
         if (a[i] != b[i]) {
             ++ndiff;
             if (first_blk < 0) first_blk = (int64_t)i / blk_size;
+        }
         }
     }
     if (first_blk >= 0) {
@@ -1274,8 +1297,8 @@ static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
     char tag_gc[128], tag_cr[128];
     snprintf(tag_gc, sizeof(tag_gc), "%s gpu/cpu", tag);
     snprintf(tag_cr, sizeof(tag_cr), "%s cpu/ref", tag);
-    const int64_t d_gpu_cpu = compare_buffers(tag_gc, out_gpu.data(), out_cpu.data(), out_size, spec.blk_size, spec.nan_d_equal);
-    const int64_t d_cpu_ref = compare_buffers(tag_cr, out_cpu.data(), out_ref.data(), out_size, spec.blk_size, spec.nan_d_equal);
+    const int64_t d_gpu_cpu = compare_buffers(tag_gc, out_gpu.data(), out_cpu.data(), out_size, spec.blk_size, spec.nan_d_equal, spec.nan_block_equal);
+    const int64_t d_cpu_ref = compare_buffers(tag_cr, out_cpu.data(), out_ref.data(), out_size, spec.blk_size, spec.nan_d_equal, spec.nan_block_equal);
 
     if (d_gpu_cpu == 0 && d_cpu_ref == 0) {
         printf("  [OK]   %s nrows=%-6lld n_per_row=%-5lld : gpu==cpu==ref\n",
@@ -1481,17 +1504,17 @@ int main(int argc, char ** argv) {
         { "q5_1", GGML_TYPE_Q5_1, QK5_1, sizeof(block_q5_1), cuda_wraps::q5_1, ref_quantize_q5_1,
                 false, nullptr, nullptr },
         { "q5_1-imatrix", GGML_TYPE_Q5_1, QK5_1, sizeof(block_q5_1), cuda_wraps::q5_1, ref_quantize_q5_1,
-                true, cuda_wraps::q5_1_imatrix, ref_quantize_q5_1_imatrix, true },
+                true, cuda_wraps::q5_1_imatrix, ref_quantize_q5_1_imatrix, true, true },
         { "q4_1", GGML_TYPE_Q4_1, QK4_1, sizeof(block_q4_1), cuda_wraps::q4_1, ref_quantize_q4_1,
                 false, nullptr, nullptr },
         { "q4_1-imatrix", GGML_TYPE_Q4_1, QK4_1, sizeof(block_q4_1), cuda_wraps::q4_1, ref_quantize_q4_1,
-                true, cuda_wraps::q4_1_imatrix, ref_quantize_q4_1_imatrix, true },
+                true, cuda_wraps::q4_1_imatrix, ref_quantize_q4_1_imatrix, true, true },
         // IQ4_NL plain only (imatrix falls back to CPU in the dispatcher)
         { "iq4_nl", GGML_TYPE_IQ4_NL, QK4_NL, sizeof(block_iq4_nl), cuda_wraps::iq4_nl, ref_quantize_iq4_nl,
-                false, nullptr, nullptr },
+                false, nullptr, nullptr, false, true },
         // IQ4_XS plain only (imatrix falls back to CPU in the dispatcher)
         { "iq4_xs", GGML_TYPE_IQ4_XS, QK_K, sizeof(block_iq4_xs), cuda_wraps::iq4_xs, ref_quantize_iq4_xs,
-                false, nullptr, nullptr },
+                false, nullptr, nullptr, false, true },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);
 

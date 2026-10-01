@@ -742,8 +742,11 @@ static __global__ void quantize_q4_1_imatrix_kernel(
     const float d = make_qkx3_quants_device(QK4_1, 15, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
 
     block_q4_1 * y = (block_q4_1 *)vy;
-    // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
-    y[ib].dm = __floats2half2_rn(d, -the_min);
+    // bit-twiddle FP16 (not half2-RN): degenerate blocks can yield a NaN
+    // scale whose sign/payload is CPU-vendor semantics; the twiddle replicates
+    // ggml_compute_fp32_to_fp16 exactly.
+    y[ib].dm = __halves2half2(__ushort_as_half(fp32_to_fp16_ggml(d)),
+                              __ushort_as_half(fp32_to_fp16_ggml(-the_min)));
     for (int j = 0; j < QK4_1/2; ++j) {
         y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_1/2] << 4));
     }
@@ -896,8 +899,10 @@ static __global__ void quantize_iq4_nl_kernel(
 
     // NL finalize: dh = FP16(scale*fudge), fudge = 1; re-quant with final scale
     // (id = 0 when scale = 0, so 0*xb runs too, matching the CPU exactly).
+    // Bit-twiddle FP16: a degenerate (overflow) block yields a NaN scale whose
+    // payload must match ggml_compute_fp32_to_fp16, not hardware canonical.
     block_iq4_nl * y = (block_iq4_nl *)vy;
-    y[ib].d = __float2half_rn(scale);
+    y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(scale));
     {
         const float idf = scale ? __fdiv_rn(1.0f, scale) : 0.0f;
         for (int j = 0; j < QK4_NL; ++j) {
@@ -1035,9 +1040,10 @@ static __global__ void quantize_iq4_xs_kernel(
     }
 
     // Global scale + re-quant (verbatim CPU order, fudge = 1).
+    // Bit-twiddle FP16 (see NL kernel): NaN-scale payload must match.
     block_iq4_xs * y = (block_iq4_xs *)vy;
     const float gd = -max_scale/32.0f;
-    y[sb].d = __float2half_rn(gd);
+    y[sb].d = __ushort_as_half(fp32_to_fp16_ggml(gd));
     const float gid = gd ? __fdiv_rn(1.0f, gd) : 0.0f;
     uint16_t scales_h = 0;
     for (int ib = 0; ib < 8; ++ib) {
@@ -1135,8 +1141,9 @@ static __global__ void quantize_q5_1_imatrix_kernel(
     const float d = make_qkx3_quants_device(QK5_1, 31, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
 
     block_q5_1 * y = (block_q5_1 *)vy;
-    // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
-    y[ib].dm = __floats2half2_rn(d, -the_min);
+    // bit-twiddle FP16 (see Q4_1 imatrix kernel): NaN-scale payload must match.
+    y[ib].dm = __halves2half2(__ushort_as_half(fp32_to_fp16_ggml(d)),
+                              __ushort_as_half(fp32_to_fp16_ggml(-the_min)));
 
     uint32_t qh = 0;
     for (int j = 0; j < QK5_1/2; ++j) {
