@@ -1330,6 +1330,30 @@ bool llama_model_loader::load_all_data(
                             }));
             }
 
+            // Merged views share no file range: malloc the base once if needed,
+            // resolve the view into it, stream this slice from the mapping.
+            if (cur->view_src != NULL && cur->buffer == nullptr) {
+                struct ggml_tensor * base = cur->view_src;
+                if (base->buffer == nullptr) {
+                    const size_t base_size = ggml_nbytes(base);
+                    ggml_backend_buffer_t bbuf = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), base_size);
+                    if (bbuf == nullptr) {
+                        throw std::runtime_error(format("unable to allocate merged base for tensor '%s'", ggml_get_name(cur)));
+                    }
+                    ggml_backend_tensor_alloc(bbuf, base, ggml_backend_buffer_get_base(bbuf));
+                    model->bufs.push_back(bbuf);
+                    if (lmlocks) {
+                        model->mlock_bufs.emplace_back(new llama_mlock);
+                        auto & mlock_buf = model->mlock_bufs.back();
+                        mlock_buf->init   (ggml_backend_buffer_get_base(bbuf));
+                        mlock_buf->grow_to(ggml_backend_buffer_get_size(bbuf));
+                    }
+                }
+                ggml_backend_view_init(cur);
+                ggml_backend_tensor_set(cur, data, 0, n_size);
+                return n_size;
+            }
+
             GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
             if (buf_mmap && cur->data == nullptr) {
                 ggml_backend_tensor_alloc(buf_mmap, cur, data);
