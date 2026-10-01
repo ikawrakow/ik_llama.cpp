@@ -5568,7 +5568,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             if (ml.ple_tensor_index.empty()) {
                 LLAMA_LOG_WARN("%s: --defer-ple had no effect: no per-layer token embedding or engram tables\n", __func__);
             } else if (!params.use_mmap) {
-                // Mappings are kept for deferred tables; everything else is copied.
+                // Mappings are kept for deferred tables; dense handling depends
+                // on -rtr (see llm_load_tensors): copied under --no-mmap, aliased otherwise.
                 LLAMA_LOG_INFO("%s: mmap is disabled, file mappings will be kept for the deferred tables only\n", __func__);
             }
 #else
