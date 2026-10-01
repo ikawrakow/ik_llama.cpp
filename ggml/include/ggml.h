@@ -426,7 +426,6 @@ extern "C" {
         GGML_TYPE_I2_S      = 36,  // So we are able to consume MS BitNet I2_S quants
         GGML_TYPE_MXFP4     = 39,  // so we are compatible with mainline
         GGML_TYPE_Q1_0_G128 = 41,  // Bonsai 1-bit quants
-        GGML_TYPE_IQ3KS_R16 = 354, // 16-row interleaved iq3ks-class codebook 3-bit (K1 superblocks, per-row d hoisted to band header)
         //
         //
         GGML_TYPE_Q8_0_X4 = 97,
@@ -492,6 +491,7 @@ extern "C" {
         GGML_TYPE_IQ4_KS_R16= 345,
         GGML_TYPE_IQ5_KS_R4 = 352,
         GGML_TYPE_MXFP4_R8  = 353,
+        GGML_TYPE_IQ3KS_R16 = 354,
         GGML_TYPE_Q8_K_R16  = 397,
         GGML_TYPE_Q8_KV_R8  = 398,
         GGML_TYPE_Q8_K_R8   = 399,

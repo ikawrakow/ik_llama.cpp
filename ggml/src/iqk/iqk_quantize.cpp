@@ -3010,7 +3010,7 @@ static void quantize_row_q3ks_g128_impl(int n_per_row, const float * x, char * c
 
 
 
-size_t quantize_q3ks_g128(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
+static size_t quantize_q3ks_g128(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         const quantize_user_data * user_data) {
     constexpr int kBlockSize = 32;
     GGML_ASSERT(n_per_row%QK3KS_G128 == 0);

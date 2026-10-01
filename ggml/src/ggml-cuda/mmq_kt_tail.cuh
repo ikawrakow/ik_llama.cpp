@@ -2,16 +2,12 @@
 
 template <ggml_type type> struct mmq_kt_tail { static constexpr bool value = false; };
 
-// IQ3KS_R16 (type 46): rows are 128-weight granular; ne00 % 256 is either 0 or
-// 128, so the tail is always exactly one 128-weight superblock (nt == 4). The
-// second half of the 256-col iteration is zero-filled so the shared
-// vec_dot_q8_0_q8_1_{dp4a,mma} kernels contribute nothing for it.
 template <> struct mmq_kt_tail<GGML_TYPE_IQ3KS_R16> {
     static constexpr bool value = true;
     template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load(
         const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, const int & nt) {
 
-        GGML_UNUSED(nt); // always 4 for this type (ne00 % 256 == 128 when there is a tail)
+        GGML_UNUSED(nt);
 
 #ifdef INT8_MMA_AVAILABLE
         int   * x_qs = (int   *)  x_tile;
@@ -37,15 +33,12 @@ template <> struct mmq_kt_tail<GGML_TYPE_IQ3KS_R16> {
             const char * band = x + (i - ir)*stride;
             const float d = __half2float(((const half *)band)[ir]);
 
-            // the tail superblock = first SB of the (partial) 256-col block
             const block_q3ks_g128 * sb = (const block_q3ks_g128 *)(band + 32 + (2*kbx0)*16*sizeof(block_q3ks_g128)) + ir;
 
-            // byte-wise read: odd row offsets (51 B) misalign get_int_b2
             const int ql = get_int_b1(sb->qs, kqsx);
 
             const uint32_t h0 = sb->qh[2*kqsx + 0];
             const uint32_t h1 = sb->qh[2*kqsx + 1];
-            // byte m of qhk = weight (4*kqsx+m)'s code: see the byte-comment in mmq.cuh
         const uint32_t qhk = (h0 & 0xf) | ((h0 & 0xf0) << 4) | ((h1 & 0x0f) << 16) | ((h1 & 0xf0) << 20);
 
             const uint32_t cb32 = uint32_t((sb->extra >> 4) & 0xf) * 0x01010101;
@@ -62,7 +55,6 @@ template <> struct mmq_kt_tail<GGML_TYPE_IQ3KS_R16> {
             x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx +  8] = v2.x;
             x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 16] = v1.y;
             x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 24] = v2.y;
-            // no second superblock in the tail block
             x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 32] = 0;
             x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 40] = 0;
             x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 48] = 0;

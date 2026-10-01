@@ -2884,12 +2884,6 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     }
 }
 
-// IQ3KS_R16 (type 46): 16-row interleaved K1 superblocks. Same dequant math as
-// IQ3_KS, but rows are interleaved in 16-row bands:
-//   band = [16 x fp16 d] + (n/128) tiles of 16 row-major block_q3ks_g128.
-// Per 256-col iteration (qk = QK_K) the tile covers 2 consecutive superblocks;
-// the shared-memory layout written here is identical to load_tiles_iq3_ks so
-// the shared vec_dot_q8_0_q8_1_{dp4a,mma} kernels can be reused.
 template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq3ks_r16(
     const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride) {
 
@@ -2913,16 +2907,14 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const int ir = i % 16;                     // row within the band
-        const char * band = x + (i - ir)*stride;   // band base = 16*stride bytes
+        const int ir = i % 16;
+        const char * band = x + (i - ir)*stride;
         const float d = __half2float(((const half *)band)[ir]);
 
 #pragma unroll
         for (int l = 0; l < 2; ++l) {
             const block_q3ks_g128 * sb = (const block_q3ks_g128 *)(band + 32 + (2*kbx0 + l)*16*sizeof(block_q3ks_g128)) + ir;
 
-            // byte-wise read: the R16 rows have odd byte offsets (51 B), so the
-            // 2-byte-aligned get_int_b2 would fault (misaligned address)
             const int ql = get_int_b1(sb->qs, kqsx);
 
             // our nibble-packed qh -> IQ3_KS-style byte: byte m = group p's high
@@ -2930,11 +2922,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             // individually to stay 2-byte aligned.
             const uint32_t h0 = sb->qh[2*kqsx + 0];
             const uint32_t h1 = sb->qh[2*kqsx + 1];
-            // qh nibble assembly: byte m of qhk = the 4-bit code (per group) of
-        // weight (4*kqsx+m). Byte1 = h0's HIGH nibble -> <<4; byte2 = h1's LOW
-        // nibble -> <<16; byte3 = h1's HIGH nibble -> <<20. (Earlier <<8/<<12
-        // collided with byte1's bits and misassigned the nibbles.)
-        const uint32_t qhk = (h0 & 0xf) | ((h0 & 0xf0) << 4) | ((h1 & 0x0f) << 16) | ((h1 & 0xf0) << 20);
+            const uint32_t qhk = (h0 & 0xf) | ((h0 & 0xf0) << 4) | ((h1 & 0x0f) << 16) | ((h1 & 0xf0) << 20);
 
             const uint32_t cb32 = uint32_t((sb->extra >> 4) & 0xf) * 0x01010101;
 
@@ -2958,7 +2946,6 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #endif // INT8_MMA_AVAILABLE
         }
 
-        // scale of group kqsx: SB = 2*kbx0 + kqsx/4, group within SB = kqsx%4
         const block_q3ks_g128 * sbg = (const block_q3ks_g128 *)(band + 32 + (2*kbx0 + kqsx/4)*16*sizeof(block_q3ks_g128)) + ir;
         const int ulg = (int)((sbg->scales[(kqsx%4)/2] >> 4*((kqsx%4)%2)) & 0xf) | (((sbg->extra >> (kqsx%4)) & 1) << 4);
 
