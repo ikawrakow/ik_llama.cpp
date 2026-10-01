@@ -1730,6 +1730,12 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
+// Byte-exact CUDA GGUF quantization (ggml-cuda/quantize_gguf.cu) replays this
+// sequential greedy/coordinate-descent optimizer bit-for-bit on the GPU with
+// correctly-rounded intrinsics. Forbid FMA contraction so a /arch:AVX2 build
+// cannot contract sumlx += w*x*l and drift ~1 ulp. FP_CONTRACT is standard:
+// honored by clang; MSVC cl ignores it (harmless, cl never contracts).
+#pragma STDC FP_CONTRACT OFF
 static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, int rmse_type,
         const float * restrict qw) {
     float max = 0;
@@ -1855,6 +1861,7 @@ static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * 
     }
     return scale;
 }
+#pragma STDC FP_CONTRACT ON
 
 static float make_q3_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, bool do_rmse) {
     float max = 0;
@@ -3380,6 +3387,9 @@ size_t quantize_q6_K(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// See FP_CONTRACT note above make_qx_quants: per-block weight and sigma2 must
+// not be FMA-contracted (CUDA replays them byte-for-bit).
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK4_0 == 32, "QK4_0 must be 32");
 
@@ -3413,6 +3423,7 @@ static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restri
         }
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 static void quantize_row_q4_0_symmetric(const float * restrict x, block_q4_0 * restrict y, int64_t k) {
     static const int qk = QK4_0;
@@ -3514,6 +3525,8 @@ size_t quantize_q4_1(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// See FP_CONTRACT note above make_qx_quants.
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK5_0 == 32, "QK5_0 must be 32");
 
@@ -3553,6 +3566,7 @@ static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restri
         memcpy(&y[ib].qh, &qh, sizeof(qh));
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 size_t quantize_q5_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
@@ -3626,6 +3640,8 @@ size_t quantize_q5_1(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
+// See FP_CONTRACT note above make_qx_quants. Q6_0 OLS is KEPT.
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q6_0_impl(const float * restrict x, block_q6_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK6_0 == 32, "QK6_0 must be 32");
 
@@ -3664,6 +3680,7 @@ static void quantize_row_q6_0_impl(const float * restrict x, block_q6_0 * restri
         }
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 size_t quantize_q6_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
