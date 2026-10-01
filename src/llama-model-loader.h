@@ -54,6 +54,8 @@ struct llama_model_loader {
     bool merge_up_gate_exps = false;
     bool defer_experts = false;
     bool defer_ple = false;
+    // Explicit --no-mmap with deferred tables: copy dense weights out, alias deferred only.
+    bool defer_copy_dense = false;
 
     llama_files files;
     llama_ftype ftype;

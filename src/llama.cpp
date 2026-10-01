@@ -5023,17 +5023,19 @@ static bool llm_load_tensors(
     }
 
     use_mmap_buffer = cth->create_tensors();
-    // --defer-ple keeps mappings alive when mmap is off (--no-mmap/-rtr/merges/overrides).
+    // Keep file mappings for deferred tables when the mmap path is off; what
+    // aliases vs copies is decided per tensor at load (dense copies under --no-mmap).
     bool keep_ple_mapping = false;
     const bool mmap_disabled = !ml.use_mmap; // --no-mmap / -rtr
     if (ml.defer_ple && !ml.ple_tensor_index.empty() && (!use_mmap_buffer || mmap_disabled)) {
         keep_ple_mapping = true;
         ml.use_mmap = true;
-        if (mmap_disabled) {
-            LLAMA_LOG_WARN("%s: mmap is disabled (--no-mmap/-rtr), but file mappings are kept for %.2f GiB of deferred tables, the rest is copied\n",
+        ml.defer_copy_dense = mmap_disabled && !ml.repack_tensors;
+        if (mmap_disabled && !ml.repack_tensors) {
+            LLAMA_LOG_WARN("%s: mmap is disabled (--no-mmap): file mappings are kept for %.2f GiB of deferred tables, dense weights are copied, not aliased\n",
                     __func__, ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
         } else {
-            LLAMA_LOG_INFO("%s: keeping file mappings for %.2f GiB of deferred tables although the mmap buffer path is off (e.g. -rtr with merges)\n",
+            LLAMA_LOG_INFO("%s: keeping file mappings for %.2f GiB of deferred tables although the mmap buffer path is off\n",
                     __func__, ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
         }
     }
@@ -5334,8 +5336,9 @@ static bool llm_load_tensors(
         }
 #endif
 #if defined(_WIN32)
-        // Bulk prefetch was skipped: warm file-aliased host ranges, deferred stay cold.
-        if (ml.use_mmap && !use_mlock && win_skip_bulk_prefetch) {
+        // Bulk prefetch was skipped: warm file-aliased host ranges, deferred stay
+        // cold, as does everything under explicit --no-mmap (fault on demand).
+        if (ml.use_mmap && !use_mlock && !ml.defer_copy_dense && win_skip_bulk_prefetch) {
             struct host_range { uint32_t idx; size_t first; size_t last; };
             std::vector<host_range> host_ranges;
             for (auto & it : ctx_bufs) {

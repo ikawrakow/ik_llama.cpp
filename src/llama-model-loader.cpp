@@ -1275,11 +1275,12 @@ bool llama_model_loader::load_all_data(
         // mmap. Serialized.
         if (use_mmap) {
             std::lock_guard<std::mutex> lock(load_mutex);
-            // -rtr needs writable RAM: stream repackables (sans views) into owned buffers.
-            if (repack_tensors && defer_ple && !ple_tensor_index.empty() && lmlocks == nullptr &&
+            // Owned buffers streamed from the file: repackables under -rtr, everything
+            // not deferred under explicit --no-mmap; deferred tables stay aliased.
+            if (defer_ple && !ple_tensor_index.empty() && lmlocks == nullptr &&
                     cur->buffer == nullptr && cur->view_src == nullptr && n_size > 0 &&
                     !ple_range_overlaps(weight->idx, weight->offs, weight->offs + n_size) &&
-                    (ggml_type) iqk_repacked_type(cur) != cur->type) {
+                    (defer_copy_dense || (repack_tensors && (ggml_type) iqk_repacked_type(cur) != cur->type))) {
                 bool has_views = false;
                 for (auto * v = ggml_get_first_tensor(ctx); v != NULL; v = ggml_get_next_tensor(ctx, v)) {
                     if (v->view_src == cur) {
