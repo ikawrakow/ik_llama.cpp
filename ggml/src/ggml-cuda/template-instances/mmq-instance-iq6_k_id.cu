@@ -8,6 +8,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #ifdef INT8_MMA_AVAILABLE
     int   * x_qs = (int   *)  x_tile;
     float * x_df = (float *) (x_qs + WARP_SIZE*2);
+    int   * x_sc = (int   *) (x_df + WARP_SIZE/QI6_K);
 #else
     constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q8_0_16;
     int   * x_qs = (int   *)  x_tile;
@@ -51,8 +52,8 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             const char4 val1  = make_char4(values[aux8[4]], values[aux8[5]], values[aux8[6]], values[aux8[7]]);
 
 #ifdef INT8_MMA_AVAILABLE
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 16*l + 0] = *(const int *)&val0;
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 16*l + 8] = *(const int *)&val1;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q6_K + kqsx + 16*l + 0] = *(const int *)&val0;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q6_K + kqsx + 16*l + 8] = *(const int *)&val1;
 #else
             x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 16*l + 0] = *(const int *)&val0;
             x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 16*l + 8] = *(const int *)&val1;
@@ -61,8 +62,8 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 
 
 #ifdef INT8_MMA_AVAILABLE
-        x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+0] = d * bxi->scales[2*kqsx+0];
-        x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+1] = d * bxi->scales[2*kqsx+1];
+        ((uint16_t *)(x_sc + i*MMQ_MMA_TILE_X_K_Q6_K))[kqsx] = ((const uint16_t *) bxi->scales)[kqsx];
+        x_df[i*MMQ_MMA_TILE_X_K_Q6_K] = d;
 #else
         x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+0] = d * bxi->scales[2*kqsx+0];
         x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+1] = d * bxi->scales[2*kqsx+1];
@@ -73,7 +74,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 template <int mmq_x, int mmq_y, bool need_check>
 struct mmq_type_traits_id<mmq_x, mmq_y, need_check, GGML_TYPE_IQ6_K> {
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq6_k<mmq_y, need_check>;
-    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q6_K_q8_1_mma<mmq_x, mmq_y>;
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
