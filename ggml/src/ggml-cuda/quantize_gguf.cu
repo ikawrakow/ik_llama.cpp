@@ -1235,61 +1235,6 @@ static __global__ void quantize_q6_0_ols_kernel(
     }
 }
 
-// Q8_0 imatrix kernel (kept for research, UNUSED for GGUF: HEAD CPU
-// quantize_q8_0 ignores imatrix, so the helper routes to plain).
-// Unlike Q4_0/Q5_0/Q6_0, Q8_0 cannot use make_qx_quants (its offset encoding
-// would overflow int8_t for 8-bit codes; block_q8_0 stores signed int8
-// directly).
-// block_q8_0 stores signed int8 directly). The CPU impl
-// quantize_row_q8_0_impl (ggml-quants.c:3799) instead keeps the plain
-// `roundf(x*id)` codes and refines only the scale via weighted least-squares
-// d = sumqx/sumq2, weighted per element w[j] = qw[j]*sqrt(sigma2 + x[j]^2).
-// This kernel replays that loop in one thread per block with correctly-rounded
-// intrinsics (__fdiv_rn/__fadd_rn/__fmul_rn/__fsqrt_rn and roundf), so it is
-// byte-identical. The row-level sigma2 is pre-computed on the host in the
-// exact CPU summation order (see the driver).
-static __global__ void quantize_q8_0_imatrix_kernel(
-        const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
-        void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row) {
-    const int64_t ib = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
-    if (ib >= nblocks) {
-        return;
-    }
-    const int64_t gb = base + ib;
-    const float * xb = x + ib*QK8_0;
-    const float * qb = qw + (int32_t)(gb % blocks_per_row)*QK8_0;
-    const float s2   = sigma2[gb / blocks_per_row];
-
-    // per-element importance weight, byte-mirroring quantize_row_q8_0_impl
-    float weight[QK8_0];
-    for (int j = 0; j < QK8_0; ++j) {
-        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
-    }
-
-    // plain top magnitude -> base scale (exact under -use_fast_math)
-    float amax = 0.0f;
-    for (int j = 0; j < QK8_0; ++j) {
-        amax = fmaxf(amax, fabsf(xb[j]));
-    }
-    const float d0  = __fdiv_rn(amax, 127.0f);
-    const float id0 = d0 ? __fdiv_rn(1.0f, d0) : 0.0f;
-
-    // weighted least-squares scale over the plain signed codes
-    block_q8_0 * y = (block_q8_0 *)vy;
-    float sumqx = 0.0f, sumq2 = 0.0f;
-    for (int j = 0; j < QK8_0; ++j) {
-        const float v = xb[j];
-        const int8_t q = (int8_t)roundf(v*id0);
-        y[ib].qs[j] = q;
-
-        const float wq = __fmul_rn(weight[j], (float)q);
-        sumqx = __fadd_rn(sumqx, __fmul_rn(wq, v));        // w*q*x
-        sumq2 = __fadd_rn(sumq2, __fmul_rn(wq, (float)q)); // w*q*q
-    }
-    const float d = sumq2 > 0.0f ? __fdiv_rn(sumqx, sumq2) : d0;
-    y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(d));
-}
-
 // ---------------------------------------------------------------------------
 // host driver (shared by all block quants)
 // ---------------------------------------------------------------------------

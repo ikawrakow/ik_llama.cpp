@@ -1032,47 +1032,7 @@ static void ref_quantize_q6_0_imatrix(void * dst, const float * src, int64_t nro
     }
 }
 
-// Local copy of quantize_row_q8_0_impl (ggml-quants.c:3799): a weighted
-// least-squares scale refinement over the plain signed-8-bit roundf codes
-// (Q8_0 cannot use make_qx_quants; see the CPU impl). The per-element weight
-// and the sums match the CPU/GPU exactly.
-static void ref_quantize_q8_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
-        const float * imatrix) {
-    for (int64_t irow = 0; irow < nrows; ++irow) {
-        const float * x = src + irow*n_per_row;
-        block_q8_0 * y = (block_q8_0 *)dst + irow*(n_per_row/QK8_0);
-
-        float sum_x2 = 0;
-        for (int64_t j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
-        float sigma2 = sum_x2/n_per_row;
-
-        float weight[QK8_0];
-        const int64_t nb = n_per_row/QK8_0;
-        for (int64_t ib = 0; ib < nb; ++ib) {
-            const float * xb = x + QK8_0 * ib;
-            const float * qw = imatrix + QK8_0 * ib;
-            for (int j = 0; j < QK8_0; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
-
-            float amax = 0.0f;
-            for (int j = 0; j < QK8_0; ++j) amax = fmaxf(amax, fabsf(xb[j]));
-
-            const float d0  = amax/127.0f;
-            const float id0 = d0 ? 1.0f/d0 : 0.0f;
-
-            float sumqx = 0, sumq2 = 0;
-            for (int j = 0; j < QK8_0; ++j) {
-                const float v = xb[j];
-                const int8_t q = (int8_t)roundf(v*id0);
-                y[ib].qs[j] = q;
-                sumqx += weight[j]*q*v;
-                sumq2 += weight[j]*q*q;
-            }
-            const float d = sumq2 > 0.0f ? sumqx/sumq2 : d0;
-            y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(d);
-        }
-    }
-}
-
+// Random-uniform fills.
 static void fill_random_uniform(float * dst, int64_t n) {
     std::uniform_real_distribution<float> dist(-6.0f, 6.0f);
     for (int64_t i = 0; i < n; ++i) dst[i] = dist(g_rng);
