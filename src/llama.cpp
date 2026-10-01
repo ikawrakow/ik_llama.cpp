@@ -8634,6 +8634,8 @@ struct llama_context_params llama_context_default_params() {
         /*.offload_policy              =*/ nullptr,
         /*.cuda_params                 =*/ nullptr,
         /*.dflash_query_capacity       =*/ 0,
+        /*.cpu_affinity                =*/ nullptr,
+        /*.n_cpu_affinity              =*/ 0,
     };
 
     return result;
