@@ -632,7 +632,13 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
                     return 0;
                 }
                 nb = ggml_cuda_quantize_iq4_nl(s_src, s_dst, nrows, n_per_row);
-            } else { // GGML_TYPE_IQ4_XS (added next commit; fallback until then)
+            } else if (type == GGML_TYPE_IQ4_XS) {
+                // Plain only; imatrix falls back to CPU (return 0).
+                if (s_im) {
+                    return 0;
+                }
+                nb = ggml_cuda_quantize_iq4_xs(s_src, s_dst, nrows, n_per_row);
+            } else {
                 return 0;
             }
             if (nb == 0) {

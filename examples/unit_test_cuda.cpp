@@ -853,6 +853,146 @@ static void ref_quantize_iq4_nl(void * dst, const float * src, int64_t nrows, in
     }
 }
 
+// One 32-value block of the IQ4_XS superblock optimizer (plain w = x*x).
+// *eps is set when amax < 1e-15 (CPU stores scales = 0 and skips tracking).
+static float ref_iq4_block_opt(const float * xb, float * weight, uint8_t * Lb, bool * eps) {
+    for (int j = 0; j < 32; ++j) weight[j] = xb[j]*xb[j];
+    float amax = 0.0f, max = 0.0f;
+    for (int j = 0; j < 32; ++j) {
+        float ax = fabsf(xb[j]);
+        if (ax > amax) { amax = ax; max = xb[j]; }
+    }
+    if (amax < 1e-15f) { *eps = true; return 0.0f; } // Lb left for re-quant
+    *eps = false;
+    float d = -max/ref_kvalues_iq4nl[0];
+    float id = 1/d;
+    float sumqx = 0.0f, sumq2 = 0.0f;
+    for (int j = 0; j < 32; ++j) {
+        int l = ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+        Lb[j] = (uint8_t)l;
+        float q = (float)ref_kvalues_iq4nl[l];
+        sumqx += weight[j]*q*xb[j];
+        sumq2 += weight[j]*q*q;
+    }
+    d = sumqx/sumq2;
+    float best = d*sumqx;
+    float best_sumqx = sumqx, best_sumq2 = sumq2;
+    for (int itry = -7; itry <= 7; ++itry) {
+        id = (itry + ref_kvalues_iq4nl[0])/max;
+        sumqx = sumq2 = 0.0f;
+        for (int j = 0; j < 32; ++j) {
+            int l = ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+            float q = (float)ref_kvalues_iq4nl[l];
+            sumqx += weight[j]*q*xb[j];
+            sumq2 += weight[j]*q*q;
+        }
+        if (sumq2 > 0.0f && sumqx*sumqx > best*sumq2) {
+            d = sumqx/sumq2; best = d*sumqx;
+            best_sumqx = sumqx; best_sumq2 = sumq2;
+            for (int j = 0; j < 32; ++j) {
+                Lb[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+            }
+        }
+        id = (itry + ref_kvalues_iq4nl[15])/max;
+        sumqx = sumq2 = 0.0f;
+        for (int j = 0; j < 32; ++j) {
+            int l = ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+            float q = (float)ref_kvalues_iq4nl[l];
+            sumqx += weight[j]*q*xb[j];
+            sumq2 += weight[j]*q*q;
+        }
+        if (sumq2 > 0.0f && sumqx*sumqx > best*sumq2) {
+            d = sumqx/sumq2; best = d*sumqx;
+            best_sumqx = sumqx; best_sumq2 = sumq2;
+            for (int j = 0; j < 32; ++j) {
+                Lb[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+            }
+        }
+    }
+    sumqx = best_sumqx; sumq2 = best_sumq2;
+    for (int iter = 0; iter < 32*32; ++iter) {
+        float min_step = INFINITY;
+        int best_j = -1, dir = 0;
+        for (int j = 0; j < 32; ++j) {
+            float g = d*weight[j]*(xb[j] - d*ref_kvalues_iq4nl[Lb[j]]);
+            if (g > 0.0f && Lb[j] < 15) {
+                float step = (ref_kvalues_iq4nl[Lb[j]+1] - ref_kvalues_iq4nl[Lb[j]])/g;
+                if (step < min_step) { min_step = step; best_j = j; dir = 1; }
+            }
+            else if (g < 0.0f && Lb[j] > 0) {
+                float step = (ref_kvalues_iq4nl[Lb[j]-1] - ref_kvalues_iq4nl[Lb[j]])/g;
+                if (step < min_step) { min_step = step; best_j = j; dir = -1; }
+            }
+        }
+        if (best_j < 0) break;
+        float new_sumqx = sumqx + weight[best_j]*xb[best_j]*(ref_kvalues_iq4nl[Lb[best_j]+dir] - ref_kvalues_iq4nl[Lb[best_j]]);
+        float new_sumq2 = sumq2 + weight[best_j]*(ref_kvalues_iq4nl[Lb[best_j]+dir]*ref_kvalues_iq4nl[Lb[best_j]+dir] - ref_kvalues_iq4nl[Lb[best_j]]*ref_kvalues_iq4nl[Lb[best_j]]);
+        if (new_sumq2 > 0.0f && new_sumqx*new_sumqx > best*new_sumq2) {
+            sumqx = new_sumqx; sumq2 = new_sumq2;
+            d = sumqx/sumq2; best = d*sumqx;
+            Lb[best_j] += dir;
+        } else break;
+    }
+    return d;
+}
+
+static int ref_iq4xs_nearest_int(float fval) {
+    float val = fval + 12582912.f;
+    int i; memcpy(&i, &val, sizeof(int));
+    return (i & 0x007fffff) - 0x00400000;
+}
+
+// Local copy of quantize_iq4_xs plain path: 8 block optimizers + global scale
+// fit + re-quant, w = x*x throughout.
+static void ref_quantize_iq4_xs(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    const int64_t nb = (nrows*n_per_row)/QK_K;
+    for (int64_t sb = 0; sb < nb; ++sb) {
+        const float * xs = src + sb*QK_K;
+        block_iq4_xs * yb = (block_iq4_xs *)dst + sb;
+
+        float weight[32];
+        uint8_t L[QK_K];
+        float scales[8];
+        float max_scale = 0.0f, amax_scale = 0.0f;
+        for (int ib = 0; ib < 8; ++ib) {
+            bool eps = false;
+            float d = ref_iq4_block_opt(xs + ib*32, weight, L + ib*32, &eps);
+            if (eps) { scales[ib] = 0.0f; continue; } // matches CPU exactly
+            scales[ib] = d;
+            float abs_d = fabsf(d);
+            if (abs_d > amax_scale) { amax_scale = abs_d; max_scale = d; }
+        }
+
+        float gd = -max_scale/32.0f;
+        yb->d = (ggml_half)__half_as_ushort(__float2half_rn(gd));
+        float gid = gd ? 1/gd : 0.0f;
+        uint16_t scales_h = 0;
+        for (int ib = 0; ib < 8; ++ib) {
+            int l = ref_iq4xs_nearest_int(gid*scales[ib]);
+            l = l > 31 ? 31 : (l < -32 ? -32 : l);
+            float dl = gd*l;
+            float idl = dl ? 1/dl : 0.0f;
+            uint8_t * Lb = L + ib*32;
+            const float * xb = xs + ib*32;
+            for (int j = 0; j < 32; ++j) {
+                Lb[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, idl*xb[j]);
+            }
+            l += 32;
+            uint8_t l_l = (uint8_t)(l & 0xf);
+            uint8_t l_h = (uint8_t)((unsigned)l >> 4);
+            if (ib % 2 == 0) yb->scales_l[ib/2] = l_l;
+            else yb->scales_l[ib/2] |= (uint8_t)(l_l << 4);
+            scales_h |= (uint16_t)(l_h << (2*(ib % 8)));
+        }
+        yb->scales_h = scales_h;
+        for (int i = 0; i < QK_K/32; ++i) {
+            for (int j = 0; j < 16; ++j) {
+                yb->qs[16*i + j] = (uint8_t)(L[32*i + j] | (L[32*i + 16 + j] << 4));
+            }
+        }
+    }
+}
+
 // Local copy of quantize_row_q6_0_impl (ggml-quants.c:3697): make_qx_quants
 // with nmax == 32, plus the 2-bit qh packing (6-bit quants).
 static void ref_quantize_q6_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
@@ -1189,6 +1329,7 @@ static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
 // slice into consecutive slots. Also checks a single whole-tensor call gives
 // the same bytes (the quantizer is contiguous, so it must).
 static void test_slices(int device, int64_t ne0, int64_t ne1, int64_t ne2, const quant_spec & spec) {
+    if (ne0 % spec.qk != 0) return; // e.g. IQ4_XS needs ne0 % 256 == 0
     char tag[96];
     snprintf(tag, sizeof(tag), "slices ne0=%lld ne1=%lld ne2=%lld",
              (long long)ne0, (long long)ne1, (long long)ne2);
@@ -1346,6 +1487,9 @@ int main(int argc, char ** argv) {
         static size_t iq4_nl(const float * s, void * d, int64_t r, int64_t n) {
             return ggml_cuda_quantize(0, GGML_TYPE_IQ4_NL, s, d, r, n, 1, nullptr);
         }
+        static size_t iq4_xs(const float * s, void * d, int64_t r, int64_t n) {
+            return ggml_cuda_quantize(0, GGML_TYPE_IQ4_XS, s, d, r, n, 1, nullptr);
+        }
     };
 
     const quant_spec specs[] = {
@@ -1377,6 +1521,9 @@ int main(int argc, char ** argv) {
                 true, cuda_wraps::q4_1_imatrix, ref_quantize_q4_1_imatrix, true },
         // IQ4_NL plain only (imatrix falls back to CPU in the dispatcher)
         { "iq4_nl", GGML_TYPE_IQ4_NL, QK4_NL, sizeof(block_iq4_nl), cuda_wraps::iq4_nl, ref_quantize_iq4_nl,
+                false, nullptr, nullptr },
+        // IQ4_XS plain only (imatrix falls back to CPU in the dispatcher)
+        { "iq4_xs", GGML_TYPE_IQ4_XS, QK_K, sizeof(block_iq4_xs), cuda_wraps::iq4_xs, ref_quantize_iq4_xs,
                 false, nullptr, nullptr },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);

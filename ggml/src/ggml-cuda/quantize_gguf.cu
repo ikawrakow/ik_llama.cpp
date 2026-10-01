@@ -908,6 +908,165 @@ static __global__ void quantize_iq4_nl_kernel(
     }
 }
 
+// ---------------------------------------------------------------------------
+// IQ4_XS: quantize_iq4_xs (ggml-quants.c) via quantize_row_iq4_nl_impl with
+// super_block_size = 256, plain weights (w = x*x), ntry = 7. One thread per
+// 256-value superblock replays the 8 block optimizers, the global scale fit,
+// and the final re-quant in the exact CPU order. imatrix is NOT ported:
+// the dispatcher returns 0 so the CPU handles it.
+// ---------------------------------------------------------------------------
+
+static __global__ void quantize_iq4_xs_kernel(
+        const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks) {
+    const int64_t sb = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (sb >= nblocks) {
+        return;
+    }
+    const float * xs = x + sb*QK_K;
+
+    float weight[32];
+    uint8_t L[QK_K];
+    float scales[8];
+    float max_scale = 0.0f, amax_scale = 0.0f;
+
+    for (int ib = 0; ib < 8; ++ib) {
+        const float * xb = xs + ib*32;
+        uint8_t * Lb = L + ib*32;
+        for (int j = 0; j < 32; ++j) {
+            weight[j] = __fmul_rn(xb[j], xb[j]);
+        }
+        float amax = 0.0f, max = 0.0f;
+        for (int j = 0; j < 32; ++j) {
+            const float ax = fabsf(xb[j]);
+            if (ax > amax) {
+                amax = ax; max = xb[j];
+            }
+        }
+        if (amax < 1e-15f) {
+            scales[ib] = 0.0f;
+            continue;
+        }
+        float d = __fdiv_rn(-max, (float)kvalues_iq4nl_dev[0]);
+        float id = __fdiv_rn(1.0f, d);
+        float sumqx = 0.0f, sumq2 = 0.0f;
+        for (int j = 0; j < 32; ++j) {
+            const int l = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
+            Lb[j] = (uint8_t)l;
+            const float q = (float)kvalues_iq4nl_dev[l];
+            sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(weight[j], q), xb[j]));
+            sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(weight[j], q), q));
+        }
+        d = __fdiv_rn(sumqx, sumq2);
+        float best = __fmul_rn(d, sumqx);
+        float best_sumqx = sumqx, best_sumq2 = sumq2;
+        for (int itry = -7; itry <= 7; ++itry) {
+            id = __fdiv_rn((float)(itry + kvalues_iq4nl_dev[0]), max);
+            sumqx = sumq2 = 0.0f;
+            for (int j = 0; j < 32; ++j) {
+                const int l = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
+                const float q = (float)kvalues_iq4nl_dev[l];
+                sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(weight[j], q), xb[j]));
+                sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(weight[j], q), q));
+            }
+            if (sumq2 > 0.0f && __fmul_rn(sumqx, sumqx) > __fmul_rn(best, sumq2)) {
+                d = __fdiv_rn(sumqx, sumq2); best = __fmul_rn(d, sumqx);
+                best_sumqx = sumqx; best_sumq2 = sumq2;
+                for (int j = 0; j < 32; ++j) {
+                    Lb[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
+                }
+            }
+            id = __fdiv_rn((float)(itry + kvalues_iq4nl_dev[15]), max);
+            sumqx = sumq2 = 0.0f;
+            for (int j = 0; j < 32; ++j) {
+                const int l = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
+                const float q = (float)kvalues_iq4nl_dev[l];
+                sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(weight[j], q), xb[j]));
+                sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(weight[j], q), q));
+            }
+            if (sumq2 > 0.0f && __fmul_rn(sumqx, sumqx) > __fmul_rn(best, sumq2)) {
+                d = __fdiv_rn(sumqx, sumq2); best = __fmul_rn(d, sumqx);
+                best_sumqx = sumqx; best_sumq2 = sumq2;
+                for (int j = 0; j < 32; ++j) {
+                    Lb[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
+                }
+            }
+        }
+        sumqx = best_sumqx; sumq2 = best_sumq2;
+        for (int iter = 0; iter < 32*32; ++iter) {
+            float min_step = INFINITY;
+            int best_j = -1, dir = 0;
+            for (int j = 0; j < 32; ++j) {
+                const float g = __fmul_rn(__fmul_rn(d, weight[j]), __fsub_rn(xb[j], __fmul_rn(d, (float)kvalues_iq4nl_dev[Lb[j]])));
+                if (g > 0.0f && Lb[j] < 15) {
+                    const float step = __fdiv_rn((float)(kvalues_iq4nl_dev[Lb[j]+1] - kvalues_iq4nl_dev[Lb[j]]), g);
+                    if (step < min_step) {
+                        min_step = step; best_j = j; dir = 1;
+                    }
+                }
+                else if (g < 0.0f && Lb[j] > 0) {
+                    const float step = __fdiv_rn((float)(kvalues_iq4nl_dev[Lb[j]-1] - kvalues_iq4nl_dev[Lb[j]]), g);
+                    if (step < min_step) {
+                        min_step = step; best_j = j; dir = -1;
+                    }
+                }
+            }
+            if (best_j < 0) break;
+            const int l0 = Lb[best_j];
+            const int l1 = l0 + dir;
+            float new_sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(weight[best_j], xb[best_j]), (float)(kvalues_iq4nl_dev[l1] - kvalues_iq4nl_dev[l0])));
+            const int q1sq = kvalues_iq4nl_dev[l1]*kvalues_iq4nl_dev[l1];
+            const int q0sq = kvalues_iq4nl_dev[l0]*kvalues_iq4nl_dev[l0];
+            float new_sumq2 = __fadd_rn(sumq2, __fmul_rn(weight[best_j], (float)(q1sq - q0sq)));
+            if (new_sumq2 > 0.0f && __fmul_rn(new_sumqx, new_sumqx) > __fmul_rn(best, new_sumq2)) {
+                sumqx = new_sumqx; sumq2 = new_sumq2;
+                d = __fdiv_rn(sumqx, sumq2); best = __fmul_rn(d, sumqx);
+                Lb[best_j] = (uint8_t)l1;
+            }
+            else {
+                break;
+            }
+        }
+        scales[ib] = d;
+        const float abs_d = fabsf(d);
+        if (abs_d > amax_scale) {
+            amax_scale = abs_d; max_scale = d;
+        }
+    }
+
+    // Global scale + re-quant (verbatim CPU order, fudge = 1).
+    block_iq4_xs * y = (block_iq4_xs *)vy;
+    const float gd = -max_scale/32.0f;
+    y[sb].d = __float2half_rn(gd);
+    const float gid = gd ? __fdiv_rn(1.0f, gd) : 0.0f;
+    uint16_t scales_h = 0;
+    for (int ib = 0; ib < 8; ++ib) {
+        int l = nearest_int_device(__fmul_rn(gid, scales[ib]));
+        l = l > 31 ? 31 : (l < -32 ? -32 : l);
+        const float dl = __fmul_rn(gd, (float)l);
+        const float idl = dl ? __fdiv_rn(1.0f, dl) : 0.0f;
+        uint8_t * Lb = L + ib*32;
+        const float * xb = xs + ib*32;
+        for (int j = 0; j < 32; ++j) {
+            Lb[j] = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(idl, xb[j]));
+        }
+        l += 32;
+        const uint8_t l_l = (uint8_t)(l & 0xf);
+        const uint8_t l_h = (uint8_t)((unsigned)l >> 4);
+        if (ib % 2 == 0) {
+            y[sb].scales_l[ib/2] = l_l;
+        } else {
+            y[sb].scales_l[ib/2] |= (uint8_t)(l_l << 4);
+        }
+        scales_h |= (uint16_t)(l_h << (2*(ib % 8)));
+    }
+    y[sb].scales_h = scales_h;
+    for (int i = 0; i < QK_K/32; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            y[sb].qs[16*i + j] = (uint8_t)(L[32*i + j] | (L[32*i + 16 + j] << 4));
+        }
+    }
+}
+
 // Q5_0 imatrix kernel: identical shape to quantize_q4_0_imatrix_kernel, but
 // quantizes 32-value blocks with nmax == 16 and additionally packs each L's
 // 5th bit into the qh bitmap like quantize_row_q5_0_impl (ggml-quants.c:3577).
@@ -1921,6 +2080,72 @@ size_t ggml_cuda_quantize_iq4_nl(const float * src, void * dst, int64_t nrows, i
     }
 
     return nblocks_total*sizeof(block_iq4_nl);
+}
+
+// IQ4_XS without imatrix (quantize_iq4_xs, quant_weights == NULL, ntry = 7).
+// One thread per 256-value superblock. imatrix is NOT ported (dispatcher
+// returns 0 so the CPU handles it).
+size_t ggml_cuda_quantize_iq4_xs(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
+    GGML_ASSERT(nrows > 0);
+    GGML_ASSERT(n_per_row % QK_K == 0);
+
+    const int64_t nblocks_total = nrows*(n_per_row/QK_K);
+
+    int n_devices = 0;
+    if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
+        return 0;
+    }
+    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
+        return 0;
+    }
+
+    const int64_t chunk_blocks = 1 << 17; // superblocks per chunk (~128 MiB F32)
+    const int64_t chunk_x      = chunk_blocks*QK_K;
+    const int64_t chunk_y      = chunk_blocks*sizeof(block_iq4_xs);
+
+    float   * x_dev = nullptr;
+    uint8_t * y_dev = nullptr;
+
+    cudaError_t err = cudaMalloc(&x_dev, chunk_x*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: iq4_xs: cudaMalloc(x_dev): %s\n", __func__, cudaGetErrorString(err));
+        return 0;
+    }
+    err = cudaMalloc(&y_dev, chunk_y);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: iq4_xs: cudaMalloc(y_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        return 0;
+    }
+
+    const unsigned int block_size = 256;
+    for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
+        const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
+
+        err = cudaMemcpy(x_dev, src + base*QK_K, nblocks*QK_K*sizeof(float), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: iq4_xs: cudaMemcpy H2D: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+
+        quantize_iq4_xs_kernel<<<(unsigned)((nblocks + block_size - 1)/block_size), block_size>>>(
+                x_dev, y_dev, nblocks);
+
+        err = cudaMemcpy((char *)dst + base*sizeof(block_iq4_xs), y_dev, nblocks*sizeof(block_iq4_xs), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: iq4_xs: cudaMemcpy D2H: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+    }
+
+    cudaFree(x_dev);
+    cudaFree(y_dev);
+
+    if (err != cudaSuccess) {
+        return 0;
+    }
+
+    return nblocks_total*sizeof(block_iq4_xs);
 }
 
 // Q6_0 OLS without imatrix (quantize_row_q6_0_impl, quant_weights == NULL).
