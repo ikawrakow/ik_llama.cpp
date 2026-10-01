@@ -723,6 +723,136 @@ static void ref_quantize_q4_1_imatrix(void * dst, const float * src, int64_t nro
     }
 }
 
+// Local copy of quantize_iq4_nl plain path (qw == NULL, ntry = 7): codebook
+// grid search + hill-climb with w = x*x, dh = FP16(scale).
+static const int8_t ref_kvalues_iq4nl[16] = {
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113
+};
+
+static int ref_best_index_iq4nl(const int8_t * values, float x);
+
+static const int ref_iq4nl_index[241] = {
+     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 16, 16,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
+     1, 17, 17,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 18,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
+     3,  3,  3,  3,  3,  3, 19,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4, 20,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5,
+     5,  5, 21, 21,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6, 22,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7, 23, 23,  8,  8,  8,  8,
+     8,  8,  8,  8,  8,  8, 24,  9,  9,  9,  9,  9,  9,  9,  9,  9,  9,  9, 25, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 26, 26,
+    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 27, 27, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 28, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 29, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+    14, 14, 14, 14, 30, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15
+};
+
+static int ref_best_index_iq4nl(const int8_t * values, float x) {
+    int ix = (int)x - values[0];
+    if (ix < 0 || ix >= 241) return ix < 0 ? 0 : 15;
+    // entries >= 16 name the boundary pair (ix-16, ix-15); ties go high
+    ix = ref_iq4nl_index[ix];
+    return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
+}
+
+static void ref_quantize_iq4_nl(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
+    const int64_t nb = (nrows*n_per_row)/QK4_NL;
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        const float * xb = src + ib*QK4_NL;
+        block_iq4_nl * yb = (block_iq4_nl *)dst + ib;
+
+        float weight[QK4_NL];
+        uint8_t L[QK4_NL];
+        for (int j = 0; j < QK4_NL; ++j) weight[j] = xb[j]*xb[j];
+
+        float amax = 0.0f, max = 0.0f;
+        for (int j = 0; j < QK4_NL; ++j) {
+            float ax = fabsf(xb[j]);
+            if (ax > amax) { amax = ax; max = xb[j]; }
+        }
+
+        float scale = 0.0f;
+        if (amax >= 1e-15f) {
+            float d = -max/ref_kvalues_iq4nl[0];
+            float id = 1/d;
+            float sumqx = 0.0f, sumq2 = 0.0f;
+            for (int j = 0; j < QK4_NL; ++j) {
+                int l = ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+                L[j] = (uint8_t)l;
+                float q = (float)ref_kvalues_iq4nl[l];
+                sumqx += weight[j]*q*xb[j];
+                sumq2 += weight[j]*q*q;
+            }
+            d = sumqx/sumq2;
+            float best = d*sumqx;
+            float best_sumqx = sumqx, best_sumq2 = sumq2;
+            for (int itry = -7; itry <= 7; ++itry) {
+                id = (itry + ref_kvalues_iq4nl[0])/max;
+                sumqx = sumq2 = 0.0f;
+                for (int j = 0; j < QK4_NL; ++j) {
+                    int l = ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+                    float q = (float)ref_kvalues_iq4nl[l];
+                    sumqx += weight[j]*q*xb[j];
+                    sumq2 += weight[j]*q*q;
+                }
+                if (sumq2 > 0.0f && sumqx*sumqx > best*sumq2) {
+                    d = sumqx/sumq2; best = d*sumqx;
+                    best_sumqx = sumqx; best_sumq2 = sumq2;
+                    for (int j = 0; j < QK4_NL; ++j) {
+                        L[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+                    }
+                }
+                id = (itry + ref_kvalues_iq4nl[15])/max;
+                sumqx = sumq2 = 0.0f;
+                for (int j = 0; j < QK4_NL; ++j) {
+                    int l = ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+                    float q = (float)ref_kvalues_iq4nl[l];
+                    sumqx += weight[j]*q*xb[j];
+                    sumq2 += weight[j]*q*q;
+                }
+                if (sumq2 > 0.0f && sumqx*sumqx > best*sumq2) {
+                    d = sumqx/sumq2; best = d*sumqx;
+                    best_sumqx = sumqx; best_sumq2 = sumq2;
+                    for (int j = 0; j < QK4_NL; ++j) {
+                        L[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, id*xb[j]);
+                    }
+                }
+            }
+            sumqx = best_sumqx; sumq2 = best_sumq2;
+            for (int iter = 0; iter < 32*QK4_NL; ++iter) {
+                float min_step = INFINITY;
+                int best_j = -1, dir = 0;
+                for (int j = 0; j < QK4_NL; ++j) {
+                    float g = d*weight[j]*(xb[j] - d*ref_kvalues_iq4nl[L[j]]);
+                    if (g > 0.0f && L[j] < 15) {
+                        float step = (ref_kvalues_iq4nl[L[j]+1] - ref_kvalues_iq4nl[L[j]])/g;
+                        if (step < min_step) { min_step = step; best_j = j; dir = 1; }
+                    }
+                    else if (g < 0.0f && L[j] > 0) {
+                        float step = (ref_kvalues_iq4nl[L[j]-1] - ref_kvalues_iq4nl[L[j]])/g;
+                        if (step < min_step) { min_step = step; best_j = j; dir = -1; }
+                    }
+                }
+                if (best_j < 0) break;
+                float new_sumqx = sumqx + weight[best_j]*xb[best_j]*(ref_kvalues_iq4nl[L[best_j]+dir] - ref_kvalues_iq4nl[L[best_j]]);
+                float new_sumq2 = sumq2 + weight[best_j]*(ref_kvalues_iq4nl[L[best_j]+dir]*ref_kvalues_iq4nl[L[best_j]+dir] - ref_kvalues_iq4nl[L[best_j]]*ref_kvalues_iq4nl[L[best_j]]);
+                if (new_sumq2 > 0.0f && new_sumqx*new_sumqx > best*new_sumq2) {
+                    sumqx = new_sumqx; sumq2 = new_sumq2;
+                    d = sumqx/sumq2; best = d*sumqx;
+                    L[best_j] += dir;
+                } else break;
+            }
+            scale = d;
+        }
+
+        yb->d = (ggml_half)__half_as_ushort(__float2half_rn(scale));
+        {
+            float idf = scale ? 1/scale : 0.0f;
+            for (int j = 0; j < QK4_NL; ++j) {
+                L[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, idf*xb[j]);
+            }
+        }
+        for (int j = 0; j < QK4_NL/2; ++j) {
+            yb->qs[j] = (uint8_t)(L[j] | (L[j + QK4_NL/2] << 4));
+        }
+    }
+}
+
 // Local copy of quantize_row_q6_0_impl (ggml-quants.c:3697): make_qx_quants
 // with nmax == 32, plus the 2-bit qh packing (6-bit quants).
 static void ref_quantize_q6_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
@@ -1213,6 +1343,9 @@ int main(int argc, char ** argv) {
         static size_t q4_1_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
             return ggml_cuda_quantize(0, GGML_TYPE_Q4_1, s, d, r, n, 1, im);
         }
+        static size_t iq4_nl(const float * s, void * d, int64_t r, int64_t n) {
+            return ggml_cuda_quantize(0, GGML_TYPE_IQ4_NL, s, d, r, n, 1, nullptr);
+        }
     };
 
     const quant_spec specs[] = {
@@ -1242,6 +1375,9 @@ int main(int argc, char ** argv) {
                 false, nullptr, nullptr },
         { "q4_1-imatrix", GGML_TYPE_Q4_1, QK4_1, sizeof(block_q4_1), cuda_wraps::q4_1, ref_quantize_q4_1,
                 true, cuda_wraps::q4_1_imatrix, ref_quantize_q4_1_imatrix, true },
+        // IQ4_NL plain only (imatrix falls back to CPU in the dispatcher)
+        { "iq4_nl", GGML_TYPE_IQ4_NL, QK4_NL, sizeof(block_iq4_nl), cuda_wraps::iq4_nl, ref_quantize_iq4_nl,
+                false, nullptr, nullptr },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);
 

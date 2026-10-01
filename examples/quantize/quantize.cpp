@@ -167,7 +167,7 @@ static void usage(const char * executable) {
     printf("  --ignore-imatrix-rules: ignore importance matrix rules when quantizing\n");
     printf("  --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
-    printf("  --cuda-quantize: quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1 tensors on the first CUDA device; other types use the CPU\n");
+    printf("  --cuda-quantize: quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1/IQ4_NL/IQ4_XS tensors on the first CUDA device; other types use the CPU\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");

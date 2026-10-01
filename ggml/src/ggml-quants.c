@@ -14837,6 +14837,10 @@ static inline int best_index_iq4nl(const int8_t * values, float x) {
     return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
 
+// Byte-exact CUDA GGUF quantization (ggml-cuda/quantize_gguf.cu) replays this
+// optimizer bit-for-bit on the GPU with correctly-rounded intrinsics.
+// Forbid FMA contraction like make_qx_quants above.
+#pragma STDC FP_CONTRACT OFF
 static void quantize_row_iq4_nl_impl(const int super_block_size, const int block_size, const float * restrict x,
         ggml_fp16_t * dh, uint8_t * q4, uint16_t * scales_h, uint8_t * scales_l,
         float * scales, float * weight, uint8_t * L,
@@ -15009,6 +15013,7 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
         }
     }
 }
+#pragma STDC FP_CONTRACT ON
 
 size_t quantize_iq4_nl(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
