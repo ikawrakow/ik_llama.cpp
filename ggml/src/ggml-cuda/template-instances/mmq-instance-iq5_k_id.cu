@@ -75,6 +75,75 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     }
 }
 
+template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_iq5_k_q8(
+    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
+
+#ifdef INT8_MMA_AVAILABLE
+    constexpr int nwarps = mmq_get_nwarps_device();
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + WARP_SIZE*2);
+
+    constexpr int qstep = 8;
+    const int kqsx = threadIdx.x % qstep;
+
+    auto values = iq5nl_values;
+
+    uint32_t aux32[2];
+    const uint8_t * aux8 = (const uint8_t *)aux32;
+
+    const int rsel = kqsx < 4 ? 0x1010 : 0x3232;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * WARP_SIZE/qstep) {
+        int i = i0 + threadIdx.y*(WARP_SIZE/qstep) + threadIdx.x/qstep;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_iq5_k * bxi = (const block_iq5_k *)(x + i*stride) + kbx0;
+
+        const uint8_t sh = bxi->scales_h[kqsx/2] >> 4*(kqsx%2);
+        const int ls1 = ((bxi->scales_l[kqsx] & 0xf) | ((sh << 4) & 0x30)) - 32;
+        const int ls2 = ((bxi->scales_l[kqsx] >>  4) | ((sh << 2) & 0x30)) - 32;
+        const int lmax = max(max(abs(ls1), abs(ls2)), 1);
+        const float rl = 1.0f/lmax;
+        const half2 r12 = __floats2half2_rn(ls1*rl, ls2*rl);
+
+        const float d = bxi->d;
+        x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx] = d * lmax;
+
+        int qh = get_int_b4(bxi->qh, kqsx);
+        uint16_t extra = bxi->extra >> (kqsx/4);
+
+    #pragma unroll
+        for (int l = 0; l < qstep/2; ++l) {
+
+            const int ql = get_int_b4(bxi->qs, kqsx + qstep*l);
+            aux32[0] = ((ql >> 0) & 0x0f0f0f0f) | ((qh & 0x01010101) << 4) | ((extra & 1) * 0x20202020);
+            aux32[1] = ((ql >> 4) & 0x0f0f0f0f) | ((qh & 0x02020202) << 3) | ((extra & 4) * 0x08080808);
+            qh    >>= 2;
+            extra >>= 4;
+
+            const char4 val0  = make_char4(values[aux8[0]], values[aux8[1]], values[aux8[2]], values[aux8[3]]);
+            const char4 val1  = make_char4(values[aux8[4]], values[aux8[5]], values[aux8[6]], values[aux8[7]]);
+
+            half2 r[2];
+        #pragma unroll
+            for (int j = 0; j < 2; ++j) {
+                const uint32_t rj = __shfl_sync(0xffffffff, *(const uint32_t *)&r12, 2*l + j, qstep);
+                *(uint32_t *)&r[j] = __byte_perm(rj, rj, rsel);
+            }
+
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 16*l + 0] = requant_int_q8(*(const int *)&val0, r[0]);
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 16*l + 8] = requant_int_q8(*(const int *)&val1, r[1]);
+        }
+    }
+#else
+    load_tiles_iq5_k<mmq_y, need_check>(x, x_tile, kbx0, i_max, stride);
+#endif // INT8_MMA_AVAILABLE
+}
+
 template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_iq5_k_r4(
     const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
 
@@ -158,8 +227,11 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 
 template <int mmq_x, int mmq_y, bool need_check>
 struct mmq_type_traits_id<mmq_x, mmq_y, need_check, GGML_TYPE_IQ5_K> {
-    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq5_k<mmq_y, need_check>;
-    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
+    static constexpr bool             requant      = mmq_requant(mmq_x, 48);
+    static constexpr load_tiles_mmq_t load_tiles   = requant ? load_tiles_iq5_k_q8<mmq_y, need_check>
+                                                             : load_tiles_iq5_k<mmq_y, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = requant ? vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_D4>
+                                                             : vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y>;
 };
 

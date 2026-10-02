@@ -90,6 +90,68 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     }
 }
 
+template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_iq2_k_q8(
+    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
+
+#ifdef INT8_MMA_AVAILABLE
+    constexpr int nwarps = mmq_get_nwarps_device();
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + WARP_SIZE*2);
+
+    constexpr int qstep = 8;
+    const int kqsx = threadIdx.x % qstep;
+
+    const int rsel = kqsx < 4 ? 0x1010 : 0x3232;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * WARP_SIZE/qstep) {
+        int i = i0 + threadIdx.y*(WARP_SIZE/qstep) + threadIdx.x/qstep;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_iq2_k * bxi = (const block_iq2_k *)(x + i*stride) + kbx0;
+
+        // |values| <= 31: the block of 16 with the larger |ls| is exact as +-4*value, the other is rounded
+        const int ls1 = ((bxi->scales[kqsx] >> 0) & 0xf) - 8;
+        const int ls2 = ((bxi->scales[kqsx] >> 4) & 0xf) - 8;
+        const int lmax = max(max(abs(ls1), abs(ls2)), 1);
+        const float rl = 4.0f/lmax;
+        const half2 r12 = __floats2half2_rn(ls1*rl, ls2*rl);
+
+        const float d = bxi->d;
+        x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx] = 0.25f * d * lmax;
+
+        uint16_t extra = bxi->extra >> (kqsx/4);
+        uint32_t extra32[2] = { uint32_t(extra & 0xff) * 0x01010101, uint32_t(extra >> 8) * 0x01010101 };
+
+    #pragma unroll
+        for (int l = 0; l < qstep/4; ++l) {
+            const int ql = get_int_b4(bxi->qs, kqsx + qstep*l);
+            uint32_t val1 = ((ql >> 0) & 0x33333333) | ((extra32[l] << 2) & 0x44444444);
+            uint32_t val2 = ((ql >> 2) & 0x33333333) | ((extra32[l] << 0) & 0x44444444);
+            int2 v1 = get_int_from_table_8(val1, iq2nl_values);
+            int2 v2 = get_int_from_table_8(val2, iq2nl_values);
+
+            half2 r[4];
+        #pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                const uint32_t rj = __shfl_sync(0xffffffff, *(const uint32_t *)&r12, 4*l + j, qstep);
+                *(uint32_t *)&r[j] = __byte_perm(rj, rj, rsel);
+            }
+
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 32*l +  0] = requant_int_q8(v1.x, r[0]);
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 32*l +  8] = requant_int_q8(v2.x, r[1]);
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 32*l + 16] = requant_int_q8(v1.y, r[2]);
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx + 32*l + 24] = requant_int_q8(v2.y, r[3]);
+        }
+    }
+#else
+    load_tiles_iq2_k<mmq_y, need_check>(x, x_tile, kbx0, i_max, stride);
+#endif // INT8_MMA_AVAILABLE
+}
+
 template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_iq2_k_r4(
     const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
     constexpr int nwarps = mmq_get_nwarps_device();
@@ -184,8 +246,11 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 
 template <int mmq_x, int mmq_y, bool need_check>
 struct mmq_type_traits_id<mmq_x, mmq_y, need_check, GGML_TYPE_IQ2_K> {
-    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq2_k<mmq_y, need_check>;
-    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
+    static constexpr bool             requant      = mmq_requant(mmq_x, 48);
+    static constexpr load_tiles_mmq_t load_tiles   = requant ? load_tiles_iq2_k_q8<mmq_y, need_check>
+                                                             : load_tiles_iq2_k<mmq_y, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = requant ? vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_D4>
+                                                             : vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
