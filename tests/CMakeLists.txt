@@ -1,5 +1,10 @@
 #llama_add_compile_flags()
 
+add_executable(test-dsv4-mask-reuse test-dsv4-mask-reuse.cpp)
+target_link_libraries(test-dsv4-mask-reuse PRIVATE ggml)
+add_test(NAME test-dsv4-mask-reuse COMMAND test-dsv4-mask-reuse)
+set_tests_properties(test-dsv4-mask-reuse PROPERTIES LABELS main)
+
 function(llama_build source)
     set(TEST_SOURCES ${source} ${ARGN})
 
