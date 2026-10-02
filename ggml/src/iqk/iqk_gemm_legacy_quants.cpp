@@ -2642,28 +2642,86 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
     GGML_ASSERT(n%32 == 0);
     Q8<nrc_y, block_q8_0_x4> q8(info);
     const int nbl = n/32;
+    const int nb4 = nbl/4;
 
     const __m256i values = MM256_SET1_M128I(_mm_loadu_si128((const __m128i *)iq3nl_values));
     const __m256i m1i  = _mm256_set1_epi16(1);
     const __m256i m3   = _mm256_set1_epi32(0x03030303);
-    const __m256i m1   = _mm256_set1_epi32(0x01010101);
+    const __m256i m4h  = _mm256_set1_epi32(0x04040404);
     const __m256i one  = _mm256_set1_epi32(1);
     const __m256i sixteen = _mm256_set1_epi32(16);
     const __m256i pgmask  = _mm256_set1_epi32(0x08080808);
-    const __m256i clamp127 = _mm256_set1_epi8(-127);
     // extra bit positions per row (low/high 8 rows): scale bit4 and page
     const __m256i cnt_s0 = _mm256_set_epi32(7,6,5,4, 3,2,1,0);
     const __m256i cnt_s1 = _mm256_set_epi32(15,14,13,12, 11,10,9,8);
     const __m256i cnt_p0 = _mm256_set_epi32(23,22,21,20, 19,18,17,16);
     const __m256i cnt_p1 = _mm256_set_epi32(31,30,29,28, 27,26,25,24);
 
+    float d8[4*nrc_y];
     for (int ix = 0; ix < nrc_x; ix += 16) {
         const uint8_t * band = (const uint8_t *)vx + ix*bx;
         const float   * dptr = (const float *)band;
         for (int half = 0; half < 2; ++half) {
             __m256 acc[nrc_y];
             for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm256_setzero_ps();
-            for (int ib = 0; ib < nbl; ++ib) {
+            const float * dh = dptr + 8*half;
+            for (int ib4 = 0; ib4 < nb4; ++ib4) {
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    _mm_storeu_ps(d8 + 4*iy, _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)q8.y[iy][ib4].d)));
+                }
+                for (int k = 0; k < 4; ++k) {
+                    const int ib = 4*ib4 + k;
+                    const uint8_t * blk = band + 64 + (size_t)ib*204;
+                    uint32_t extra;
+                    std::memcpy(&extra, blk, 4);
+                    const __m128i sc = _mm_loadl_epi64((const __m128i *)(blk + 4));
+                    const __m128i nib = half == 0 ? _mm_and_si128(sc, _mm_set1_epi8(0x0f))
+                                                  : _mm_and_si128(_mm_srli_epi16(sc, 4), _mm_set1_epi8(0x0f));
+                    const __m256i e   = _mm256_set1_epi32((int)extra);
+                    const __m256i ul  = _mm256_or_si256(_mm256_cvtepu8_epi32(nib),
+                        _mm256_slli_epi32(_mm256_and_si256(_mm256_srlv_epi32(e, half == 0 ? cnt_s0 : cnt_s1), one), 4));
+                    const __m256i pg  = _mm256_and_si256(
+                        _mm256_sub_epi32(_mm256_setzero_si256(),
+                            _mm256_and_si256(_mm256_srlv_epi32(e, half == 0 ? cnt_p0 : cnt_p1), one)), pgmask);
+                    const __m256 dl = _mm256_mul_ps(_mm256_loadu_ps(dh),
+                        _mm256_cvtepi32_ps(_mm256_sub_epi32(ul, sixteen)));
+
+                    const __m256i qA = _mm256_loadu_si256((const __m256i *)(blk + 12 + 32*half));
+                    const __m256i qB = _mm256_loadu_si256((const __m256i *)(blk + 12 + 32*half + 64));
+                    const __m256i hA = _mm256_loadu_si256((const __m256i *)(blk + 140 + 32*half));
+                    const __m256i hA4 = _mm256_slli_epi32(hA, 2);
+                    const __m256i hB4 = _mm256_slli_epi32(_mm256_srli_epi32(hA, 4), 2);
+
+                    __m256i vA[4], vB[4];
+                    for (int p = 0; p < 4; ++p) {
+                        const __m256i iA = _mm256_or_si256(pg, _mm256_or_si256(
+                            _mm256_and_si256(_mm256_srli_epi32(qA, 2*p), m3),
+                            _mm256_and_si256(_mm256_srli_epi32(hA4, p), m4h)));
+                        const __m256i iB = _mm256_or_si256(pg, _mm256_or_si256(
+                            _mm256_and_si256(_mm256_srli_epi32(qB, 2*p), m3),
+                            _mm256_and_si256(_mm256_srli_epi32(hB4, p), m4h)));
+                        vA[p] = _mm256_shuffle_epi8(values, iA);
+                        vB[p] = _mm256_shuffle_epi8(values, iB);
+                    }
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        const int8_t * yqs = q8.y[iy][ib4].qs + 32*k;
+                        const float yd = d8[4*iy + k];
+                        __m256i sum = _mm256_setzero_si256();
+                        for (int p = 0; p < 4; ++p) {
+                            const __m256i yS = _mm256_set1_epi32(*(const int32_t *)(yqs + 4*p));
+                            const __m256i yT = _mm256_set1_epi32(*(const int32_t *)(yqs + 16 + 4*p));
+                            const __m256i yUA = _mm256_abs_epi8(yS);
+                            const __m256i yUB = _mm256_abs_epi8(yT);
+                            sum = _mm256_add_epi32(sum, _mm256_madd_epi16(m1i,
+                                _mm256_add_epi16(_mm256_maddubs_epi16(yUA, _mm256_sign_epi8(vA[p], yS)),
+                                                 _mm256_maddubs_epi16(yUB, _mm256_sign_epi8(vB[p], yT)))));
+                        }
+                        acc[iy] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(sum), _mm256_mul_ps(dl, _mm256_set1_ps(yd)), acc[iy]);
+                    }
+                }
+            }
+            // tail: nbl % 4 != 0 (n % 128 != 0)
+            for (int ib = 4*nb4; ib < nbl; ++ib) {
                 const uint8_t * blk = band + 64 + (size_t)ib*204;
                 uint32_t extra;
                 std::memcpy(&extra, blk, 4);
@@ -2676,23 +2734,23 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
                 const __m256i pg  = _mm256_and_si256(
                     _mm256_sub_epi32(_mm256_setzero_si256(),
                         _mm256_and_si256(_mm256_srlv_epi32(e, half == 0 ? cnt_p0 : cnt_p1), one)), pgmask);
-                const __m256 dl = _mm256_mul_ps(_mm256_loadu_ps(dptr + 8*half),
+                const __m256 dl = _mm256_mul_ps(_mm256_loadu_ps(dh),
                     _mm256_cvtepi32_ps(_mm256_sub_epi32(ul, sixteen)));
 
                 const __m256i qA = _mm256_loadu_si256((const __m256i *)(blk + 12 + 32*half));
                 const __m256i qB = _mm256_loadu_si256((const __m256i *)(blk + 12 + 32*half + 64));
                 const __m256i hA = _mm256_loadu_si256((const __m256i *)(blk + 140 + 32*half));
+                const __m256i hA4 = _mm256_slli_epi32(hA, 2);
+                const __m256i hB4 = _mm256_slli_epi32(_mm256_srli_epi32(hA, 4), 2);
 
                 __m256i vA[4], vB[4];
                 for (int p = 0; p < 4; ++p) {
                     const __m256i iA = _mm256_or_si256(pg, _mm256_or_si256(
                         _mm256_and_si256(_mm256_srli_epi32(qA, 2*p), m3),
-                        _mm256_slli_epi32(_mm256_and_si256(_mm256_srli_epi32(hA, p), m1), 2)));
+                        _mm256_and_si256(_mm256_srli_epi32(hA4, p), m4h)));
                     const __m256i iB = _mm256_or_si256(pg, _mm256_or_si256(
                         _mm256_and_si256(_mm256_srli_epi32(qB, 2*p), m3),
-                        _mm256_slli_epi32(_mm256_and_si256(_mm256_srli_epi32(hA, p+4), m1), 2)));
-                    // maddubs takes the first operand as unsigned and the second
-                    // as signed -> feed it |y| and the signed codebook value.
+                        _mm256_and_si256(_mm256_srli_epi32(hB4, p), m4h)));
                     vA[p] = _mm256_shuffle_epi8(values, iA);
                     vB[p] = _mm256_shuffle_epi8(values, iB);
                 }
@@ -2703,8 +2761,8 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
                     const float yd = GGML_FP16_TO_FP32(y4->d[g]);
                     __m256i sum = _mm256_setzero_si256();
                     for (int p = 0; p < 4; ++p) {
-                        const __m256i yS = _mm256_max_epi8(_mm256_set1_epi32(*(const int32_t *)(yqs + 4*p)), clamp127);
-                        const __m256i yT = _mm256_max_epi8(_mm256_set1_epi32(*(const int32_t *)(yqs + 16 + 4*p)), clamp127);
+                        const __m256i yS = _mm256_set1_epi32(*(const int32_t *)(yqs + 4*p));
+                        const __m256i yT = _mm256_set1_epi32(*(const int32_t *)(yqs + 16 + 4*p));
                         const __m256i yUA = _mm256_abs_epi8(yS);
                         const __m256i yUB = _mm256_abs_epi8(yT);
                         sum = _mm256_add_epi32(sum, _mm256_madd_epi16(m1i,
@@ -2720,10 +2778,99 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
 }
 #endif
 
-// dispatcher: AVX2 when available, portable scalar otherwise.
+// AVX512 sibling of the x8-row AVX2 kernel above: all 16 rows in one 512-bit
+// vector (one 32-bit lane per row), one 32-column block per iteration.
+#ifdef HAVE_FANCY_SIMD
+template <int nrc_y>
+static void mul_mat_iq3ks_r16_q8_0_x4_avx512(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%16 == 0);
+    GGML_ASSERT(n%32 == 0);
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+    const int nbl = n/32;
+
+    const __m512i values = _mm512_broadcast_i32x4(_mm_loadu_si128((const __m128i *)iq3nl_values));
+    const __m512i m1i  = _mm512_set1_epi16(1);
+    const __m512i m3   = _mm512_set1_epi32(0x03030303);
+    const __m512i m1   = _mm512_set1_epi32(0x01010101);
+    const __m512i one  = _mm512_set1_epi32(1);
+    const __m512i sixteen = _mm512_set1_epi32(16);
+    const __m512i pgmask  = _mm512_set1_epi32(0x08080808);
+    const __m512i clamp127 = _mm512_set1_epi8(-127);
+    // extra bit positions: scale bit4 = bits 0..15, page = bits 16..31
+    const __m512i cnt_s = _mm512_set_epi32(15,14,13,12, 11,10,9,8, 7,6,5,4, 3,2,1,0);
+    const __m512i cnt_p = _mm512_set_epi32(31,30,29,28, 27,26,25,24, 23,22,21,20, 19,18,17,16);
+    // vpsignb has no AVX512 form: apply the sign of s to v with a mask.
+    auto apply_sign = [](const __m512i & v, const __m512i & s) {
+        return _mm512_mask_sub_epi8(v, _mm512_movepi8_mask(s), _mm512_setzero_si512(), v);
+    };
+
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        const uint8_t * band = (const uint8_t *)vx + ix*bx;
+        const float   * dptr = (const float *)band;
+        __m512 acc[nrc_y];
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm512_setzero_ps();
+        for (int ib = 0; ib < nbl; ++ib) {
+            const uint8_t * blk = band + 64 + (size_t)ib*204;
+            uint32_t extra;
+            std::memcpy(&extra, blk, 4);
+            const __m128i sc = _mm_loadl_epi64((const __m128i *)(blk + 4));
+            // rows 0..7 use the low nibble, rows 8..15 the high nibble
+            const __m128i nib = _mm_unpacklo_epi64(_mm_and_si128(sc, _mm_set1_epi8(0x0f)),
+                                                   _mm_and_si128(_mm_srli_epi16(sc, 4), _mm_set1_epi8(0x0f)));
+            const __m512i e   = _mm512_set1_epi32((int)extra);
+            const __m512i ul  = _mm512_or_si512(_mm512_cvtepu8_epi32(nib),
+                _mm512_slli_epi32(_mm512_and_si512(_mm512_srlv_epi32(e, cnt_s), one), 4));
+            const __m512i pg  = _mm512_and_si512(
+                _mm512_sub_epi32(_mm512_setzero_si512(), _mm512_and_si512(_mm512_srlv_epi32(e, cnt_p), one)), pgmask);
+            const __m512 dl = _mm512_mul_ps(_mm512_loadu_ps(dptr),
+                _mm512_cvtepi32_ps(_mm512_sub_epi32(ul, sixteen)));
+
+            const __m512i qA = _mm512_loadu_si512((const void *)(blk + 12));
+            const __m512i qB = _mm512_loadu_si512((const void *)(blk + 12 + 64));
+            const __m512i hA = _mm512_loadu_si512((const void *)(blk + 140));
+
+            __m512i vA[4], vB[4];
+            for (int p = 0; p < 4; ++p) {
+                const __m512i iA = _mm512_or_si512(pg, _mm512_or_si512(
+                    _mm512_and_si512(_mm512_srli_epi32(qA, 2*p), m3),
+                    _mm512_slli_epi32(_mm512_and_si512(_mm512_srli_epi32(hA, p), m1), 2)));
+                const __m512i iB = _mm512_or_si512(pg, _mm512_or_si512(
+                    _mm512_and_si512(_mm512_srli_epi32(qB, 2*p), m3),
+                    _mm512_slli_epi32(_mm512_and_si512(_mm512_srli_epi32(hA, p+4), m1), 2)));
+                // maddubs takes the first operand as unsigned and the second
+                // as signed -> feed it |y| and the signed codebook value.
+                vA[p] = _mm512_shuffle_epi8(values, iA);
+                vB[p] = _mm512_shuffle_epi8(values, iB);
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const block_q8_0_x4 * y4 = (const block_q8_0_x4 *)q8.y[iy] + ib/4;
+                const int g = ib & 3;
+                const int8_t * yqs = y4->qs + 32*g;
+                const float yd = GGML_FP16_TO_FP32(y4->d[g]);
+                __m512i sum = _mm512_setzero_si512();
+                for (int p = 0; p < 4; ++p) {
+                    const __m512i yS = _mm512_max_epi8(_mm512_set1_epi32(*(const int32_t *)(yqs + 4*p)), clamp127);
+                    const __m512i yT = _mm512_max_epi8(_mm512_set1_epi32(*(const int32_t *)(yqs + 16 + 4*p)), clamp127);
+                    const __m512i yUA = _mm512_abs_epi8(yS);
+                    const __m512i yUB = _mm512_abs_epi8(yT);
+                    sum = _mm512_add_epi32(sum, _mm512_madd_epi16(m1i,
+                        _mm512_add_epi16(_mm512_maddubs_epi16(yUA, apply_sign(vA[p], yS)),
+                                         _mm512_maddubs_epi16(yUB, apply_sign(vB[p], yT)))));
+                }
+                acc[iy] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(sum), _mm512_mul_ps(dl, _mm512_set1_ps(yd)), acc[iy]);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) info.store(ix, iy, acc[iy]);
+    }
+}
+#endif
+
+// dispatcher: AVX512 when available, AVX2 next, portable scalar otherwise.
 template <int nrc_y>
 static void mul_mat_iq3ks_r16_q8_0_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-#ifdef __AVX2__
+#ifdef HAVE_FANCY_SIMD
+    mul_mat_iq3ks_r16_q8_0_x4_avx512<nrc_y>(n, vx, bx, info, nrc_x);
+#elif defined(__AVX2__)
     mul_mat_iq3ks_r16_q8_0_x4_avx2<nrc_y>(n, vx, bx, info, nrc_x);
 #else
     mul_mat_iq3ks_r16_q8_0_x4_scalar<nrc_y>(n, vx, bx, info, nrc_x);
