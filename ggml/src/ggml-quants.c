@@ -14981,7 +14981,12 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
         dh[0] = GGML_FP32_TO_FP16(d*fudge);
         float id = d ? 1/d : 0.f;
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
-            int l = nearest_int(id*scales[ib]);
+            // Deterministic degenerate path: a non-finite block scale (from
+            // inf/nan intermediates on overflow inputs) would make nearest_int
+            // and the re-quant casts platform-UB (x86 INT_MIN vs CUDA 0). Pin
+            // l = 0 so stored bytes are identical everywhere; numerics are
+            // unaffected (dl = 0 dequantizes to 0 either way).
+            int l = isfinite(scales[ib]) ? nearest_int(id*scales[ib]) : 0;
             l = MAX(-32, MIN(31, l));
             float dl = d * l;
             float idl = dl ? 1/dl : 0.f;

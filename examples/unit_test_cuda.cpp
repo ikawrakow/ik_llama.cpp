@@ -1042,7 +1042,7 @@ static void ref_quantize_iq4_xs(void * dst, const float * src, int64_t nrows, in
         float gid = gd ? 1/gd : 0.0f;
         uint16_t scales_h = 0;
         for (int ib = 0; ib < 8; ++ib) {
-            int l = ref_iq4xs_nearest_int(gid*scales[ib]);
+            int l = isfinite(scales[ib]) ? ref_iq4xs_nearest_int(gid*scales[ib]) : 0; // deterministic degenerate path
             l = l > 31 ? 31 : (l < -32 ? -32 : l);
             float dl = gd*l;
             float idl = dl ? 1/dl : 0.0f;
@@ -1107,7 +1107,7 @@ static void ref_quantize_iq4_xs_imatrix(void * dst, const float * src, int64_t n
         float gid = gd ? 1/gd : 0.0f;
         uint16_t scales_h = 0;
         for (int ib = 0; ib < 8; ++ib) {
-            int l = ref_iq4xs_nearest_int(gid*scales[ib]);
+            int l = isfinite(scales[ib]) ? ref_iq4xs_nearest_int(gid*scales[ib]) : 0; // deterministic degenerate path
             l = l > 31 ? 31 : (l < -32 ? -32 : l);
             float dl = gd*l;
             float idl = dl ? 1/dl : 0.0f;
@@ -1437,6 +1437,33 @@ static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
                tag, (long long)nrows, (long long)n_per_row);
     } else {
         ++g_failures;
+#ifdef UNIT_TEST_CUDA_DEBUG_INPUTS
+        // Dump exact inputs of the first cpu/ref-divergent block (%a hex floats)
+        // to root-cause host-replica vs CPU codegen ghosts. Gated: off by default.
+        if (d_cpu_ref != 0) {
+            const size_t blk_size = spec.blk_size;
+            size_t first = 0;
+            for (; first < out_size; ++first) {
+                if (out_cpu[first] != out_ref[first]) break;
+            }
+            const size_t fblk = first/blk_size; // d_cpu_ref != 0 guarantees first < out_size
+            const int64_t vals_per_blk = spec.qk == QK_K ? QK_K : 32;
+            printf("  [DEBUG] %s/%s nrows=%lld npr=%lld blk=%zu vals:",
+                    spec.name, tag, (long long)nrows, (long long)n_per_row, fblk);
+            for (int64_t j = 0; j < vals_per_blk; ++j) {
+                printf(" %a", (double)src[fblk*vals_per_blk + j]);
+            }
+            printf("\n  [DEBUG] imatrix:");
+            if (imatrix) {
+                for (int64_t j = 0; j < vals_per_blk; ++j) {
+                    printf(" %a", (double)imatrix[(fblk*vals_per_blk + j) % n_per_row]);
+                }
+            } else {
+                printf(" (none)");
+            }
+            printf("\n");
+        }
+#endif
     }
 }
 
