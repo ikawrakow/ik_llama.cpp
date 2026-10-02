@@ -43,6 +43,7 @@ static __device__ void iqk_mul_mat_vec_q_kernel(
 
     const     int tid = WARP_SIZE*threadIdx.y + threadIdx.x;
     const     int row0 = rows_per_cuda_block*blockIdx.x;
+    const     int actual_row0 = type != GGML_TYPE_IQ4_KS_R16 ? row0 : 16*(row0/16);
     const     int blocks_per_row_x = ncols_x / qk;
     const     int blocks_per_col_y = nrows_y / QK8_1;
     constexpr int blocks_per_iter = vdr * nwarps*WARP_SIZE / qi;
@@ -68,7 +69,7 @@ static __device__ void iqk_mul_mat_vec_q_kernel(
                             &y[j*blocks_per_col_y + kby], kbx, kqs, &tmp[j][i]);
                 }
             } else {
-                vec_dot_q_cuda((const void *)((const char *)vx + row0*row_size),
+                vec_dot_q_cuda((const void *)((const char *)vx + actual_row0*row_size),
                     &y[j*blocks_per_col_y + kby], kbx, kqs, tmp[j]);
             }
         }
@@ -87,7 +88,7 @@ static __device__ void iqk_mul_mat_vec_q_kernel(
                                 &y[j*blocks_per_col_y + kby], kbx, kqs, nt, &tmp[j][i]);
                     }
                 } else {
-                    vec_dot_tail((const void *)((const char *)vx + row0*row_size),
+                    vec_dot_tail((const void *)((const char *)vx + actual_row0*row_size),
                         &y[j*blocks_per_col_y + kby], kbx, kqs, nt, tmp[j]);
                 }
             }
@@ -147,6 +148,7 @@ static __device__ void iqk_fused_mul_mat_vec_q_kernel(
 
     const     int tid = WARP_SIZE*threadIdx.y + threadIdx.x;
     const     int row0 = rows_per_cuda_block*blockIdx.x;
+    const     int actual_row0 = type != GGML_TYPE_IQ4_KS_R16 ? row0 : 16*(row0/16);
     const     int blocks_per_row_x = ncols_x / qk;
     const     int blocks_per_col_y = nrows_y / QK8_1;
     constexpr int blocks_per_iter = vdr * nwarps*WARP_SIZE / qi;
@@ -175,9 +177,9 @@ static __device__ void iqk_fused_mul_mat_vec_q_kernel(
                             &y[j*blocks_per_col_y + kby], kbx, kqs, &tmp_g[j][i]);
                 }
             } else {
-                vec_dot_q_cuda((const void *)((const char *)vup + row0*row_size),
+                vec_dot_q_cuda((const void *)((const char *)vup + actual_row0*row_size),
                     &y[j*blocks_per_col_y + kby], kbx, kqs, tmp_u[j]);
-                vec_dot_q_cuda((const void *)((const char *)vgate + row0*row_size),
+                vec_dot_q_cuda((const void *)((const char *)vgate + actual_row0*row_size),
                     &y[j*blocks_per_col_y + kby], kbx, kqs, tmp_g[j]);
             }
         }
@@ -198,9 +200,9 @@ static __device__ void iqk_fused_mul_mat_vec_q_kernel(
                                 &y[j*blocks_per_col_y + kby], kbx, kqs, nt, &tmp_g[j][i]);
                     }
                 } else {
-                    vec_dot_tail((const void *)((const char *)vup + row0*row_size),
+                    vec_dot_tail((const void *)((const char *)vup + actual_row0*row_size),
                         &y[j*blocks_per_col_y + kby], kbx, kqs, nt, tmp_u[j]);
-                    vec_dot_tail((const void *)((const char *)vgate + row0*row_size),
+                    vec_dot_tail((const void *)((const char *)vgate + actual_row0*row_size),
                         &y[j*blocks_per_col_y + kby], kbx, kqs, nt, tmp_g[j]);
                 }
             }
