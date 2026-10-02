@@ -1055,6 +1055,71 @@ static void ref_quantize_iq4_xs(void * dst, const float * src, int64_t nrows, in
     }
 }
 
+// Local copy of quantize_iq4_xs with an importance matrix: same superblock
+// replay with weight = qw*sqrt(sigma2 + x*x); sigma2 = (sum x^2)*2/256 is
+// computed per superblock in source order, matching the CPU impl. The imatrix
+// holds n_per_row weights reused for every row: superblock sb uses the 256
+// weights of its in-row slot (sb % sb_per_row).
+static void ref_quantize_iq4_xs_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    const int64_t sb_per_row = n_per_row/QK_K;
+    const int64_t nb = nrows*sb_per_row;
+    for (int64_t sb = 0; sb < nb; ++sb) {
+        const float * xs = src + sb*QK_K;
+        block_iq4_xs * yb = (block_iq4_xs *)dst + sb;
+        const float * qs = imatrix + (sb % sb_per_row)*QK_K;
+
+        float sum = 0.0f;
+        for (int j = 0; j < QK_K; ++j) sum += xs[j]*xs[j];
+        const float sigma2 = sum*2.0f/QK_K;
+
+        float weight[32];
+        uint8_t L[QK_K];
+        float scales[8];
+        float max_scale = 0.0f, amax_scale = 0.0f;
+        for (int ib = 0; ib < 8; ++ib) {
+            const float * xb = xs + ib*32;
+            const float * qb = qs + ib*32;
+            for (int j = 0; j < 32; ++j) weight[j] = qb[j]*sqrtf(sigma2 + xb[j]*xb[j]);
+            bool eps = false;
+            float d = ref_iq4_block_opt(xb, weight, L + ib*32, &eps);
+            if (eps) { scales[ib] = 0.0f; continue; } // matches CPU exactly
+            scales[ib] = d;
+            float abs_d = fabsf(d);
+            if (abs_d > amax_scale) { amax_scale = abs_d; max_scale = d; }
+        }
+
+        float gd = -max_scale/32.0f;
+        // bit-twiddle FP16 (see Q5_1 imatrix ref): NaN payload must match.
+        yb->d = (ggml_half)fp32_to_fp16_ggml_host(gd);
+        float gid = gd ? 1/gd : 0.0f;
+        uint16_t scales_h = 0;
+        for (int ib = 0; ib < 8; ++ib) {
+            int l = ref_iq4xs_nearest_int(gid*scales[ib]);
+            l = l > 31 ? 31 : (l < -32 ? -32 : l);
+            float dl = gd*l;
+            float idl = dl ? 1/dl : 0.0f;
+            uint8_t * Lb = L + ib*32;
+            const float * xb = xs + ib*32;
+            for (int j = 0; j < 32; ++j) {
+                Lb[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, idl*xb[j]);
+            }
+            l += 32;
+            uint8_t l_l = (uint8_t)(l & 0xf);
+            uint8_t l_h = (uint8_t)((unsigned)l >> 4);
+            if (ib % 2 == 0) yb->scales_l[ib/2] = l_l;
+            else yb->scales_l[ib/2] |= (uint8_t)(l_l << 4);
+            scales_h |= (uint16_t)(l_h << (2*(ib % 8)));
+        }
+        yb->scales_h = scales_h;
+        for (int i = 0; i < QK_K/32; ++i) {
+            for (int j = 0; j < 16; ++j) {
+                yb->qs[16*i + j] = (uint8_t)(L[32*i + j] | (L[32*i + 16 + j] << 4));
+            }
+        }
+    }
+}
+
 // Local copy of quantize_row_q6_0_impl (ggml-quants.c:3697): make_qx_quants
 // with nmax == 32, plus the 2-bit qh packing (6-bit quants).
 static void ref_quantize_q6_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
@@ -1538,6 +1603,9 @@ int main(int argc, char ** argv) {
         static size_t iq4_xs(const float * s, void * d, int64_t r, int64_t n) {
             return ggml_cuda_quantize(0, GGML_TYPE_IQ4_XS, s, d, r, n, 1, nullptr);
         }
+        static size_t iq4_xs_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
+            return ggml_cuda_quantize(0, GGML_TYPE_IQ4_XS, s, d, r, n, 1, im);
+        }
     };
 
     const quant_spec specs[] = {
@@ -1572,9 +1640,11 @@ int main(int argc, char ** argv) {
                 false, nullptr, nullptr, false, true },
         { "iq4_nl-imatrix", GGML_TYPE_IQ4_NL, QK4_NL, sizeof(block_iq4_nl), cuda_wraps::iq4_nl, ref_quantize_iq4_nl,
                 true, cuda_wraps::iq4_nl_imatrix, ref_quantize_iq4_nl_imatrix, false, true },
-        // IQ4_XS plain only (imatrix falls back to CPU in the dispatcher)
+        // IQ4_XS (+imatrix): superblock replay with x*x / qw*sqrt weights
         { "iq4_xs", GGML_TYPE_IQ4_XS, QK_K, sizeof(block_iq4_xs), cuda_wraps::iq4_xs, ref_quantize_iq4_xs,
                 false, nullptr, nullptr, false, true },
+        { "iq4_xs-imatrix", GGML_TYPE_IQ4_XS, QK_K, sizeof(block_iq4_xs), cuda_wraps::iq4_xs, ref_quantize_iq4_xs,
+                true, cuda_wraps::iq4_xs_imatrix, ref_quantize_iq4_xs_imatrix, false, true },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);
 
