@@ -488,7 +488,7 @@ static void sampler_queue(
         }
 
     }
-    if (params.adaptive_target >= 0.0f && ctx_sampling->adapt_p_ctx != nullptr) {
+    if (ctx_sampling->adapt_p_ctx != nullptr) {
         // adaptive p should be put to the last, so we ignore the order in the sampler
         llama_sample_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx);
     }
