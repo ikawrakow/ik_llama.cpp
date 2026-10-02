@@ -1387,8 +1387,8 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
 
     [GGML_TYPE_IQ3KS_R16] = {
         .type_name                = "iq3ks_r16",
-        .blck_size                = QK3KS_G128,
-        .type_size                = sizeof(block_iq3ks_r16)/16,
+        .blck_size                = QK8_0,
+        .type_size                = 13, // (204 B per 16-row x 32-col block)/16 rows, rounded up
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_iq3ks_r16,
         .from_float               = quantize_row_iq3ks_r16,
@@ -1396,7 +1396,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_iq3ks_r16_q8_2,
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
         .nrows                    = 1,
-        .row_meta_size            = 2,
+        .row_meta_size            = 4,
     },
     [GGML_TYPE_IQ5_KS_R4] = {
         .type_name                = "iq5_ks_r4",
@@ -5103,6 +5103,12 @@ GGML_CALL int64_t ggml_row_blck_size(enum ggml_type type) {
 }
 
 GGML_CALL size_t ggml_row_size(enum ggml_type type, int64_t ne) {
+    if (type == GGML_TYPE_IQ3KS_R16) {
+        // 16-row bands: 16 f32 row scales + (ne/32) blocks of 204 B, padded so
+        // that a band is a whole number of bytes per row (16*row_size == band).
+        assert(ne % 32 == 0);
+        return GGML_PAD(64 + (ne/32)*sizeof(block_iq3_ks_r16), 16)/16;
+    }
     if (ggml_is_kt_tail_type(type)) {
         assert(ne % 32 == 0);
         const int nt = (ne % QK_K)/32;

@@ -254,8 +254,8 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
         }
     }
     if (new_type == GGML_TYPE_IQ3KS_R16) {
-        if (nx % 128 != 0 || ny % 16 != 0) {
-            LLAMA_LOG_WARN("\n\n%s : tensor %d x %d is not compatible with %s (needs cols %% 128 == 0 and rows %% 16 == 0)", __func__, nx, ny, ggml_type_name(new_type));
+        if (nx % 32 != 0 || ny % 16 != 0) {
+            LLAMA_LOG_WARN("\n\n%s : tensor %d x %d is not compatible with %s (needs cols %% 32 == 0 and rows %% 16 == 0)", __func__, nx, ny, ggml_type_name(new_type));
             convert_incompatible_tensor = true;
         }
     }
