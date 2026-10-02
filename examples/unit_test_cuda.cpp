@@ -525,7 +525,12 @@ static void ref_quantize_q5_1(void * dst, const float * src, int64_t nrows, int6
 // Host copy of make_qkx3_quants (ggml-quants.c:2211) for the Q4_1/Q5_1 imatrix
 // refs. Verbatim order, double accumulators, nearest-even magic rounding.
 // FP_CONTRACT OFF (like ggml-quants.c): a fused FMA would flip exact ties.
-#pragma STDC FP_CONTRACT OFF
+// optimize off (clang only): ggml and test TUs unroll/vectorize the double
+// reductions differently, reordering 1-ulp summation on tie-sensitive data;
+// force strict source order here (test-only, zero production impact).
+#ifdef __clang__
+#pragma clang optimize off
+#endif
 static inline int ref_kx3_nearest_int(float fval) {
     float val = fval + 12582912.f;
     int i; memcpy(&i, &val, sizeof(int));
@@ -738,6 +743,9 @@ static void ref_quantize_q4_1_imatrix(void * dst, const float * src, int64_t nro
     }
 }
 #pragma STDC FP_CONTRACT ON
+#ifdef __clang__
+#pragma clang optimize on
+#endif
 
 // Local copy of quantize_iq4_nl plain path (qw == NULL, ntry = 7): codebook
 // grid search + hill-climb with w = x*x, dh = FP16(scale).
