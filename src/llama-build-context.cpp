@@ -100,7 +100,6 @@ void llm_build_context::init() {
     };
 
     ctx0 = ggml_init(params);
-    dsv4_mask_views.clear();
 
     if (clear_lctx_inputs) {
         lctx.inp_tokens      = nullptr;
@@ -141,7 +140,6 @@ void llm_build_context::init() {
 }
 
 void llm_build_context::free() {
-    dsv4_mask_views.clear();
     if (ctx0) {
         ggml_free(ctx0);
         ctx0 = nullptr;

@@ -2,7 +2,6 @@
 
 #include "llama-impl.h"
 #include "llama-hparams.h"
-#include "graphs/dsv4-mask-view.h"
 
 #include <cstdint>
 #include <functional>
@@ -104,9 +103,6 @@ struct llm_build_context {
     std::vector<uint8_t> & buf_compute_meta;
 
     struct ggml_context * ctx0 = nullptr;
-
-    // Equivalent CSA/HCA input views share one scheduler copy per backend in this graph.
-    dsv4_mask_view_cache dsv4_mask_views;
 
     // GLM-5.2 IndexShare: the most-recent "full" indexer layer's top-k selection (argsort indices).
     // "shared" layers reuse this instead of computing their own. Reset to nullptr at each graph build.
