@@ -18,6 +18,80 @@
 
 // --- kernels ---
 
+// Warp helpers shared by the plain kernels (all lanes must call uniformly).
+
+// Argmax |x|, lowest index wins ties (matches ref scan; fixes sign of d).
+static __device__ __forceinline__ float warp_argmax_first_device(float xi, int lane) {
+    float   bval = fabsf(xi);
+    int32_t bidx = lane;
+#pragma unroll
+    for (int m = 16; m > 0; m >>= 1) {
+        const float   oval = __shfl_xor_sync(0xffffffffu, bval, m);
+        const int32_t oidx = __shfl_xor_sync(0xffffffffu, bidx, m);
+        if (oval > bval || (oval == bval && oidx < bidx)) {
+            bval = oval;
+            bidx = oidx;
+        }
+    }
+    return __shfl_sync(0xffffffffu, xi, bidx);
+}
+
+// Min/max values (order-independent); used by the x1 plain kernels.
+static __device__ __forceinline__ void warp_minmax_device(float xi, float & bmin, float & bmax) {
+    bmin = xi;
+    bmax = xi;
+#pragma unroll
+    for (int m = 16; m > 0; m >>= 1) {
+        bmin = fminf(bmin, __shfl_xor_sync(0xffffffffu, bmin, m));
+        bmax = fmaxf(bmax, __shfl_xor_sync(0xffffffffu, bmax, m));
+    }
+}
+
+// Nibble pack: lane j<16 writes byte j from pair j+16.
+static __device__ __forceinline__ void pack_nibbles_shfl_device(uint32_t q, uint8_t * qs, int lane) {
+    const uint32_t my   = q & 0xF;
+    const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
+    if (lane < 16) {
+        qs[lane] = (uint8_t)(my | (pair << 4));
+    }
+}
+
+// 5th-bit qh bitmap + nibble pack for one-thread-per-block Q5 kernels
+// (L in [0,31]).
+static __device__ void pack_q5_qh_device(const uint8_t * L, uint8_t * qs, uint8_t * qh) {
+    uint32_t bits = 0;
+    for (int j = 0; j < 16; ++j) {
+        const uint8_t xi0 = L[j];
+        const uint8_t xi1 = L[j + 16];
+        qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+        bits |= ((uint32_t)((xi0 & 0x10u) >> 4)) << (j + 0);
+        bits |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + 16);
+    }
+    qh[0] = (uint8_t)(bits >>  0);
+    qh[1] = (uint8_t)(bits >>  8);
+    qh[2] = (uint8_t)(bits >> 16);
+    qh[3] = (uint8_t)(bits >> 24);
+}
+
+// Q4 nibble pack for one-thread-per-block kernels (L in [0,15]).
+static __device__ void pack_q4_nibbles_device(const uint8_t * L, uint8_t * qs) {
+    for (int j = 0; j < 16; ++j) {
+        qs[j] = (uint8_t)(L[j] | (L[j + 16] << 4));
+    }
+}
+
+// 5th-bit qh bitmap, little-endian uint32 (Q5_0/Q5_1 warp kernels; all lanes
+// must call uniformly).
+static __device__ __forceinline__ void pack_qh_ballot_device(uint32_t q, uint8_t * qh, int lane) {
+    const uint32_t bits = __ballot_sync(0xffffffffu, (q >> 4) & 1);
+    if (lane == 0) {
+        qh[0] = (uint8_t)(bits >>  0);
+        qh[1] = (uint8_t)(bits >>  8);
+        qh[2] = (uint8_t)(bits >> 16);
+        qh[3] = (uint8_t)(bits >> 24);
+    }
+}
+
 static __global__ void quantize_q8_0_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
     const int32_t lane = threadIdx.x; // 0 .. 31 == QK8_0
@@ -54,20 +128,7 @@ static __global__ void quantize_q4_0_kernel(
     for (int64_t ib = blockIdx.x; ib < nblocks; ib += gridDim.x) {
         const float xi = x[ib*QK4_0 + lane];
 
-        // argmax |x|, lowest index wins ties (matches ref scan; fixes sign of d).
-        float   bval = fabsf(xi);
-        int32_t bidx = lane;
-#pragma unroll
-        for (int m = 16; m > 0; m >>= 1) {
-            const float   oval = __shfl_xor_sync(0xffffffffu, bval, m);
-            const int32_t oidx = __shfl_xor_sync(0xffffffffu, bidx, m);
-            if (oval > bval || (oval == bval && oidx < bidx)) {
-                bval = oval;
-                bidx = oidx;
-            }
-        }
-
-        const float max = __shfl_sync(0xffffffffu, xi, bidx);
+        const float max = warp_argmax_first_device(xi, lane);
         // __fdiv_rn for 1/d (max/-8 exact pow2); CPU stores FP16(fudge*d).
         const float d  = __fmul_rn(fudge, __fdiv_rn(max, -8.0f));
         const float id = d ? __fdiv_rn(1.0f, d) : 0.0f;
@@ -82,12 +143,7 @@ static __global__ void quantize_q4_0_kernel(
             y[ib].d = __float2half_rn(d); // store the __half, see Q8_0 kernel
         }
 
-        // Nibble pack: lane j<16 writes byte j from pair j+16.
-        const uint32_t my   = (uint32_t)q & 0xF;
-        const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
-        if (lane < 16) {
-            y[ib].qs[lane] = (uint8_t)(my | (pair << 4));
-        }
+        pack_nibbles_shfl_device((uint32_t)q, y[ib].qs, lane);
     }
 }
 
@@ -99,19 +155,7 @@ static __global__ void quantize_q5_0_kernel(
 
     for (int64_t ib = blockIdx.x; ib < nblocks; ib += gridDim.x) {
         const float xi = x[ib*QK5_0 + lane];
-        float   bval = fabsf(xi);
-        int32_t bidx = lane;
-#pragma unroll
-        for (int m = 16; m > 0; m >>= 1) {
-            const float   oval = __shfl_xor_sync(0xffffffffu, bval, m);
-            const int32_t oidx = __shfl_xor_sync(0xffffffffu, bidx, m);
-            if (oval > bval || (oval == bval && oidx < bidx)) {
-                bval = oval;
-                bidx = oidx;
-            }
-        }
-
-        const float max = __shfl_sync(0xffffffffu, xi, bidx);
+        const float max = warp_argmax_first_device(xi, lane);
         // __fdiv_rn for 1/d (max/-16 exact pow2).
         const float d  = __fmul_rn(fudge, __fdiv_rn(max, -16.0f));
         const float id = d ? __fdiv_rn(1.0f, d) : 0.0f;
@@ -126,20 +170,8 @@ static __global__ void quantize_q5_0_kernel(
             y[ib].d = __float2half_rn(d); // store the __half, see Q8_0 kernel
         }
 
-        const uint32_t my   = (uint32_t)q & 0xF;
-        const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
-        if (lane < 16) {
-            y[ib].qs[lane] = (uint8_t)(my | (pair << 4));
-        }
-
-        // qh via __ballot_sync (must stay uniform), LE uint32.
-        const uint32_t qh = __ballot_sync(0xffffffffu, (q >> 4) & 1);
-        if (lane == 0) {
-            y[ib].qh[0] = (uint8_t)(qh >>  0);
-            y[ib].qh[1] = (uint8_t)(qh >>  8);
-            y[ib].qh[2] = (uint8_t)(qh >> 16);
-            y[ib].qh[3] = (uint8_t)(qh >> 24);
-        }
+        pack_nibbles_shfl_device((uint32_t)q, y[ib].qs, lane);
+        pack_qh_ballot_device((uint32_t)q, y[ib].qh, lane);
     }
 }
 
@@ -153,14 +185,8 @@ static __global__ void quantize_q5_1_kernel(
     for (int64_t ib = blockIdx.x; ib < nblocks; ib += gridDim.x) {
         const float xi = x[ib*QK5_1 + lane];
 
-        // min/max reductions (values only; order-independent).
-        float bmin = xi;
-        float bmax = xi;
-#pragma unroll
-        for (int m = 16; m > 0; m >>= 1) {
-            bmin = fminf(bmin, __shfl_xor_sync(0xffffffffu, bmin, m));
-            bmax = fmaxf(bmax, __shfl_xor_sync(0xffffffffu, bmax, m));
-        }
+        float bmin, bmax;
+        warp_minmax_device(xi, bmin, bmax);
 
         const float d  = __fdiv_rn(bmax - bmin, 31.0f);
         const float id = d ? __fdiv_rn(1.0f, d) : 0.0f;
@@ -174,20 +200,8 @@ static __global__ void quantize_q5_1_kernel(
             // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
             y[ib].dm = __floats2half2_rn(d, bmin);
         }
-        const uint32_t my   = q & 0xF;
-        const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
-        if (lane < 16) {
-            y[ib].qs[lane] = (uint8_t)(my | (pair << 4));
-        }
-
-        // 5th bit -> qh bitmap, LE uint32 (same as Q5_0 kernel).
-        const uint32_t qhb = __ballot_sync(0xffffffffu, (q >> 4) & 1);
-        if (lane == 0) {
-            y[ib].qh[0] = (uint8_t)(qhb >>  0);
-            y[ib].qh[1] = (uint8_t)(qhb >>  8);
-            y[ib].qh[2] = (uint8_t)(qhb >> 16);
-            y[ib].qh[3] = (uint8_t)(qhb >> 24);
-        }
+        pack_nibbles_shfl_device(q, y[ib].qs, lane);
+        pack_qh_ballot_device(q, y[ib].qh, lane);
     }
 }
 
@@ -201,14 +215,8 @@ static __global__ void quantize_q4_1_kernel(
     for (int64_t ib = blockIdx.x; ib < nblocks; ib += gridDim.x) {
         const float xi = x[ib*QK4_1 + lane];
 
-        // min/max reductions (values only; order-independent).
-        float bmin = xi;
-        float bmax = xi;
-#pragma unroll
-        for (int m = 16; m > 0; m >>= 1) {
-            bmin = fminf(bmin, __shfl_xor_sync(0xffffffffu, bmin, m));
-            bmax = fmaxf(bmax, __shfl_xor_sync(0xffffffffu, bmax, m));
-        }
+        float bmin, bmax;
+        warp_minmax_device(xi, bmin, bmax);
 
         const float d  = __fdiv_rn(bmax - bmin, 15.0f);
         const float id = d ? __fdiv_rn(1.0f, d) : 0.0f;
@@ -223,11 +231,7 @@ static __global__ void quantize_q4_1_kernel(
             // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
             y[ib].dm = __floats2half2_rn(d, bmin);
         }
-        const uint32_t my   = q & 0xF;
-        const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
-        if (lane < 16) {
-            y[ib].qs[lane] = (uint8_t)(my | (pair << 4));
-        }
+        pack_nibbles_shfl_device(q, y[ib].qs, lane);
     }
 }
 
@@ -525,6 +529,14 @@ static __device__ float make_qkx3_quants_device(int n, int nmax, const float * x
     return scale;
 }
 
+// Per-block imatrix weights, shared by all imatrix kernels.
+static __device__ void imatrix_weights_device(const float * xb, const float * qb, float s2, float * weight, int n) {
+    for (int j = 0; j < n; ++j) {
+        // __fsqrt_rn keeps sqrt exact under -use_fast_math, no FMA.
+        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
+    }
+}
+
 // --- Removable Q4_0 imatrix kernel (one thread/block; base keeps chunk indexing exact) ---
 static __global__ void quantize_q4_0_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
@@ -541,18 +553,13 @@ static __global__ void quantize_q4_0_imatrix_kernel(
 
     float weight[QK4_0];
     int8_t L[QK4_0];
-    for (int j = 0; j < QK4_0; ++j) {
-        // __fsqrt_rn keeps sqrt exact under -use_fast_math, no FMA.
-        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
-    }
+    imatrix_weights_device(xb, qb, s2, weight, QK4_0);
 
     const float d = make_qx_quants_device(QK4_0, 8, xb, L, weight);
 
     block_q4_0 * y = (block_q4_0 *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(__fmul_rn(fudge, d)));
-    for (int j = 0; j < QK4_0/2; ++j) {
-        y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_0/2] << 4));
-    }
+    pack_q4_nibbles_device((const uint8_t *)L, y[ib].qs);
 }
 
 // --- Q4_1 imatrix via make_qkx3 (nmax=15, no fudge) ---
@@ -572,9 +579,7 @@ static __global__ void quantize_q4_1_imatrix_kernel(
 
     float weight[QK4_1];
     uint8_t L[QK4_1], Laux[QK4_1];
-    for (int j = 0; j < QK4_1; ++j) {
-        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
-    }
+    imatrix_weights_device(xb, qb, s2, weight, QK4_1);
 
     float the_min;
     const float d = make_qkx3_quants_device(QK4_1, 15, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
@@ -583,9 +588,7 @@ static __global__ void quantize_q4_1_imatrix_kernel(
     // Bit-twiddle FP16 (NaN payload is CPU-vendor semantics).
     y[ib].dm = __halves2half2(__ushort_as_half(fp32_to_fp16_ggml(d)),
                               __ushort_as_half(fp32_to_fp16_ggml(-the_min)));
-    for (int j = 0; j < QK4_1/2; ++j) {
-        y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_1/2] << 4));
-    }
+    pack_q4_nibbles_device(L, y[ib].qs);
 }
 
 // --- IQ4_NL (ntry=7, w=x*x) ---
@@ -714,6 +717,8 @@ static __device__ float iq4nl_opt_block_device(const float * xb, const float * w
     return d;
 }
 
+static __device__ void iq4nl_requant_pack_device(const float * xb, float scale, uint8_t * L, uint8_t * qs);
+
 static __global__ void quantize_iq4_nl_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
     (void) fudge; // no fudge for IQ4_NL (matches CPU)
@@ -734,15 +739,16 @@ static __global__ void quantize_iq4_nl_kernel(
     // Finalize: re-quant with id=0 when scale=0; bit-twiddle FP16 for NaN payload.
     block_iq4_nl * y = (block_iq4_nl *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(scale));
-    {
-        const float idf = scale ? __fdiv_rn(1.0f, scale) : 0.0f;
-        for (int j = 0; j < QK4_NL; ++j) {
-            L[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(idf, xb[j]));
-        }
+    iq4nl_requant_pack_device(xb, scale, L, y[ib].qs);
+}
+
+// Final re-quant with the fitted scale + nibble pack, shared by NL kernels.
+static __device__ void iq4nl_requant_pack_device(const float * xb, float scale, uint8_t * L, uint8_t * qs) {
+    const float idf = scale ? __fdiv_rn(1.0f, scale) : 0.0f;
+    for (int j = 0; j < 32; ++j) {
+        L[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(idf, xb[j]));
     }
-    for (int j = 0; j < QK4_NL/2; ++j) {
-        y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_NL/2] << 4));
-    }
+    pack_q4_nibbles_device(L, qs);
 }
 
 // --- IQ4_NL imatrix (same optimizer, qw*sqrt(sigma2+x*x)) ---
@@ -762,26 +768,51 @@ static __global__ void quantize_iq4_nl_imatrix_kernel(
 
     float weight[QK4_NL];
     uint8_t L[QK4_NL];
-    for (int j = 0; j < QK4_NL; ++j) {
-        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
-    }
+    imatrix_weights_device(xb, qb, s2, weight, QK4_NL);
 
     const float scale = iq4nl_opt_block_device(xb, weight, L);
 
     block_iq4_nl * y = (block_iq4_nl *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(scale));
-    {
-        const float idf = scale ? __fdiv_rn(1.0f, scale) : 0.0f;
-        for (int j = 0; j < QK4_NL; ++j) {
-            L[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(idf, xb[j]));
-        }
-    }
-    for (int j = 0; j < QK4_NL/2; ++j) {
-        y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_NL/2] << 4));
-    }
+    iq4nl_requant_pack_device(xb, scale, L, y[ib].qs);
 }
 
 // --- IQ4_XS (super_block=256, ntry=7) ---
+
+// XS global scale fit + re-quant + pack, shared by plain/imatrix kernels.
+static __device__ void iq4xs_finalize_device(const float * xs, float max_scale, float * scales, uint8_t * L,
+        block_iq4_xs * y, int64_t sb) {
+    const float gd = -max_scale/32.0f;
+    y[sb].d = __ushort_as_half(fp32_to_fp16_ggml(gd));
+    const float gid = gd ? __fdiv_rn(1.0f, gd) : 0.0f;
+    uint16_t scales_h = 0;
+    for (int ib = 0; ib < 8; ++ib) {
+        int l = isfinite(scales[ib]) ? nearest_int_device(__fmul_rn(gid, scales[ib])) : 0; // deterministic degenerate path (see ggml-quants.c)
+        l = l > 31 ? 31 : (l < -32 ? -32 : l);
+        const float dl = __fmul_rn(gd, (float)l);
+        const float idl = dl ? __fdiv_rn(1.0f, dl) : 0.0f;
+        uint8_t * Lb = L + ib*32;
+        const float * xb = xs + ib*32;
+        for (int j = 0; j < 32; ++j) {
+            Lb[j] = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(idl, xb[j]));
+        }
+        l += 32;
+        const uint8_t l_l = (uint8_t)(l & 0xf);
+        const uint8_t l_h = (uint8_t)((unsigned)l >> 4);
+        if (ib % 2 == 0) {
+            y[sb].scales_l[ib/2] = l_l;
+        } else {
+            y[sb].scales_l[ib/2] |= (uint8_t)(l_l << 4);
+        }
+        scales_h |= (uint16_t)(l_h << (2*(ib % 8)));
+    }
+    y[sb].scales_h = scales_h;
+    for (int i = 0; i < QK_K/32; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            y[sb].qs[16*i + j] = (uint8_t)(L[32*i + j] | (L[32*i + 16 + j] << 4));
+        }
+    }
+}
 
 static __global__ void quantize_iq4_xs_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
@@ -814,36 +845,7 @@ static __global__ void quantize_iq4_xs_kernel(
 
     // Global scale + re-quant (CPU order, fudge=1; bit-twiddle FP16 for NaN).
     block_iq4_xs * y = (block_iq4_xs *)vy;
-    const float gd = -max_scale/32.0f;
-    y[sb].d = __ushort_as_half(fp32_to_fp16_ggml(gd));
-    const float gid = gd ? __fdiv_rn(1.0f, gd) : 0.0f;
-    uint16_t scales_h = 0;
-    for (int ib = 0; ib < 8; ++ib) {
-        int l = isfinite(scales[ib]) ? nearest_int_device(__fmul_rn(gid, scales[ib])) : 0; // deterministic degenerate path (see ggml-quants.c)
-        l = l > 31 ? 31 : (l < -32 ? -32 : l);
-        const float dl = __fmul_rn(gd, (float)l);
-        const float idl = dl ? __fdiv_rn(1.0f, dl) : 0.0f;
-        uint8_t * Lb = L + ib*32;
-        const float * xb = xs + ib*32;
-        for (int j = 0; j < 32; ++j) {
-            Lb[j] = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(idl, xb[j]));
-        }
-        l += 32;
-        const uint8_t l_l = (uint8_t)(l & 0xf);
-        const uint8_t l_h = (uint8_t)((unsigned)l >> 4);
-        if (ib % 2 == 0) {
-            y[sb].scales_l[ib/2] = l_l;
-        } else {
-            y[sb].scales_l[ib/2] |= (uint8_t)(l_l << 4);
-        }
-        scales_h |= (uint16_t)(l_h << (2*(ib % 8)));
-    }
-    y[sb].scales_h = scales_h;
-    for (int i = 0; i < QK_K/32; ++i) {
-        for (int j = 0; j < 16; ++j) {
-            y[sb].qs[16*i + j] = (uint8_t)(L[32*i + j] | (L[32*i + 16 + j] << 4));
-        }
-    }
+    iq4xs_finalize_device(xs, max_scale, scales, L, y, sb);
 }
 
 // --- IQ4_XS imatrix (same replay, qw*sqrt(sigma2+x*x)) ---
@@ -870,9 +872,7 @@ static __global__ void quantize_iq4_xs_imatrix_kernel(
         const float * xb = xs + ib*32;
         const float * qb = qs + ib*32;
         uint8_t * Lb = L + ib*32;
-        for (int j = 0; j < 32; ++j) {
-            weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
-        }
+        imatrix_weights_device(xb, qb, s2, weight, 32);
         const float d = iq4nl_opt_block_device(xb, weight, Lb);
         scales[ib] = d;
         const float abs_d = fabsf(d);
@@ -882,36 +882,7 @@ static __global__ void quantize_iq4_xs_imatrix_kernel(
     }
 
     block_iq4_xs * y = (block_iq4_xs *)vy;
-    const float gd = -max_scale/32.0f;
-    y[sb].d = __ushort_as_half(fp32_to_fp16_ggml(gd));
-    const float gid = gd ? __fdiv_rn(1.0f, gd) : 0.0f;
-    uint16_t scales_h = 0;
-    for (int ib = 0; ib < 8; ++ib) {
-        int l = isfinite(scales[ib]) ? nearest_int_device(__fmul_rn(gid, scales[ib])) : 0; // deterministic degenerate path (see ggml-quants.c)
-        l = l > 31 ? 31 : (l < -32 ? -32 : l);
-        const float dl = __fmul_rn(gd, (float)l);
-        const float idl = dl ? __fdiv_rn(1.0f, dl) : 0.0f;
-        uint8_t * Lb = L + ib*32;
-        const float * xb = xs + ib*32;
-        for (int j = 0; j < 32; ++j) {
-            Lb[j] = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(idl, xb[j]));
-        }
-        l += 32;
-        const uint8_t l_l = (uint8_t)(l & 0xf);
-        const uint8_t l_h = (uint8_t)((unsigned)l >> 4);
-        if (ib % 2 == 0) {
-            y[sb].scales_l[ib/2] = l_l;
-        } else {
-            y[sb].scales_l[ib/2] |= (uint8_t)(l_l << 4);
-        }
-        scales_h |= (uint16_t)(l_h << (2*(ib % 8)));
-    }
-    y[sb].scales_h = scales_h;
-    for (int i = 0; i < QK_K/32; ++i) {
-        for (int j = 0; j < 16; ++j) {
-            y[sb].qs[16*i + j] = (uint8_t)(L[32*i + j] | (L[32*i + 16 + j] << 4));
-        }
-    }
+    iq4xs_finalize_device(xs, max_scale, scales, L, y, sb);
 }
 
 // --- Removable Q5_0 imatrix (nmax=16 + qh bitmap) ---
@@ -930,28 +901,14 @@ static __global__ void quantize_q5_0_imatrix_kernel(
 
     float weight[QK5_0];
     int8_t L[QK5_0];
-    for (int j = 0; j < QK5_0; ++j) {
-        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
-    }
+    imatrix_weights_device(xb, qb, s2, weight, QK5_0);
 
     const float d = make_qx_quants_device(QK5_0, 16, xb, L, weight);
 
     block_q5_0 * y = (block_q5_0 *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(__fmul_rn(fudge, d)));
 
-    // qs+qh pack (L in [0,31]).
-    uint32_t qh = 0;
-    for (int j = 0; j < QK5_0/2; ++j) {
-        const uint8_t xi0 = (uint8_t)L[j];
-        const uint8_t xi1 = (uint8_t)L[j + QK5_0/2];
-        y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
-        qh |= ((uint32_t)((xi0 & 0x10u) >> 4)) << (j + 0);
-        qh |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + QK5_0/2);
-    }
-    y[ib].qh[0] = (uint8_t)(qh >>  0);
-    y[ib].qh[1] = (uint8_t)(qh >>  8);
-    y[ib].qh[2] = (uint8_t)(qh >> 16);
-    y[ib].qh[3] = (uint8_t)(qh >> 24);
+    pack_q5_qh_device((const uint8_t *)L, y[ib].qs, y[ib].qh);
 }
 
 // --- Q5_1 imatrix via make_qkx3 (nmax=31, no fudge) ---
@@ -971,9 +928,7 @@ static __global__ void quantize_q5_1_imatrix_kernel(
 
     float weight[QK5_1];
     uint8_t L[QK5_1], Laux[QK5_1];
-    for (int j = 0; j < QK5_1; ++j) {
-        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
-    }
+    imatrix_weights_device(xb, qb, s2, weight, QK5_1);
 
     float the_min;
     const float d = make_qkx3_quants_device(QK5_1, 31, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
@@ -983,18 +938,24 @@ static __global__ void quantize_q5_1_imatrix_kernel(
     y[ib].dm = __halves2half2(__ushort_as_half(fp32_to_fp16_ggml(d)),
                               __ushort_as_half(fp32_to_fp16_ggml(-the_min)));
 
-    uint32_t qh = 0;
-    for (int j = 0; j < QK5_1/2; ++j) {
-        const uint8_t xi0 = L[j];
-        const uint8_t xi1 = L[j + QK5_1/2];
+    pack_q5_qh_device(L, y[ib].qs, y[ib].qh);
+}
+
+// Q6 low nibbles + 2-bit qh pack (L in [0,63]), shared by imatrix/OLS kernels.
+static __device__ void pack_q6_0_device(const int8_t * L, block_q6_0 * y, int64_t ib) {
+    for (int j = 0; j < QK6_0/2; ++j) {
+        const uint8_t xi0 = (uint8_t)L[j];
+        const uint8_t xi1 = (uint8_t)L[j + QK6_0/2];
         y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
-        qh |= ((uint32_t)((xi0 & 0x10u) >> 4)) << (j + 0);
-        qh |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + QK5_1/2);
     }
-    y[ib].qh[0] = (uint8_t)(qh >>  0);
-    y[ib].qh[1] = (uint8_t)(qh >>  8);
-    y[ib].qh[2] = (uint8_t)(qh >> 16);
-    y[ib].qh[3] = (uint8_t)(qh >> 24);
+    for (int k = 0; k < QK6_0/4; ++k) {
+        const uint8_t a0 = (uint8_t)L[k];
+        const uint8_t a1 = (uint8_t)L[k + QK6_0/2];
+        const uint8_t b0 = (uint8_t)L[k + QK6_0/4];
+        const uint8_t b1 = (uint8_t)L[k + 3*(QK6_0/4)];
+        y[ib].qh[k] = (uint8_t)((a0 >> 4) | ((a1 >> 4) << 2)
+                              | (((b0 >> 4) | ((b1 >> 4) << 2)) << 4));
+    }
 }
 
 // --- Q6_0 imatrix (nmax=32, 2-bit qh) ---
@@ -1013,29 +974,14 @@ static __global__ void quantize_q6_0_imatrix_kernel(
 
     float weight[QK6_0];
     int8_t L[QK6_0];
-    for (int j = 0; j < QK6_0; ++j) {
-        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
-    }
+    imatrix_weights_device(xb, qb, s2, weight, QK6_0);
 
     const float d = make_qx_quants_device(QK6_0, 32, xb, L, weight);
 
     block_q6_0 * y = (block_q6_0 *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(__fmul_rn(fudge, d)));
 
-    // qs low nibbles + 2-bit qh (L in [0,63]).
-    for (int j = 0; j < QK6_0/2; ++j) {
-        const uint8_t xi0 = (uint8_t)L[j];
-        const uint8_t xi1 = (uint8_t)L[j + QK6_0/2];
-        y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
-    }
-    for (int k = 0; k < QK6_0/4; ++k) {
-        const uint8_t a0 = (uint8_t)L[k];
-        const uint8_t a1 = (uint8_t)L[k + QK6_0/2];
-        const uint8_t b0 = (uint8_t)L[k + QK6_0/4];
-        const uint8_t b1 = (uint8_t)L[k + 3*(QK6_0/4)];
-        y[ib].qh[k] = (uint8_t)((a0 >> 4) | ((a1 >> 4) << 2)
-                              | (((b0 >> 4) | ((b1 >> 4) << 2)) << 4));
-    }
+    pack_q6_0_device(L, y, ib);
 }
 
 // --- Q6_0 OLS kernel (w=x*x, make_qx+fudge) ---
@@ -1059,27 +1005,18 @@ static __global__ void quantize_q6_0_ols_kernel(
     block_q6_0 * y = (block_q6_0 *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(__fmul_rn(fudge, d)));
 
-    for (int j = 0; j < QK6_0/2; ++j) {
-        const uint8_t xi0 = (uint8_t)L[j];
-        const uint8_t xi1 = (uint8_t)L[j + QK6_0/2];
-        y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
-    }
-    for (int k = 0; k < QK6_0/4; ++k) {
-        const uint8_t a0 = (uint8_t)L[k];
-        const uint8_t a1 = (uint8_t)L[k + QK6_0/2];
-        const uint8_t b0 = (uint8_t)L[k + QK6_0/4];
-        const uint8_t b1 = (uint8_t)L[k + 3*(QK6_0/4)];
-        y[ib].qh[k] = (uint8_t)((a0 >> 4) | ((a1 >> 4) << 2)
-                              | (((b0 >> 4) | ((b1 >> 4) << 2)) << 4));
-    }
+    pack_q6_0_device(L, y, ib);
 }
 
 // --- generic chunked host drivers (~128 MiB, shared) ---
 
 using quantize_kernel_t = void (*)(const float *, void *, int64_t, float);
 
+// Shared chunked driver for warp-per-block plain kernels (block_size = 0
+// selects one warp per quant block) and one-thread-per-block OLS/codebook
+// kernels (block_size = 256). ~128 MiB F32 chunks bound VRAM use.
 static size_t ggml_cuda_quantize_generic(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
-        int64_t qk, size_t blk_size, quantize_kernel_t kernel, const char * name, float fudge) {
+        int64_t qk, size_t blk_size, quantize_kernel_t kernel, const char * name, float fudge, int block_size) {
     GGML_ASSERT(nrows > 0);
     GGML_ASSERT(n_per_row % qk == 0);
 
@@ -1093,7 +1030,7 @@ static size_t ggml_cuda_quantize_generic(const float * src, void * dst, int64_t 
     // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     // Chunked ~128 MiB F32 input so large tensors avoid huge VRAM allocs.
-    const int64_t chunk_blocks = 1 << 20;                  // quant blocks per chunk
+    const int64_t chunk_blocks = std::max<int64_t>(1, (128ll << 20)/(qk*(int64_t)sizeof(float)));
     const int64_t chunk_x      = chunk_blocks*qk;          // floats per chunk
     const int64_t chunk_y      = chunk_blocks*blk_size;    // bytes per chunk
 
@@ -1114,8 +1051,9 @@ static size_t ggml_cuda_quantize_generic(const float * src, void * dst, int64_t 
         return 0;
     }
 
-    // one warp per quant block
-    const int64_t block_size = qk;
+    // one warp per quant block (block_size 0, grid-stride loop in kernel)
+    // or 256-thread one-block-per-thread
+    const unsigned int launch_bs = block_size ? (unsigned)block_size : (unsigned)qk;
 
     for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
         const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
@@ -1126,7 +1064,11 @@ static size_t ggml_cuda_quantize_generic(const float * src, void * dst, int64_t 
             break;
         }
 
-        kernel<<<(unsigned)nblocks, (unsigned)block_size>>>(x_dev, y_dev, nblocks, fudge);
+        if (block_size) {
+            kernel<<<(unsigned)((nblocks + launch_bs - 1)/launch_bs), launch_bs>>>(x_dev, y_dev, nblocks, fudge);
+        } else {
+            kernel<<<(unsigned)nblocks, launch_bs>>>(x_dev, y_dev, nblocks, fudge);
+        }
 
         err = cudaMemcpy((char *)dst + base*blk_size, y_dev, nblocks*blk_size, cudaMemcpyDeviceToHost);
         if (err != cudaSuccess) {
@@ -1268,7 +1210,7 @@ static size_t ggml_cuda_quantize_imatrix_generic(const float * src, void * dst, 
 size_t ggml_cuda_quantize_q8_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0); // match CPU quirk
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
-            QK8_0, sizeof(block_q8_0), quantize_q8_0_kernel, "q8_0", fudge);
+            QK8_0, sizeof(block_q8_0), quantize_q8_0_kernel, "q8_0", fudge, 0);
 }
 
 
@@ -1276,20 +1218,20 @@ size_t ggml_cuda_quantize_q8_0(const float * src, void * dst, int64_t nrows, int
 size_t ggml_cuda_quantize_q5_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q5_0);
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
-            QK5_0, sizeof(block_q5_0), quantize_q5_0_kernel, "q5_0", fudge);
+            QK5_0, sizeof(block_q5_0), quantize_q5_0_kernel, "q5_0", fudge, 0);
 }
 
 // --- Removable Q4_0 section (delete kernel+helpers+cases to drop) ---
 size_t ggml_cuda_quantize_q4_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q4_0);
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
-            QK4_0, sizeof(block_q4_0), quantize_q4_0_kernel, "q4_0", fudge);
+            QK4_0, sizeof(block_q4_0), quantize_q4_0_kernel, "q4_0", fudge, 0);
 }
 
 // --- Q4_1 (quantize_row_q4_1_ref, no fudge) ---
 size_t ggml_cuda_quantize_q4_1(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
-            QK4_1, sizeof(block_q4_1), quantize_q4_1_kernel, "q4_1", 1.0f);
+            QK4_1, sizeof(block_q4_1), quantize_q4_1_kernel, "q4_1", 1.0f, 0);
 }
 
 // --- Removable Q4_0 imatrix (reuses row imatrix like CPU) ---
@@ -1316,7 +1258,7 @@ size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nr
 // --- Q5_1 (quantize_row_q5_1_ref, no fudge) ---
 size_t ggml_cuda_quantize_q5_1(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
-            QK5_1, sizeof(block_q5_1), quantize_q5_1_kernel, "q5_1", 1.0f);
+            QK5_1, sizeof(block_q5_1), quantize_q5_1_kernel, "q5_1", 1.0f, 0);
 }
 
 // --- Q5_1 imatrix via make_qkx3 (no fudge) ---
@@ -1334,74 +1276,9 @@ size_t ggml_cuda_quantize_q4_1_imatrix(const float * src, void * dst, int64_t nr
 }
 
 // --- IQ4_NL (no imatrix, ntry=7) ---
-using ols_kernel_t = void (*)(const float *, void *, int64_t, float);
-
-// Shared chunked driver for one-thread-per-block kernels (Q6_0 OLS, IQ4_NL/XS).
-static size_t ggml_cuda_quantize_ols_generic(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
-        int64_t qk, size_t blk_size, ols_kernel_t kernel, const char * name, float fudge) {
-    GGML_ASSERT(nrows > 0);
-    GGML_ASSERT(n_per_row % qk == 0);
-
-    const int64_t nblocks_total = nrows*(n_per_row/qk);
-
-    int n_devices = 0;
-    if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
-        return 0;
-    }
-    // Runs on the ambient device (dispatcher selects it).
-
-    const int64_t chunk_blocks = std::max<int64_t>(1, (128ll << 20)/(qk*(int64_t)sizeof(float)));
-    const int64_t chunk_x      = chunk_blocks*qk;
-    const int64_t chunk_y      = chunk_blocks*(int64_t)blk_size;
-
-    float   * x_dev = nullptr;
-    uint8_t * y_dev = nullptr;
-
-    cudaError_t err = cudaMalloc(&x_dev, chunk_x*sizeof(float));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "%s: %s: cudaMalloc(x_dev): %s\n", __func__, name, cudaGetErrorString(err));
-        return 0;
-    }
-    err = cudaMalloc(&y_dev, chunk_y);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "%s: %s: cudaMalloc(y_dev): %s\n", __func__, name, cudaGetErrorString(err));
-        cudaFree(x_dev);
-        return 0;
-    }
-
-    const unsigned int block_size = 256;
-    for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
-        const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
-
-        err = cudaMemcpy(x_dev, src + base*qk, nblocks*qk*sizeof(float), cudaMemcpyHostToDevice);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "%s: %s: cudaMemcpy H2D: %s\n", __func__, name, cudaGetErrorString(err));
-            break;
-        }
-
-        kernel<<<(unsigned)((nblocks + block_size - 1)/block_size), block_size>>>(
-                x_dev, y_dev, nblocks, fudge);
-
-        err = cudaMemcpy((char *)dst + base*blk_size, y_dev, nblocks*blk_size, cudaMemcpyDeviceToHost);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "%s: %s: cudaMemcpy D2H: %s\n", __func__, name, cudaGetErrorString(err));
-            break;
-        }
-    }
-
-    cudaFree(x_dev);
-    cudaFree(y_dev);
-
-    if (err != cudaSuccess) {
-        return 0;
-    }
-
-    return nblocks_total*blk_size;
-}
-
 size_t ggml_cuda_quantize_iq4_nl(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
-    return ggml_cuda_quantize_ols_generic(src, dst, nrows, n_per_row, QK4_NL, sizeof(block_iq4_nl),
-            quantize_iq4_nl_kernel, "iq4_nl", 1.0f);
+    return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row, QK4_NL, sizeof(block_iq4_nl),
+            quantize_iq4_nl_kernel, "iq4_nl", 1.0f, 256);
 }
 
 // --- IQ4_NL imatrix (qw*sqrt(sigma2+x*x), host sigma2 per 32-block) ---
@@ -1413,8 +1290,8 @@ size_t ggml_cuda_quantize_iq4_nl_imatrix(const float * src, void * dst, int64_t 
 
 // --- IQ4_XS (no imatrix, ntry=7) ---
 size_t ggml_cuda_quantize_iq4_xs(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
-    return ggml_cuda_quantize_ols_generic(src, dst, nrows, n_per_row, QK_K, sizeof(block_iq4_xs),
-            quantize_iq4_xs_kernel, "iq4_xs", 1.0f);
+    return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row, QK_K, sizeof(block_iq4_xs),
+            quantize_iq4_xs_kernel, "iq4_xs", 1.0f, 256);
 }
 
 // --- IQ4_XS imatrix (host sigma2 per superblock) ---
@@ -1426,8 +1303,8 @@ size_t ggml_cuda_quantize_iq4_xs_imatrix(const float * src, void * dst, int64_t 
 
 // --- Q6_0 OLS driver (w=x*x, make_qx+fudge) ---
 size_t ggml_cuda_quantize_q6_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
-    return ggml_cuda_quantize_ols_generic(src, dst, nrows, n_per_row, QK6_0, sizeof(block_q6_0),
-            quantize_q6_0_ols_kernel, "q6_0", ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0));
+    return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row, QK6_0, sizeof(block_q6_0),
+            quantize_q6_0_ols_kernel, "q6_0", ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0), 256);
 }
 
 // Q8_0 imatrix routes to plain (CPU ignores imatrix).

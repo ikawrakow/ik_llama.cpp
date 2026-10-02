@@ -60,6 +60,33 @@ static size_t cuda_imatrix(const float * s, void * d, int64_t r, int64_t n, cons
 // FP_CONTRACT OFF: match CPU (ggml-quants.c); no FMA so OLS ties stay bit-exact.
 #pragma STDC FP_CONTRACT OFF
 
+// Q5 nibble pack + 5th-bit qh bitmap, shared by plain/imatrix refs (L in [0,31]).
+static void ref_pack_q5_qh(const uint8_t * L, uint8_t * qs, uint8_t * qh) {
+    uint32_t bits = 0;
+    for (int j = 0; j < 16; ++j) {
+        const uint8_t xi0 = L[j];
+        const uint8_t xi1 = L[j + 16];
+        qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+        bits |= ((uint32_t)((xi0 & 0x10u) >> 4)) << (j + 0);
+        bits |= ((uint32_t)((xi1 & 0x10u) >> 4)) << (j + 16);
+    }
+    memcpy(qh, &bits, sizeof(bits));
+}
+
+// Q6 low nibbles + 2-bit qh pack, shared by plain/imatrix refs (L in [0,63]).
+static void ref_pack_q6_0(const uint8_t * L, uint8_t * qs, uint8_t * qh) {
+    for (int j = 0; j < 16; ++j) {
+        const uint8_t xi0 = L[j];
+        const uint8_t xi1 = L[j + 16];
+        qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+    }
+    memset(qh, 0, 8);
+    for (int j = 0; j < 16; ++j) {
+        const uint8_t h = (L[j] >> 4) | ((L[j + 16] >> 4) << 2);
+        qh[j % 8] |= (uint8_t)(h << (4*(j / 8)));
+    }
+}
+
 // REF quantize_row_q8_0_ref (ggml-quants.c); matches CPU Q6_0-fudge quirk via __float2half_rn.
 static void ref_quantize_q8_0(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0); // match CPU quirk
@@ -389,14 +416,7 @@ static void ref_quantize_q6_0(void * dst, const float * src, int64_t nrows, int6
             float d = ref_make_qx_quants(QK6_0, 32, xb, L, 1, weight);
             y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(fudge*d);
 
-            memset(y[ib].qh, 0, QK6_0/4);
-            for (int j = 0; j < QK6_0/2; ++j) {
-                const uint8_t xi0 = (uint8_t)L[j];
-                const uint8_t xi1 = (uint8_t)L[j + QK6_0/2];
-                y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
-                const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
-                y[ib].qh[j%(QK6_0/4)] |= (uint8_t)(h << 4*(j/(QK6_0/4)));
-            }
+            ref_pack_q6_0((const uint8_t *)L, y[ib].qs, y[ib].qh);
         }
     }
 }
@@ -1050,14 +1070,7 @@ static void ref_quantize_q6_0_imatrix(void * dst, const float * src, int64_t nro
             float d = ref_make_qx_quants(QK6_0, 32, xb, L, 1, weight);
             y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0)*d);
 
-            memset(y[ib].qh, 0, QK6_0/4);
-            for (int j = 0; j < QK6_0/2; ++j) {
-                const uint8_t xi0 = (uint8_t)L[j];
-                const uint8_t xi1 = (uint8_t)L[j + QK6_0/2];
-                y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
-                const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
-                y[ib].qh[j%(QK6_0/4)] |= (uint8_t)(h << 4*(j/(QK6_0/4)));
-            }
+            ref_pack_q6_0((const uint8_t *)L, y[ib].qs, y[ib].qh);
         }
     }
 }
