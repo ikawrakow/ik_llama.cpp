@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <cfloat>
 #include <algorithm>
 #include <vector>
 
@@ -787,7 +788,7 @@ static __device__ void iq4xs_finalize_device(const float * xs, float max_scale, 
     const float gid = gd ? __fdiv_rn(1.0f, gd) : 0.0f;
     uint16_t scales_h = 0;
     for (int ib = 0; ib < 8; ++ib) {
-        int l = std::isfinite(scales[ib]) ? nearest_int_device(__fmul_rn(gid, scales[ib])) : 0; // deterministic degenerate path (see ggml-quants.c)
+        int l = fabsf(scales[ib]) <= FLT_MAX ? nearest_int_device(__fmul_rn(gid, scales[ib])) : 0; // deterministic degenerate path (see ggml-quants.c)
         l = l > 31 ? 31 : (l < -32 ? -32 : l);
         const float dl = __fmul_rn(gd, (float)l);
         const float idl = dl ? __fdiv_rn(1.0f, dl) : 0.0f;
