@@ -22,6 +22,7 @@ set(TARGET_SRCS
     server-common.h
     server-context.cpp
     server-context.h
+    ${CMAKE_SOURCE_DIR}/kv-cache/kv-cache.cpp
 )
 set(PUBLIC_ASSETS
     index.html.gz
@@ -78,7 +79,7 @@ endif()
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 #target_link_libraries(${TARGET} PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
 
-target_include_directories(${TARGET} PRIVATE ../mtmd)
+target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR}/kv-cache)
 target_link_libraries(${TARGET} PRIVATE common mtmd cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
 if (LLAMA_SERVER_SSL)
@@ -98,6 +99,12 @@ endif()
 
 if (WIN32)
     TARGET_LINK_LIBRARIES(${TARGET} PRIVATE ws2_32)
+endif()
+
+if (MINGW)
+    # kv-cache.cpp uses BCrypt for SHA-256; the "#pragma comment(lib, "bcrypt.lib")"
+    # only works on MSVC, so MinGW needs an explicit link.
+    TARGET_LINK_LIBRARIES(${TARGET} PRIVATE bcrypt)
 endif()
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
