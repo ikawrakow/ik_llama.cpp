@@ -413,6 +413,21 @@ struct llama_mmap::impl {
         }
     }
 
+    void prefetch_fragment(size_t first, size_t last) {
+        int page_size = mapped_page_size > 0 ? mapped_page_size : sysconf(_SC_PAGESIZE);
+        align_range(&first, &last, page_size);
+        size_t len = last - first;
+
+        if (len == 0) {
+            return;
+        }
+
+        if (posix_madvise((uint8_t *) addr + first, len, POSIX_MADV_WILLNEED)) {
+            LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
+                    strerror(errno));
+        }
+    }
+
     void unmap_fragment(size_t first, size_t last) {
         int page_size = mapped_page_size > 0 ? mapped_page_size : sysconf(_SC_PAGESIZE);
         align_range(&first, &last, page_size);
@@ -502,14 +517,63 @@ struct llama_mmap::impl {
         }
     }
 
+    static size_t win_page_size() {
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        return (size_t) si.dwPageSize;
+    }
+
+    static void win_align_range(size_t * first, size_t * last, size_t page_size) {
+        size_t offset_in_page = *first & (page_size - 1);
+        size_t offset_to_page = offset_in_page == 0 ? 0 : page_size - offset_in_page;
+        *first += offset_to_page;
+
+        *last = *last & ~(page_size - 1);
+
+        if (*last <= *first) {
+            *last = *first;
+        }
+    }
+
     void dontneed_fragment(size_t first, size_t last) {
         GGML_UNUSED(first);
         GGML_UNUSED(last);
     }
 
     void random_fragment(size_t first, size_t last) {
+        // No Windows MADV_RANDOM equivalent; demand paging fetches on touch only.
         GGML_UNUSED(first);
         GGML_UNUSED(last);
+    }
+
+    void prefetch_fragment(size_t first, size_t last) {
+        // Warm [first,last) only; deferred/VRAM-bound weights stream on demand.
+        const size_t page_size = win_page_size();
+        win_align_range(&first, &last, page_size);
+        const size_t len = last - first;
+
+        if (len == 0) {
+            return;
+        }
+
+#if _WIN32_WINNT >= 0x602
+        BOOL (WINAPI * pPrefetchVirtualMemory) (HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
+        HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+
+        pPrefetchVirtualMemory = (decltype(pPrefetchVirtualMemory))(void *) GetProcAddress(hKernel32, "PrefetchVirtualMemory");
+
+        if (pPrefetchVirtualMemory) {
+            WIN32_MEMORY_RANGE_ENTRY range;
+            range.VirtualAddress = (uint8_t *) addr + first;
+            range.NumberOfBytes = (SIZE_T) len;
+            if (!pPrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0)) {
+                LLAMA_LOG_WARN("warning: PrefetchVirtualMemory failed: %s\n",
+                        llama_format_win_err(GetLastError()).c_str());
+            }
+        }
+#else
+        LLAMA_LOG_DEBUG("skipping PrefetchVirtualMemory because _WIN32_WINNT < 0x602\n");
+#endif
     }
 
     void unmap_fragment(size_t first, size_t last) {
@@ -546,6 +610,13 @@ struct llama_mmap::impl {
         throw std::runtime_error("mmap not supported");
     }
 
+    void prefetch_fragment(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+
+        throw std::runtime_error("mmap not supported");
+    }
+
     void unmap_fragment(size_t first, size_t last) {
         GGML_UNUSED(first);
         GGML_UNUSED(last);
@@ -572,6 +643,7 @@ bool llama_mmap::is_anonymous() const { return pimpl->is_anonymous(); }
 
 void llama_mmap::dontneed_fragment(size_t first, size_t last) { pimpl->dontneed_fragment(first, last); }
 void llama_mmap::random_fragment(size_t first, size_t last) { pimpl->random_fragment(first, last); }
+void llama_mmap::prefetch_fragment(size_t first, size_t last) { pimpl->prefetch_fragment(first, last); }
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
 
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)

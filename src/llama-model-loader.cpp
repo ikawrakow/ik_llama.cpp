@@ -5,6 +5,7 @@
 #include "ggml.h"
 #include <memory>
 #include "ggml-backend.h"
+#include "iqk/iqk_quantize.h"
 
 #ifdef GGML_USE_CUDA
 #  include "ggml-cuda.h"
@@ -695,17 +696,34 @@ void llama_model_loader::drop_mmap_expert_pages() const {
 
 void llama_model_loader::build_ple_tensor_index() {
     ple_tensor_index = {};
+    ple_tensor_index.file_ranges.resize(files.size());
+    auto index_range = [&](uint16_t idx, size_t offs, size_t nbytes) {
+        ple_tensor_index.file_ranges.at(idx).push_back({ offs, offs + nbytes });
+        ple_tensor_index.deferred_bytes += nbytes;
+    };
 
     const auto * weight = get_weight(LLM_TN(get_arch())(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").c_str());
-    if (weight == nullptr) {
-        return;
+    if (weight != nullptr) {
+        index_range(weight->idx, weight->offs, ggml_nbytes(weight->tensor));
     }
 
-    const size_t tensor_bytes = ggml_nbytes(weight->tensor);
-
-    ple_tensor_index.file_ranges.resize(files.size());
-    ple_tensor_index.file_ranges.at(weight->idx).push_back({ weight->offs, weight->offs + tensor_bytes });
-    ple_tensor_index.deferred_bytes = tensor_bytes;
+    // Engram tables are hash-indexed sparse lookups like PLE; the dense k/q/wkv stay prefetched.
+    int n_engram = 0;
+    for (int i = 0; i < n_tensors; ++i) {
+        const std::string name = get_tensor_name(i);
+        if (name.find("engram_embd.weight") == std::string::npos) {
+            continue;
+        }
+        const auto * ew = get_weight(name.c_str());
+        if (ew == nullptr) {
+            continue;
+        }
+        index_range(ew->idx, ew->offs, ggml_nbytes(ew->tensor));
+        ++n_engram;
+    }
+    if (n_engram > 0) {
+        LLAMA_LOG_INFO("%s: indexed %d engram tables for deferred loading\n", __func__, n_engram);
+    }
 }
 
 bool llama_model_loader::should_defer_ple_mmaps() const {
@@ -720,6 +738,37 @@ void llama_model_loader::apply_ple_mmap_policy() const {
             mappings[idx]->dontneed_fragment(range.first, range.last);
         }
     }
+}
+
+bool llama_model_loader::file_has_deferred_ple(int idx) const {
+    if (idx < 0 || (size_t) idx >= ple_tensor_index.file_ranges.size()) {
+        return false;
+    }
+    for (const auto & range : ple_tensor_index.file_ranges[(size_t) idx]) {
+        if (!range.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool llama_model_loader::ple_range_overlaps(int idx, size_t first, size_t last) const {
+    return ple_deferred_bytes_in(idx, first, last) > 0;
+}
+
+size_t llama_model_loader::ple_deferred_bytes_in(int idx, size_t first, size_t last) const {
+    if (idx < 0 || (size_t) idx >= ple_tensor_index.file_ranges.size() || first >= last) {
+        return 0;
+    }
+    size_t bytes = 0;
+    for (const auto & range : ple_tensor_index.file_ranges[(size_t) idx]) {
+        const size_t lo = std::max(first, range.first);
+        const size_t hi = std::min(last, range.last);
+        if (hi > lo) {
+            bytes += hi - lo;
+        }
+    }
+    return bytes;
 }
 
 template<typename T>
@@ -1068,8 +1117,16 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
     if (use_mmap) {
         mappings.reserve(files.size());
         mmaps_used.reserve(files.size());
-        for (const auto & file : files) {
-            std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), prefetch ? -1 : 0, ggml_is_numa(), use_thp));
+        size_t n_deferred = 0;
+        for (size_t fi = 0; fi < files.size(); ++fi) {
+            const auto & file = files[fi];
+            // Deferred sparse tables (PLE, engram) stay cold; faulting GBs upfront wastes IO.
+            const bool deferred_file = file_has_deferred_ple((int) fi);
+            if (deferred_file) {
+                ++n_deferred;
+            }
+            const size_t file_prefetch = (prefetch && !deferred_file) ? (size_t) -1 : 0;
+            std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), file_prefetch, ggml_is_numa(), use_thp));
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
@@ -1077,6 +1134,10 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
                 mlock_mmaps->emplace_back(std::move(mlock_mmap));
             }
             mappings.emplace_back(std::move(mapping));
+        }
+        if (n_deferred > 0) {
+            LLAMA_LOG_INFO("%s: %zu of %zu files hold deferred tables and skip bulk prefetch\n",
+                    __func__, n_deferred, files.size());
         }
     }
 
@@ -1214,6 +1275,50 @@ bool llama_model_loader::load_all_data(
         // mmap. Serialized.
         if (use_mmap) {
             std::lock_guard<std::mutex> lock(load_mutex);
+            // Owned buffers streamed from the file: repackables under -rtr, everything
+            // not deferred under explicit --no-mmap; deferred tables stay aliased.
+            if (defer_ple && !ple_tensor_index.empty() && lmlocks == nullptr &&
+                    cur->buffer == nullptr && cur->view_src == nullptr && n_size > 0 &&
+                    !ple_range_overlaps(weight->idx, weight->offs, weight->offs + n_size) &&
+                    (defer_copy_dense || (repack_tensors && (ggml_type) iqk_repacked_type(cur) != cur->type))) {
+                bool has_views = false;
+                for (auto * v = ggml_get_first_tensor(ctx); v != NULL; v = ggml_get_next_tensor(ctx, v)) {
+                    if (v->view_src == cur) {
+                        has_views = true;
+                        break;
+                    }
+                }
+                if (!has_views) {
+                    ggml_backend_buffer_t owned = ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), n_size);
+                    if (owned == nullptr) {
+                        throw std::runtime_error(format("unable to allocate repack buffer for tensor '%s'", ggml_get_name(cur)));
+                    }
+                    uint8_t * base = (uint8_t *) ggml_backend_buffer_get_base(owned);
+                    file->seek(weight->offs, SEEK_SET);
+                    file->read_raw(base, n_size);
+                    if (check_tensors && !ggml_validate_row_data(cur->type, base, n_size)) {
+                        throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+                    }
+                    ggml_backend_tensor_alloc(owned, cur, base);
+                    ggml_backend_buffer_set_usage(owned, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                    model->bufs.push_back(owned);
+                    return n_size;
+                }
+            }
+#if defined(_WIN32)
+            // No per-range discard for READONLY views: stream device tensors from disk.
+            if (cur->buffer != nullptr && !ggml_backend_buffer_is_host(cur->buffer)) {
+                auto & read_buf = read_bufs[thread_idx];
+                read_buf.resize(n_size);
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(read_buf.data(), n_size);
+                ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+                if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
+                    throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+                }
+                return n_size;
+            }
+#endif
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
             if (bufs_mmap.count(weight->idx)) {
@@ -1225,6 +1330,38 @@ bool llama_model_loader::load_all_data(
                 validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {
                             return std::make_pair(cur, ggml_validate_row_data(cur->type, data, n_size));
                             }));
+            }
+
+            // Merged views share no file range: malloc the base once if needed,
+            // resolve the view, stream this slice without faulting the mapping on Windows.
+            if (cur->view_src != NULL && cur->buffer == nullptr) {
+                struct ggml_tensor * base = cur->view_src;
+                if (base->buffer == nullptr) {
+                    const size_t base_size = ggml_nbytes(base);
+                    ggml_backend_buffer_t bbuf = ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), base_size);
+                    if (bbuf == nullptr) {
+                        throw std::runtime_error(format("unable to allocate merged base for tensor '%s'", ggml_get_name(cur)));
+                    }
+                    ggml_backend_tensor_alloc(bbuf, base, ggml_backend_buffer_get_base(bbuf));
+                    ggml_backend_buffer_set_usage(bbuf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                    model->bufs.push_back(bbuf);
+                    if (lmlocks) {
+                        model->mlock_bufs.emplace_back(new llama_mlock);
+                        auto & mlock_buf = model->mlock_bufs.back();
+                        mlock_buf->init   (ggml_backend_buffer_get_base(bbuf));
+                        mlock_buf->grow_to(ggml_backend_buffer_get_size(bbuf));
+                    }
+                }
+                ggml_backend_view_init(cur);
+#if defined(_WIN32)
+                // File stream, not mapping: slice copies would pin tens of GB
+                // of fused-expert file pages in the working set for no benefit.
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(cur->data, n_size);
+#else
+                ggml_backend_tensor_set(cur, data, 0, n_size);
+#endif
+                return n_size;
             }
 
             GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
