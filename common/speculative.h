@@ -93,7 +93,7 @@ common_speculative_init_status common_speculative_try_init(
         llama_context             * ctx_tgt,
         common_speculative      ** out_spec);
 
-void common_speculative_prepare_startup(
+bool common_speculative_prepare_startup(
         gpt_params & params_base,
         bool         allow_parallel_mtp = true);
 
@@ -144,6 +144,9 @@ common_speculative_draft_result common_speculative_draft_ex(
                             const common_params_sampling * sampling = nullptr);
 
 int common_speculative_get_configured_n_max(const common_speculative * spec);
+
+// apply -td/--threads-draft to a draft params copy
+void common_speculative_apply_draft_threads(const common_params_speculative & spec, gpt_params & out);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
