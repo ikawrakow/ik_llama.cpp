@@ -546,7 +546,12 @@ static float ref_make_qkx3_quants(int n, int nmax, const float * x, const float 
     double sum_w = weights ? (double)weights[0] : (double)(x[0]*x[0]);
     double sum_x = sum_w * (double)x[0];
     double sum_x2 = sum_w * (double)x[0] * (double)x[0];
+#ifdef HAVE_BUGGY_APPLE_LINKER
+    // use 'volatile' to prevent unroll and work around a bug in Apple ld64 1015.7
+    for (volatile int i = 1; i < n; ++i) {
+#else
     for (int i = 1; i < n; ++i) {
+#endif
         if (x[i] < min) min = x[i];
         if (x[i] > max) max = x[i];
         float w = weights ? weights[i] : x[i]*x[i];
@@ -640,7 +645,7 @@ static float ref_make_qkx3_quants(int n, int nmax, const float * x, const float 
         float gmax = 0;
         int best_j = -1, dir = 0;
         for (int j = 0; j < n; ++j) {
-            float g = (float)((double)x[j] - (double)scale*L[j] - (double)min);
+            float g = x[j] - scale*L[j] - min;
             if (g > 0 && L[j] < nmax && g > gmax) {
                 gmax = g; best_j = j; dir = 1;
             }
