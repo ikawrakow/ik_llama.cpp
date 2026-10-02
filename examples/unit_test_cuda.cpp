@@ -1025,8 +1025,10 @@ static void ref_quantize_iq4_xs(void * dst, const float * src, int64_t nrows, in
         float scales[8];
         float max_scale = 0.0f, amax_scale = 0.0f;
         for (int ib = 0; ib < 8; ++ib) {
+            const float * xb = xs + ib*32;
+            for (int j = 0; j < 32; ++j) weight[j] = xb[j]*xb[j];
             bool eps = false;
-            float d = ref_iq4_block_opt(xs + ib*32, weight, L + ib*32, &eps);
+            float d = ref_iq4_block_opt(xb, weight, L + ib*32, &eps);
             if (eps) { scales[ib] = 0.0f; continue; } // matches CPU exactly
             scales[ib] = d;
             float abs_d = fabsf(d);
