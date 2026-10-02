@@ -93,7 +93,7 @@ common_speculative_init_status common_speculative_try_init(
         llama_context             * ctx_tgt,
         common_speculative      ** out_spec);
 
-void common_speculative_prepare_startup(
+bool common_speculative_prepare_startup(
         gpt_params & params_base,
         bool         allow_parallel_mtp = true);
 
