@@ -519,7 +519,7 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
     static_assert(QK_IQ1BN == 64, "This dot product implementation for iq1_bn requires a block size of 64");
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -570,7 +570,7 @@ void vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, size_t 
     static_assert(QK_IQ1BN == 64, "This dot product implementation for iq2_bn requires a block size of 64");
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -1419,7 +1419,7 @@ void vec_dot_iq2_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -1943,7 +1943,7 @@ void vec_dot_iq2_ks_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_KS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_KS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -2309,7 +2309,7 @@ void vec_dot_iq2_kl_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_KL, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_KL, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -2603,7 +2603,7 @@ void vec_dot_iq3_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -2836,7 +2836,7 @@ void dequantize_row_iq3_ks(const block_iq3_ks * x, float * y, int64_t k) {
 
 void  vec_dot_iq3_ks_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_KS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_KS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -2889,7 +2889,7 @@ void vec_dot_iq4_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -3193,7 +3193,7 @@ void vec_dot_iq5_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ5_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ5_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -3534,7 +3534,7 @@ void vec_dot_iq6_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ6_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ6_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -4281,7 +4281,7 @@ void dequantize_row_mxfp4(const block_mxfp4 * x, float * y, int64_t k) {
 
 void  vec_dot_mxfp4_q8_0_x4(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_MXFP4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_MXFP4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -4398,7 +4398,7 @@ void dequantize_row_mxfp4_r8(const block_mxfp4_r8 * x, float * y, int64_t k) {
 
 void vec_dot_mxfp4_r8_q8_2_x4(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_MXFP4_R8, vx, 0, GGML_TYPE_Q8_2_X4, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_MXFP4_R8, vx, 0, GGML_TYPE_Q8_2_X4, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -4623,7 +4623,7 @@ void dequantize_row_iq4_ks(const block_iq4_ks * x, float * y, int64_t k) {
 void  vec_dot_iq4_ks_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
     constexpr int kBlockSize = 32;
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -4871,7 +4871,7 @@ void dequantize_row_iq5_ks(const block_iq5_ks * x, float * y, int64_t k) {
 void  vec_dot_iq5_ks_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
     constexpr int kBlockSize = 32;
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ5_KS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ5_KS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -5237,7 +5237,7 @@ void dequantize_row_iq4_kss(const block_iq4_kss * x, float * y, int64_t k) {
 
 void vec_dot_iq4_kss_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KSS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KSS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -5327,7 +5327,7 @@ void dequantize_row_iq4_nl_r4(const block_iq4_nl_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq4_nl_r4_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_NL_R4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_NL_R4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -5460,7 +5460,7 @@ void dequantize_row_q4_0_r8(const block_iq4_nl_r8 * x, float * y, int64_t k) {
 
 void vec_dot_q4_0_r8_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q4_0_R8, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q4_0_R8, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -5561,7 +5561,7 @@ void dequantize_row_q8_0_r8(const block_q8_0_r8 * x, float * y, int64_t k) {
 
 void vec_dot_q8_0_r8_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_0_R8, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_0_R8, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -5663,7 +5663,7 @@ void dequantize_row_q5_0_r4(const block_q5_0_r4 * x, float * y, int64_t k) {
 
 void vec_dot_q5_0_r4_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q5_0_R4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q5_0_R4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -5766,7 +5766,7 @@ void dequantize_row_q6_0_r4(const block_q6_0_r4 * x, float * y, int64_t k) {
 
 void vec_dot_q6_0_r4_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q6_0_R4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q6_0_R4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -5853,7 +5853,7 @@ void dequantize_row_iq4_xs_r8(const block_iq4_xs_r8 * x, float * y, int64_t k) {
 
 void vec_dot_iq4_xs_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_XS_R8, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_XS_R8, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -5955,7 +5955,7 @@ void dequantize_row_iq4_ks_r4(const block_iq4_ks_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq4_ks_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -6095,7 +6095,7 @@ void dequantize_row_iq4_ks_r16(const block_iq4_ks_r16 * x, float * y, int64_t k)
 
 void vec_dot_iq4_ks_r16_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KS_R16, vx, 0, GGML_TYPE_Q8_2_X4, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KS_R16, vx, 0, GGML_TYPE_Q8_2_X4, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -6218,7 +6218,7 @@ void dequantize_row_iq2_bn_r4(const block_iq2_bn * x, float * y, int64_t k) {
 
 void vec_dot_iq2_bn_r4_q8_K64(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_BN_R4, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_BN_R4, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -6334,7 +6334,7 @@ void dequantize_row_q4_k_r4(const block_q4_k_r4 * x, float * y, int64_t k) {
 
 void vec_dot_q4_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q4_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q4_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -6447,7 +6447,7 @@ void dequantize_row_q6_k_r4(const block_q6_k_r4 * x, float * y, int64_t k) {
 
 void vec_dot_q6_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q6_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q6_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -6562,7 +6562,7 @@ void dequantize_row_q5_k_r4(const block_q5_k_r4 * x, float * y, int64_t k) {
 
 void vec_dot_q5_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q5_K_R4, vx, 0, GGML_TYPE_Q8_K32, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q5_K_R4, vx, 0, GGML_TYPE_Q8_K32, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -6693,7 +6693,7 @@ void dequantize_row_q3_k_r4(const block_q3_k_r4 * x, float * y, int64_t k) {
 
 void vec_dot_q3_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q3_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q3_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -6803,7 +6803,7 @@ void dequantize_row_q2_k_r4(const block_q2_k_r4 * x, float * y, int64_t k) {
 
 void vec_dot_q2_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q2_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q2_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -6918,7 +6918,7 @@ void dequantize_row_iq4_k_r4(const block_iq4_k_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq4_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -7056,7 +7056,7 @@ void dequantize_row_iq5_k_r4(const block_iq5_k_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq5_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ5_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ5_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -7177,7 +7177,7 @@ void dequantize_row_iq5_ks_r4(const block_iq5_ks_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq5_ks_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ5_KS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ5_KS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -7276,7 +7276,7 @@ void dequantize_row_q8_k_r8(const block_q8_k_r8 * x, float * y, int64_t k) {
 
 void vec_dot_q8_k_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_K_R8, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_K_R8, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -7363,7 +7363,7 @@ void dequantize_row_q8_k_r16(const block_q8_k_r16 * x, float * y, int64_t k) {
 
 void vec_dot_q8_k_r16_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_K_R16, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_K_R16, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -7508,7 +7508,7 @@ void dequantize_row_q8_KV_r8(const void * vx, float * y, int64_t k) {
 
 void vec_dot_q8_KV_r8_q8_KV(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_KV_R8, vx, 0, GGML_TYPE_Q8_KV, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_KV_R8, vx, 0, GGML_TYPE_Q8_KV, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -7682,7 +7682,7 @@ void dequantize_row_iq3_k_r4(const block_iq3_k_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq3_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -7806,7 +7806,7 @@ void dequantize_row_iq2_k_r4(const block_iq2_k_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq2_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -7917,7 +7917,7 @@ void dequantize_row_iq2_xxs_r4(const block_iq2_xxs_r4 * x, float * y, int64_t k)
 
 void vec_dot_iq2_xxs_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_XXS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_XXS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -7999,7 +7999,7 @@ void dequantize_row_iq2_xs_r4(const block_iq2_xs_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq2_xs_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_XS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_XS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -8081,7 +8081,7 @@ void dequantize_row_iq2_s_r4(const block_iq2_s_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq2_s_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_S_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_S_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -8179,7 +8179,7 @@ void dequantize_row_iq3_xxs_r4(const block_iq3_xxs_r4 * x, float * y, int64_t k)
 
 void vec_dot_iq3_xxs_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_XXS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_XXS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -8275,7 +8275,7 @@ void dequantize_row_iq3_s_r4(const block_iq3_s_r4 * x, float * y, int64_t k) {
 
 void vec_dot_iq3_s_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_S_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_S_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -8407,7 +8407,7 @@ void dequantize_row_iq1_s_r4(const block_iq1_s_r4  * x, float * y, int64_t n) {
 
 void vec_dot_iq1_s_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_S_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_S_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -8554,7 +8554,7 @@ void dequantize_row_iq1_m_r4(const block_iq1_m_r4  * x, float * y, int64_t n) {
 
 void vec_dot_iq1_m_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_M_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_M_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -8595,7 +8595,7 @@ void dequantize_row_q8_KV(const void * x, float * y, int64_t k) {
 
 void vec_dot_q8_KV_q8_KV(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_KV, vx, 0, GGML_TYPE_Q8_KV, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_KV, vx, 0, GGML_TYPE_Q8_KV, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -9696,7 +9696,7 @@ void vec_dot_iq1_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -10071,7 +10071,7 @@ void vec_dot_iq2_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -10363,7 +10363,7 @@ void vec_dot_iq3_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -10658,7 +10658,7 @@ void vec_dot_iq4_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
     GGML_UNUSED(bs);
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -11109,7 +11109,7 @@ void quantize_row_ptq1_0_r8_ref(const float * x, block_ptq1_0_r8 * y, int64_t n)
 
 void vec_dot_ptq1_0_r8_q8_K(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_PTQ1_0_R8, vx, 0, GGML_TYPE_Q8_K128, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_PTQ1_0_R8, vx, 0, GGML_TYPE_Q8_K128, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -11123,7 +11123,7 @@ void vec_dot_ptq1_0_r8_q8_K(int n, float * s, size_t bs, const void * vx, size_t
 
 void vec_dot_pq2_0_r8_q8_K(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_PQ2_0_R8, vx, 0, GGML_TYPE_Q8_K128, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_PQ2_0_R8, vx, 0, GGML_TYPE_Q8_K128, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif
@@ -11137,7 +11137,7 @@ void vec_dot_pq2_0_r8_q8_K(int n, float * s, size_t bs, const void * vx, size_t 
 
 void vec_dot_q1_0_g128_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q1_0_G128_R8, vx, 0, GGML_TYPE_Q8_K128, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q1_0_G128_R8, vx, 0, GGML_TYPE_Q8_K128, vy, 0, s, 0, 0, 1, nullptr)) {
         return;
     }
 #endif

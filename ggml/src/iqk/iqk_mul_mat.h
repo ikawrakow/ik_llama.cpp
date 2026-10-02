@@ -16,14 +16,14 @@ extern "C" {
 IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth);
+        float * C, long stride_C, int ith, int nth, int * dyn_chunk);
 
 IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
         long ne02, long ne03, long ne12, long ne13,
         long nb02, long nb03, long nb12, long nb13, long nb2, long nb3,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth);
+        float * C, long stride_C, int ith, int nth, int * dyn_chunk);
 
 IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         int typeA, const void * A, long strideA,
@@ -37,6 +37,11 @@ IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int un
         float * C, long nb1, long nb2, const void * vrow_mapping, float limit, int ith, int nth);
 
 IQK_API int iqk_dequant_type(int type, int Ny);
+
+// Dynamic work-stealing for the dense iqk_mul_mat path (-DGGML_IQK_DYN_CHUNK=ON).
+// The caller passes a per-op counter (int*, used with atomics): reset and
+// synchronized before the call, or nullptr for the static split.
+IQK_API bool iqk_dyn_chunk_enabled(void);
 
 struct ggml_tensor;
 

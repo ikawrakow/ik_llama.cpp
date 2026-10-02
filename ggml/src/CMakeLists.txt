@@ -224,6 +224,10 @@ if (GGML_EXPERT_CHUNKING)
     add_compile_definitions(GGML_EXPERT_CHUNKING)
 endif()
 
+if (GGML_IQK_DYN_CHUNK)
+    add_compile_definitions(GGML_IQK_DYN_CHUNK)
+endif()
+
 if (GGML_CUDA)
     cmake_minimum_required(VERSION 3.18)  # for CMAKE_CUDA_ARCHITECTURES
 

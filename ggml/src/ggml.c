@@ -2999,7 +2999,19 @@ struct ggml_compute_state_shared {
     ggml_abort_callback abort_callback; // abort ggml_graph_compute when true
     void * abort_callback_data;
 
-    atomic_int current_chunk; // currently processing chunk during mul_mat, shared between all the threads
+    // Keep the work counter on its own cache line: it is hammered with atomics by
+    // every thread, and must not false-share with the barrier counters above nor with
+    // the fields below (pad on both sides).
+#if defined(_MSC_VER)
+    __declspec(align(CACHE_LINE_SIZE)) atomic_int current_chunk;
+    char _pad_chunk[CACHE_LINE_SIZE - sizeof(atomic_int)];
+#elif defined(__GNUC__) || defined(__clang__)
+    atomic_int current_chunk __attribute__((aligned(CACHE_LINE_SIZE)));
+    char _pad_chunk[CACHE_LINE_SIZE - sizeof(atomic_int)];
+#else
+    atomic_int current_chunk;
+#endif
+    // currently processing chunk during mul_mat, shared between all the threads
 
     enum ggml_status ec;
 };
@@ -18335,11 +18347,24 @@ static int ggml_compute_forward_mul_mat(
 
 #if GGML_USE_IQK_MULMAT
     if (dst->type == GGML_TYPE_F32) {
+        // Experimental: work-stealing chunking inside iqk_mul_mat (IK_DYN_CHUNK=1).
+        // Restricted to a single (i02,i03) batch so that one iqk_mul_mat() call per op
+        // owns the per-op counter. Reset + barrier so all threads start at tile 0. The
+        // counter lives in the per-op shared state, so concurrent contexts never collide.
+        // Only engage for large-batch ops (prompt processing), so the per-op barrier is
+        // amortized and the static split keeps being used for decode/TG.
+        // Per-op counter shared with the generic/MoE chunking (atomic on both sides).
+        int * dyn_chunk = NULL;
+        if (nth > 1 && ne11 >= 32 && ne02 == 1 && ne03 == 1 && ne12 == 1 && ne13 == 1 && iqk_dyn_chunk_enabled()) {
+            if (ith == 0) atomic_store(&params->shared->current_chunk, 0);
+            ggml_barrier(params->shared);
+            dyn_chunk = (int *)&params->shared->current_chunk;
+        }
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
                     ne02, ne03, ne12, ne13, nb02, nb03, nb12, nb13, nb2/sizeof(float), nb3/sizeof(float),
                     src0->type, src0->data, nb01,
                     src1->type, src1->data, nb11,
-                    (float *)dst->data, nb1/sizeof(float), ith, nth)) return node_n;
+                    (float *)dst->data, nb1/sizeof(float), ith, nth, dyn_chunk)) return node_n;
     }
 #endif
 
@@ -18407,7 +18432,7 @@ static int ggml_compute_forward_mul_mat(
                     nb2/sizeof(float), nb3/sizeof(float),
                     src0->type, src0->data, nb01,
                     vec_dot_type, wdata, row_size,
-                    (float *)dst->data, nb1/sizeof(float), ith, nth)) {
+                    (float *)dst->data, nb1/sizeof(float), ith, nth, NULL)) {
             if (!cgraph) return node_n;
             while (node_n < cgraph->n_nodes - 1 &&
                    cgraph->nodes[node_n+1]->op == GGML_OP_MUL_MAT &&
@@ -18423,7 +18448,7 @@ static int ggml_compute_forward_mul_mat(
                     dst_next->nb[2]/sizeof(float), dst_next->nb[3]/sizeof(float),
                     src0_next->type, src0_next->data, src0_next->nb[1],
                     vec_dot_type, wdata, row_size,
-                    (float *)dst_next->data, dst_next->nb[1]/sizeof(float), ith, nth)) break;
+                    (float *)dst_next->data, dst_next->nb[1]/sizeof(float), ith, nth, NULL)) break;
                 ++node_n;
             }
             return node_n;
