@@ -5317,8 +5317,8 @@ void create_tensors_helper::unmerge_qkv(const LLM_TN & tn, int i, int bias) {
     auto wqkv_meta = ml.get_tensor_meta(wqkv_name.c_str());
     if (wqkv_meta) {
         const int64_t n_embd_q = n_embd_head_k * n_head;
-        const int64_t n_embd_k = hparams.n_embd_k_gqa();
-        const int64_t n_embd_v = hparams.n_embd_v_gqa();
+        const int64_t n_embd_k = hparams.n_embd_k_gqa(i);
+        const int64_t n_embd_v = hparams.n_embd_v_gqa(i);
         const int64_t n_embd_qkv = n_embd_q + n_embd_k + n_embd_v;
 
         GGML_ASSERT(wqkv_meta->ne[0] == n_embd);

@@ -1028,6 +1028,10 @@ void llm_build_context::llm_build_kv_store(
                     (kv_head)*ggml_element_size(kv.v_l[il]));
             lctx.cache_copies[2*il+1].step = ggml_element_size(kv.v_l[il]);
 
+            if (ggml_is_contiguous(v_cur)) {
+                // V may arrive as {head_dim, n_head_kv, n_tokens} (e.g. Gemma-4)
+                v_cur = ggml_reshape_2d(ctx, v_cur, n_embd_v_gqa, n_tokens);
+            }
             v_cur = ggml_transpose(ctx, v_cur);
         }
         cb(v_cache_view, "v_cache_view", il);
