@@ -244,7 +244,8 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
         new_type == GGML_TYPE_IQ2_S_R4|| new_type == GGML_TYPE_IQ3_S_R4|| new_type == GGML_TYPE_IQ3_KS ||
         new_type == GGML_TYPE_IQ2_KT  || new_type == GGML_TYPE_IQ3_KT  || new_type == GGML_TYPE_IQ4_KT ||
         new_type == GGML_TYPE_IQ5_KS || new_type == GGML_TYPE_IQ5_KS_R4|| new_type == GGML_TYPE_IQ2_KL ||
-        new_type == GGML_TYPE_IQ1_KT  || new_type == GGML_TYPE_IQ4_KS_R16) {
+        new_type == GGML_TYPE_IQ1_KT  || new_type == GGML_TYPE_IQ4_KS_R16 || new_type == GGML_TYPE_IQ1_S_R4 ||
+        new_type == GGML_TYPE_IQ1_M_R4) {
         const int blck = ggml_row_blck_size(new_type);
         if (nx % blck != 0) {
             LLAMA_LOG_WARN("\n\n%s : tensor cols %d x %d are not divisible by %d, required for %s", __func__, nx, ny, blck, ggml_type_name(new_type));
@@ -268,7 +269,9 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ3_XXS:
             case GGML_TYPE_IQ3_XXS_R4:
             case GGML_TYPE_IQ1_S:
+            case GGML_TYPE_IQ1_S_R4:
             case GGML_TYPE_IQ1_M:
+            case GGML_TYPE_IQ1_M_R4:
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q2_K_R4:
             case GGML_TYPE_IQ2_K:
