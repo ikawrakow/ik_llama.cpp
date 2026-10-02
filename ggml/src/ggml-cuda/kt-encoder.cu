@@ -1,4 +1,5 @@
 #include "common.cuh"
+#include "quantize_gguf.cuh"
 #include "../iqk/iqk_quantize.h"
 
 #include <cstring>
@@ -582,6 +583,58 @@ static kt_codebook kt_get_codebook(int device, ggml_type type) {
 
 GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float * src, void * dst, int64_t nrows, int64_t n_per_row, int64_t nslice,
         const float * imatrix) {
+    // Legacy block quants after KT (Joel single entry); Q5_0/Q4_0 removable, Q6_0 OLS kept, 0 = CPU fallback.
+    struct legacy_quant_entry {
+        ggml_type type;
+        size_t (*plain)(const float *, void *, int64_t, int64_t);
+        size_t (*with_imatrix)(const float *, void *, int64_t, int64_t, const float *);
+    };
+    static const legacy_quant_entry legacy_quants[] = {
+        { GGML_TYPE_Q8_0,   ggml_cuda_quantize_q8_0,   ggml_cuda_quantize_q8_0_imatrix },
+        { GGML_TYPE_Q6_0,   ggml_cuda_quantize_q6_0,   ggml_cuda_quantize_q6_0_imatrix },
+        // --- Removable Q5_0 row (delete to drop Q5_0) ---
+        { GGML_TYPE_Q5_0,   ggml_cuda_quantize_q5_0,   ggml_cuda_quantize_q5_0_imatrix },
+        // --- Removable Q4_0 row (delete to drop Q4_0) ---
+        { GGML_TYPE_Q4_0,   ggml_cuda_quantize_q4_0,   ggml_cuda_quantize_q4_0_imatrix },
+        { GGML_TYPE_Q5_1,   ggml_cuda_quantize_q5_1,   ggml_cuda_quantize_q5_1_imatrix },
+        { GGML_TYPE_Q4_1,   ggml_cuda_quantize_q4_1,   ggml_cuda_quantize_q4_1_imatrix },
+        { GGML_TYPE_IQ4_NL, ggml_cuda_quantize_iq4_nl, ggml_cuda_quantize_iq4_nl_imatrix },
+        { GGML_TYPE_IQ4_XS, ggml_cuda_quantize_iq4_xs, ggml_cuda_quantize_iq4_xs_imatrix },
+    };
+    const legacy_quant_entry * entry = nullptr;
+    for (const auto & e : legacy_quants) {
+        if (e.type == type) { entry = &e; break; }
+    }
+    if (entry != nullptr) {
+#if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
+        return 0;
+#else
+        if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
+            static bool warned = false;
+            if (!warned) {
+                fprintf(stderr, "%s: device %d unavailable, legacy tensors use the CPU encoder\n", __func__, device);
+                warned = true;
+            }
+            return 0;
+        }
+        ggml_cuda_set_device(device);
+        const size_t row_size = ggml_row_size(type, n_per_row);
+        const int64_t nelements_matrix = nrows*n_per_row;
+        size_t total = 0;
+        for (int64_t s = 0; s < nslice; ++s) {
+            const float * s_src = src + s*nelements_matrix;
+            char * s_dst = (char *)dst + s*nrows*row_size;
+            const float * s_im = imatrix ? imatrix + s*n_per_row : nullptr;
+            const size_t nb = s_im ? entry->with_imatrix(s_src, s_dst, nrows, n_per_row, s_im)
+                                   : entry->plain(s_src, s_dst, nrows, n_per_row);
+            if (nb == 0) {
+                return 0;
+            }
+            total += nb;
+        }
+        return total;
+#endif
+    }
     if (type != GGML_TYPE_IQ4_KT && type != GGML_TYPE_IQ3_KT) {
         return 0;
     }

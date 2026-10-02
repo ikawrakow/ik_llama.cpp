@@ -979,12 +979,17 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
         const llama_model_quantize_params * params) {
 #ifdef GGML_USE_CUDA
     if (params->cuda_quantize) {
-        new_size = ggml_cuda_quantize(0, new_type, f32_data, new_data, tensor->ne[1], tensor->ne[0], tensor->ne[2], imatrix);
-        if (new_size > 0) {
-            if (!ggml_validate_row_data(new_type, new_data, new_size)) {
-                throw std::runtime_error("quantized data validation failed");
+        // Symmetric Q4_0 (--symmetric-q4-0, d=amax/7) stays on CPU: no CUDA kernel.
+        const bool symmetric_q4_0 = new_type == GGML_TYPE_Q4_0 && params->user_data &&
+            static_cast<const quantize_user_data *>(params->user_data)->symmetric_q4_0;
+        if (!symmetric_q4_0) {
+            new_size = ggml_cuda_quantize(params->cuda_device, new_type, f32_data, new_data, tensor->ne[1], tensor->ne[0], tensor->ne[2], imatrix);
+            if (new_size > 0) {
+                if (!ggml_validate_row_data(new_type, new_data, new_size)) {
+                    throw std::runtime_error("quantized data validation failed");
+                }
+                return;
             }
-            return;
         }
     }
 #endif

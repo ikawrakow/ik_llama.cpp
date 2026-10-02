@@ -8669,6 +8669,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.partial_requant                =*/ false,
         /*.slab_size                      =*/ 1ull << 30,
         /*.cuda_quantize                  =*/ false,
+        /*.cuda_device                    =*/ 0,
         /*.imatrix                        =*/ nullptr,
         /*.kv_overrides                   =*/ nullptr,
         /*.custom_quants                  =*/ nullptr,
