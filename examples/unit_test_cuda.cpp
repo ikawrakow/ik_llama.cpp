@@ -47,6 +47,16 @@ struct quant_spec {
     bool         nan_block_equal; // skip the whole block when both d are non-finite
 };
 
+// Joel single-entry wrappers (nslice=1); order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS.
+template<ggml_type T>
+static size_t cuda_plain(const float * s, void * d, int64_t r, int64_t n) {
+    return ggml_cuda_quantize(g_cuda_device, T, s, d, r, n, 1, nullptr);
+}
+template<ggml_type T>
+static size_t cuda_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
+    return ggml_cuda_quantize(g_cuda_device, T, s, d, r, n, 1, im);
+}
+
 // FP_CONTRACT OFF: match CPU (ggml-quants.c); no FMA so OLS ties stay bit-exact.
 #pragma STDC FP_CONTRACT OFF
 
@@ -942,55 +952,69 @@ static int ref_iq4xs_nearest_int(float fval) {
 
 // Local copy of quantize_iq4_xs plain path: 8 block optimizers + global scale
 // fit + re-quant, w = x*x throughout.
+// One IQ4_XS superblock shared by plain/imatrix refs; qs == nullptr → w = x*x,
+// else w = qw*sqrt(sigma2 + x*x) with superblock sigma2 (CPU order).
+static void ref_iq4xs_superblock(const float * xs, const float * qs, block_iq4_xs * yb) {
+    float sigma2 = 0.0f;
+    if (qs != nullptr) {
+        float sum = 0.0f;
+        for (int j = 0; j < QK_K; ++j) sum += xs[j]*xs[j];
+        sigma2 = sum*2.0f/QK_K;
+    }
+    float weight[32];
+    uint8_t L[QK_K];
+    float scales[8];
+    float max_scale = 0.0f, amax_scale = 0.0f;
+    for (int ib = 0; ib < 8; ++ib) {
+        const float * xb = xs + ib*32;
+        if (qs == nullptr) {
+            for (int j = 0; j < 32; ++j) weight[j] = xb[j]*xb[j];
+        } else {
+            const float * qb = qs + ib*32;
+            for (int j = 0; j < 32; ++j) weight[j] = qb[j]*sqrtf(sigma2 + xb[j]*xb[j]);
+        }
+        bool eps = false;
+        float d = ref_iq4_block_opt(xb, weight, L + ib*32, &eps);
+        if (eps) { scales[ib] = 0.0f; continue; } // matches CPU exactly
+        scales[ib] = d;
+        float abs_d = fabsf(d);
+        if (abs_d > amax_scale) { amax_scale = abs_d; max_scale = d; }
+    }
+
+    float gd = -max_scale/32.0f;
+    // bit-twiddle FP16 (see Q5_1 imatrix ref): NaN payload must match.
+    yb->d = (ggml_half)fp32_to_fp16_ggml_host(gd);
+    float gid = gd ? 1/gd : 0.0f;
+    uint16_t scales_h = 0;
+    for (int ib = 0; ib < 8; ++ib) {
+        int l = isfinite(scales[ib]) ? ref_iq4xs_nearest_int(gid*scales[ib]) : 0; // deterministic degenerate path
+        l = l > 31 ? 31 : (l < -32 ? -32 : l);
+        float dl = gd*l;
+        float idl = dl ? 1/dl : 0.0f;
+        uint8_t * Lb = L + ib*32;
+        const float * xb = xs + ib*32;
+        for (int j = 0; j < 32; ++j) {
+            Lb[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, idl*xb[j]);
+        }
+        l += 32;
+        uint8_t l_l = (uint8_t)(l & 0xf);
+        uint8_t l_h = (uint8_t)((unsigned)l >> 4);
+        if (ib % 2 == 0) yb->scales_l[ib/2] = l_l;
+        else yb->scales_l[ib/2] |= (uint8_t)(l_l << 4);
+        scales_h |= (uint16_t)(l_h << (2*(ib % 8)));
+    }
+    yb->scales_h = scales_h;
+    for (int i = 0; i < QK_K/32; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            yb->qs[16*i + j] = (uint8_t)(L[32*i + j] | (L[32*i + 16 + j] << 4));
+        }
+    }
+}
+
 static void ref_quantize_iq4_xs(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
     const int64_t nb = (nrows*n_per_row)/QK_K;
     for (int64_t sb = 0; sb < nb; ++sb) {
-        const float * xs = src + sb*QK_K;
-        block_iq4_xs * yb = (block_iq4_xs *)dst + sb;
-
-        float weight[32];
-        uint8_t L[QK_K];
-        float scales[8];
-        float max_scale = 0.0f, amax_scale = 0.0f;
-        for (int ib = 0; ib < 8; ++ib) {
-            const float * xb = xs + ib*32;
-            for (int j = 0; j < 32; ++j) weight[j] = xb[j]*xb[j];
-            bool eps = false;
-            float d = ref_iq4_block_opt(xb, weight, L + ib*32, &eps);
-            if (eps) { scales[ib] = 0.0f; continue; } // matches CPU exactly
-            scales[ib] = d;
-            float abs_d = fabsf(d);
-            if (abs_d > amax_scale) { amax_scale = abs_d; max_scale = d; }
-        }
-
-        float gd = -max_scale/32.0f;
-        // bit-twiddle FP16 (see Q5_1 imatrix ref): NaN payload must match.
-        yb->d = (ggml_half)fp32_to_fp16_ggml_host(gd);
-        float gid = gd ? 1/gd : 0.0f;
-        uint16_t scales_h = 0;
-        for (int ib = 0; ib < 8; ++ib) {
-            int l = isfinite(scales[ib]) ? ref_iq4xs_nearest_int(gid*scales[ib]) : 0; // deterministic degenerate path
-            l = l > 31 ? 31 : (l < -32 ? -32 : l);
-            float dl = gd*l;
-            float idl = dl ? 1/dl : 0.0f;
-            uint8_t * Lb = L + ib*32;
-            const float * xb = xs + ib*32;
-            for (int j = 0; j < 32; ++j) {
-                Lb[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, idl*xb[j]);
-            }
-            l += 32;
-            uint8_t l_l = (uint8_t)(l & 0xf);
-            uint8_t l_h = (uint8_t)((unsigned)l >> 4);
-            if (ib % 2 == 0) yb->scales_l[ib/2] = l_l;
-            else yb->scales_l[ib/2] |= (uint8_t)(l_l << 4);
-            scales_h |= (uint16_t)(l_h << (2*(ib % 8)));
-        }
-        yb->scales_h = scales_h;
-        for (int i = 0; i < QK_K/32; ++i) {
-            for (int j = 0; j < 16; ++j) {
-                yb->qs[16*i + j] = (uint8_t)(L[32*i + j] | (L[32*i + 16 + j] << 4));
-            }
-        }
+        ref_iq4xs_superblock(src + sb*QK_K, nullptr, (block_iq4_xs *)dst + sb);
     }
 }
 
@@ -1000,58 +1024,7 @@ static void ref_quantize_iq4_xs_imatrix(void * dst, const float * src, int64_t n
     const int64_t sb_per_row = n_per_row/QK_K;
     const int64_t nb = nrows*sb_per_row;
     for (int64_t sb = 0; sb < nb; ++sb) {
-        const float * xs = src + sb*QK_K;
-        block_iq4_xs * yb = (block_iq4_xs *)dst + sb;
-        const float * qs = imatrix + (sb % sb_per_row)*QK_K;
-
-        float sum = 0.0f;
-        for (int j = 0; j < QK_K; ++j) sum += xs[j]*xs[j];
-        const float sigma2 = sum*2.0f/QK_K;
-
-        float weight[32];
-        uint8_t L[QK_K];
-        float scales[8];
-        float max_scale = 0.0f, amax_scale = 0.0f;
-        for (int ib = 0; ib < 8; ++ib) {
-            const float * xb = xs + ib*32;
-            const float * qb = qs + ib*32;
-            for (int j = 0; j < 32; ++j) weight[j] = qb[j]*sqrtf(sigma2 + xb[j]*xb[j]);
-            bool eps = false;
-            float d = ref_iq4_block_opt(xb, weight, L + ib*32, &eps);
-            if (eps) { scales[ib] = 0.0f; continue; } // matches CPU exactly
-            scales[ib] = d;
-            float abs_d = fabsf(d);
-            if (abs_d > amax_scale) { amax_scale = abs_d; max_scale = d; }
-        }
-
-        float gd = -max_scale/32.0f;
-        // bit-twiddle FP16 (see Q5_1 imatrix ref): NaN payload must match.
-        yb->d = (ggml_half)fp32_to_fp16_ggml_host(gd);
-        float gid = gd ? 1/gd : 0.0f;
-        uint16_t scales_h = 0;
-        for (int ib = 0; ib < 8; ++ib) {
-            int l = isfinite(scales[ib]) ? ref_iq4xs_nearest_int(gid*scales[ib]) : 0; // deterministic degenerate path
-            l = l > 31 ? 31 : (l < -32 ? -32 : l);
-            float dl = gd*l;
-            float idl = dl ? 1/dl : 0.0f;
-            uint8_t * Lb = L + ib*32;
-            const float * xb = xs + ib*32;
-            for (int j = 0; j < 32; ++j) {
-                Lb[j] = (uint8_t)ref_best_index_iq4nl(ref_kvalues_iq4nl, idl*xb[j]);
-            }
-            l += 32;
-            uint8_t l_l = (uint8_t)(l & 0xf);
-            uint8_t l_h = (uint8_t)((unsigned)l >> 4);
-            if (ib % 2 == 0) yb->scales_l[ib/2] = l_l;
-            else yb->scales_l[ib/2] |= (uint8_t)(l_l << 4);
-            scales_h |= (uint16_t)(l_h << (2*(ib % 8)));
-        }
-        yb->scales_h = scales_h;
-        for (int i = 0; i < QK_K/32; ++i) {
-            for (int j = 0; j < 16; ++j) {
-                yb->qs[16*i + j] = (uint8_t)(L[32*i + j] | (L[32*i + 16 + j] << 4));
-            }
-        }
+        ref_iq4xs_superblock(src + sb*QK_K, imatrix + (sb % sb_per_row)*QK_K, (block_iq4_xs *)dst + sb);
     }
 }
 
@@ -1481,97 +1454,43 @@ int main(int argc, char ** argv) {
 
     printf("  [INFO] ggml_cuda_quantize runs on device %d\n", g_cuda_device);
 
-    // Joel single-entry wrappers: ggml_cuda_quantize(device,type,...,nslice=1,imatrix); KT order Q8_0,Q6_0,Q5_0,Q4_0.
-    struct cuda_wraps {
-        static size_t q8_0(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q8_0, s, d, r, n, 1, nullptr);
-        }
-        static size_t q8_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q8_0, s, d, r, n, 1, im);
-        }
-        static size_t q6_0(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q6_0, s, d, r, n, 1, nullptr);
-        }
-        static size_t q6_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q6_0, s, d, r, n, 1, im);
-        }
-        // --- Removable Q5_0 wrappers (delete to drop Q5_0) ---
-        static size_t q5_0(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q5_0, s, d, r, n, 1, nullptr);
-        }
-        static size_t q5_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q5_0, s, d, r, n, 1, im);
-        }
-        // --- Removable Q4_0 wrappers (delete to drop Q4_0) ---
-        static size_t q4_0(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q4_0, s, d, r, n, 1, nullptr);
-        }
-        static size_t q4_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q4_0, s, d, r, n, 1, im);
-        }
-        static size_t q5_1(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q5_1, s, d, r, n, 1, nullptr);
-        }
-        static size_t q5_1_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q5_1, s, d, r, n, 1, im);
-        }
-        static size_t q4_1(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q4_1, s, d, r, n, 1, nullptr);
-        }
-        static size_t q4_1_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q4_1, s, d, r, n, 1, im);
-        }
-        static size_t iq4_nl(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_IQ4_NL, s, d, r, n, 1, nullptr);
-        }
-        static size_t iq4_nl_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_IQ4_NL, s, d, r, n, 1, im);
-        }
-        static size_t iq4_xs(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_IQ4_XS, s, d, r, n, 1, nullptr);
-        }
-        static size_t iq4_xs_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_IQ4_XS, s, d, r, n, 1, im);
-        }
-    };
-
     const quant_spec specs[] = {
-        { "q8_0", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), cuda_wraps::q8_0, ref_quantize_q8_0,
+        { "q8_0", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), cuda_plain<GGML_TYPE_Q8_0>, ref_quantize_q8_0,
                 false, nullptr, nullptr },
-        { "q8_0-imatrix", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), cuda_wraps::q8_0, ref_quantize_q8_0,
-                true, cuda_wraps::q8_0_imatrix, ref_quantize_q8_0_imatrix_plain, false },
-        { "q6_0", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_wraps::q6_0, ref_quantize_q6_0,
+        { "q8_0-imatrix", GGML_TYPE_Q8_0, QK8_0, sizeof(block_q8_0), cuda_plain<GGML_TYPE_Q8_0>, ref_quantize_q8_0,
+                true, cuda_imatrix<GGML_TYPE_Q8_0>, ref_quantize_q8_0_imatrix_plain, false },
+        { "q6_0", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_plain<GGML_TYPE_Q6_0>, ref_quantize_q6_0,
                 false, nullptr, nullptr, true }, // OLS can yield NaN scale on degenerate blocks (payload is vendor-defined)
-        { "q6_0-imatrix", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_wraps::q6_0, ref_quantize_q6_0,
-                true, cuda_wraps::q6_0_imatrix, ref_quantize_q6_0_imatrix, true },
+        { "q6_0-imatrix", GGML_TYPE_Q6_0, QK6_0, sizeof(block_q6_0), cuda_plain<GGML_TYPE_Q6_0>, ref_quantize_q6_0,
+                true, cuda_imatrix<GGML_TYPE_Q6_0>, ref_quantize_q6_0_imatrix, true },
         // --- Removable Q5_0 specs ---
-        { "q5_0", GGML_TYPE_Q5_0, QK5_0, sizeof(block_q5_0), cuda_wraps::q5_0, ref_quantize_q5_0,
+        { "q5_0", GGML_TYPE_Q5_0, QK5_0, sizeof(block_q5_0), cuda_plain<GGML_TYPE_Q5_0>, ref_quantize_q5_0,
                 false, nullptr, nullptr },
-        { "q5_0-imatrix", GGML_TYPE_Q5_0, QK5_0, sizeof(block_q5_0), cuda_wraps::q5_0, ref_quantize_q5_0,
-                true, cuda_wraps::q5_0_imatrix, ref_quantize_q5_0_imatrix, true },
+        { "q5_0-imatrix", GGML_TYPE_Q5_0, QK5_0, sizeof(block_q5_0), cuda_plain<GGML_TYPE_Q5_0>, ref_quantize_q5_0,
+                true, cuda_imatrix<GGML_TYPE_Q5_0>, ref_quantize_q5_0_imatrix, true },
         // --- Removable Q4_0 specs ---
-        { "q4_0", GGML_TYPE_Q4_0, QK4_0, sizeof(block_q4_0), cuda_wraps::q4_0, ref_quantize_q4_0,
+        { "q4_0", GGML_TYPE_Q4_0, QK4_0, sizeof(block_q4_0), cuda_plain<GGML_TYPE_Q4_0>, ref_quantize_q4_0,
                 false, nullptr, nullptr },
-        { "q4_0-imatrix", GGML_TYPE_Q4_0, QK4_0, sizeof(block_q4_0), cuda_wraps::q4_0, ref_quantize_q4_0,
-                true, cuda_wraps::q4_0_imatrix, ref_quantize_q4_0_imatrix, true },
-        { "q5_1", GGML_TYPE_Q5_1, QK5_1, sizeof(block_q5_1), cuda_wraps::q5_1, ref_quantize_q5_1,
+        { "q4_0-imatrix", GGML_TYPE_Q4_0, QK4_0, sizeof(block_q4_0), cuda_plain<GGML_TYPE_Q4_0>, ref_quantize_q4_0,
+                true, cuda_imatrix<GGML_TYPE_Q4_0>, ref_quantize_q4_0_imatrix, true },
+        { "q5_1", GGML_TYPE_Q5_1, QK5_1, sizeof(block_q5_1), cuda_plain<GGML_TYPE_Q5_1>, ref_quantize_q5_1,
                 false, nullptr, nullptr },
-        { "q5_1-imatrix", GGML_TYPE_Q5_1, QK5_1, sizeof(block_q5_1), cuda_wraps::q5_1, ref_quantize_q5_1,
-                true, cuda_wraps::q5_1_imatrix, ref_quantize_q5_1_imatrix, true, true },
-        { "q4_1", GGML_TYPE_Q4_1, QK4_1, sizeof(block_q4_1), cuda_wraps::q4_1, ref_quantize_q4_1,
+        { "q5_1-imatrix", GGML_TYPE_Q5_1, QK5_1, sizeof(block_q5_1), cuda_plain<GGML_TYPE_Q5_1>, ref_quantize_q5_1,
+                true, cuda_imatrix<GGML_TYPE_Q5_1>, ref_quantize_q5_1_imatrix, true, true },
+        { "q4_1", GGML_TYPE_Q4_1, QK4_1, sizeof(block_q4_1), cuda_plain<GGML_TYPE_Q4_1>, ref_quantize_q4_1,
                 false, nullptr, nullptr },
-        { "q4_1-imatrix", GGML_TYPE_Q4_1, QK4_1, sizeof(block_q4_1), cuda_wraps::q4_1, ref_quantize_q4_1,
-                true, cuda_wraps::q4_1_imatrix, ref_quantize_q4_1_imatrix, true, true },
+        { "q4_1-imatrix", GGML_TYPE_Q4_1, QK4_1, sizeof(block_q4_1), cuda_plain<GGML_TYPE_Q4_1>, ref_quantize_q4_1,
+                true, cuda_imatrix<GGML_TYPE_Q4_1>, ref_quantize_q4_1_imatrix, true, true },
         // IQ4_NL (+imatrix): optimizer replay with x*x / qw*sqrt weights
-        { "iq4_nl", GGML_TYPE_IQ4_NL, QK4_NL, sizeof(block_iq4_nl), cuda_wraps::iq4_nl, ref_quantize_iq4_nl,
+        { "iq4_nl", GGML_TYPE_IQ4_NL, QK4_NL, sizeof(block_iq4_nl), cuda_plain<GGML_TYPE_IQ4_NL>, ref_quantize_iq4_nl,
                 false, nullptr, nullptr, false, true },
-        { "iq4_nl-imatrix", GGML_TYPE_IQ4_NL, QK4_NL, sizeof(block_iq4_nl), cuda_wraps::iq4_nl, ref_quantize_iq4_nl,
-                true, cuda_wraps::iq4_nl_imatrix, ref_quantize_iq4_nl_imatrix, false, true },
+        { "iq4_nl-imatrix", GGML_TYPE_IQ4_NL, QK4_NL, sizeof(block_iq4_nl), cuda_plain<GGML_TYPE_IQ4_NL>, ref_quantize_iq4_nl,
+                true, cuda_imatrix<GGML_TYPE_IQ4_NL>, ref_quantize_iq4_nl_imatrix, false, true },
         // IQ4_XS (+imatrix): superblock replay with x*x / qw*sqrt weights
-        { "iq4_xs", GGML_TYPE_IQ4_XS, QK_K, sizeof(block_iq4_xs), cuda_wraps::iq4_xs, ref_quantize_iq4_xs,
+        { "iq4_xs", GGML_TYPE_IQ4_XS, QK_K, sizeof(block_iq4_xs), cuda_plain<GGML_TYPE_IQ4_XS>, ref_quantize_iq4_xs,
                 false, nullptr, nullptr, false, true },
-        { "iq4_xs-imatrix", GGML_TYPE_IQ4_XS, QK_K, sizeof(block_iq4_xs), cuda_wraps::iq4_xs, ref_quantize_iq4_xs,
-                true, cuda_wraps::iq4_xs_imatrix, ref_quantize_iq4_xs_imatrix, false, true },
+        { "iq4_xs-imatrix", GGML_TYPE_IQ4_XS, QK_K, sizeof(block_iq4_xs), cuda_plain<GGML_TYPE_IQ4_XS>, ref_quantize_iq4_xs,
+                true, cuda_imatrix<GGML_TYPE_IQ4_XS>, ref_quantize_iq4_xs_imatrix, false, true },
     };
     const size_t nspec = sizeof(specs)/sizeof(specs[0]);
 
