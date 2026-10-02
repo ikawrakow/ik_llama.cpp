@@ -1730,8 +1730,6 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
-// FP_CONTRACT OFF: CUDA replays this optimizer bit-for-bit, forbid FMA contraction.
-#pragma STDC FP_CONTRACT OFF
 static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, int rmse_type,
         const float * restrict qw) {
     float max = 0;
@@ -1857,8 +1855,6 @@ static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * 
     }
     return scale;
 }
-#pragma STDC FP_CONTRACT ON
-
 static float make_q3_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, bool do_rmse) {
     float max = 0;
     float amax = 0;
@@ -2204,8 +2200,6 @@ void quantize_row_q2_K(const float * restrict x, void * restrict vy, int64_t k) 
     quantize_row_q2_K_ref(x, vy, k);
 }
 
-// FP_CONTRACT OFF: CUDA replays this optimizer bit-for-bit (see make_qx_quants).
-#pragma STDC FP_CONTRACT OFF
 static float make_qkx3_quants(int n, int nmax, const float * restrict x, const float * restrict weights,
         uint8_t * restrict L, float * restrict the_min, uint8_t * restrict Laux,
         float rmin, float rdelta, int nstep, bool use_mad) {
@@ -2346,8 +2340,6 @@ static float make_qkx3_quants(int n, int nmax, const float * restrict x, const f
     *the_min = -min;
     return scale;
 }
-#pragma STDC FP_CONTRACT ON
-
 static float make_qp_quants(int n, int nmax, const float * restrict x, uint8_t * restrict L, const float * quant_weights) {
     float max = 0;
     for (int i = 0; i < n; ++i) {
@@ -3386,8 +3378,6 @@ size_t quantize_q6_K(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
-// FP_CONTRACT OFF: CUDA replays weight/sigma2 bit-for-bit, forbid FMA.
-#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK4_0 == 32, "QK4_0 must be 32");
 
@@ -3421,8 +3411,6 @@ static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restri
         }
     }
 }
-#pragma STDC FP_CONTRACT ON
-
 static void quantize_row_q4_0_symmetric(const float * restrict x, block_q4_0 * restrict y, int64_t k) {
     static const int qk = QK4_0;
 
@@ -3476,8 +3464,6 @@ size_t quantize_q4_0(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
-// See FP_CONTRACT note above make_qkx3_quants.
-#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q4_1_impl(const float * restrict x, block_q4_1 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK4_1 == 32, "QK4_1 must be 32");
 
@@ -3507,8 +3493,6 @@ static void quantize_row_q4_1_impl(const float * restrict x, block_q4_1 * restri
         }
     }
 }
-#pragma STDC FP_CONTRACT ON
-
 size_t quantize_q4_1(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
     GGML_UNUSED(user_data);
@@ -3526,8 +3510,6 @@ size_t quantize_q4_1(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
-// See FP_CONTRACT note above make_qx_quants.
-#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK5_0 == 32, "QK5_0 must be 32");
 
@@ -3567,8 +3549,6 @@ static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restri
         memcpy(&y[ib].qh, &qh, sizeof(qh));
     }
 }
-#pragma STDC FP_CONTRACT ON
-
 size_t quantize_q5_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
     GGML_UNUSED(user_data);
@@ -3586,8 +3566,6 @@ size_t quantize_q5_0(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
-// See FP_CONTRACT note above make_qkx3_quants.
-#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q5_1_impl(const float * restrict x, block_q5_1 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK5_1 == 32, "QK5_1 must be 32");
 
@@ -3625,8 +3603,6 @@ static void quantize_row_q5_1_impl(const float * restrict x, block_q5_1 * restri
         memcpy(&y[ib].qh, &qh, sizeof(qh));
     }
 }
-#pragma STDC FP_CONTRACT ON
-
 size_t quantize_q5_1(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
     GGML_UNUSED(user_data);
@@ -3644,8 +3620,6 @@ size_t quantize_q5_1(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
-// See FP_CONTRACT note above make_qx_quants. Q6_0 OLS is KEPT.
-#pragma STDC FP_CONTRACT OFF
 static void quantize_row_q6_0_impl(const float * restrict x, block_q6_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK6_0 == 32, "QK6_0 must be 32");
 
@@ -3684,8 +3658,6 @@ static void quantize_row_q6_0_impl(const float * restrict x, block_q6_0 * restri
         }
     }
 }
-#pragma STDC FP_CONTRACT ON
-
 size_t quantize_q6_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
     GGML_UNUSED(user_data);
@@ -14830,8 +14802,6 @@ static inline int best_index_iq4nl(const int8_t * values, float x) {
     return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
 
-// FP_CONTRACT OFF: CUDA replays this optimizer bit-for-bit (see make_qx_quants).
-#pragma STDC FP_CONTRACT OFF
 static void quantize_row_iq4_nl_impl(const int super_block_size, const int block_size, const float * restrict x,
         ggml_fp16_t * dh, uint8_t * q4, uint16_t * scales_h, uint8_t * scales_l,
         float * scales, float * weight, uint8_t * L,
@@ -15005,8 +14975,6 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
         }
     }
 }
-#pragma STDC FP_CONTRACT ON
-
 size_t quantize_iq4_nl(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
     GGML_UNUSED(user_data);

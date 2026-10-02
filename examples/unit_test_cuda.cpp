@@ -1007,7 +1007,7 @@ static void ref_iq4xs_superblock(const float * xs, const float * qs, block_iq4_x
     float gid = gd ? 1/gd : 0.0f;
     uint16_t scales_h = 0;
     for (int ib = 0; ib < 8; ++ib) {
-        int l = isfinite(scales[ib]) ? ref_iq4xs_nearest_int(gid*scales[ib]) : 0; // deterministic degenerate path
+        int l = std::isfinite(scales[ib]) ? ref_iq4xs_nearest_int(gid*scales[ib]) : 0; // deterministic degenerate path
         l = l > 31 ? 31 : (l < -32 ? -32 : l);
         float dl = gd*l;
         float idl = dl ? 1/dl : 0.0f;
