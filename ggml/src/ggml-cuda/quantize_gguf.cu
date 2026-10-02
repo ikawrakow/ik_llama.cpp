@@ -784,6 +784,111 @@ static __device__ int best_index_iq4nl_device(const int8_t * values, float x) {
     return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
 
+// One 32-value block of the IQ4_NL/XS optimizer (ntry = 7): grid search over
+// 30 scale probes + hill-climb, verbatim CPU order with correctly-rounded
+// intrinsics. weight[] is caller-provided (x*x plain, or qw*sqrt imatrix).
+// Returns the LS scale (0 when amax < 1e-15); L is filled except on the eps
+// path, where the caller's finalize re-quant overwrites it (matches CPU).
+static __device__ float iq4nl_opt_block_device(const float * xb, const float * weight, uint8_t * L) {
+    float amax = 0.0f, max = 0.0f;
+    for (int j = 0; j < 32; ++j) {
+        const float ax = fabsf(xb[j]);
+        if (ax > amax) {
+            amax = ax; max = xb[j];
+        }
+    }
+    if (amax < 1e-15f) {
+        return 0.0f;
+    }
+    float d = __fdiv_rn(-max, (float)kvalues_iq4nl_dev[0]);
+    const float id0 = __fdiv_rn(1.0f, d);
+    float sumqx = 0.0f, sumq2 = 0.0f;
+    for (int j = 0; j < 32; ++j) {
+        const int l = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id0, xb[j]));
+        L[j] = (uint8_t)l;
+        const float q = (float)kvalues_iq4nl_dev[l];
+        const float w = weight[j];
+        sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, q), xb[j]));
+        sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(w, q), q));
+    }
+    d = __fdiv_rn(sumqx, sumq2);
+    float best = __fmul_rn(d, sumqx);
+    float best_sumqx = sumqx, best_sumq2 = sumq2;
+    for (int itry = -7; itry <= 7; ++itry) {
+        float id = __fdiv_rn((float)(itry + kvalues_iq4nl_dev[0]), max);
+        sumqx = sumq2 = 0.0f;
+        for (int j = 0; j < 32; ++j) {
+            const int l = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
+            const float q = (float)kvalues_iq4nl_dev[l];
+            const float w = weight[j];
+            sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, q), xb[j]));
+            sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(w, q), q));
+        }
+        if (sumq2 > 0.0f && __fmul_rn(sumqx, sumqx) > __fmul_rn(best, sumq2)) {
+            d = __fdiv_rn(sumqx, sumq2); best = __fmul_rn(d, sumqx);
+            best_sumqx = sumqx; best_sumq2 = sumq2;
+            for (int j = 0; j < 32; ++j) {
+                L[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
+            }
+        }
+        id = __fdiv_rn((float)(itry + kvalues_iq4nl_dev[15]), max);
+        sumqx = sumq2 = 0.0f;
+        for (int j = 0; j < 32; ++j) {
+            const int l = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
+            const float q = (float)kvalues_iq4nl_dev[l];
+            const float w = weight[j];
+            sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, q), xb[j]));
+            sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(w, q), q));
+        }
+        if (sumq2 > 0.0f && __fmul_rn(sumqx, sumqx) > __fmul_rn(best, sumq2)) {
+            d = __fdiv_rn(sumqx, sumq2); best = __fmul_rn(d, sumqx);
+            best_sumqx = sumqx; best_sumq2 = sumq2;
+            for (int j = 0; j < 32; ++j) {
+                L[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
+            }
+        }
+    }
+    sumqx = best_sumqx; sumq2 = best_sumq2;
+    for (int iter = 0; iter < 32*32; ++iter) {
+        float min_step = INFINITY;
+        int best_j = -1, dir = 0;
+        for (int j = 0; j < 32; ++j) {
+            const float w = weight[j];
+            const float g = __fmul_rn(__fmul_rn(d, w), __fsub_rn(xb[j], __fmul_rn(d, (float)kvalues_iq4nl_dev[L[j]])));
+            if (g > 0.0f && L[j] < 15) {
+                const float step = __fdiv_rn((float)(kvalues_iq4nl_dev[L[j]+1] - kvalues_iq4nl_dev[L[j]]), g);
+                if (step < min_step) {
+                    min_step = step; best_j = j; dir = 1;
+                }
+            }
+            else if (g < 0.0f && L[j] > 0) {
+                const float step = __fdiv_rn((float)(kvalues_iq4nl_dev[L[j]-1] - kvalues_iq4nl_dev[L[j]]), g);
+                if (step < min_step) {
+                    min_step = step; best_j = j; dir = -1;
+                }
+            }
+        }
+        if (best_j < 0) break;
+
+        const float w = weight[best_j];
+        const int l0 = L[best_j];
+        const int l1 = l0 + dir;
+        float new_sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, xb[best_j]), (float)(kvalues_iq4nl_dev[l1] - kvalues_iq4nl_dev[l0])));
+        const int q1sq = kvalues_iq4nl_dev[l1]*kvalues_iq4nl_dev[l1];
+        const int q0sq = kvalues_iq4nl_dev[l0]*kvalues_iq4nl_dev[l0];
+        float new_sumq2 = __fadd_rn(sumq2, __fmul_rn(w, (float)(q1sq - q0sq)));
+        if (new_sumq2 > 0.0f && __fmul_rn(new_sumqx, new_sumqx) > __fmul_rn(best, new_sumq2)) {
+            sumqx = new_sumqx; sumq2 = new_sumq2;
+            d = __fdiv_rn(sumqx, sumq2); best = __fmul_rn(d, sumqx);
+            L[best_j] = (uint8_t)l1;
+        }
+        else {
+            break;
+        }
+    }
+    return d;
+}
+
 static __global__ void quantize_iq4_nl_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks) {
     const int64_t ib = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
@@ -798,109 +903,50 @@ static __global__ void quantize_iq4_nl_kernel(
         weight[j] = __fmul_rn(xb[j], xb[j]);
     }
 
-    float amax = 0.0f, max = 0.0f;
-    for (int j = 0; j < QK4_NL; ++j) {
-        const float ax = fabsf(xb[j]);
-        if (ax > amax) {
-            amax = ax; max = xb[j];
-        }
-    }
-
-    float scale = 0.0f;
-    if (amax >= 1e-15f) {
-        float d = __fdiv_rn(-max, (float)kvalues_iq4nl_dev[0]);
-        const float id0 = __fdiv_rn(1.0f, d);
-        float sumqx = 0.0f, sumq2 = 0.0f;
-        for (int j = 0; j < QK4_NL; ++j) {
-            const int l = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id0, xb[j]));
-            L[j] = (uint8_t)l;
-            const float q = (float)kvalues_iq4nl_dev[l];
-            const float w = weight[j];
-            sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, q), xb[j]));
-            sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(w, q), q));
-        }
-        d = __fdiv_rn(sumqx, sumq2);
-        float best = __fmul_rn(d, sumqx);
-        float best_sumqx = sumqx, best_sumq2 = sumq2;
-        for (int itry = -7; itry <= 7; ++itry) {
-            float id = __fdiv_rn((float)(itry + kvalues_iq4nl_dev[0]), max);
-            sumqx = sumq2 = 0.0f;
-            for (int j = 0; j < QK4_NL; ++j) {
-                const int l = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
-                const float q = (float)kvalues_iq4nl_dev[l];
-                const float w = weight[j];
-                sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, q), xb[j]));
-                sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(w, q), q));
-            }
-            if (sumq2 > 0.0f && __fmul_rn(sumqx, sumqx) > __fmul_rn(best, sumq2)) {
-                d = __fdiv_rn(sumqx, sumq2); best = __fmul_rn(d, sumqx);
-                best_sumqx = sumqx; best_sumq2 = sumq2;
-                for (int j = 0; j < QK4_NL; ++j) {
-                    L[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
-                }
-            }
-            id = __fdiv_rn((float)(itry + kvalues_iq4nl_dev[15]), max);
-            sumqx = sumq2 = 0.0f;
-            for (int j = 0; j < QK4_NL; ++j) {
-                const int l = best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
-                const float q = (float)kvalues_iq4nl_dev[l];
-                const float w = weight[j];
-                sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, q), xb[j]));
-                sumq2 = __fadd_rn(sumq2, __fmul_rn(__fmul_rn(w, q), q));
-            }
-            if (sumq2 > 0.0f && __fmul_rn(sumqx, sumqx) > __fmul_rn(best, sumq2)) {
-                d = __fdiv_rn(sumqx, sumq2); best = __fmul_rn(d, sumqx);
-                best_sumqx = sumqx; best_sumq2 = sumq2;
-                for (int j = 0; j < QK4_NL; ++j) {
-                    L[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(id, xb[j]));
-                }
-            }
-        }
-        sumqx = best_sumqx; sumq2 = best_sumq2;
-        for (int iter = 0; iter < 32*QK4_NL; ++iter) {
-            float min_step = INFINITY;
-            int best_j = -1, dir = 0;
-            for (int j = 0; j < QK4_NL; ++j) {
-                const float w = weight[j];
-                const float g = __fmul_rn(__fmul_rn(d, w), __fsub_rn(xb[j], __fmul_rn(d, (float)kvalues_iq4nl_dev[L[j]])));
-                if (g > 0.0f && L[j] < 15) {
-                    const float step = __fdiv_rn((float)(kvalues_iq4nl_dev[L[j]+1] - kvalues_iq4nl_dev[L[j]]), g);
-                    if (step < min_step) {
-                        min_step = step; best_j = j; dir = 1;
-                    }
-                }
-                else if (g < 0.0f && L[j] > 0) {
-                    const float step = __fdiv_rn((float)(kvalues_iq4nl_dev[L[j]-1] - kvalues_iq4nl_dev[L[j]]), g);
-                    if (step < min_step) {
-                        min_step = step; best_j = j; dir = -1;
-                    }
-                }
-            }
-            if (best_j < 0) break;
-
-            const float w = weight[best_j];
-            const int l0 = L[best_j];
-            const int l1 = l0 + dir;
-            float new_sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, xb[best_j]), (float)(kvalues_iq4nl_dev[l1] - kvalues_iq4nl_dev[l0])));
-            const int q1sq = kvalues_iq4nl_dev[l1]*kvalues_iq4nl_dev[l1];
-            const int q0sq = kvalues_iq4nl_dev[l0]*kvalues_iq4nl_dev[l0];
-            float new_sumq2 = __fadd_rn(sumq2, __fmul_rn(w, (float)(q1sq - q0sq)));
-            if (new_sumq2 > 0.0f && __fmul_rn(new_sumqx, new_sumqx) > __fmul_rn(best, new_sumq2)) {
-                sumqx = new_sumqx; sumq2 = new_sumq2;
-                d = __fdiv_rn(sumqx, sumq2); best = __fmul_rn(d, sumqx);
-                L[best_j] = (uint8_t)l1;
-            }
-            else {
-                break;
-            }
-        }
-        scale = d;
-    }
+    const float scale = iq4nl_opt_block_device(xb, weight, L);
 
     // NL finalize: dh = FP16(scale*fudge), fudge = 1; re-quant with final scale
     // (id = 0 when scale = 0, so 0*xb runs too, matching the CPU exactly).
     // Bit-twiddle FP16: a degenerate (overflow) block yields a NaN scale whose
     // payload must match ggml_compute_fp32_to_fp16, not hardware canonical.
+    block_iq4_nl * y = (block_iq4_nl *)vy;
+    y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(scale));
+    {
+        const float idf = scale ? __fdiv_rn(1.0f, scale) : 0.0f;
+        for (int j = 0; j < QK4_NL; ++j) {
+            L[j] = (uint8_t)best_index_iq4nl_device(kvalues_iq4nl_dev, __fmul_rn(idf, xb[j]));
+        }
+    }
+    for (int j = 0; j < QK4_NL/2; ++j) {
+        y[ib].qs[j] = (uint8_t)(L[j] | (L[j + QK4_NL/2] << 4));
+    }
+}
+
+// IQ4_NL with an importance matrix: same optimizer replay with
+// weight = qw*sqrt(sigma2 + x*x); sigma2 is precomputed on the host in the
+// exact CPU summation order. dh = FP16(scale) via bit-twiddle (see plain).
+static __global__ void quantize_iq4_nl_imatrix_kernel(
+        const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
+        void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row) {
+    const int64_t ib = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (ib >= nblocks) {
+        return;
+    }
+    const int64_t gb = base + ib;
+    const float * xb = x + ib*QK4_NL;
+    const float * qb = qw + (int32_t)(gb % blocks_per_row)*QK4_NL;
+    const float s2   = sigma2[gb];
+
+    float weight[QK4_NL];
+    uint8_t L[QK4_NL];
+    for (int j = 0; j < QK4_NL; ++j) {
+        weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
+    }
+
+    // sigma2 for the NL superblock covers exactly this 32-block, matching the
+    // CPU impl (super_block_size = 32); s2 above is that same value.
+    const float scale = iq4nl_opt_block_device(xb, weight, L);
+
     block_iq4_nl * y = (block_iq4_nl *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(scale));
     {
@@ -2026,6 +2072,122 @@ size_t ggml_cuda_quantize_iq4_nl(const float * src, void * dst, int64_t nrows, i
     }
 
     cudaFree(x_dev);
+    cudaFree(y_dev);
+
+    if (err != cudaSuccess) {
+        return 0;
+    }
+
+    return nblocks_total*sizeof(block_iq4_nl);
+}
+
+// IQ4_NL with an importance matrix: same optimizer replay with
+// weight = qw*sqrt(sigma2 + x*x); sigma2 = (sum x^2)*2/32 is precomputed on
+// the host per 32-block in the exact CPU summation order.
+size_t ggml_cuda_quantize_iq4_nl_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix) {
+    GGML_ASSERT(nrows > 0);
+    GGML_ASSERT(n_per_row % QK4_NL == 0);
+
+    const int64_t nblocks_total = nrows*(n_per_row/QK4_NL);
+    const int32_t blocks_per_row = (int32_t)(n_per_row/QK4_NL);
+
+    int n_devices = 0;
+    if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
+        return 0;
+    }
+    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
+        return 0;
+    }
+
+    std::vector<float> sigma2(nblocks_total);
+    for (int64_t b = 0; b < nblocks_total; ++b) {
+        const float * xb = src + b*QK4_NL;
+        float sum = 0.0f;
+        for (int j = 0; j < QK4_NL; ++j) {
+            sum += xb[j]*xb[j];
+        }
+        sigma2[b] = sum*2.0f/QK4_NL;
+    }
+
+    const int64_t chunk_blocks = 1 << 20;
+    const int64_t chunk_x      = chunk_blocks*QK4_NL;
+    const int64_t chunk_y      = chunk_blocks*sizeof(block_iq4_nl);
+
+    float   * x_dev = nullptr;
+    float   * q_dev = nullptr;
+    float   * s_dev = nullptr;
+    uint8_t * y_dev = nullptr;
+
+    cudaError_t err = cudaMalloc(&x_dev, chunk_x*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: iq4_nl_imatrix: cudaMalloc(x_dev): %s\n", __func__, cudaGetErrorString(err));
+        return 0;
+    }
+    err = cudaMalloc(&q_dev, n_per_row*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: iq4_nl_imatrix: cudaMalloc(q_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        return 0;
+    }
+    err = cudaMalloc(&s_dev, nblocks_total*sizeof(float));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: iq4_nl_imatrix: cudaMalloc(s_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        return 0;
+    }
+    err = cudaMalloc(&y_dev, chunk_y);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: iq4_nl_imatrix: cudaMalloc(y_dev): %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        return 0;
+    }
+
+    err = cudaMemcpy(q_dev, imatrix, n_per_row*sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: iq4_nl_imatrix: cudaMemcpy imatrix H2D: %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        cudaFree(y_dev);
+        return 0;
+    }
+    err = cudaMemcpy(s_dev, sigma2.data(), nblocks_total*sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s: iq4_nl_imatrix: cudaMemcpy sigma2 H2D: %s\n", __func__, cudaGetErrorString(err));
+        cudaFree(x_dev);
+        cudaFree(q_dev);
+        cudaFree(s_dev);
+        cudaFree(y_dev);
+        return 0;
+    }
+
+    const unsigned int block_size = 256;
+    for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
+        const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
+
+        err = cudaMemcpy(x_dev, src + base*QK4_NL, nblocks*QK4_NL*sizeof(float), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: iq4_nl_imatrix: cudaMemcpy H2D: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+
+        quantize_iq4_nl_imatrix_kernel<<<(unsigned)((nblocks + block_size - 1)/block_size), block_size>>>(
+                x_dev, q_dev, s_dev, y_dev, base, nblocks, blocks_per_row);
+
+        err = cudaMemcpy((char *)dst + base*sizeof(block_iq4_nl), y_dev, nblocks*sizeof(block_iq4_nl), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: iq4_nl_imatrix: cudaMemcpy D2H: %s\n", __func__, cudaGetErrorString(err));
+            break;
+        }
+    }
+
+    cudaFree(x_dev);
+    cudaFree(q_dev);
+    cudaFree(s_dev);
     cudaFree(y_dev);
 
     if (err != cudaSuccess) {

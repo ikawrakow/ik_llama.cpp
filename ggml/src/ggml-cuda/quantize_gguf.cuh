@@ -70,7 +70,9 @@ size_t ggml_cuda_quantize_q5_1_imatrix(const float * src, void * dst, int64_t nr
 size_t ggml_cuda_quantize_q4_1(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
 size_t ggml_cuda_quantize_q4_1_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix);
-// IQ4_NL plain only (ntry=7, w=x*x; imatrix falls back to CPU in dispatcher)
+// IQ4_NL (ntry=7, w=x*x plain or qw*sqrt imatrix)
 size_t ggml_cuda_quantize_iq4_nl(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
+size_t ggml_cuda_quantize_iq4_nl_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+        const float * imatrix);
 // IQ4_XS plain only (ntry=7, w=x*x; imatrix falls back to CPU in dispatcher)
 size_t ggml_cuda_quantize_iq4_xs(const float * src, void * dst, int64_t nrows, int64_t n_per_row);

@@ -627,11 +627,8 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
                 nb = s_im ? ggml_cuda_quantize_q4_1_imatrix(s_src, s_dst, nrows, n_per_row, s_im)
                           : ggml_cuda_quantize_q4_1(s_src, s_dst, nrows, n_per_row);
             } else if (type == GGML_TYPE_IQ4_NL) {
-                // Plain only; imatrix falls back to CPU (return 0).
-                if (s_im) {
-                    return 0;
-                }
-                nb = ggml_cuda_quantize_iq4_nl(s_src, s_dst, nrows, n_per_row);
+                nb = s_im ? ggml_cuda_quantize_iq4_nl_imatrix(s_src, s_dst, nrows, n_per_row, s_im)
+                          : ggml_cuda_quantize_iq4_nl(s_src, s_dst, nrows, n_per_row);
             } else if (type == GGML_TYPE_IQ4_XS) {
                 // Plain only; imatrix falls back to CPU (return 0).
                 if (s_im) {
