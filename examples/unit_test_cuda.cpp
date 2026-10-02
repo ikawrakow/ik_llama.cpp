@@ -69,6 +69,7 @@
 static int  g_seed  = 12345;
 static int  g_failures = 0;
 static bool g_quick = false;
+static bool g_debug_inputs = false; // --debug-inputs: dump exact inputs of cpu/ref-divergent blocks
 static int  g_cuda_device = 0; // --device N, forwarded to ggml_cuda_quantize
 static std::mt19937 g_rng(g_seed);
 
@@ -1437,10 +1438,9 @@ static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
                tag, (long long)nrows, (long long)n_per_row);
     } else {
         ++g_failures;
-#ifdef UNIT_TEST_CUDA_DEBUG_INPUTS
         // Dump exact inputs of the first cpu/ref-divergent block (%a hex floats)
-        // to root-cause host-replica vs CPU codegen ghosts. Gated: off by default.
-        if (d_cpu_ref != 0) {
+        // to root-cause host-replica vs CPU codegen ghosts. Runtime-gated.
+        if (g_debug_inputs && d_cpu_ref != 0) {
             const size_t blk_size = spec.blk_size;
             size_t first = 0;
             for (; first < out_size; ++first) {
@@ -1463,7 +1463,6 @@ static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
             }
             printf("\n");
         }
-#endif
     }
 }
 
@@ -1573,6 +1572,7 @@ int main(int argc, char ** argv) {
         else if (arg == "--big")   big = true;
         else if (arg == "--huge")  huge = true;
         else if (arg == "--quick") g_quick = true;
+        else if (arg == "--debug-inputs") g_debug_inputs = true;
         else {
             fprintf(stderr, "error: unknown argument '%s'\n", arg.c_str());
             return 1;
