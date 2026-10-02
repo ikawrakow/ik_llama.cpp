@@ -1730,11 +1730,7 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
-// Byte-exact CUDA GGUF quantization (ggml-cuda/quantize_gguf.cu) replays this
-// sequential greedy/coordinate-descent optimizer bit-for-bit on the GPU with
-// correctly-rounded intrinsics. Forbid FMA contraction so a /arch:AVX2 build
-// cannot contract sumlx += w*x*l and drift ~1 ulp. FP_CONTRACT is standard:
-// honored by clang; MSVC cl ignores it (harmless, cl never contracts).
+// FP_CONTRACT OFF: CUDA replays this optimizer bit-for-bit, forbid FMA contraction.
 #pragma STDC FP_CONTRACT OFF
 static float make_qx_quants(int n, int nmax, const float * restrict x, int8_t * restrict L, int rmse_type,
         const float * restrict qw) {
@@ -2208,9 +2204,7 @@ void quantize_row_q2_K(const float * restrict x, void * restrict vy, int64_t k) 
     quantize_row_q2_K_ref(x, vy, k);
 }
 
-// Byte-exact CUDA GGUF quantization (ggml-cuda/quantize_gguf.cu) replays this
-// affine optimizer bit-for-bit on the GPU with correctly-rounded intrinsics.
-// Forbid FMA contraction like make_qx_quants above.
+// FP_CONTRACT OFF: CUDA replays this optimizer bit-for-bit (see make_qx_quants).
 #pragma STDC FP_CONTRACT OFF
 static float make_qkx3_quants(int n, int nmax, const float * restrict x, const float * restrict weights,
         uint8_t * restrict L, float * restrict the_min, uint8_t * restrict Laux,
@@ -3392,8 +3386,7 @@ size_t quantize_q6_K(const float * restrict src, void * restrict dst, int64_t nr
     return nrow * row_size;
 }
 
-// See FP_CONTRACT note above make_qx_quants: per-block weight and sigma2 must
-// not be FMA-contracted (CUDA replays them byte-for-bit).
+// FP_CONTRACT OFF: CUDA replays weight/sigma2 bit-for-bit, forbid FMA.
 #pragma STDC FP_CONTRACT OFF
 static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restrict y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK4_0 == 32, "QK4_0 must be 32");
@@ -14837,9 +14830,7 @@ static inline int best_index_iq4nl(const int8_t * values, float x) {
     return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
 
-// Byte-exact CUDA GGUF quantization (ggml-cuda/quantize_gguf.cu) replays this
-// optimizer bit-for-bit on the GPU with correctly-rounded intrinsics.
-// Forbid FMA contraction like make_qx_quants above.
+// FP_CONTRACT OFF: CUDA replays this optimizer bit-for-bit (see make_qx_quants).
 #pragma STDC FP_CONTRACT OFF
 static void quantize_row_iq4_nl_impl(const int super_block_size, const int block_size, const float * restrict x,
         ggml_fp16_t * dh, uint8_t * q4, uint16_t * scales_h, uint8_t * scales_l,
@@ -14981,11 +14972,7 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
         dh[0] = GGML_FP32_TO_FP16(d*fudge);
         float id = d ? 1/d : 0.f;
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
-            // Deterministic degenerate path: a non-finite block scale (from
-            // inf/nan intermediates on overflow inputs) would make nearest_int
-            // and the re-quant casts platform-UB (x86 INT_MIN vs CUDA 0). Pin
-            // l = 0 so stored bytes are identical everywhere; numerics are
-            // unaffected (dl = 0 dequantizes to 0 either way).
+            // Pin l=0 for non-finite scales: avoids platform-UB, identical bytes.
             int l = isfinite(scales[ib]) ? nearest_int(id*scales[ib]) : 0;
             l = MAX(-32, MIN(31, l));
             float dl = d * l;

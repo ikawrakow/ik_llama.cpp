@@ -1,50 +1,9 @@
 //
-// unit_test_cuda.cpp - byte-for-byte CUDA block-quant verification.
-// Order after Joel's KT: Q8_0, Q6_0, Q5_0, Q4_0, Q5_1, Q4_1, IQ4_NL, IQ4_XS
-// (+imatrix where CPU uses it).
-// Dispatched in production through Joel's single ggml_cuda_quantize() entry
-// (kt-encoder.cu lead); this harness also exercises the per-type helpers
-// directly (ggml/src/ggml-cuda/quantize_gguf.cu).
-//
-// For each type, three producers of GGUF quantized bytes are compared on
-// identical input:
-//
-//   1. GPU : ggml_cuda_quantize(g_cuda_device,type,...,nslice=1,imatrix) (Joel single
-//            entry -> ggml/src/ggml-cuda/quantize_gguf.cu helpers)
-//   2. CPU : ggml_quantize_chunk       (the fork's real llama-quantize path;
-//            for Q4_0/Q5_0 without imatrix/symmetric this is the vanilla ref;
-//            Q6_0 always OLS make_qx; Q8_0 ignores imatrix)
-//   3. REF : local copy of the quantize_row_*_ref implementations
-//            (ggml/src/ggml-quants.c q8_0, q4_0, q5_0) with the
-//            fp16 step done by __float2half_rn, no ggml internals
-//
-// TODO (HEAD adaptation): local REF copies must include fudge factors
-// (FP16(fudge*d), Q8_0 uses Q6_0 fudge quirk) and Q6_0 OLS (make_qx +
-// fudge, weight=x*x without imatrix) to stay byte-exact vs HEAD CPU.
-// Q8_0+imatrix must expect plain (CPU ignores imatrix). Q4_0 symmetric
-// stays on CPU. Until updated, gpu==cpu is the binding check; gpu==ref
-// may diverge on fudge != 1 or OLS types.
-//
-// The triggering scenario is llama-quantize --cuda-quantize bf16 -> q8_0
-// producing garbage perplexity (no NaN). gpu vs cpu answers "is the kernel
-// byte-exact?"; cpu vs ref answers "is the fork's CPU path still the vanilla
-// reference?"; gpu vs ref ties the two together with an independent baseline.
-//
-// Layout note: the 32-value quant blocks tile the flat row-major F32 buffer
-// contiguously (n_per_row % 32 == 0), so rows need no bookkeeping and per-slice
-// calls can be concatenated. test_slices reproduces do_quantize's ne[2]
-// slicing exactly: the CUDA branch and the CPU branch both quantize one expert
-// slice at a time into consecutive slots, and both must equal a single
-// whole-tensor call.
-//
-// Edge cases (docs/cuda-quantize.md §6): all-zero, single outlier, ±max,
-// exact .5 rounding ties, denormals, huge/tiny magnitudes, mixed signs.
-// A >1<<20-block tensor exercises the chunk loop in the CUDA host wrapper.
-//
-// Build (must run with GGML_CUDA on):
-//   cmake --build build --target unit_test_cuda -j
-// Run:
-//   unit_test_cuda [--seed N] [--device N] [--all-devices] [--big] [--huge] [--quick]
+// unit_test_cuda.cpp - byte-exact CUDA vs CPU vs REF quant check; KT order Q8_0,Q6_0,Q5_0,Q4_0,Q5_1,Q4_1,IQ4_NL,IQ4_XS (+imatrix).
+// Producers: GPU ggml_cuda_quantize (Joel single entry, nslice=1) vs CPU ggml_quantize_chunk vs local REF copies of ggml-quants.c.
+// Layout: 32-val blocks tile rows contiguously; test_slices reproduces do_quantize ne[2] slicing; edge cases per docs/cuda-quantize.md S6.
+// Build (GGML_CUDA on): cmake --build build --target unit_test_cuda -j
+// Run: unit_test_cuda [--seed N] [--device N] [--all-devices] [--big] [--huge] [--quick]
 //
 
 #include <cstdio>
@@ -73,10 +32,7 @@ static bool g_debug_inputs = false; // --debug-inputs: dump exact inputs of cpu/
 static int  g_cuda_device = 0; // --device N, forwarded to ggml_cuda_quantize
 static std::mt19937 g_rng(g_seed);
 
-// ---------------------------------------------------------------------------
 // Per-type plumbing
-// ---------------------------------------------------------------------------
-
 struct quant_spec {
     const char * name;
     ggml_type    type;
@@ -89,19 +45,12 @@ struct quant_spec {
     void (*ref_imatrix)(void *, const float *, int64_t, int64_t, const float *);
     bool         nan_d_equal; // treat fp16 NaN scale (d) as equal even if sign/payload differs
     bool         nan_block_equal; // skip the whole block when both d are non-finite
-                                 // (NaN/Inf scale: degenerate overflow blocks whose
-                                 // payload bytes come from UB casts, x86 vs CUDA)
 };
 
-// The local refs below replay ggml-quants.c bit-for-bit. The CPU side carries
-// #pragma STDC FP_CONTRACT OFF, so forbid contraction here too (clang would
-// otherwise fuse e.g. sum_xl += w*l*x and drift ~1 ulp on degenerate blocks).
+// FP_CONTRACT OFF: match CPU (ggml-quants.c); no FMA so OLS ties stay bit-exact.
 #pragma STDC FP_CONTRACT OFF
 
-// Local copy of quantize_row_q8_0_ref (ggml/src/ggml-quants.c). The fp16
-// conversion uses __float2half_rn (nearest-even), what GGML_FP32_TO_FP16 maps
-// to and what the CUDA kernel stores via __half_as_ushort. HEAD CPU stores
-// FP16(fudge*d) with the Q6_0-fudge quirk (ggml-quants.c:915); match it.
+// REF quantize_row_q8_0_ref (ggml-quants.c); matches CPU Q6_0-fudge quirk via __float2half_rn.
 static void ref_quantize_q8_0(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0); // match CPU quirk
     const int64_t nb = (nrows*n_per_row)/QK8_0;
@@ -166,9 +115,7 @@ static void ref_quantize_q4_0(void * dst, const float * src, int64_t nrows, int6
     }
 }
 
-// ---------------------------------------------------------------------------
-// Q4_0 imatrix path: make_qx_quants (ggml-quants.c:1786) + quantize_row_q4_0_impl
-// ---------------------------------------------------------------------------
+// Q4_0 imatrix: make_qx_quants + quantize_row_q4_0_impl (ggml-quants.c:1786,3429).
 
 // Verbatim copy of ggml-quants.c:1779 (round half to even via magic constant).
 static inline int ref_nearest_int(float fval) {
@@ -183,10 +130,7 @@ static inline int ref_clamp_l(int l, int nmax) {
     return l > nmax-1 ? nmax-1 : (l < -nmax ? -nmax : l);
 }
 
-// Verbatim copy of make_qx_quants (ggml-quants.c:1786), restricted to the
-// Q4_0 imatrix use (rmse_type == 1, qw always provided). Host code compiled
-// with the same flags as the llama lib CPU path, so it must reproduce it
-// byte-for-byte.
+// REF make_qx_quants (ggml-quants.c:1786) for Q4_0 imatrix (rmse_type==1); byte-exact host port.
 static float ref_make_qx_quants(int n, int nmax, const float * x, int8_t * L, int rmse_type, const float * qw) {
     float max = 0;
     float amax = 0;
@@ -303,11 +247,7 @@ static float ref_make_qx_quants(int n, int nmax, const float * x, int8_t * L, in
     return scale;
 }
 
-// Host port of the CPU reference's fp16 conversion ggml_compute_fp32_to_fp16
-// (ggml/src/ggml-impl.h:595, used when __F16C__ is off as in this build). The
-// device kernel uses the identical bit-mask path (fp32_to_fp16_ggml), so NaN
-// scales (possible from make_qx_quants on degenerate blocks) are byte-exact
-// too: the CPU encodes NaN as sign|0x7e00, not the hardware conversion's 0x7fff.
+// Host port of ggml_compute_fp32_to_fp16 (ggml-impl.h:595); matches device NaN encoding (0x7e00).
 static uint16_t fp32_to_fp16_ggml_host(float f) {
     const float scale_to_inf  = [](){ uint32_t u = 0x77800000u; float v; memcpy(&v, &u, 4); return v; }();
     const float scale_to_zero = [](){ uint32_t u = 0x08800000u; float v; memcpy(&v, &u, 4); return v; }();
@@ -330,9 +270,7 @@ static uint16_t fp32_to_fp16_ggml_host(float f) {
     return (uint16_t)((sign >> 16) | (shl1_w > 0xFF000000u ? 0x7E00u : nonsign));
 }
 
-// Local copy of quantize_row_q4_0_impl (ggml-quants.c:3429). The imatrix holds
-// n_per_row weights and is reused for every row, exactly like the CPU path.
-// HEAD CPU stores FP16(fudge*d).
+// REF quantize_row_q4_0_impl (ggml-quants.c:3429); stores FP16(fudge*d), imatrix reused per row.
 static void ref_quantize_q4_0_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q4_0);
@@ -389,9 +327,7 @@ static void ref_quantize_q4_1(void * dst, const float * src, int64_t nrows, int6
     }
 }
 
-// Local copy of quantize_row_q5_0_ref (ggml/src/ggml-quants.c:757). The 5-th
-// bit of every quant goes into the 4-byte LE qh bitmap, which the ref memcpys
-// from a native uint32.
+// REF quantize_row_q5_0_ref (ggml-quants.c:757); 5th bit packs into LE qh bitmap.
 static void ref_quantize_q5_0(void * dst, const float * src, int64_t nrows, int64_t n_per_row) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q5_0);
     const int64_t nb = (nrows*n_per_row)/QK5_0;
@@ -523,12 +459,8 @@ static void ref_quantize_q5_1(void * dst, const float * src, int64_t nrows, int6
     }
 }
 
-// Host copy of make_qkx3_quants (ggml-quants.c:2211) for the Q4_1/Q5_1 imatrix
-// refs. Verbatim order, double accumulators, nearest-even magic rounding.
-// FP_CONTRACT OFF (like ggml-quants.c): a fused FMA would flip exact ties.
-// optimize off (clang only): ggml and test TUs unroll/vectorize the double
-// reductions differently, reordering 1-ulp summation on tie-sensitive data;
-// force strict source order here (test-only, zero production impact).
+// REF make_qkx3_quants (ggml-quants.c:2211) for Q4_1/Q5_1 imatrix; verbatim order, double accumulators.
+// optimize off (clang only): force strict source order for tie-sensitive reductions (test-only).
 #ifdef __clang__
 #pragma clang optimize off
 #endif
@@ -680,8 +612,7 @@ static float ref_make_qkx3_quants(int n, int nmax, const float * x, const float 
     return scale;
 }
 
-// Local copy of quantize_row_q5_1_impl: make_qkx3 (nmax=31), no fudge.
-// (FP_CONTRACT OFF region continues: sigma2/weight loops below must not fuse.)
+// REF quantize_row_q5_1_impl: make_qkx3 (nmax=31), no fudge.
 static void ref_quantize_q5_1_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     for (int64_t irow = 0; irow < nrows; ++irow) {
@@ -701,8 +632,7 @@ static void ref_quantize_q5_1_imatrix(void * dst, const float * src, int64_t nro
             for (int j = 0; j < QK5_1; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
             float the_min;
             float d = ref_make_qkx3_quants(QK5_1, 31, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
-            // bit-twiddle FP16 (not hardware RN): NaN-scale payload must match
-            // ggml_compute_fp32_to_fp16, whose sign derives from x86 operands.
+            // Bit-twiddle FP16 so NaN payload matches ggml_compute_fp32_to_fp16.
             y[ib].d = (ggml_half)fp32_to_fp16_ggml_host(d);
             y[ib].m = (ggml_half)fp32_to_fp16_ggml_host(-the_min);
 
@@ -780,11 +710,7 @@ static int ref_best_index_iq4nl(const int8_t * values, float x) {
     return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
 
-// One 32-value block of the IQ4_NL/XS optimizer (ntry = 7): grid search over
-// 30 scale probes + hill-climb, verbatim CPU order. weight[] is
-// caller-provided (x*x plain, or qw*sqrt imatrix). Returns the LS scale
-// (0 when amax < 1e-15); L is filled except on the eps path, whose caller
-// finalize re-quant overwrites it (matches CPU).
+// IQ4_NL/XS 32-val block optimizer (ntry=7, verbatim CPU order); weight from caller, returns LS scale.
 static float ref_iq4nl_opt_block(const float * xb, float * weight, uint8_t * L) {
     float amax = 0.0f, max = 0.0f;
     for (int j = 0; j < 32; ++j) {
@@ -892,9 +818,7 @@ static void ref_quantize_iq4_nl(void * dst, const float * src, int64_t nrows, in
     }
 }
 
-// Local copy of quantize_iq4_nl with an importance matrix: same optimizer
-// replay with weight = qw*sqrt(sigma2 + x*x); sigma2 = (sum x^2)*2/32 is
-// computed per 32-block in source order, matching the CPU impl.
+// REF quantize_iq4_nl with imatrix: same optimizer, weight=qw*sqrt(sigma2+x*x) per 32-block.
 static void ref_quantize_iq4_nl_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     for (int64_t irow = 0; irow < nrows; ++irow) {
@@ -929,10 +853,7 @@ static void ref_quantize_iq4_nl_imatrix(void * dst, const float * src, int64_t n
     }
 }
 
-// One 32-value block of the IQ4_XS superblock optimizer (ntry = 7).
-// weight[] is caller-provided (x*x plain, or qw*sqrt imatrix); this helper
-// must NOT touch it (it serves both paths).
-// *eps is set when amax < 1e-15 (CPU stores scales = 0 and skips tracking).
+// IQ4_XS superblock 32-val optimizer (ntry=7); weight from caller, *eps when amax<1e-15.
 static float ref_iq4_block_opt(const float * xb, float * weight, uint8_t * Lb, bool * eps) {
     float amax = 0.0f, max = 0.0f;
     for (int j = 0; j < 32; ++j) {
@@ -1073,11 +994,7 @@ static void ref_quantize_iq4_xs(void * dst, const float * src, int64_t nrows, in
     }
 }
 
-// Local copy of quantize_iq4_xs with an importance matrix: same superblock
-// replay with weight = qw*sqrt(sigma2 + x*x); sigma2 = (sum x^2)*2/256 is
-// computed per superblock in source order, matching the CPU impl. The imatrix
-// holds n_per_row weights reused for every row: superblock sb uses the 256
-// weights of its in-row slot (sb % sb_per_row).
+// REF quantize_iq4_xs with imatrix: same replay, weight=qw*sqrt(sigma2+x*x) per superblock.
 static void ref_quantize_iq4_xs_imatrix(void * dst, const float * src, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     const int64_t sb_per_row = n_per_row/QK_K;
@@ -1178,8 +1095,7 @@ static void fill_random_uniform(float * dst, int64_t n) {
     for (int64_t i = 0; i < n; ++i) dst[i] = dist(g_rng);
 }
 
-// Weight-like: 90% of 32-value blocks tight around zero (N(0,0.05)), 10% wide
-// (N(0,1)) - covers near-amax-scale diversity without denormal-range noise.
+// Weight-like: 90% tight N(0,0.05) + 10% wide N(0,1) blocks.
 static void fill_random_weight_like(float * dst, int64_t n) {
     std::normal_distribution<float> tight(0.0f, 0.05f);
     std::normal_distribution<float> wide(0.0f, 1.0f);
@@ -1231,8 +1147,7 @@ static void fill_edge_cases(float * dst, int64_t n) {
     }
 }
 
-// Q5_0 boundary blocks: exercises the 5-th bit / qh bitmap and the
-// (int32_t)(x*id + 16.5f) truncation ties.
+// Q5_0 boundary blocks: 5th-bit/qh bitmap and truncation ties.
 static void fill_q5_0_boundary(float * dst, int64_t n) {
     const int64_t nb = n/QK5_0;
     for (int64_t ib = 0; ib < nb; ++ib) {
@@ -1265,8 +1180,7 @@ static void fill_q5_0_boundary(float * dst, int64_t n) {
     }
 }
 
-// Q6_0 boundary blocks: exercises the 6-bit levels / 2-bit qh and the
-// (int32_t)(x*id + 32.5f) truncation ties.
+// Q6_0 boundary blocks: 6-bit levels/2-bit qh and truncation ties.
 static void fill_q6_0_boundary(float * dst, int64_t n) {
     const int64_t nb = n/QK6_0;
     for (int64_t ib = 0; ib < nb; ++ib) {
@@ -1302,8 +1216,7 @@ static void fill_q6_0_boundary(float * dst, int64_t n) {
     }
 }
 
-// Synthetic importance matrix: positive weights spanning ~5 decades, with
-// every 11th column zero (exercises the w == 0 / suml2 == 0 paths).
+// Synthetic imatrix: ~5 decades, every 11th column zero (w==0 path).
 static void fill_imatrix(float * dst, int64_t n_per_row) {
     std::uniform_real_distribution<float> dist(-2.5f, 2.5f);
     for (int64_t j = 0; j < n_per_row; ++j) {
@@ -1317,28 +1230,22 @@ static void dump_block(const char * who, const uint8_t * blk, size_t blk_size) {
     printf("\n");
 }
 
-// Report the first differing quant block plus the diff count.
-// fp16 exponent all-ones + nonzero mantissa => NaN
+// fp16 NaN: exponent all-ones + nonzero mantissa.
 static bool is_fp16_nan(uint16_t v) {
     return ((v >> 10) & 0x1f) == 0x1f && (v & 0x03ff) != 0;
 }
-// fp16 exponent all-ones (inf or NaN): downstream bytes derive from UB
-// integer casts or inf/nan arithmetic, which differ by platform even when the
-// scale itself converts identically.
+// fp16 nonfinite (Inf/NaN): payload from UB casts differs by platform.
 static bool is_fp16_nonfinite(uint16_t v) {
     return ((v >> 10) & 0x1f) == 0x1f;
 }
+// Compare buffers; report first differing block + diff count.
+// Nonfinite-d skips whole block, NaN-d treats any NaN scale as equal (UB payload differs x86 vs CUDA).
 static int64_t compare_buffers(const char * tag, const uint8_t * a, const uint8_t * b, size_t n, size_t blk_size,
         bool nan_d_equal = false, bool nan_block_equal = false) {
     int64_t ndiff = 0;
     int64_t first_blk = -1;
     for (size_t blk = 0; blk < n; blk += blk_size) {
-        // Whole-block non-finite skip (see quant_spec::nan_block_equal): a
-        // degenerate overflow block stores a NaN/Inf d on both sides, but the
-        // remaining bytes derive from UB float->int casts of NaN/Inf (x86
-        // yields INT_MIN, CUDA yields 0), which differ by platform. Real model
-        // tensors never contain such magnitudes (x*x overflows f32); e2e
-        // GGUF runs prove byte-exactness on real data.
+        // Skip degenerate overflow blocks: UB payload differs x86 vs CUDA.
         if (nan_block_equal && blk + 1 < n) {
             const uint16_t da = (uint16_t)a[blk] | (uint16_t)(a[blk+1] << 8);
             const uint16_t db = (uint16_t)b[blk] | (uint16_t)(b[blk+1] << 8);
@@ -1347,14 +1254,7 @@ static int64_t compare_buffers(const char * tag, const uint8_t * a, const uint8_
             }
         }
         for (size_t i = blk; i < blk + blk_size && i < n; ++i) {
-        // The block scale d is the first 2 bytes (little-endian) of every
-        // quant block. The imatrix quantizer can legitimately produce a NaN
-        // scale for degenerate blocks (e.g. huge |x| makes x*x overflow so the
-        // weights become 0*inf/inf). The sign/payload of that NaN differs
-        // between x86 SSE (sign bit from the operands) and NVIDIA hardware
-        // (default quiet NaN), a CPU-vendor-level semantic difference that even
-        // CPU-only llama.cpp does not normalize. For such specs treat any NaN
-        // d as equal so the byte comparison stays strict for every finite block.
+        // NaN scale: sign/payload differs x86 SSE vs NVIDIA, treat any NaN d as equal.
         if (nan_d_equal && i % blk_size == 0 && i + 1 < n) {
             const uint16_t da = (uint16_t)a[i] | (uint16_t)(a[i+1] << 8);
             const uint16_t db = (uint16_t)b[i] | (uint16_t)(b[i+1] << 8);
@@ -1380,10 +1280,7 @@ static int64_t compare_buffers(const char * tag, const uint8_t * a, const uint8_
     return ndiff;
 }
 
-// ---------------------------------------------------------------------------
-// Byte-exact comparison of the three producers
-// ---------------------------------------------------------------------------
-
+// Compare GPU vs CPU vs REF producers.
 static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
         void (*fill)(float *, int64_t), int device, const quant_spec & spec) {
     if (n_per_row % spec.qk != 0 || nrows <= 0) return;
@@ -1392,8 +1289,7 @@ static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
     std::vector<float> src(nelements);
     fill(src.data(), nelements);
 
-    // Q4_0 imatrix specs: synthetic weights, one value per column, reused for
-    // every row (matches the CPU quantize_row_q4_0_impl contract).
+    // Synthetic imatrix: one weight per column, reused per row (CPU contract).
     std::vector<float> imat;
     if (spec.imatrix) {
         imat.resize(n_per_row);
@@ -1443,8 +1339,7 @@ static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
                tag, (long long)nrows, (long long)n_per_row);
     } else {
         ++g_failures;
-        // Dump exact inputs of the first cpu/ref-divergent block (%a hex floats)
-        // to root-cause host-replica vs CPU codegen ghosts. Runtime-gated.
+        // Dump first cpu/ref-divergent block inputs (%a) to root-cause codegen ghosts.
         if (g_debug_inputs && d_cpu_ref != 0) {
             const size_t blk_size = spec.blk_size;
             size_t first = 0;
@@ -1471,14 +1366,8 @@ static void test_one(const char * tag, int64_t nrows, int64_t n_per_row,
     }
 }
 
-// ---------------------------------------------------------------------------
-// do_quantize slice reproduction (multi-slice tensors, ne[2] > 1)
-// ---------------------------------------------------------------------------
-
-// Reproduces do_quantize (src/llama-quantize.cpp) for a tensor with ne[2]
-// expert slices: the CUDA branch and the threaded CPU branch both quantize each
-// slice into consecutive slots. Also checks a single whole-tensor call gives
-// the same bytes (the quantizer is contiguous, so it must).
+// Reproduces do_quantize ne[2] slicing: per-slice CPU/GPU into consecutive slots.
+// Also checks whole-tensor call matches (quantizer is contiguous).
 static void test_slices(int device, int64_t ne0, int64_t ne1, int64_t ne2, const quant_spec & spec) {
     if (ne0 % spec.qk != 0) return; // e.g. IQ4_XS needs ne0 % 256 == 0
     char tag[96];
@@ -1536,9 +1425,7 @@ static void test_slices(int device, int64_t ne0, int64_t ne1, int64_t ne2, const
     }
 }
 
-// ---------------------------------------------------------------------------
 // Device diagnostics
-// ---------------------------------------------------------------------------
 
 static int print_devices(void) {
     int nd = 0;
@@ -1557,9 +1444,7 @@ static int print_devices(void) {
     return nd;
 }
 
-// ---------------------------------------------------------------------------
 // main
-// ---------------------------------------------------------------------------
 
 #pragma STDC FP_CONTRACT ON // local refs above replay CPU bit-for-bit; re-enable contraction for the harness below
 
@@ -1596,9 +1481,7 @@ int main(int argc, char ** argv) {
 
     printf("  [INFO] ggml_cuda_quantize runs on device %d\n", g_cuda_device);
 
-    // Joel-lead wrappers: exercise the production single entry
-    // ggml_cuda_quantize(device,type,...,nslice=1,imatrix) with the spec's
-    // (src,dst,nrows,n_per_row) signature. Order after KT: Q8_0, Q6_0, Q5_0, Q4_0.
+    // Joel single-entry wrappers: ggml_cuda_quantize(device,type,...,nslice=1,imatrix); KT order Q8_0,Q6_0,Q5_0,Q4_0.
     struct cuda_wraps {
         static size_t q8_0(const float * s, void * d, int64_t r, int64_t n) {
             return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q8_0, s, d, r, n, 1, nullptr);

@@ -4,75 +4,9 @@
 // MIT license
 // SPDX-License-Identifier: MIT
 //
-// Bit-exact CUDA quantization of legacy block quants for GGUF, dispatched
-// through Joel's single entry ggml_cuda_quantize() (kt-encoder.cu lead).
-// Logical order after Joel's KT: Q8_0, Q6_0, Q5_0, Q4_0. Q5_0 and Q4_0
-// sections are bannered so they can be removed with minimal work once
-// Ikawrakow confirms (delete their kernels + helpers + dispatcher cases).
-//
-// Q8_0 target: quantize_q8_0 (ggml/src/ggml-quants.c:3681) via
-// quantize_row_q8_0_ref (ggml/src/ggml-quants.c:911):
-//   amax = max(|x_j|) over the 32-value block
-//   d    = fudge*amax/127      (__fdiv_rn: exact under -use_fast_math)
-//   id   = d ? 1/d : 0         (__fdiv_rn: exact under -use_fast_math)
-//   q_j  = roundf(x_j*id)      // round half away from zero
-//   d    = FP16(fudge*d)       // round to nearest even
-//   NOTE: HEAD CPU uses ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0) for
-//   Q8_0 (ggml-quants.c:915, copy-paste quirk). CUDA matches it exactly so
-//   the bytes stay identical; fix the CPU quirk separately if desired.
-//   Q8_0 ignores imatrix on the CPU, so CUDA also ignores it.
-//
-// Q6_0 OLS is KEPT (not reverted): quantize_q6_0 (ggml-quants.c:3668) always
-// runs quantize_row_q6_0_impl via make_qx_quants with fudge:
-//   weight = x*x without imatrix, qw*sqrt(sigma2+x*x) with imatrix
-//   d = make_qx_quants(QK6_0, 32, xb, L, 1, weight) * fudge
-//   FP16(d*fudge). The old plain max/-32 kernel is NOT used for GGUF.
-//
-// Q4_0 target: quantize_q4_0 without imatrix uses quantize_row_q4_0_ref
-// (ggml/src/ggml-quants.c:673):
-//   max  = signed value with max |x| (first occurrence = |x| ties)
-//   d    = fudge*max/-8        (__fdiv_rn: exact under -use_fast_math)
-//   id   = d ? 1/d : 0         (__fdiv_rn: exact under -use_fast_math)
-//   q_j  = MIN(15, (int8_t)(x_j*id + 8.5f))  // truncation toward zero
-//   d    = FP16(fudge*d)
-//   byte j (0..15) = low nibble q_j | high nibble q_{j+16} << 4
-//   Symmetric Q4_0 (--symmetric-q4-0, d=amax/7, no fudge) stays on CPU.
-//
-// Q5_0 target: quantize_q5_0 without imatrix uses quantize_row_q5_0_ref:
-//   max  = signed value with max |x| (first occurrence wins |x| ties)
-//   d    = fudge*max/-16       (__fdiv_rn: exact under -use_fast_math)
-//   id   = d ? 1/d : 0         (__fdiv_rn: exact under -use_fast_math)
-//   q_j  = MIN(31, (int8_t)(x_j*id + 16.5f))  // truncation toward zero
-//   d    = FP16(fudge*d)
-//   byte j (0..15) = low nibble q_j | high nibble q_{j+16} << 4
-//   5-th bit of q_j and q_{j+16} -> qh bit j and bit j+16 (4-byte LE uint32)
-//
-// Q4_0 / Q5_0 / Q6_0 with importance matrix: quantize_row_q4_0_impl,
-// quantize_row_q5_0_impl, quantize_row_q6_0_impl. Each 32-value block is
-// quantized by make_qx_quants, a deterministic sequential greedy optimizer.
-// One thread per block replays it in the exact CPU order with
-// correctly-rounded intrinsics, so it is byte-identical too, with
-// FP16(d*fudge). The row-level sigma2 sum is order-dependent, so it is
-// pre-computed on the host in the exact CPU summation order.
-//
-//
-// Q5_0 also stores a 4-byte qh bitmap that carries each quant's 5-th bit.
-// Like qs/d it is an exact, order-independent function of the block (bit e =
-// (q_e >> 4) & 1), so it is assembled with __ballot_sync over the warp and
-// stored little-endian, reproducing the reference's `memcpy(&qh, 4)` bytes.
-//
-// The 32-value blocks tile the tensor row-major buffer contiguously
-// (n_per_row % 32 == 0), so rows need no explicit bookkeeping. Each warp
-// quantizes one block independently; the max reduction via shuffles is exact
-// and order-independent, the argmax tie-break (lowest index wins) matches the
-// reference's sequential scan, and the per-element rounding is
-// backend-deterministic. The result is byte-for-byte identical to the
-// quantize_row_*_ref implementations on any GPU.
-//
-// Both public entry points share one chunked host driver (fixed ~128 MiB F32
-// device chunks) so single large tensors never need a large contiguous VRAM
-// allocation; every CUDA call is checked, and on failure the error is printed
-// and 0 returned (the caller aborts the quantization).
+// Bit-exact CUDA GGUF quants (RN intrinsics, no FMA; host sigma2 in CPU order), via Joel's ggml_cuda_quantize() (kt-encoder.cu).
+// Order: Q8_0, Q6_0, Q5_0, Q4_0. Q4_0/Q5_0 removable (delete kernel+helpers+cases).
+// Q8_0 uses Q6_0 fudge quirk (ggml-quants.c:915), ignores imatrix; Q6_0 OLS kept (make_qx+fudge).
 
 #include "quantize_gguf.cuh"
 
@@ -82,9 +16,7 @@
 #include <algorithm>
 #include <vector>
 
-// ---------------------------------------------------------------------------
-// kernels
-// ---------------------------------------------------------------------------
+// --- kernels ---
 
 static __global__ void quantize_q8_0_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
@@ -101,10 +33,7 @@ static __global__ void quantize_q8_0_kernel(
             amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, m));
         }
 
-        // __fdiv_rn: correctly-rounded IEEE division. The build uses
-        // -use_fast_math, which makes plain '/' approximate (reciprocal +
-        // multiply); the CPU ref divides with exact rounding, and an ulp
-        // difference in d/id flips roundf() exactly on k+0.5 ties.
+        // __fdiv_rn for exact rounding under -use_fast_math; 1-ulp flips roundf() on k+0.5 ties.
         const float d  = __fmul_rn(fudge, __fdiv_rn(amax, 127.0f));
         const float id = d ? __fdiv_rn(1.0f, d) : 0.0f;
 
@@ -112,11 +41,7 @@ static __global__ void quantize_q8_0_kernel(
         y[ib].qs[lane] = (int8_t)roundf(xi*id);
 
         if (lane == 0) {
-            // store the __half directly. Do NOT round-trip through
-            // __half_as_ushort + assignment: block_q8_0.d is __half, and
-            // `half = unsigned short` converts the ushort as a *number*
-            // (half(float(ushort))), corrupting the scale bits (e.g. 0x29f2
-            // -> 0x713e). Assigning the __half copies the raw bits.
+            // Assign __half directly (ushort assignment corrupts bits, e.g. 0x29f2->0x713e).
             y[ib].d = __float2half_rn(d);
         }
     }
@@ -129,10 +54,7 @@ static __global__ void quantize_q4_0_kernel(
     for (int64_t ib = blockIdx.x; ib < nblocks; ib += gridDim.x) {
         const float xi = x[ib*QK4_0 + lane];
 
-        // argmax of |x|. On |x| ties the *first* (lowest index) element wins,
-        // exactly like the ref's sequential scan: quantize_row_q4_0_ref keeps
-        // the signed value `max` of the first max-magnitude element, which
-        // fixes the sign of d.
+        // argmax |x|, lowest index wins ties (matches ref scan; fixes sign of d).
         float   bval = fabsf(xi);
         int32_t bidx = lane;
 #pragma unroll
@@ -145,22 +67,12 @@ static __global__ void quantize_q4_0_kernel(
             }
         }
 
-        // signed value of the argmax element, broadcast to the warp
         const float max = __shfl_sync(0xffffffffu, xi, bidx);
-
-        // __fdiv_rn: correctly-rounded IEEE division (see Q8_0 kernel). max/-8
-        // is a power-of-2 division (exact anyway); 1/d is the general case.
-        // CPU stores FP16(fudge*d), and codes use id=1/(fudge*d).
+        // __fdiv_rn for 1/d (max/-8 exact pow2); CPU stores FP16(fudge*d).
         const float d  = __fmul_rn(fudge, __fdiv_rn(max, -8.0f));
         const float id = d ? __fdiv_rn(1.0f, d) : 0.0f;
 
-        // MIN(15, (int8_t)(x_j*id + 8.5f)): truncation toward zero, then clamp.
-        // |x_j*id| <= 8 so x_j*id + 8.5 is in [-0.5, 16.5] and the truncation
-        // is always representable (matches the ref's (int8_t) cast exactly).
-        // __fmul_rn forces the multiply to round once: with -use_fast_math nvcc
-        // otherwise contracts `xi*id + 8.5f` into one FMA (single rounding)
-        // while the CPU rounds the product and the add separately, and that
-        // 1-ulp difference flips the truncation at integer thresholds.
+        // Truncation toward zero + clamp; __fmul_rn avoids FMA (1-ulp flips truncation).
         const float   t = __fmul_rn(xi, id);
         const int32_t v = (int32_t)(t + 8.5f);
         const int32_t q = v > 15 ? 15 : v;
@@ -170,8 +82,7 @@ static __global__ void quantize_q4_0_kernel(
             y[ib].d = __float2half_rn(d); // store the __half, see Q8_0 kernel
         }
 
-        // byte j (0..15): low nibble = element j, high nibble = element j+16.
-        // lane j<16 writes its byte using the nibble received from lane j+16.
+        // Nibble pack: lane j<16 writes byte j from pair j+16.
         const uint32_t my   = (uint32_t)q & 0xF;
         const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
         if (lane < 16) {
@@ -180,9 +91,7 @@ static __global__ void quantize_q4_0_kernel(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Q5_0: quantize_row_q5_0_ref (ggml-quants.c:757)
-// ---------------------------------------------------------------------------
+// --- Q5_0 (quantize_row_q5_0_ref) ---
 
 static __global__ void quantize_q5_0_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
@@ -190,8 +99,6 @@ static __global__ void quantize_q5_0_kernel(
 
     for (int64_t ib = blockIdx.x; ib < nblocks; ib += gridDim.x) {
         const float xi = x[ib*QK5_0 + lane];
-
-        // argmax of |x|, first (lowest index) element wins |x| ties (see Q4_0)
         float   bval = fabsf(xi);
         int32_t bidx = lane;
 #pragma unroll
@@ -204,19 +111,12 @@ static __global__ void quantize_q5_0_kernel(
             }
         }
 
-        // signed value of the argmax element, broadcast to the warp
         const float max = __shfl_sync(0xffffffffu, xi, bidx);
-
-        // correctly-rounded integer division (see Q8_0 kernel); max/-16 is a
-        // power-of-2 division (exact anyway), 1/d is the general case.
-        // CPU stores FP16(fudge*d), codes use id=1/(fudge*d).
+        // __fdiv_rn for 1/d (max/-16 exact pow2).
         const float d  = __fmul_rn(fudge, __fdiv_rn(max, -16.0f));
         const float id = d ? __fdiv_rn(1.0f, d) : 0.0f;
 
-        // MIN(31, (int8_t)(x_j*id + 16.5f)): truncation toward zero, then
-        // clamp. |x_j*id| <= 16 so x_j*id + 16.5 is in [-0.5, 32.5]. __fmul_rn
-        // forces the product to round once (no FMA contraction) so the result
-        // matches the CPU's separate product + add roundings, like Q4_0.
+        // Truncation + clamp; __fmul_rn avoids FMA (matches CPU roundings).
         const float   t = __fmul_rn(xi, id);
         const int32_t v = (int32_t)(t + 16.5f);
         const int32_t q = v > 31 ? 31 : v;
@@ -226,19 +126,13 @@ static __global__ void quantize_q5_0_kernel(
             y[ib].d = __float2half_rn(d); // store the __half, see Q8_0 kernel
         }
 
-        // byte j (0..15): low nibble = element j, high nibble = element j+16.
         const uint32_t my   = (uint32_t)q & 0xF;
         const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
         if (lane < 16) {
             y[ib].qs[lane] = (uint8_t)(my | (pair << 4));
         }
 
-        // 5-th bit of every element -> qh bit e (= element index e, because
-        // element j<16 maps to bit j and element j+16 maps to bit j+16).
-        // __ballot_sync must be executed by every lane (uniform), so it is done
-        // here for the whole warp: bit e is set iff lane e's element has its
-        // 5th bit set, exactly reproducing the reference bit layout. Store the
-        // 4 bytes little-endian (the ref memcpys a native uint32).
+        // qh via __ballot_sync (must stay uniform), LE uint32.
         const uint32_t qh = __ballot_sync(0xffffffffu, (q >> 4) & 1);
         if (lane == 0) {
             y[ib].qh[0] = (uint8_t)(qh >>  0);
@@ -249,10 +143,7 @@ static __global__ void quantize_q5_0_kernel(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Q5_1: quantize_row_q5_1_ref (ggml-quants.c:809). No fudge. No clamp
-// (bug-compatible: codes are raw (uint8_t)(x+0.5f), matching cpy-utils).
-// ---------------------------------------------------------------------------
+// --- Q5_1 (quantize_row_q5_1_ref, no fudge, no clamp) ---
 
 static __global__ void quantize_q5_1_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
@@ -283,8 +174,6 @@ static __global__ void quantize_q5_1_kernel(
             // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
             y[ib].dm = __floats2half2_rn(d, bmin);
         }
-
-        // byte j (0..15): low nibble = element j, high nibble = element j+16.
         const uint32_t my   = q & 0xF;
         const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
         if (lane < 16) {
@@ -302,10 +191,7 @@ static __global__ void quantize_q5_1_kernel(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Q4_1: quantize_row_q4_1_ref (ggml-quants.c:718). No fudge. MIN(15) clamp.
-// Q4_1 ignores symmetric_q4_0 on the CPU, so no symmetric guard is needed.
-// ---------------------------------------------------------------------------
+// --- Q4_1 (quantize_row_q4_1_ref, no fudge, MIN(15)) ---
 
 static __global__ void quantize_q4_1_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
@@ -337,8 +223,6 @@ static __global__ void quantize_q4_1_kernel(
             // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
             y[ib].dm = __floats2half2_rn(d, bmin);
         }
-
-        // byte j (0..15): low nibble = element j, high nibble = element j+16.
         const uint32_t my   = q & 0xF;
         const uint32_t pair = __shfl_xor_sync(0xffffffffu, my, 16);
         if (lane < 16) {
@@ -347,34 +231,11 @@ static __global__ void quantize_q4_1_kernel(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Q6_0 OLS: quantize_q6_0 (ggml-quants.c:3668) via quantize_row_q6_0_impl.
-// OLS is KEPT. The kernel lives below with the make_qx_quants device port
-// (one thread per block, weight = x*x, FP16(d*fudge)). The old plain
-// max/-32 kernel was removed: HEAD CPU never uses it for GGUF.
-// ---------------------------------------------------------------------------
-// (Q6_0 OLS kernel + driver defined after make_qx_quants_device.)
+// --- Q6_0 OLS kept (make_qx_quants+fudge; plain max/-32 unused) ---
 
-// ---------------------------------------------------------------------------
-// Q4_0 with importance matrix: make_qx_quants (ggml-quants.c:1786)
-// ---------------------------------------------------------------------------
+// --- make_qx_quants device port ---
 
-// Byte-exact port of ggml_compute_fp32_to_fp16 (ggml/src/ggml-impl.h:595), the
-// fp16 conversion the CPU reference uses when __F16C__ is off (as in this
-// build). __float2half_rn agrees with it on finite values and overflow to inf
-// (both round to nearest even), but encodes NaN differently: the hardware
-// conversion emits the canonical 0x7fff, while this bit-mask path emits
-// (sign ? 0xfe00 : 0x7e00). The make_qx_quants scale can be NaN for degenerate
-// imatrix blocks, so this must be byte-exact too.
-//
-// Note: only the NaN *sign/payload* is not normalized here, and that is a
-// CPU-vendor semantic difference, not a porting gap: x86 SSE sets the sign of
-// a NaN result from the operand signs (so e.g. -inf/+inf and 0*inf render as
-// -NaN -> 0xfe00), whereas NVIDIA hardware always emits the default quiet NaN
-// (+NaN -> 0x7e00). Even CPU-only llama.cpp produces different bytes for these
-// degenerate, NaN-scale blocks across CPU vendors. The harness therefore treats
-// any NaN d as equal (spec.nan_d_equal); every finite block must still match
-// byte-for-byte.
+// Bit-twiddle FP16 matching ggml_compute_fp32_to_fp16; NaN payload is vendor-specific (harness nan_d_equal).
 static __device__ __forceinline__ uint16_t fp32_to_fp16_ggml(float f) {
     const float scale_to_inf  = __int_as_float(0x77800000u);
     const float scale_to_zero = __int_as_float(0x08800000u);
@@ -407,14 +268,7 @@ static __device__ int clamp_l_device(int l, int nmax) {
     return l > nmax-1 ? nmax-1 : (l < -nmax ? -nmax : l);
 }
 
-// Byte-exact device port of make_qx_quants, restricted to the path the Q4_0
-// imatrix quantizer uses: rmse_type == 1 with a non-null weight vector. One
-// thread replays the whole sequential algorithm in the exact CPU order, so
-// the greedy search and coordinate-descent loop take the identical sequence
-// of steps. Every float op is a correctly-rounded intrinsic so the
-// -use_fast_math build (approximate sqrt/div) and FMA contraction cannot
-// change a single bit: `sumlx += w*x*l` is (w*x)*l + sumlx with separate
-// roundings, exactly like the non-contracting host compiler.
+// make_qx_quants port (rmse_type==1 only); RN intrinsics, exact CPU order, no FMA.
 static __device__ float make_qx_quants_device(int n, int nmax, const float * x, int8_t * L, const float * qw) {
     float max  = 0.0f;
     float amax = 0.0f;
@@ -443,7 +297,6 @@ static __device__ float make_qx_quants_device(int n, int nmax, const float * x, 
     float best_sumlx = sumlx, best_suml2 = suml2;
 
     for (int is = -9; is <= 9; ++is) {
-        // iscale = -(nmax + 0.1*is)/max
         iscale = __fdiv_rn(-__fadd_rn((float)nmax, __fmul_rn(0.1f, (float)is)), max);
         sumlx = suml2 = 0.0f;
         for (int i = 0; i < n; ++i) {
@@ -462,7 +315,6 @@ static __device__ float make_qx_quants_device(int n, int nmax, const float * x, 
             best = __fmul_rn(scale, sumlx);
             best_sumlx = sumlx; best_suml2 = suml2;
         }
-        // iscale = (nmax-1 + 0.1*is)/max
         iscale = __fdiv_rn(__fadd_rn((float)(nmax-1), __fmul_rn(0.1f, (float)is)), max);
         sumlx = suml2 = 0.0f;
         for (int i = 0; i < n; ++i) {
@@ -525,13 +377,7 @@ static __device__ float make_qx_quants_device(int n, int nmax, const float * x, 
     return scale;
 }
 
-// Byte-exact device port of make_qkx3_quants (ggml-quants.c:2211), used by the
-// Q4_1/Q5_1 imatrix quantizers (rmse path with min). One thread replays the
-// whole sequential algorithm in the exact CPU order. Double accumulators use
-// correctly-rounded intrinsics (__dadd_rn/__dmul_rn/__ddiv_rn) so the
-// -use_fast_math build cannot change a bit; float parts use __fdiv_rn/
-// __fmul_rn/__fadd_rn/__fsub_rn. Requires callers in ggml-quants.c to compile
-// with #pragma STDC FP_CONTRACT OFF (as they now do).
+// --- make_qkx3_quants device port (Q4_1/Q5_1; double RN intrinsics, FP_CONTRACT OFF) ---
 static __device__ float make_qkx3_quants_device(int n, int nmax, const float * x, const float * weights,
         uint8_t * L, float * the_min, uint8_t * Laux,
         float rmin, float rdelta, int nstep, bool use_mad) {
@@ -679,14 +525,7 @@ static __device__ float make_qkx3_quants_device(int n, int nmax, const float * x
     return scale;
 }
 
-// One thread per quant block: computes the per-block weights from the shared
-// row sigma2 and the (row-reused) importance weights, then runs
-// make_qx_quants. `base` is the chunk's first global quant block, so the
-// row/weight indexing stays correct when a tensor spans several device chunks
-// and the chunk base is not a multiple of blocks_per_row. Block gb = base + ib
-// belongs to row gb/blocks_per_row and uses weight block gb%blocks_per_row,
-// matching quantize_row_q4_0_impl which is called once per row with the same
-// quant_weights pointer.
+// --- Removable Q4_0 imatrix kernel (one thread/block; base keeps chunk indexing exact) ---
 static __global__ void quantize_q4_0_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row,
@@ -703,9 +542,7 @@ static __global__ void quantize_q4_0_imatrix_kernel(
     float weight[QK4_0];
     int8_t L[QK4_0];
     for (int j = 0; j < QK4_0; ++j) {
-        // weight[j] = qw[j]*sqrtf(sigma2 + xb[j]^2); __fsqrt_rn keeps the
-        // square root exact under -use_fast_math, __fadd_rn/__fmul_rn keep
-        // the sum/multiply uncontracted.
+        // __fsqrt_rn keeps sqrt exact under -use_fast_math, no FMA.
         weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
     }
 
@@ -718,8 +555,7 @@ static __global__ void quantize_q4_0_imatrix_kernel(
     }
 }
 
-// Q4_1 imatrix kernel: quantize_row_q4_1_impl via make_qkx3_quants (nmax=15).
-// No fudge. Stores d and -the_min like the CPU (y.m = FP16(-min)).
+// --- Q4_1 imatrix via make_qkx3 (nmax=15, no fudge) ---
 static __global__ void quantize_q4_1_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row) {
@@ -742,9 +578,7 @@ static __global__ void quantize_q4_1_imatrix_kernel(
     const float d = make_qkx3_quants_device(QK4_1, 15, xb, weight, L, &the_min, Laux, -0.9f, 0.05f, 36, false);
 
     block_q4_1 * y = (block_q4_1 *)vy;
-    // bit-twiddle FP16 (not half2-RN): degenerate blocks can yield a NaN
-    // scale whose sign/payload is CPU-vendor semantics; the twiddle replicates
-    // ggml_compute_fp32_to_fp16 exactly.
+    // Bit-twiddle FP16 (NaN payload is CPU-vendor semantics).
     y[ib].dm = __halves2half2(__ushort_as_half(fp32_to_fp16_ggml(d)),
                               __ushort_as_half(fp32_to_fp16_ggml(-the_min)));
     for (int j = 0; j < QK4_1/2; ++j) {
@@ -752,20 +586,13 @@ static __global__ void quantize_q4_1_imatrix_kernel(
     }
 }
 
-// ---------------------------------------------------------------------------
-// IQ4_NL: quantize_iq4_nl (ggml-quants.c:15013) via quantize_row_iq4_nl_impl
-// with ntry=7, plain weights (w = x*x). One thread per 32-value block replays
-// the grid search (30 probes) + hill-climb in the exact CPU order with
-// correctly-rounded intrinsics. imatrix is NOT ported: the dispatcher returns
-// 0 so the CPU handles it (correctness preserved).
-// ---------------------------------------------------------------------------
+// --- IQ4_NL (ntry=7, w=x*x) ---
 
 static __device__ const int8_t kvalues_iq4nl_dev[16] = {
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113
 };
 
-// Fast LUT verbatim from ggml-quants.c:14823 (iq4nl_index). Encodes exact
-// midpoints: entries >= 16 name the boundary pair (ix-16, ix-15).
+// LUT from ggml-quants.c:14823; >=16 names boundary pair (ix-16, ix-15).
 static __device__ const int kIq4nlIndex[241] = {
      0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 16, 16,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
      1, 17, 17,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 18,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
@@ -784,11 +611,7 @@ static __device__ int best_index_iq4nl_device(const int8_t * values, float x) {
     return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
 
-// One 32-value block of the IQ4_NL/XS optimizer (ntry = 7): grid search over
-// 30 scale probes + hill-climb, verbatim CPU order with correctly-rounded
-// intrinsics. weight[] is caller-provided (x*x plain, or qw*sqrt imatrix).
-// Returns the LS scale (0 when amax < 1e-15); L is filled except on the eps
-// path, where the caller's finalize re-quant overwrites it (matches CPU).
+// --- IQ4 shared block optimizer (ntry=7 grid+hill-climb, exact CPU order) ---
 static __device__ float iq4nl_opt_block_device(const float * xb, const float * weight, uint8_t * L) {
     float amax = 0.0f, max = 0.0f;
     for (int j = 0; j < 32; ++j) {
@@ -905,10 +728,7 @@ static __global__ void quantize_iq4_nl_kernel(
 
     const float scale = iq4nl_opt_block_device(xb, weight, L);
 
-    // NL finalize: dh = FP16(scale*fudge), fudge = 1; re-quant with final scale
-    // (id = 0 when scale = 0, so 0*xb runs too, matching the CPU exactly).
-    // Bit-twiddle FP16: a degenerate (overflow) block yields a NaN scale whose
-    // payload must match ggml_compute_fp32_to_fp16, not hardware canonical.
+    // Finalize: re-quant with id=0 when scale=0; bit-twiddle FP16 for NaN payload.
     block_iq4_nl * y = (block_iq4_nl *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(scale));
     {
@@ -922,9 +742,7 @@ static __global__ void quantize_iq4_nl_kernel(
     }
 }
 
-// IQ4_NL with an importance matrix: same optimizer replay with
-// weight = qw*sqrt(sigma2 + x*x); sigma2 is precomputed on the host in the
-// exact CPU summation order. dh = FP16(scale) via bit-twiddle (see plain).
+// --- IQ4_NL imatrix (same optimizer, qw*sqrt(sigma2+x*x)) ---
 static __global__ void quantize_iq4_nl_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row) {
@@ -943,8 +761,6 @@ static __global__ void quantize_iq4_nl_imatrix_kernel(
         weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
     }
 
-    // sigma2 for the NL superblock covers exactly this 32-block, matching the
-    // CPU impl (super_block_size = 32); s2 above is that same value.
     const float scale = iq4nl_opt_block_device(xb, weight, L);
 
     block_iq4_nl * y = (block_iq4_nl *)vy;
@@ -960,13 +776,7 @@ static __global__ void quantize_iq4_nl_imatrix_kernel(
     }
 }
 
-// ---------------------------------------------------------------------------
-// IQ4_XS: quantize_iq4_xs (ggml-quants.c) via quantize_row_iq4_nl_impl with
-// super_block_size = 256, plain weights (w = x*x), ntry = 7. One thread per
-// 256-value superblock replays the 8 block optimizers, the global scale fit,
-// and the final re-quant in the exact CPU order. imatrix is NOT ported:
-// the dispatcher returns 0 so the CPU handles it.
-// ---------------------------------------------------------------------------
+// --- IQ4_XS (super_block=256, ntry=7) ---
 
 static __global__ void quantize_iq4_xs_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks) {
@@ -987,8 +797,7 @@ static __global__ void quantize_iq4_xs_kernel(
         for (int j = 0; j < 32; ++j) {
             weight[j] = __fmul_rn(xb[j], xb[j]);
         }
-        // Shared block optimizer (eps blocks yield 0 with Lb for re-quant;
-        // storing/tracking 0 is a no-op identical to the CPU continue).
+        // Shared optimizer (eps 0 is no-op, matches CPU continue).
         const float d = iq4nl_opt_block_device(xb, weight, Lb);
         scales[ib] = d;
         const float abs_d = fabsf(d);
@@ -997,8 +806,7 @@ static __global__ void quantize_iq4_xs_kernel(
         }
     }
 
-    // Global scale + re-quant (verbatim CPU order, fudge = 1).
-    // Bit-twiddle FP16 (see NL kernel): NaN-scale payload must match.
+    // Global scale + re-quant (CPU order, fudge=1; bit-twiddle FP16 for NaN).
     block_iq4_xs * y = (block_iq4_xs *)vy;
     const float gd = -max_scale/32.0f;
     y[sb].d = __ushort_as_half(fp32_to_fp16_ggml(gd));
@@ -1032,9 +840,7 @@ static __global__ void quantize_iq4_xs_kernel(
     }
 }
 
-// IQ4_XS with an importance matrix: same superblock replay with
-// weight = qw*sqrt(sigma2 + x*x); sigma2 = (sum x^2)*2/256 is precomputed on
-// the host per superblock in the exact CPU summation order.
+// --- IQ4_XS imatrix (same replay, qw*sqrt(sigma2+x*x)) ---
 static __global__ void quantize_iq4_xs_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t sb_per_row) {
@@ -1059,7 +865,6 @@ static __global__ void quantize_iq4_xs_imatrix_kernel(
         for (int j = 0; j < 32; ++j) {
             weight[j] = __fmul_rn(qb[j], __fsqrt_rn(__fadd_rn(s2, __fmul_rn(xb[j], xb[j]))));
         }
-        // Shared block optimizer (see plain kernel note on eps equivalence).
         const float d = iq4nl_opt_block_device(xb, weight, Lb);
         scales[ib] = d;
         const float abs_d = fabsf(d);
@@ -1101,9 +906,7 @@ static __global__ void quantize_iq4_xs_imatrix_kernel(
     }
 }
 
-// Q5_0 imatrix kernel: identical shape to quantize_q4_0_imatrix_kernel, but
-// quantizes 32-value blocks with nmax == 16 and additionally packs each L's
-// 5th bit into the qh bitmap like quantize_row_q5_0_impl (ggml-quants.c:3577).
+// --- Removable Q5_0 imatrix (nmax=16 + qh bitmap) ---
 static __global__ void quantize_q5_0_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row,
@@ -1128,8 +931,7 @@ static __global__ void quantize_q5_0_imatrix_kernel(
     block_q5_0 * y = (block_q5_0 *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(__fmul_rn(fudge, d)));
 
-    // qs low nibbles + qh 5th-bit bitmap; byte-exact clone of the packing loop
-    // in quantize_row_q5_0_impl (L is already +nmax, so L in [0, 31]).
+    // qs+qh pack (L in [0,31]).
     uint32_t qh = 0;
     for (int j = 0; j < QK5_0/2; ++j) {
         const uint8_t xi0 = (uint8_t)L[j];
@@ -1144,8 +946,7 @@ static __global__ void quantize_q5_0_imatrix_kernel(
     y[ib].qh[3] = (uint8_t)(qh >> 24);
 }
 
-// Q5_1 imatrix kernel: quantize_row_q5_1_impl via make_qkx3_quants (nmax=31).
-// No fudge. Stores d and -the_min like the CPU (y.m = FP16(-min)).
+// --- Q5_1 imatrix via make_qkx3 (nmax=31, no fudge) ---
 static __global__ void quantize_q5_1_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row) {
@@ -1186,9 +987,7 @@ static __global__ void quantize_q5_1_imatrix_kernel(
     y[ib].qh[3] = (uint8_t)(qh >> 24);
 }
 
-// Q6_0 imatrix kernel: identical shape to quantize_q5_0_imatrix_kernel, but
-// quantizes with nmax == 32 (L in [0, 63], bits 0-5) and packs the 2-bit qh
-// (bits 4-5) exactly like quantize_row_q6_0_impl (ggml-quants.c:3697).
+// --- Q6_0 imatrix (nmax=32, 2-bit qh) ---
 static __global__ void quantize_q6_0_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row,
@@ -1213,15 +1012,13 @@ static __global__ void quantize_q6_0_imatrix_kernel(
     block_q6_0 * y = (block_q6_0 *)vy;
     y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(__fmul_rn(fudge, d)));
 
-    // Byte-exact clone of the packing loop in quantize_row_q6_0_impl: L is
-    // already +nmax so in [0, 63]; low nibbles -> qs, bits 4-5 -> the 2-bit qh.
+    // qs low nibbles + 2-bit qh (L in [0,63]).
     for (int j = 0; j < QK6_0/2; ++j) {
         const uint8_t xi0 = (uint8_t)L[j];
         const uint8_t xi1 = (uint8_t)L[j + QK6_0/2];
         y[ib].qs[j] = (uint8_t)((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
     }
     for (int k = 0; k < QK6_0/4; ++k) {
-        // qh[k] = h_k | (h_{k+8} << 4), h_e = (q_e>>4)|((q_{e+16}>>4)<<2)
         const uint8_t a0 = (uint8_t)L[k];
         const uint8_t a1 = (uint8_t)L[k + QK6_0/2];
         const uint8_t b0 = (uint8_t)L[k + QK6_0/4];
@@ -1231,9 +1028,7 @@ static __global__ void quantize_q6_0_imatrix_kernel(
     }
 }
 
-// Q6_0 OLS without imatrix: quantize_row_q6_0_impl with quant_weights == NULL.
-// CPU sets weight[j] = xb[j]*xb[j], then d = make_qx_quants(QK6_0, 32, ...)
-// with fudge. One thread per block replays it exactly. OLS is KEPT.
+// --- Q6_0 OLS kernel (w=x*x, make_qx+fudge) ---
 static __global__ void quantize_q6_0_ols_kernel(
         const float * __restrict__ x,
         void * __restrict__ vy, const int64_t nblocks, const float fudge) {
@@ -1269,9 +1064,7 @@ static __global__ void quantize_q6_0_ols_kernel(
     }
 }
 
-// ---------------------------------------------------------------------------
-// host driver (shared by all block quants)
-// ---------------------------------------------------------------------------
+// --- generic chunked host drivers (~128 MiB, shared) ---
 
 using quantize_kernel_t = void (*)(const float *, void *, int64_t, float);
 
@@ -1289,11 +1082,7 @@ static size_t ggml_cuda_quantize_generic(const float * src, void * dst, int64_t 
     // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
     // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
-    // Fixed-size device buffers; the tensor is processed in chunks so that a
-    // single large tensor never needs a huge VRAM allocation (which can fail
-    // silently while another context holds most of the memory, e.g. a loaded
-    // model in llama-server/webui, and then produce a confusing illegal-access
-    // error from the NULL pointers). ~128 MiB of F32 input per chunk.
+    // Chunked ~128 MiB F32 input so large tensors avoid huge VRAM allocs.
     const int64_t chunk_blocks = 1 << 20;                  // quant blocks per chunk
     const int64_t chunk_x      = chunk_blocks*qk;          // floats per chunk
     const int64_t chunk_y      = chunk_blocks*blk_size;    // bytes per chunk
@@ -1346,41 +1135,37 @@ static size_t ggml_cuda_quantize_generic(const float * src, void * dst, int64_t 
     return nblocks_total*blk_size;
 }
 
-// Order after Joel's KT: Q8_0, Q6_0, Q5_0, Q4_0. Q8_0 matches HEAD CPU
-// including its Q6_0-fudge quirk (ggml-quants.c:915).
+// Order Q8_0/Q6_0/Q5_0/Q4_0; Q8_0 keeps Q6_0-fudge quirk (ggml-quants.c:915).
 size_t ggml_cuda_quantize_q8_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0); // match CPU quirk
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
             QK8_0, sizeof(block_q8_0), quantize_q8_0_kernel, "q8_0", fudge);
 }
 
-// Q6_0 OLS entry: replaced below by the OLS driver (make_qx + fudge).
-// Declared here for ordering; defined after the OLS kernel.
+// Q6_0 OLS entry (defined below); declared here for ordering.
 size_t ggml_cuda_quantize_q6_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row);
 
-// --- Removable Q5_0 section ---
+// --- Removable Q5_0 section (delete kernel+helpers+cases to drop) ---
 size_t ggml_cuda_quantize_q5_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q5_0);
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
             QK5_0, sizeof(block_q5_0), quantize_q5_0_kernel, "q5_0", fudge);
 }
 
-// --- Removable Q4_0 section ---
+// --- Removable Q4_0 section (delete kernel+helpers+cases to drop) ---
 size_t ggml_cuda_quantize_q4_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q4_0);
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
             QK4_0, sizeof(block_q4_0), quantize_q4_0_kernel, "q4_0", fudge);
 }
 
-// Q4_1 without imatrix (quantize_row_q4_1_ref). No fudge; ignores symmetric.
+// --- Q4_1 (quantize_row_q4_1_ref, no fudge) ---
 size_t ggml_cuda_quantize_q4_1(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
             QK4_1, sizeof(block_q4_1), quantize_q4_1_kernel, "q4_1", 1.0f);
 }
 
-// Q4_0 with an importance matrix. `imatrix` holds n_per_row weights and is
-// reused for every row, exactly like the CPU quantize_row_q4_0_impl which is
-// called once per row with the same quant_weights pointer.
+// --- Removable Q4_0 imatrix (reuses row imatrix like CPU) ---
 size_t ggml_cuda_quantize_q4_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     GGML_ASSERT(nrows > 0);
@@ -1393,14 +1178,7 @@ size_t ggml_cuda_quantize_q4_0_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
-    // Per-row sigma2 = sum_x2/n_per_row, summed sequentially in the exact
-    // order of quantize_row_q4_0_impl. The host compiler is cl with default
-    // /fp:precise (no fast-math, no FMA contraction), so this loop produces
-    // the identical float as the CPU reference. A row sum cannot be reduced
-    // in parallel on the GPU: different summation order -> different bits.
+    // Host sigma2 in exact CPU order (parallel GPU sum would change bits).
     std::vector<float> sigma2(nrows);
     for (int64_t irow = 0; irow < nrows; ++irow) {
         const float * xr = src + irow*n_per_row;
@@ -1411,7 +1189,6 @@ size_t ggml_cuda_quantize_q4_0_imatrix(const float * src, void * dst, int64_t nr
         sigma2[irow] = sum_x2/n_per_row;
     }
 
-    // Fixed-size device chunks, same rationale as the generic driver.
     const int64_t chunk_blocks = 1 << 20;
     const int64_t chunk_x      = chunk_blocks*QK4_0;
     const int64_t chunk_y      = chunk_blocks*sizeof(block_q4_0);
@@ -1505,9 +1282,7 @@ size_t ggml_cuda_quantize_q4_0_imatrix(const float * src, void * dst, int64_t nr
     return nblocks_total*sizeof(block_q4_0);
 }
 
-// Q5_0 with an importance matrix. Mirror of ggml_cuda_quantize_q4_0_imatrix:
-// same chunked driver, same host-computed row sigma2 in the exact CPU order of
-// quantize_row_q5_0_impl (ggml-quants.c:3577).
+// --- Removable Q5_0 imatrix (mirror of Q4_0 imatrix) ---
 size_t ggml_cuda_quantize_q5_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     GGML_ASSERT(nrows > 0);
@@ -1520,12 +1295,6 @@ size_t ggml_cuda_quantize_q5_0_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
-    // Per-row sigma2 = sum_x2/n_per_row, summed sequentially in the exact
-    // order of quantize_row_q5_0_impl. See the Q4_0 driver for why this sum is
-    // computed on the host and not reduced in parallel.
     std::vector<float> sigma2(nrows);
     for (int64_t irow = 0; irow < nrows; ++irow) {
         const float * xr = src + irow*n_per_row;
@@ -1536,7 +1305,6 @@ size_t ggml_cuda_quantize_q5_0_imatrix(const float * src, void * dst, int64_t nr
         sigma2[irow] = sum_x2/n_per_row;
     }
 
-    // Fixed-size device chunks, same rationale as the generic driver.
     const int64_t chunk_blocks = 1 << 20;
     const int64_t chunk_x      = chunk_blocks*QK5_0;
     const int64_t chunk_y      = chunk_blocks*sizeof(block_q5_0);
@@ -1605,7 +1373,6 @@ size_t ggml_cuda_quantize_q5_0_imatrix(const float * src, void * dst, int64_t nr
             break;
         }
 
-        // 256 threads per block, one quant block per thread
         const unsigned int block_size = 256;
         const float fudge_q5_0 = ggml_get_quantize_fudge_factor(GGML_TYPE_Q5_0);
         quantize_q5_0_imatrix_kernel<<<(unsigned)((nblocks + block_size - 1)/block_size), block_size>>>(
@@ -1630,10 +1397,7 @@ size_t ggml_cuda_quantize_q5_0_imatrix(const float * src, void * dst, int64_t nr
     return nblocks_total*sizeof(block_q5_0);
 }
 
-// Q6_0 with an importance matrix. Mirror of ggml_cuda_quantize_q5_0_imatrix:
-// same chunked driver, same host-computed row sigma2 in the exact CPU order of
-// quantize_row_q6_0_impl (ggml-quants.c:3697), one thread per quant block
-// replaying make_qx_quants with nmax == 32.
+// --- Q6_0 OLS imatrix (mirror of Q4_0 imatrix, nmax=32) ---
 size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     GGML_ASSERT(nrows > 0);
@@ -1646,12 +1410,6 @@ size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
-    // Per-row sigma2 = sum_x2/n_per_row, summed sequentially in the exact
-    // order of quantize_row_q6_0_impl. See the Q4_0 driver for why this sum is
-    // computed on the host and not reduced in parallel.
     std::vector<float> sigma2(nrows);
     for (int64_t irow = 0; irow < nrows; ++irow) {
         const float * xr = src + irow*n_per_row;
@@ -1662,7 +1420,6 @@ size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nr
         sigma2[irow] = sum_x2/n_per_row;
     }
 
-    // Fixed-size device chunks, same rationale as the generic driver.
     const int64_t chunk_blocks = 1 << 20;
     const int64_t chunk_x      = chunk_blocks*QK6_0;
     const int64_t chunk_y      = chunk_blocks*sizeof(block_q6_0);
@@ -1731,7 +1488,6 @@ size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nr
             break;
         }
 
-        // 256 threads per block, one quant block per thread
         const unsigned int block_size = 256;
         const float fudge_q6_0 = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0);
         quantize_q6_0_imatrix_kernel<<<(unsigned)((nblocks + block_size - 1)/block_size), block_size>>>(
@@ -1756,15 +1512,13 @@ size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nr
     return nblocks_total*sizeof(block_q6_0);
 }
 
-// Q5_1 without imatrix (quantize_row_q5_1_ref). No fudge.
+// --- Q5_1 (quantize_row_q5_1_ref, no fudge) ---
 size_t ggml_cuda_quantize_q5_1(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row,
             QK5_1, sizeof(block_q5_1), quantize_q5_1_kernel, "q5_1", 1.0f);
 }
 
-// Q5_1 with an importance matrix (quantize_row_q5_1_impl via make_qkx3).
-// Same chunked driver shape as the Q5_0 imatrix path, same host-computed row
-// sigma2 in the exact CPU summation order. No fudge.
+// --- Q5_1 imatrix via make_qkx3 (no fudge) ---
 size_t ggml_cuda_quantize_q5_1_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     GGML_ASSERT(nrows > 0);
@@ -1777,9 +1531,6 @@ size_t ggml_cuda_quantize_q5_1_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
     std::vector<float> sigma2(nrows);
     for (int64_t irow = 0; irow < nrows; ++irow) {
         const float * xr = src + irow*n_per_row;
@@ -1877,8 +1628,7 @@ size_t ggml_cuda_quantize_q5_1_imatrix(const float * src, void * dst, int64_t nr
     return nblocks_total*sizeof(block_q5_1);
 }
 
-// Q4_1 with an importance matrix (quantize_row_q4_1_impl via make_qkx3).
-// Same chunked driver shape as Q5_1 imatrix. No fudge.
+// --- Q4_1 imatrix via make_qkx3 (no fudge) ---
 size_t ggml_cuda_quantize_q4_1_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     GGML_ASSERT(nrows > 0);
@@ -1891,9 +1641,6 @@ size_t ggml_cuda_quantize_q4_1_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
     std::vector<float> sigma2(nrows);
     for (int64_t irow = 0; irow < nrows; ++irow) {
         const float * xr = src + irow*n_per_row;
@@ -1991,8 +1738,7 @@ size_t ggml_cuda_quantize_q4_1_imatrix(const float * src, void * dst, int64_t nr
     return nblocks_total*sizeof(block_q4_1);
 }
 
-// IQ4_NL without imatrix (quantize_iq4_nl, quant_weights == NULL, ntry = 7).
-// imatrix is NOT ported (dispatcher returns 0 so the CPU handles it).
+// --- IQ4_NL (no imatrix, ntry=7) ---
 size_t ggml_cuda_quantize_iq4_nl(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     GGML_ASSERT(nrows > 0);
     GGML_ASSERT(n_per_row % QK4_NL == 0);
@@ -2003,9 +1749,6 @@ size_t ggml_cuda_quantize_iq4_nl(const float * src, void * dst, int64_t nrows, i
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
     const int64_t chunk_blocks = 1 << 20;
     const int64_t chunk_x      = chunk_blocks*QK4_NL;
     const int64_t chunk_y      = chunk_blocks*sizeof(block_iq4_nl);
@@ -2055,9 +1798,7 @@ size_t ggml_cuda_quantize_iq4_nl(const float * src, void * dst, int64_t nrows, i
     return nblocks_total*sizeof(block_iq4_nl);
 }
 
-// IQ4_NL with an importance matrix: same optimizer replay with
-// weight = qw*sqrt(sigma2 + x*x); sigma2 = (sum x^2)*2/32 is precomputed on
-// the host per 32-block in the exact CPU summation order.
+// --- IQ4_NL imatrix (qw*sqrt(sigma2+x*x), host sigma2 per 32-block) ---
 size_t ggml_cuda_quantize_iq4_nl_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     GGML_ASSERT(nrows > 0);
@@ -2070,9 +1811,6 @@ size_t ggml_cuda_quantize_iq4_nl_imatrix(const float * src, void * dst, int64_t 
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
     std::vector<float> sigma2(nblocks_total);
     for (int64_t b = 0; b < nblocks_total; ++b) {
         const float * xb = src + b*QK4_NL;
@@ -2170,9 +1908,7 @@ size_t ggml_cuda_quantize_iq4_nl_imatrix(const float * src, void * dst, int64_t 
     return nblocks_total*sizeof(block_iq4_nl);
 }
 
-// IQ4_XS without imatrix (quantize_iq4_xs, quant_weights == NULL, ntry = 7).
-// One thread per 256-value superblock. imatrix is NOT ported (dispatcher
-// returns 0 so the CPU handles it).
+// --- IQ4_XS (no imatrix, ntry=7) ---
 size_t ggml_cuda_quantize_iq4_xs(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     GGML_ASSERT(nrows > 0);
     GGML_ASSERT(n_per_row % QK_K == 0);
@@ -2183,9 +1919,6 @@ size_t ggml_cuda_quantize_iq4_xs(const float * src, void * dst, int64_t nrows, i
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
     const int64_t chunk_blocks = 1 << 17; // superblocks per chunk (~128 MiB F32)
     const int64_t chunk_x      = chunk_blocks*QK_K;
     const int64_t chunk_y      = chunk_blocks*sizeof(block_iq4_xs);
@@ -2235,9 +1968,7 @@ size_t ggml_cuda_quantize_iq4_xs(const float * src, void * dst, int64_t nrows, i
     return nblocks_total*sizeof(block_iq4_xs);
 }
 
-// IQ4_XS with an importance matrix: same superblock replay with
-// weight = qw*sqrt(sigma2 + x*x); sigma2 = (sum x^2)*2/256 is precomputed on
-// the host per superblock in the exact CPU summation order.
+// --- IQ4_XS imatrix (host sigma2 per superblock) ---
 size_t ggml_cuda_quantize_iq4_xs_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     GGML_ASSERT(nrows > 0);
@@ -2250,9 +1981,6 @@ size_t ggml_cuda_quantize_iq4_xs_imatrix(const float * src, void * dst, int64_t 
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
     std::vector<float> sigma2(nblocks_total);
     for (int64_t b = 0; b < nblocks_total; ++b) {
         const float * xb = src + b*QK_K;
@@ -2350,9 +2078,7 @@ size_t ggml_cuda_quantize_iq4_xs_imatrix(const float * src, void * dst, int64_t 
     return nblocks_total*sizeof(block_iq4_xs);
 }
 
-// Q6_0 OLS without imatrix (quantize_row_q6_0_impl, quant_weights == NULL).
-// OLS is KEPT: weight = x*x, d = make_qx_quants * fudge. Chunked, one thread
-// per block, 256 threads per launch block.
+// --- Q6_0 OLS driver (w=x*x, make_qx+fudge) ---
 size_t ggml_cuda_quantize_q6_0(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     GGML_ASSERT(nrows > 0);
     GGML_ASSERT(n_per_row % QK6_0 == 0);
@@ -2363,9 +2089,6 @@ size_t ggml_cuda_quantize_q6_0(const float * src, void * dst, int64_t nrows, int
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
-    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
-
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0);
 
     const int64_t chunk_blocks = 1 << 20;
@@ -2417,9 +2140,7 @@ size_t ggml_cuda_quantize_q6_0(const float * src, void * dst, int64_t nrows, int
     return nblocks_total*sizeof(block_q6_0);
 }
 
-// Q8_0 with an importance matrix. HEAD CPU quantize_q8_0 ignores imatrix, so
-// this helper routes to plain (same bytes). The weighted-LS kernel below is
-// kept for research but UNUSED for GGUF.
+// Q8_0 imatrix routes to plain (CPU ignores imatrix).
 size_t ggml_cuda_quantize_q8_0_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     (void) imatrix; // CPU ignores it; match exactly

@@ -583,10 +583,7 @@ static kt_codebook kt_get_codebook(int device, ggml_type type) {
 
 GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float * src, void * dst, int64_t nrows, int64_t n_per_row, int64_t nslice,
         const float * imatrix) {
-    // Legacy block quants (Joel lead: single entry). Order after KT:
-    // Q8_0, Q6_0, Q5_0, Q4_0, Q5_1, Q4_1, IQ4_NL, IQ4_XS.
-    // Q5_0/Q4_0 cases are bannered for easy removal.
-    // Q6_0 OLS is KEPT. Returns 0 to fall back to CPU when unsupported.
+    // Legacy block quants after KT (Joel single entry); Q5_0/Q4_0 removable, Q6_0 OLS kept, 0 = CPU fallback.
     if (type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q4_0 ||
             type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_IQ4_XS) {
 #if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)

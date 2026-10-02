@@ -1,10 +1,4 @@
-# unit_test_cuda - byte-for-byte Q8_0 CUDA quantizer verification
-#
-# Links the real ggml/llama libs (like llama-cuda-pinmem) so the test exercises
-# the exact production paths llama-quantize uses:
-#   - GPU: ggml_cuda_quantize_q8_0  (ggml/src/ggml-cuda/quantize_gguf.cu)
-#   - CPU: ggml_quantize_chunk      (quantize_q8_0 -> quantize_row_q8_0_ref)
-# CUDA::cudart is only needed for the device-count/properties diagnostics.
+# unit_test_cuda: byte-for-byte Q8_0 check via production GPU/CPU paths.
 
 cmake_minimum_required(VERSION 3.14)
 project(unit_test_cuda C CXX)
