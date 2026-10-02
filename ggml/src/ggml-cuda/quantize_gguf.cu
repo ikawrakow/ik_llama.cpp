@@ -12,6 +12,7 @@
 
 #include <cinttypes>
 #include <cstdio>
+#include <cstring>
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -1012,6 +1013,157 @@ static __global__ void quantize_q6_0_ols_kernel(
 
 using quantize_kernel_t = void (*)(const float *, void *, int64_t, float);
 
+// Streaming chunk executor shared by the plain/OLS and imatrix drivers.
+// Double-buffered overlap across chunks: while chunk i runs (kernel + D2H)
+// on the compute stream, chunk i+1 uploads on the transfer stream and the
+// host stages/copies through pinned memory. launch(dx, dy, base, nblocks, st)
+// issues the type-specific kernel launch on the given stream. Falls back to
+// synchronous copies when streams or pinned staging are unavailable.
+// Returns bytes written, or 0 on failure (caller falls back to CPU).
+template <typename LaunchFn>
+static size_t quantize_exec_chunked(const float * src, void * dst, int64_t nblocks_total,
+        int64_t qk, size_t blk_size, int64_t chunk_blocks, const char * name, LaunchFn launch) {
+    const int64_t chunk_x = chunk_blocks*qk;
+    const int64_t chunk_y = chunk_blocks*(int64_t)blk_size;
+
+    float   * x_dev[2] = {nullptr, nullptr};
+    uint8_t * y_dev[2] = {nullptr, nullptr};
+    float   * x_pin[2] = {nullptr, nullptr};
+    uint8_t * y_pin[2] = {nullptr, nullptr};
+    cudaStream_t st_h2d = nullptr, st_exe = nullptr;
+    cudaEvent_t ev_h2d[2] = {nullptr, nullptr}, ev_done[2] = {nullptr, nullptr};
+
+    bool ok = true;
+    cudaError_t err = cudaSuccess;
+    // Single-chunk tensors gain nothing from pipelining; use the synchronous
+    // path directly (also avoids pinned staging).
+    if (nblocks_total <= chunk_blocks) {
+        ok = false;
+    }
+    for (int b = 0; b < 2 && ok; ++b) {
+        if ((err = cudaMalloc(&x_dev[b], chunk_x*sizeof(float))) != cudaSuccess) ok = false;
+        if (ok && (err = cudaMalloc(&y_dev[b], chunk_y)) != cudaSuccess) ok = false;
+        if (ok && (err = cudaMallocHost(&x_pin[b], chunk_x*sizeof(float))) != cudaSuccess) ok = false;
+        if (ok && (err = cudaMallocHost(&y_pin[b], chunk_y)) != cudaSuccess) ok = false;
+        if (ok && (err = cudaEventCreateWithFlags(&ev_h2d[b], cudaEventDisableTiming)) != cudaSuccess) ok = false;
+        if (ok && (err = cudaEventCreateWithFlags(&ev_done[b], cudaEventDisableTiming)) != cudaSuccess) ok = false;
+    }
+    if (ok && (err = cudaStreamCreate(&st_h2d)) != cudaSuccess) ok = false;
+    if (ok && (err = cudaStreamCreate(&st_exe)) != cudaSuccess) ok = false;
+
+    auto release = [&]() {
+        for (int b = 0; b < 2; ++b) {
+            if (x_dev[b]) cudaFree(x_dev[b]);
+            if (y_dev[b]) cudaFree(y_dev[b]);
+            if (x_pin[b]) cudaFreeHost(x_pin[b]);
+            if (y_pin[b]) cudaFreeHost(y_pin[b]);
+            if (ev_h2d[b]) cudaEventDestroy(ev_h2d[b]);
+            if (ev_done[b]) cudaEventDestroy(ev_done[b]);
+        }
+        if (st_h2d) cudaStreamDestroy(st_h2d);
+        if (st_exe) cudaStreamDestroy(st_exe);
+    };
+
+    if (!ok) {
+        // Synchronous fallback: single buffers, blocking copies (old behavior).
+        release();
+        float   * xs = nullptr;
+        uint8_t * ys = nullptr;
+        if ((err = cudaMalloc(&xs, chunk_x*sizeof(float))) != cudaSuccess) {
+            fprintf(stderr, "%s: %s: cudaMalloc(x_dev): %s\n", __func__, name, cudaGetErrorString(err));
+            return 0;
+        }
+        if ((err = cudaMalloc(&ys, chunk_y)) != cudaSuccess) {
+            fprintf(stderr, "%s: %s: cudaMalloc(y_dev): %s\n", __func__, name, cudaGetErrorString(err));
+            cudaFree(xs);
+            return 0;
+        }
+        for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
+            const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
+            err = cudaMemcpy(xs, src + base*qk, nblocks*qk*sizeof(float), cudaMemcpyHostToDevice);
+            if (err != cudaSuccess) {
+                fprintf(stderr, "%s: %s: cudaMemcpy H2D: %s\n", __func__, name, cudaGetErrorString(err));
+                break;
+            }
+            launch(xs, ys, base, nblocks, nullptr);
+            if ((err = cudaGetLastError()) != cudaSuccess) {
+                fprintf(stderr, "%s: %s: kernel launch: %s\n", __func__, name, cudaGetErrorString(err));
+                break;
+            }
+            err = cudaMemcpy((char *)dst + base*blk_size, ys, nblocks*blk_size, cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) {
+                fprintf(stderr, "%s: %s: cudaMemcpy D2H: %s\n", __func__, name, cudaGetErrorString(err));
+                break;
+            }
+        }
+        cudaFree(xs);
+        cudaFree(ys);
+        if (err != cudaSuccess) {
+            return 0;
+        }
+        return nblocks_total*blk_size;
+    }
+
+    for (int64_t base = 0, i = 0; base < nblocks_total; base += chunk_blocks, ++i) {
+        const int b = (int)(i & 1);
+        const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
+
+        // Buffer b must be fully done (H2D + kernel + D2H of iteration i-2)
+        // before its staging and device buffers are reused.
+        if (i >= 2) {
+            err = cudaStreamWaitEvent(st_h2d, ev_done[b], 0);
+            if (err != cudaSuccess) {
+                fprintf(stderr, "%s: %s: stream wait: %s\n", __func__, name, cudaGetErrorString(err));
+                break;
+            }
+        }
+        memcpy(x_pin[b], src + base*qk, nblocks*qk*sizeof(float));
+        err = cudaMemcpyAsync(x_dev[b], x_pin[b], nblocks*qk*sizeof(float), cudaMemcpyHostToDevice, st_h2d);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: %s: cudaMemcpyAsync H2D: %s\n", __func__, name, cudaGetErrorString(err));
+            break;
+        }
+        err = cudaEventRecord(ev_h2d[b], st_h2d);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: %s: event record: %s\n", __func__, name, cudaGetErrorString(err));
+            break;
+        }
+        err = cudaStreamWaitEvent(st_exe, ev_h2d[b], 0);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: %s: stream wait: %s\n", __func__, name, cudaGetErrorString(err));
+            break;
+        }
+        launch(x_dev[b], y_dev[b], base, nblocks, st_exe);
+        if ((err = cudaGetLastError()) != cudaSuccess) {
+            fprintf(stderr, "%s: %s: kernel launch: %s\n", __func__, name, cudaGetErrorString(err));
+            break;
+        }
+        err = cudaMemcpyAsync(y_pin[b], y_dev[b], nblocks*blk_size, cudaMemcpyDeviceToHost, st_exe);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: %s: cudaMemcpyAsync D2H: %s\n", __func__, name, cudaGetErrorString(err));
+            break;
+        }
+        err = cudaEventRecord(ev_done[b], st_exe);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: %s: event record: %s\n", __func__, name, cudaGetErrorString(err));
+            break;
+        }
+        err = cudaEventSynchronize(ev_done[b]);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "%s: %s: event sync: %s\n", __func__, name, cudaGetErrorString(err));
+            break;
+        }
+        memcpy((char *)dst + base*blk_size, y_pin[b], nblocks*blk_size);
+    }
+
+    release();
+    if (err != cudaSuccess) {
+        return 0;
+    }
+
+    return nblocks_total*blk_size;
+}
+
 // Shared chunked driver for warp-per-block plain kernels (block_size = 0
 // selects one warp per quant block) and one-thread-per-block OLS/codebook
 // kernels (block_size = 256). ~128 MiB F32 chunks bound VRAM use.
@@ -1031,60 +1183,20 @@ static size_t ggml_cuda_quantize_generic(const float * src, void * dst, int64_t 
 
     // Chunked ~128 MiB F32 input so large tensors avoid huge VRAM allocs.
     const int64_t chunk_blocks = std::max<int64_t>(1, (128ll << 20)/(qk*(int64_t)sizeof(float)));
-    const int64_t chunk_x      = chunk_blocks*qk;          // floats per chunk
-    const int64_t chunk_y      = chunk_blocks*blk_size;    // bytes per chunk
-
-    float   * x_dev = nullptr;
-    uint8_t * y_dev = nullptr;
-
-    cudaError_t err = cudaMalloc(&x_dev, chunk_x*sizeof(float));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "%s: %s: cudaMalloc(x_dev, %" PRId64 "): %s\n",
-                __func__, name, (int64_t)(chunk_x*sizeof(float)), cudaGetErrorString(err));
-        return 0;
-    }
-    err = cudaMalloc(&y_dev, chunk_y);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "%s: %s: cudaMalloc(y_dev, %" PRId64 "): %s\n",
-                __func__, name, (int64_t)chunk_y, cudaGetErrorString(err));
-        cudaFree(x_dev);
-        return 0;
-    }
-
     // one warp per quant block (block_size 0, grid-stride loop in kernel)
     // or 256-thread one-block-per-thread
     const unsigned int launch_bs = block_size ? (unsigned)block_size : (unsigned)qk;
-
-    for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
-        const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
-
-        err = cudaMemcpy(x_dev, src + base*qk, nblocks*qk*sizeof(float), cudaMemcpyHostToDevice);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "%s: %s: cudaMemcpy H2D: %s\n", __func__, name, cudaGetErrorString(err));
-            break;
-        }
-
-        if (block_size) {
-            kernel<<<(unsigned)((nblocks + launch_bs - 1)/launch_bs), launch_bs>>>(x_dev, y_dev, nblocks, fudge);
+    const bool warp_path = !block_size;
+    auto launch = [&](float * dx, uint8_t * dy, int64_t base, int64_t nblocks, cudaStream_t st) {
+        (void) base;
+        if (warp_path) {
+            kernel<<<(unsigned)nblocks, launch_bs, 0, st>>>(dx, dy, nblocks, fudge);
         } else {
-            kernel<<<(unsigned)nblocks, launch_bs>>>(x_dev, y_dev, nblocks, fudge);
+            kernel<<<(unsigned)((nblocks + launch_bs - 1)/launch_bs), launch_bs, 0, st>>>(dx, dy, nblocks, fudge);
         }
+    };
 
-        err = cudaMemcpy((char *)dst + base*blk_size, y_dev, nblocks*blk_size, cudaMemcpyDeviceToHost);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "%s: %s: cudaMemcpy D2H: %s\n", __func__, name, cudaGetErrorString(err));
-            break;
-        }
-    }
-
-    cudaFree(x_dev);
-    cudaFree(y_dev);
-
-    if (err != cudaSuccess) {
-        return 0;
-    }
-
-    return nblocks_total*blk_size;
+    return quantize_exec_chunked(src, dst, nblocks_total, qk, blk_size, chunk_blocks, name, launch);
 }
 
 using imatrix_kernel_t = void (*)(const float *, const float *, const float *, void *, int64_t, int64_t, int32_t, float);
@@ -1120,90 +1232,48 @@ static size_t ggml_cuda_quantize_imatrix_generic(const float * src, void * dst, 
     }
 
     const int64_t chunk_blocks = std::max<int64_t>(1, (128ll << 20)/(qk*(int64_t)sizeof(float)));
-    const int64_t chunk_x      = chunk_blocks*qk;
-    const int64_t chunk_y      = chunk_blocks*(int64_t)blk_size;
 
-    float   * x_dev = nullptr;
     float   * q_dev = nullptr;
     float   * s_dev = nullptr;
-    uint8_t * y_dev = nullptr;
 
-    cudaError_t err = cudaMalloc(&x_dev, chunk_x*sizeof(float));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "%s: %s: cudaMalloc(x_dev): %s\n", __func__, name, cudaGetErrorString(err));
-        return 0;
-    }
-    err = cudaMalloc(&q_dev, n_per_row*sizeof(float));
+    cudaError_t err = cudaMalloc(&q_dev, n_per_row*sizeof(float));
     if (err != cudaSuccess) {
         fprintf(stderr, "%s: %s: cudaMalloc(q_dev): %s\n", __func__, name, cudaGetErrorString(err));
-        cudaFree(x_dev);
         return 0;
     }
     err = cudaMalloc(&s_dev, nsigma*sizeof(float));
     if (err != cudaSuccess) {
         fprintf(stderr, "%s: %s: cudaMalloc(s_dev): %s\n", __func__, name, cudaGetErrorString(err));
-        cudaFree(x_dev);
         cudaFree(q_dev);
-        return 0;
-    }
-    err = cudaMalloc(&y_dev, chunk_y);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "%s: %s: cudaMalloc(y_dev): %s\n", __func__, name, cudaGetErrorString(err));
-        cudaFree(x_dev);
-        cudaFree(q_dev);
-        cudaFree(s_dev);
         return 0;
     }
 
     err = cudaMemcpy(q_dev, imatrix, n_per_row*sizeof(float), cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         fprintf(stderr, "%s: %s: cudaMemcpy imatrix H2D: %s\n", __func__, name, cudaGetErrorString(err));
-        cudaFree(x_dev);
         cudaFree(q_dev);
         cudaFree(s_dev);
-        cudaFree(y_dev);
         return 0;
     }
     err = cudaMemcpy(s_dev, sigma2.data(), nsigma*sizeof(float), cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         fprintf(stderr, "%s: %s: cudaMemcpy sigma2 H2D: %s\n", __func__, name, cudaGetErrorString(err));
-        cudaFree(x_dev);
         cudaFree(q_dev);
         cudaFree(s_dev);
-        cudaFree(y_dev);
         return 0;
     }
 
-    const unsigned int block_size = 256;
-    for (int64_t base = 0; base < nblocks_total; base += chunk_blocks) {
-        const int64_t nblocks = std::min(chunk_blocks, nblocks_total - base);
+    auto launch = [&](float * dx, uint8_t * dy, int64_t base, int64_t nblocks, cudaStream_t st) {
+        kernel<<<(unsigned)((nblocks + 256 - 1)/256), 256, 0, st>>>(
+                dx, q_dev, s_dev, dy, base, nblocks, blocks_per_row, fudge);
+    };
 
-        err = cudaMemcpy(x_dev, src + base*qk, nblocks*qk*sizeof(float), cudaMemcpyHostToDevice);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "%s: %s: cudaMemcpy H2D: %s\n", __func__, name, cudaGetErrorString(err));
-            break;
-        }
+    const size_t out = quantize_exec_chunked(src, dst, nblocks_total, qk, blk_size, chunk_blocks, name, launch);
 
-        kernel<<<(unsigned)((nblocks + block_size - 1)/block_size), block_size>>>(
-                x_dev, q_dev, s_dev, y_dev, base, nblocks, blocks_per_row, fudge);
-
-        err = cudaMemcpy((char *)dst + base*blk_size, y_dev, nblocks*blk_size, cudaMemcpyDeviceToHost);
-        if (err != cudaSuccess) {
-            fprintf(stderr, "%s: %s: cudaMemcpy D2H: %s\n", __func__, name, cudaGetErrorString(err));
-            break;
-        }
-    }
-
-    cudaFree(x_dev);
     cudaFree(q_dev);
     cudaFree(s_dev);
-    cudaFree(y_dev);
 
-    if (err != cudaSuccess) {
-        return 0;
-    }
-
-    return nblocks_total*blk_size;
+    return out;
 }
 
 // Order Q8_0/Q6_0/Q5_0/Q4_0; Q8_0 keeps Q6_0-fudge quirk (ggml-quants.c:915).
