@@ -1637,12 +1637,17 @@ class LlamaModel(Model):
             special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
+        # MoE-only keys (absent from dense configs).
+        has_dense_prefix = "prefix_dense_intermediate_size" in self.hparams
         saved_intermediate_size = self.hparams.get("intermediate_size")
-        saved_num_experts_per_tok = self.hparams.pop("num_experts_per_tok")
-        self.hparams["intermediate_size"] = self.hparams["prefix_dense_intermediate_size"]
+        saved_num_experts_per_tok = self.hparams.pop("num_experts_per_tok", None)
+        if has_dense_prefix:
+            self.hparams["intermediate_size"] = self.hparams["prefix_dense_intermediate_size"]
         super().set_gguf_parameters()
-        self.hparams["intermediate_size"] = saved_intermediate_size
-        self.hparams["num_experts_per_tok"] = saved_num_experts_per_tok
+        if saved_intermediate_size is not None:
+            self.hparams["intermediate_size"] = saved_intermediate_size
+        if saved_num_experts_per_tok is not None:
+            self.hparams["num_experts_per_tok"] = saved_num_experts_per_tok
         hparams = self.hparams
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
@@ -1760,6 +1765,26 @@ class LlamaModel(Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@Model.register("NanbeigeForCausalLM")
+class NanbeigeModel(LlamaModel):
+    # Looped transformer: n_layer physical layers repeated num_loops times.
+    model_arch = gguf.MODEL_ARCH.NANBEIGE
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        hparams = self.hparams
+        for key in ("loop_share_kv", "enable_double_loop_split", "enable_depth_attention"):
+            if hparams.get(key, False):
+                raise NotImplementedError(f"Nanbeige models with '{key}=True' are not supported yet")
+
+        n_loops = int(hparams.get("num_loops", 1) or 1)
+        if n_loops < 1:
+            n_loops = 1
+        self.gguf_writer.add_num_loops(n_loops)
+        self.gguf_writer.add_skip_loop_final_norm(bool(hparams.get("skip_loop_final_norm", False)))
 
 
 @Model.register("DeciLMForCausalLM")

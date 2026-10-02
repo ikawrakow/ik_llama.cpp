@@ -2816,6 +2816,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
 
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_NANBEIGE:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:

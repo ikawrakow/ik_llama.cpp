@@ -326,6 +326,36 @@ void llm_load_hparams(
                     }
                 }
             } break;
+        case LLM_ARCH_NANBEIGE:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_NUM_LOOPS,            hparams.n_loops,              false);
+                ml.get_key(LLM_KV_SKIP_LOOP_FINAL_NORM, hparams.skip_loop_final_norm, false);
+
+                // n_layer is switched to n_layer_all once the tensors are created.
+                GGML_ASSERT(hparams.n_loops >= 1);
+                if (hparams.n_loops > 1) {
+                    // size_t to avoid wrapping the product for a malformed file.
+                    GGML_ASSERT((size_t) hparams.n_layer * (size_t) hparams.n_loops <= (size_t) LLAMA_MAX_LAYERS);
+                    hparams.n_layer_phys = hparams.n_layer;
+                    hparams.n_layer_all  = (uint32_t) ((size_t) hparams.n_layer * (size_t) hparams.n_loops);
+                    for (uint32_t il = hparams.n_layer_phys; il < hparams.n_layer_all; ++il) {
+                        const uint32_t ip = il % hparams.n_layer_phys;
+                        hparams.n_head_arr[il]    = hparams.n_head_arr[ip];
+                        hparams.n_head_kv_arr[il] = hparams.n_head_kv_arr[ip];
+                        hparams.n_ff_arr[il]      = hparams.n_ff_arr[ip];
+                        hparams.swa_layers[il]    = hparams.swa_layers[ip];
+                        hparams.recurrent_layer_arr[il] = hparams.recurrent_layer_arr[ip];
+                        hparams.rope_dim_per_layer[il]  = hparams.rope_dim_per_layer[ip];
+                        hparams.rope_freq_base_per_layer[il] = hparams.rope_freq_base_per_layer[ip];
+                    }
+                }
+
+                switch (hparams.n_layer) {
+                    case 22: model.type = e_model::MODEL_3B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_LLAMA4:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
