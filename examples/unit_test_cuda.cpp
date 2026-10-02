@@ -923,10 +923,11 @@ static void ref_quantize_iq4_nl_imatrix(void * dst, const float * src, int64_t n
     }
 }
 
-// One 32-value block of the IQ4_XS superblock optimizer (plain w = x*x).
+// One 32-value block of the IQ4_XS superblock optimizer (ntry = 7).
+// weight[] is caller-provided (x*x plain, or qw*sqrt imatrix); this helper
+// must NOT touch it (it serves both paths).
 // *eps is set when amax < 1e-15 (CPU stores scales = 0 and skips tracking).
 static float ref_iq4_block_opt(const float * xb, float * weight, uint8_t * Lb, bool * eps) {
-    for (int j = 0; j < 32; ++j) weight[j] = xb[j]*xb[j];
     float amax = 0.0f, max = 0.0f;
     for (int j = 0; j < 32; ++j) {
         float ax = fabsf(xb[j]);
