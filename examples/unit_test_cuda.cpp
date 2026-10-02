@@ -9,7 +9,7 @@
 // For each type, three producers of GGUF quantized bytes are compared on
 // identical input:
 //
-//   1. GPU : ggml_cuda_quantize(0,type,...,nslice=1,imatrix) (Joel single
+//   1. GPU : ggml_cuda_quantize(g_cuda_device,type,...,nslice=1,imatrix) (Joel single
 //            entry -> ggml/src/ggml-cuda/quantize_gguf.cu helpers)
 //   2. CPU : ggml_quantize_chunk       (the fork's real llama-quantize path;
 //            for Q4_0/Q5_0 without imatrix/symmetric this is the vanilla ref;
@@ -69,6 +69,7 @@
 static int  g_seed  = 12345;
 static int  g_failures = 0;
 static bool g_quick = false;
+static int  g_cuda_device = 0; // --device N, forwarded to ggml_cuda_quantize
 static std::mt19937 g_rng(g_seed);
 
 // ---------------------------------------------------------------------------
@@ -1548,63 +1549,63 @@ int main(int argc, char ** argv) {
 
     const int devices[2] = { device >= 0 ? device : 0, 0 };
     const int ntest_dev  = all_devices ? nd : 1;
+    g_cuda_device = devices[0];
 
-    // quantize always runs on device 0 in this POC; report which one is real.
-    printf("  [INFO] ggml_cuda_quantize runs on device 0; testing device %d\n", devices[0]);
+    printf("  [INFO] ggml_cuda_quantize runs on device %d\n", g_cuda_device);
 
     // Joel-lead wrappers: exercise the production single entry
     // ggml_cuda_quantize(device,type,...,nslice=1,imatrix) with the spec's
     // (src,dst,nrows,n_per_row) signature. Order after KT: Q8_0, Q6_0, Q5_0, Q4_0.
     struct cuda_wraps {
         static size_t q8_0(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q8_0, s, d, r, n, 1, nullptr);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q8_0, s, d, r, n, 1, nullptr);
         }
         static size_t q8_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q8_0, s, d, r, n, 1, im);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q8_0, s, d, r, n, 1, im);
         }
         static size_t q6_0(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q6_0, s, d, r, n, 1, nullptr);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q6_0, s, d, r, n, 1, nullptr);
         }
         static size_t q6_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q6_0, s, d, r, n, 1, im);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q6_0, s, d, r, n, 1, im);
         }
         // --- Removable Q5_0 wrappers (delete to drop Q5_0) ---
         static size_t q5_0(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q5_0, s, d, r, n, 1, nullptr);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q5_0, s, d, r, n, 1, nullptr);
         }
         static size_t q5_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q5_0, s, d, r, n, 1, im);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q5_0, s, d, r, n, 1, im);
         }
         // --- Removable Q4_0 wrappers (delete to drop Q4_0) ---
         static size_t q4_0(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q4_0, s, d, r, n, 1, nullptr);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q4_0, s, d, r, n, 1, nullptr);
         }
         static size_t q4_0_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q4_0, s, d, r, n, 1, im);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q4_0, s, d, r, n, 1, im);
         }
         static size_t q5_1(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q5_1, s, d, r, n, 1, nullptr);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q5_1, s, d, r, n, 1, nullptr);
         }
         static size_t q5_1_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q5_1, s, d, r, n, 1, im);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q5_1, s, d, r, n, 1, im);
         }
         static size_t q4_1(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q4_1, s, d, r, n, 1, nullptr);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q4_1, s, d, r, n, 1, nullptr);
         }
         static size_t q4_1_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(0, GGML_TYPE_Q4_1, s, d, r, n, 1, im);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_Q4_1, s, d, r, n, 1, im);
         }
         static size_t iq4_nl(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(0, GGML_TYPE_IQ4_NL, s, d, r, n, 1, nullptr);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_IQ4_NL, s, d, r, n, 1, nullptr);
         }
         static size_t iq4_nl_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(0, GGML_TYPE_IQ4_NL, s, d, r, n, 1, im);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_IQ4_NL, s, d, r, n, 1, im);
         }
         static size_t iq4_xs(const float * s, void * d, int64_t r, int64_t n) {
-            return ggml_cuda_quantize(0, GGML_TYPE_IQ4_XS, s, d, r, n, 1, nullptr);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_IQ4_XS, s, d, r, n, 1, nullptr);
         }
         static size_t iq4_xs_imatrix(const float * s, void * d, int64_t r, int64_t n, const float * im) {
-            return ggml_cuda_quantize(0, GGML_TYPE_IQ4_XS, s, d, r, n, 1, im);
+            return ggml_cuda_quantize(g_cuda_device, GGML_TYPE_IQ4_XS, s, d, r, n, 1, im);
         }
     };
 

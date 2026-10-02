@@ -1286,9 +1286,8 @@ static size_t ggml_cuda_quantize_generic(const float * src, void * dst, int64_t 
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // POC: device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     // Fixed-size device buffers; the tensor is processed in chunks so that a
     // single large tensor never needs a huge VRAM allocation (which can fail
@@ -1394,9 +1393,8 @@ size_t ggml_cuda_quantize_q4_0_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // POC: device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     // Per-row sigma2 = sum_x2/n_per_row, summed sequentially in the exact
     // order of quantize_row_q4_0_impl. The host compiler is cl with default
@@ -1522,9 +1520,8 @@ size_t ggml_cuda_quantize_q5_0_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // POC: device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     // Per-row sigma2 = sum_x2/n_per_row, summed sequentially in the exact
     // order of quantize_row_q5_0_impl. See the Q4_0 driver for why this sum is
@@ -1649,9 +1646,8 @@ size_t ggml_cuda_quantize_q6_0_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // POC: device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     // Per-row sigma2 = sum_x2/n_per_row, summed sequentially in the exact
     // order of quantize_row_q6_0_impl. See the Q4_0 driver for why this sum is
@@ -1781,9 +1777,8 @@ size_t ggml_cuda_quantize_q5_1_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     std::vector<float> sigma2(nrows);
     for (int64_t irow = 0; irow < nrows; ++irow) {
@@ -1896,9 +1891,8 @@ size_t ggml_cuda_quantize_q4_1_imatrix(const float * src, void * dst, int64_t nr
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     std::vector<float> sigma2(nrows);
     for (int64_t irow = 0; irow < nrows; ++irow) {
@@ -2009,9 +2003,8 @@ size_t ggml_cuda_quantize_iq4_nl(const float * src, void * dst, int64_t nrows, i
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     const int64_t chunk_blocks = 1 << 20;
     const int64_t chunk_x      = chunk_blocks*QK4_NL;
@@ -2077,9 +2070,8 @@ size_t ggml_cuda_quantize_iq4_nl_imatrix(const float * src, void * dst, int64_t 
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     std::vector<float> sigma2(nblocks_total);
     for (int64_t b = 0; b < nblocks_total; ++b) {
@@ -2191,9 +2183,8 @@ size_t ggml_cuda_quantize_iq4_xs(const float * src, void * dst, int64_t nrows, i
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     const int64_t chunk_blocks = 1 << 17; // superblocks per chunk (~128 MiB F32)
     const int64_t chunk_x      = chunk_blocks*QK_K;
@@ -2259,9 +2250,8 @@ size_t ggml_cuda_quantize_iq4_xs_imatrix(const float * src, void * dst, int64_t 
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     std::vector<float> sigma2(nblocks_total);
     for (int64_t b = 0; b < nblocks_total; ++b) {
@@ -2373,9 +2363,8 @@ size_t ggml_cuda_quantize_q6_0(const float * src, void * dst, int64_t nrows, int
     if (cudaGetDeviceCount(&n_devices) != cudaSuccess || n_devices == 0) {
         return 0;
     }
-    if (cudaSetDevice(0) != cudaSuccess) { // device 0 only (matches dispatcher)
-        return 0;
-    }
+    // Runs on the ambient CUDA device selected by the ggml_cuda_quantize
+    // dispatcher (ggml_cuda_set_device); device 0 when called directly.
 
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0);
 

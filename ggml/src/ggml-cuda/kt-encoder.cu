@@ -592,12 +592,15 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
 #if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
         return 0;
 #else
-        if (device != 0) {
-            return 0; // legacy helpers are device-0 only (match POC)
-        }
-        if (device >= ggml_backend_cuda_get_device_count()) {
+        if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
+            static bool warned = false;
+            if (!warned) {
+                fprintf(stderr, "%s: device %d unavailable, legacy tensors use the CPU encoder\n", __func__, device);
+                warned = true;
+            }
             return 0;
         }
+        ggml_cuda_set_device(device);
         const size_t row_size = ggml_row_size(type, n_per_row);
         const int64_t nelements_matrix = nrows*n_per_row;
         size_t total = 0;
