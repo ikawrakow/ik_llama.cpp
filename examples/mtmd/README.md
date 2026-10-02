@@ -14,10 +14,6 @@ The naming and structure related to multimodal support have evolved, which might
 - [#12849](https://github.com/ggml-org/llama.cpp/pull/12849): `libmtmd` was introduced as a replacement for `llava.cpp`. Its goals include providing a single, unified command-line interface, improving the user/developer experience (UX/DX), and supporting both audio and image inputs.
 - [#13012](https://github.com/ggml-org/llama.cpp/pull/13012): `mtmd-cli` was added, consolidating the various model-specific CLIs into a single tool powered by `libmtmd`.
 
-## Pre-quantized models
-
-See the list of pre-quantized model [here](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal.md)
-
 ## How it works and what is `mmproj`?
 
 Multimodal support in `llama.cpp` works by encoding images into embeddings using a separate model component, and then feeding these embeddings into the language model.
@@ -42,7 +38,7 @@ Built upon `clip.cpp` (similar to `llava.cpp`), `libmtmd` offers several advanta
 Multimodal projector (`mmproj`) files are specific to each model architecture.
 
 For the following models, you can use `convert_hf_to_gguf.py` with `--mmproj` flag to get the `mmproj` file:
-- [Gemma 3](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d) ; See the guide [here](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal/gemma3.md) - Note: 1B variant does not have vision support
+- [Gemma 3](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d) - Note: 1B variant does not have vision support
 - SmolVLM (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
 - SmolVLM2 (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
 - [Pixtral 12B](https://huggingface.co/mistral-community/pixtral-12b) - only works with `transformers`-compatible checkpoint
@@ -50,14 +46,14 @@ For the following models, you can use `convert_hf_to_gguf.py` with `--mmproj` fl
 - [Mistral Small 3.1 24B](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)
 - InternVL 2.5 and InternVL 3 from [OpenGVLab](https://huggingface.co/OpenGVLab) (note: we don't support conversion of `InternVL3-*-hf` model, only non-HF version is supported ; `InternLM2Model` **text** model is not supported)
 
-For older models, please refer to the relevant guide for instructions on how to obtain or create them:
+For older models, the `mmproj` file is created with a legacy conversion script:
 
 NOTE: conversion scripts are located under `tools/mtmd/legacy-models`
 
-- [LLaVA](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal/llava.md)
-- [MobileVLM](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal/MobileVLM.md)
-- [GLM-Edge](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal/glmedge.md)
-- [MiniCPM-V 2.5](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal/minicpmv2.5.md)
-- [MiniCPM-V 2.6](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal/minicpmv2.6.md)
-- [MiniCPM-o 2.6](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal/minicpmo2.6.md)
-- [IBM Granite Vision](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal/granitevision.md)
+- LLaVA
+- MobileVLM
+- GLM-Edge
+- MiniCPM-V 2.5
+- MiniCPM-V 2.6
+- MiniCPM-o 2.6
+- IBM Granite Vision
