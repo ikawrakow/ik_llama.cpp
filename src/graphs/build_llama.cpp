@@ -50,22 +50,22 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         // self-attention
         if (use_rope) {
-            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+            cur = build_std_attention(gf, model.layer_rt(il).attn_norm, inpL,
                     inp_pos, il == n_layer - 1 && n_tokens > 1 ? inp_out_ids : nullptr, rope_factors,
                     this_KQ_mask, nullptr, nullptr, kq_scale, hparams.f_attention_scale, this_n_swa, il, true, false, true);
         }
         else {
 
             // norm
-            cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, inpL, hparams, model.layer_rt(il).attn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
 
             auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
-                    model.layers[il].wqkv, model.layers[il].bqkv,
-                    model.layers[il].wqk, model.layers[il].bqk,
-                    model.layers[il].wq, model.layers[il].bq,
-                    model.layers[il].wk, model.layers[il].bk,
-                    model.layers[il].wv, model.layers[il].bv,
+                    model.layer_rt(il).wqkv, model.layer_rt(il).bqkv,
+                    model.layer_rt(il).wqk, model.layer_rt(il).bqk,
+                    model.layer_rt(il).wq, model.layer_rt(il).bq,
+                    model.layer_rt(il).wk, model.layer_rt(il).bk,
+                    model.layer_rt(il).wv, model.layer_rt(il).bv,
                     nullptr, nullptr, hparams.f_attention_scale, il);
 
             if (use_rope) {
@@ -93,7 +93,7 @@ ggml_cgraph * llm_build_context::build_llama() {
             }
 
             cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                    model.layers[il].wo, model.layers[il].bo,
+                    model.layer_rt(il).wo, model.layer_rt(il).bo,
                     Kcur, Vcur, Qcur, this_KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il, nullptr,
                     this_n_swa);
         }
@@ -110,7 +110,7 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         // For Granite architecture
         if (hparams.f_residual_scale) {
-            // Why is hparams.f_residual_scale not simply absorbed into model.layers[il].wv ?
+            // Why is hparams.f_residual_scale not simply absorbed into model.layer_rt(il).wv ?
             cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
         }
 
@@ -123,37 +123,37 @@ ggml_cgraph * llm_build_context::build_llama() {
         }
 
         // feed-forward network
-        if (model.layers[il].ffn_gate_inp == nullptr) {
+        if (model.layer_rt(il).ffn_gate_inp == nullptr) {
             // non-MoE
-            cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
-                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+            cur = llm_build_ffn(ctx0, lctx, model.layer_rt(il).ffn_norm, ffn_inp,
+                    model.layer_rt(il).ffn_up,   model.layer_rt(il).ffn_up_b,   NULL,
+                    model.layer_rt(il).ffn_gate, model.layer_rt(il).ffn_gate_b, NULL,
+                    model.layer_rt(il).ffn_down, model.layer_rt(il).ffn_down_b, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
             cb(cur, "ffn_out", il);
         } else if (model.arch == LLM_ARCH_LLAMA4) {
             // llama4 MoE
-            ggml_tensor * ffn_inp_normed = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
+            ggml_tensor * ffn_inp_normed = llm_build_norm(ctx0, ffn_inp, hparams, model.layer_rt(il).ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, ffn_inp_normed,
-                    model.layers[il].ffn_gate_inp,
-                    model.layers[il].ffn_up_exps,
-                    model.layers[il].ffn_gate_exps,
-                    model.layers[il].ffn_down_exps,
+                    model.layer_rt(il).ffn_gate_inp,
+                    model.layer_rt(il).ffn_up_exps,
+                    model.layer_rt(il).ffn_gate_exps,
+                    model.layer_rt(il).ffn_down_exps,
                     nullptr,
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, false,
                     false, 0.0,
                     LLM_EXPERT_GATING_FUNC_SIGMOID,
-                    cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
+                    cb, il, gf, true, model.layer_rt(il).ffn_up_gate_exps);
 
             // Shared experts
             ggml_tensor * shexp_out = llm_build_ffn(ctx0, lctx, nullptr, ffn_inp_normed,
-                    model.layers[il].ffn_up_shexp,   NULL, NULL,
-                    model.layers[il].ffn_gate_shexp, NULL, NULL,
-                    model.layers[il].ffn_down_shexp, NULL, NULL,
+                    model.layer_rt(il).ffn_up_shexp,   NULL, NULL,
+                    model.layer_rt(il).ffn_gate_shexp, NULL, NULL,
+                    model.layer_rt(il).ffn_down_shexp, NULL, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
             cb(shexp_out, "ffn_moe_shexp", il);
@@ -163,14 +163,14 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         } else {
             // MoE branch
-            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layer_rt(il).ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_moe_ffn(ctx0, lctx, cur,
-                    model.layers[il].ffn_gate_inp,
-                    model.layers[il].ffn_up_exps,
-                    model.layers[il].ffn_gate_exps,
-                    model.layers[il].ffn_down_exps,
+                    model.layer_rt(il).ffn_gate_inp,
+                    model.layer_rt(il).ffn_up_exps,
+                    model.layer_rt(il).ffn_gate_exps,
+                    model.layer_rt(il).ffn_down_exps,
                     nullptr,
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, true,
@@ -182,7 +182,7 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         // For Granite architecture
         if (hparams.f_residual_scale) {
-            // Why is hparams.f_residual_scale not simply absorbed into model.layers[il].ffn_down_exps ?
+            // Why is hparams.f_residual_scale not simply absorbed into model.layer_rt(il).ffn_down_exps ?
             cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
         }
 
@@ -194,6 +194,12 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         // input for next layer
         inpL = cur;
+
+        // Nanbeige: output_norm between two passes over the physical layers.
+        if (hparams.needs_loop_final_norm(il)) {
+            inpL = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(inpL, "loop_norm", il);
+        }
     }
     cur = inpL;
 
