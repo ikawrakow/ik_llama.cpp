@@ -148,6 +148,9 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     }
 
     llama_sampling_set_rng_seed(result, params.seed);
+    if (params.adaptive_target >= 0.0f) {
+        result->adapt_p_ctx = llama_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
+    }
     for (const auto& cnstr : params.samplers_sequence)
     {
         switch (cnstr)
@@ -162,13 +165,6 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                 }
                 result->smpl=llama_sampler_init_dry(vocab, params.dry_multiplier, params.dry_base, params.dry_allowed_length, params.dry_penalty_last_n, c_breakers.data(), c_breakers.size());
 
-                break;
-            }
-            case llama_sampler_type::ADAPTIVE_P:
-            {
-                if (params.adaptive_target >= 0.0f) {
-                    result->adapt_p_ctx = llama_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
-                }
                 break;
             }
             default:
@@ -227,7 +223,9 @@ void common_sampler_reset(common_sampler * ctx) {
     llama_sampler_dry_reset(ctx->smpl);
 
     llama_free_adaptive_p(ctx->adapt_p_ctx);
-    ctx->adapt_p_ctx = llama_init_adaptive_p(ctx->params.adaptive_target, ctx->params.adaptive_decay, ctx->params.adaptive_updt_w_cur, ctx->rng());
+    ctx->adapt_p_ctx = ctx->params.adaptive_target >= 0.0f
+        ? llama_init_adaptive_p(ctx->params.adaptive_target, ctx->params.adaptive_decay, ctx->params.adaptive_updt_w_cur, ctx->rng())
+        : nullptr;
     ctx->speculative_rng.seed(ctx->speculative_seed);
 }
 
@@ -466,7 +464,6 @@ static void sampler_queue(
     const float         top_n_sigma = params.top_n_sigma;
 
     const std::vector<llama_sampler_type> & samplers_sequence = params.samplers_sequence;
-    bool use_adaptive_p = false; // see below
     for (auto sampler_type : samplers_sequence) {
         switch (sampler_type) {
             case llama_sampler_type::DRY        : llama_sample_dry      (ctx_main, ctx_sampling->smpl, &cur_p); break;
@@ -487,12 +484,11 @@ static void sampler_queue(
                     llama_sample_temp(ctx_main, &cur_p, temp);
                 }
                 break;
-            case llama_sampler_type::ADAPTIVE_P:  use_adaptive_p = ctx_sampling->adapt_p_ctx != nullptr; break;
             default : break;
         }
 
     }
-    if (use_adaptive_p) {
+    if (ctx_sampling->adapt_p_ctx != nullptr) {
         // adaptive p should be put to the last, so we ignore the order in the sampler
         llama_sample_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx);
     }
