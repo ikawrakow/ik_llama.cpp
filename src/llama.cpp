@@ -750,7 +750,7 @@ bool llama_context::update_cache_copies() {
         return any;
     }
     const int n_layer = model.mtp && cparams.mtp_op_type != MTP_OP_NONE ?
-        model.hparams.n_layer : model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
+        (int) model.hparams.n_layer_runtime() : (int) model.hparams.n_layer_runtime() - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
     auto layer_has_attention_kv = [&](int il) {
         return !model.hparams.is_recurrent(il);
     };
@@ -832,15 +832,15 @@ llama_context::llama_context(const llama_model & model)
     : model(model) , sampling(llama_n_vocab(&model)) , t_start_us(model.t_start_us) , t_load_us(model.t_load_us) {
     const auto & hparams = model.hparams;
     if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
-        cache_copies.resize(2*model.splits.size()*hparams.n_layer);
+        cache_copies.resize(2*model.splits.size()*hparams.n_layer_runtime());
     } else {
-        cache_copies.resize(2*hparams.n_layer);
+        cache_copies.resize(2*hparams.n_layer_runtime());
     }
     // DSA indexer-key cache copy. Entries stay null for non-DSA models and non-indexer layers,
     // so update_cache_copies() is a no-op when DSA is off.
-    dsa_cache_copies.resize(hparams.n_layer);
-    openpangu_cache_copies.resize(hparams.n_layer);
-    openpangu_cache_copies_mtp.resize(hparams.n_layer);
+    dsa_cache_copies.resize(hparams.n_layer_runtime());
+    openpangu_cache_copies.resize(hparams.n_layer_runtime());
+    openpangu_cache_copies_mtp.resize(hparams.n_layer_runtime());
     llama_all_contexts().push_back(this);
 }
 
@@ -1206,8 +1206,8 @@ static bool llama_kv_cache_init(
 
     const struct llama_hparams & hparams = model.hparams;
 
-    const int64_t  n_layer = model.mtp ? hparams.n_layer
-                                       : hparams.n_layer - hparams.nextn_predict_layers;
+    const int64_t  n_layer = model.mtp ? (int64_t) hparams.n_layer_runtime()
+                                       : (int64_t) hparams.n_layer_runtime() - hparams.nextn_predict_layers;
 
     cache.has_shift = false;
 
@@ -1228,9 +1228,9 @@ static bool llama_kv_cache_init(
             LLAMA_LOG_WARN("%s: --swa-compress is not implemented for this model; ignoring\n", __func__);
         }
     } else if (cparams.swa_compress) {
-        std::vector<uint32_t> plan((size_t) hparams.n_layer, kv_size);
+        std::vector<uint32_t> plan((size_t) n_layer, kv_size);
         bool any = false;
-        for (int il = 0; il < (int) hparams.n_layer; ++il) {
+        for (int il = 0; il < (int) n_layer; ++il) {
             plan[il] = llama_kv_layer_rows(hparams, il, kv_size, true, cparams.n_ubatch,
                                            llama_kv_cache::get_padding(cparams.flash_attn));
             any = any || plan[il] < kv_size;
@@ -1238,7 +1238,7 @@ static bool llama_kv_cache_init(
         if (any) {
             cache.row_count = std::move(plan);
             uint32_t rows_compacted = 0;
-            for (int il = 0; il < (int) hparams.n_layer; ++il) {
+            for (int il = 0; il < (int) n_layer; ++il) {
                 if (cache.row_count[il] >= kv_size) {
                     continue;
                 }
@@ -1304,7 +1304,7 @@ static bool llama_kv_cache_init(
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
         const bool is_mtp = llama_mtp_tail_uses_layer_cache(model);
-        const int64_t n_mtp_first = hparams.n_layer - hparams.nextn_predict_layers;
+        const int64_t n_mtp_first = n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
             const bool is_mtp_tail = is_mtp && i >= n_mtp_first;
             if ((split_cache || replicate_mla) && !is_mtp_tail) {
@@ -1400,7 +1400,7 @@ static bool llama_kv_cache_init(
 
     int n_mla = 0;
     int n_kv_active_layers = 0;
-    const int n_mtp_first_layer = hparams.n_layer - hparams.nextn_predict_layers;
+    const int n_mtp_first_layer = (int) n_layer - hparams.nextn_predict_layers;
     for (int i = 0; i < (int) n_layer; i++) {
         // For MTP-only context, skip KV allocation for non-MTP layers
         if (cparams.mtp_op_type != MTP_OP_NONE && i < n_mtp_first_layer) {
@@ -1437,8 +1437,8 @@ static bool llama_kv_cache_init(
             }
             LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
             if ((split_cache || replicate_mla) && model.arch != LLM_ARCH_LFM2 && model.arch != LLM_ARCH_LFM2MOE &&
-                    model.layers[i].ssm_out != nullptr && model.layers[i].ssm_out->extra) {
-                auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
+                    model.layer_rt(i).ssm_out != nullptr && model.layer_rt(i).ssm_out->extra) {
+                auto split_ssm_out = (const ggml_split_tensor_t *)model.layer_rt(i).ssm_out->extra;
                 GGML_ASSERT(split_ssm_out);
                 int num_v_heads = hparams.ssm_dt_rank;
                 int head_v_dim  = hparams.ssm_d_inner / num_v_heads;
@@ -1477,7 +1477,7 @@ static bool llama_kv_cache_init(
             // indexer keys in F16 so a decoded token can score against ALL past keys.
             // GLM5NEXT's k-pool indexer packs [key; gate] per token (gate depends on the hidden
             // state and cannot be recomputed from the cache), so its row is 2*indexer_head_size.
-            if (has_glm_dsa_indexer && model.layers[i].indexer_attn_k && hparams.indexer_is_full[i] &&
+            if (has_glm_dsa_indexer && model.layer_rt(i).indexer_attn_k && hparams.indexer_is_full[i] &&
                     (!is_mtp_tail_layer || (model.arch == LLM_ARCH_GLM5NEXT && cparams.dsa))) {
                 const uint32_t idx_row = (model.arch == LLM_ARCH_GLM5NEXT)
                     ? 2 * hparams.indexer_head_size : hparams.indexer_head_size;
@@ -1491,8 +1491,8 @@ static bool llama_kv_cache_init(
                 cache.v_l.push_back(kvt);
             }
             // Per-device replicas of the compressed latent KV cache (n_device from wo's split).
-            if (replicate_mla && !is_mtp_tail_layer && model.layers[i].wo && model.layers[i].wo->extra) {
-                auto wo = model.layers[i].wo;
+            if (replicate_mla && !is_mtp_tail_layer && model.layer_rt(i).wo && model.layer_rt(i).wo->extra) {
+                auto wo = model.layer_rt(i).wo;
                 auto extra_wo = (const ggml_split_tensor_t *)wo->extra;
                 int n_device = extra_wo->n_device;
                 auto & repl_k_l = cache.replicated_k_l.emplace_back();
@@ -1524,8 +1524,8 @@ static bool llama_kv_cache_init(
                 continue;
             }
             bool split_cache_i = split_cache;
-            auto K = model.layers[i].wk;
-            auto V = model.layers[i].wv;
+            auto K = model.layer_rt(i).wk;
+            auto V = model.layer_rt(i).wv;
             if (!V && model.arch == LLM_ARCH_GEMMA4) {
                 V = K;
             }
@@ -1619,7 +1619,7 @@ static bool llama_kv_cache_init(
             }
 
             if (split_cache_i) {
-                bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
+                bool use_V_for_K = model.layer_rt(i).attn_k_norm && model.layer_rt(i).attn_k_norm->ne[0] == K->ne[1] ? true : false;
                 auto extra_K = (const ggml_split_tensor_t *)K->extra;
                 auto extra_V = (const ggml_split_tensor_t *)V->extra;
                 auto & split_k_l = cache.split_k_l.emplace_back();
@@ -4236,6 +4236,8 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         int amb, int worst_case_tokens, bool flash_attn, bool swa_compress,
         std::vector<expert_tensors> & experts) {
     int n_layer = model.hparams.n_layer;
+    // Looped models keep one KV slot per logical layer: scale the per-layer cache.
+    const double kv_loops = double(model.hparams.n_layer_runtime()) / std::max(1u, model.hparams.n_layer);
     std::vector<double> result(n_layer+1, 0);
     std::vector<double> compute(n_layer+1, 0);
     struct mla_tensors {
@@ -4457,7 +4459,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
-        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn,
+        auto kv_size = kv_loops * model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn,
                                         swa_compress, (uint32_t) n_ubatch);
         LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f   %9.2f  MiB\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024., compute[il]/1024./1024.);
         max_compute = std::max(max_compute, compute[il]);
@@ -7948,7 +7950,7 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
 
     const auto & hparams = lctx.model.hparams;
 
-    const uint32_t n_layer = hparams.n_layer;
+    const uint32_t n_layer = hparams.n_layer_runtime();
 
     const uint32_t n_kv   = llama_kv_cache_cell_max(kv_self);
     const uint32_t n_used = kv_self.used;
@@ -9849,6 +9851,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_NANBEIGE:
         case LLM_ARCH_DECI:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_BAICHUAN:
@@ -9968,7 +9971,7 @@ int32_t llama_model_n_embd_inp(const llama_model* model) {
 }
 
 int32_t llama_n_layer(const struct llama_model * model) {
-    return model->hparams.n_layer;
+    return model->hparams.n_layer_runtime();
 }
 
 float llama_rope_freq_scale_train(const struct llama_model * model) {
@@ -10105,7 +10108,7 @@ static bool llama_control_vector_init(struct llama_control_vector & cvec, const 
 
     // count layer buffer types
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
-    for (int64_t i = 0; i < model.hparams.n_layer; i++) {
+    for (uint32_t i = 0; i < model.hparams.n_layer_runtime(); i++) {
         buft_layer_count[model.buft_layer[i].buft]++;
     }
 
@@ -10127,9 +10130,9 @@ static bool llama_control_vector_init(struct llama_control_vector & cvec, const 
     }
 
     // make tensors
-    cvec.tensors.reserve(model.hparams.n_layer);
+    cvec.tensors.reserve(model.hparams.n_layer_runtime());
     cvec.tensors.push_back(nullptr); // there's never a tensor for layer 0
-    for (size_t il = 1; il < model.hparams.n_layer; il++) {
+    for (size_t il = 1; il < model.hparams.n_layer_runtime(); il++) {
         struct ggml_context * ctx = ctx_map.at(model.buft_layer[il].buft);
         ggml_tensor * tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, model.hparams.n_embd);
         cvec.tensors.push_back(tensor);
@@ -10179,7 +10182,7 @@ int32_t llama_control_vector_apply(struct llama_context * lctx, const float * da
     cvec.layer_start = il_start;
     cvec.layer_end   = il_end;
 
-    for (size_t il = 1; il < model.hparams.n_layer; il++) {
+    for (size_t il = 1; il < model.hparams.n_layer_runtime(); il++) {
         assert(cvec.tensors[il] != nullptr);
 
         const size_t off = n_embd * (il - 1); // buffer doesn't have data for layer 0, since it's never present
@@ -11522,7 +11525,7 @@ struct llama_data_read {
             return;
         }
         bool is_recurrent =  ctx->model.hparams.recurrent_layer_arr[il];
-        auto kv = is_recurrent ? nullptr : get_kv_cache_split_tensor(tensor, ctx->model.layers[il]);
+        auto kv = is_recurrent ? nullptr : get_kv_cache_split_tensor(tensor, ctx->model.layer_rt(il));
         auto kv_extra = kv ? (ggml_split_tensor_t *)kv->extra : nullptr;
         GGML_ASSERT(extra && (is_recurrent || kv_extra));
         auto ne = kv ? kv->ne[1] : tensor->ne[0];
@@ -12257,7 +12260,7 @@ struct llama_data_write_buffer : llama_data_write {
         else if (model.hparams.recurrent_layer_arr[il]) {
             get_tensor_data_split(ptr, tensor, aux_buffer, offset, size);
         } else {
-            auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
+            auto kv = get_kv_cache_split_tensor(tensor, model.layer_rt(il));
             get_tensor_data_split(ptr, tensor, kv, aux_buffer, offset, size);
         }
     }
@@ -12401,7 +12404,7 @@ struct llama_data_write_file : llama_data_write {
             }
             return;
         }
-        auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
+        auto kv = get_kv_cache_split_tensor(tensor, model.layer_rt(il));
         temp_buffer.resize(size);
         llama_data_write_buffer::get_tensor_data_split(temp_buffer.data(), tensor, kv, aux_buffer, offset, size);
     }

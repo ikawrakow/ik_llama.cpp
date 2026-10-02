@@ -605,6 +605,17 @@ struct llama_model {
 
     std::vector<llama_layer> layers;
 
+    // Looped models (Nanbeige) map a logical layer onto its shared physical layer; for
+    // every other architecture this is the identity. Graph/KV must use layer_rt(il).
+    const llama_layer & layer_rt(int il) const {
+        GGML_ASSERT(il >= 0 && hparams.n_layer > 0);
+        return layers[(uint32_t) il % hparams.n_layer];
+    }
+    llama_layer &       layer_rt(int il)       {
+        GGML_ASSERT(il >= 0 && hparams.n_layer > 0);
+        return layers[(uint32_t) il % hparams.n_layer];
+    }
+
     llama_split_mode split_mode;
     int main_gpu;
     int max_gpu = 0; // max. number of GPUs to use per layer for aplit mode "graph"

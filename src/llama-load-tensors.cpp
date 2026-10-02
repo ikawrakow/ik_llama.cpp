@@ -42,7 +42,9 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     bool create_tensors() override;
 
     bool create_llama_tensors(const LLM_TN & tn);
-    
+
+    bool create_nanbeige_tensors(const LLM_TN & tn);
+
     bool create_k2horizon_tensors(const LLM_TN & tn);
 
     bool create_muse_glimmer_tensors(const LLM_TN & tn);
@@ -626,6 +628,27 @@ bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
             }
         }
     }
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_nanbeige_tensors(const LLM_TN & tn) {
+    // Physical layers are loaded like Llama; mirror the per-layer buffer types so the KV
+    // setup can address every logical layer.
+    bool use_mmap_buffer = create_llama_tensors(tn);
+
+    const auto & hparams = model.hparams;
+    const int n_phys = (int) hparams.n_layer;
+    const int n_all  = (int) hparams.n_layer_all;
+
+    if (n_all > n_phys && hparams.n_loops > 1) {
+        model.buft_layer.resize(n_all);
+        for (int j = 1; j < (int) hparams.n_loops; ++j) {
+            for (int i = 0; i < n_phys; ++i) {
+                model.buft_layer[j*n_phys + i] = model.buft_layer[i];
+            }
+        }
+    }
+
     return use_mmap_buffer;
 }
 
@@ -5851,6 +5874,8 @@ bool create_tensors_helper::create_tensors() {
     switch (model.arch) {
         case LLM_ARCH_K2_HORIZON:
             use_mmap_buffer = create_k2horizon_tensors(tn); break;
+        case LLM_ARCH_NANBEIGE:
+            use_mmap_buffer = create_nanbeige_tensors(tn); break;
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_REFACT:
         case LLM_ARCH_MINICPM:

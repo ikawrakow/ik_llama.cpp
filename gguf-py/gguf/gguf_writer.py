@@ -709,6 +709,12 @@ class GGUFWriter:
         else:
             self.add_array(Keys.Attention.HEAD_COUNT_KV.format(arch=self.arch), count)
 
+    def add_num_loops(self, n: int) -> None:
+        self.add_uint32(Keys.Nanbeige.NUM_LOOPS.format(arch=self.arch), n)
+
+    def add_skip_loop_final_norm(self, value: bool) -> None:
+        self.add_bool(Keys.Nanbeige.SKIP_LOOP_FINAL_NORM.format(arch=self.arch), value)
+
     def add_key_length(self, length: int) -> None:
         self.add_uint32(Keys.Attention.KEY_LENGTH.format(arch=self.arch), length)
 

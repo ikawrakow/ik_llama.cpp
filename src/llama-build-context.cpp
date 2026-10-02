@@ -45,7 +45,7 @@ llm_build_context::llm_build_context(
         batch            (batch),
         kv_self          (lctx.kv_self),
         n_embd           (hparams.n_embd),
-        n_layer          (hparams.n_layer),
+        n_layer          (hparams.n_layer_runtime()),
         n_rot            (hparams.n_rot),
         n_ctx            (cparams.n_ctx),
         n_head           (hparams.n_head()),
@@ -543,15 +543,15 @@ ggml_tensor * llm_build_context::build_rope_factors(int il) {
     // choose long/short freq factors based on the context size
     const auto n_ctx_pre_seq = cparams.n_ctx / cparams.n_seq_max;
 
-    if (model.layers[il].rope_freqs != nullptr) {
-        return model.layers[il].rope_freqs;
+    if (model.layer_rt(il).rope_freqs != nullptr) {
+        return model.layer_rt(il).rope_freqs;
     }
 
     if (n_ctx_pre_seq > hparams.n_ctx_orig_yarn) {
-        return model.layers[il].rope_long;
+        return model.layer_rt(il).rope_long;
     }
 
-    return model.layers[il].rope_short;
+    return model.layer_rt(il).rope_short;
 }
 
 ggml_tensor * llm_build_context::build_inp_out_ids() {
@@ -2816,6 +2816,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
 
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_NANBEIGE:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
@@ -3222,8 +3223,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                                   || model.arch == LLM_ARCH_K2_HORIZON;
                                // || (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8);
 
-    if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&
-         model.layers[il].wq->extra && model.layers[il].wk->extra && model.layers[il].wv->extra && model.layers[il].wo->extra) {
+    if (!model.layer_rt(il).wqkv && !model.layer_rt(il).wqk && cparams.flash_attn &&
+         model.layer_rt(il).wq->extra && model.layer_rt(il).wk->extra && model.layer_rt(il).wv->extra && model.layer_rt(il).wo->extra) {
         if (kv_self.k_l[il]->extra && kv_self.v_l[il]->extra) {
 
             const bool compacted = kv_self.is_compacted(il);
@@ -3232,29 +3233,29 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             const int32_t n_kv_view = use_swa_window ? (int32_t) lctx.swa_window_view.w_view : n_kv;
             const int32_t kv_view_offset = use_swa_window ? (int32_t) lctx.swa_window_view.win_off : 0;
 
-            auto wq = (ggml_split_tensor_t *)model.layers[il].wq->extra;
-            auto wk = (ggml_split_tensor_t *)model.layers[il].wk->extra;
-            auto wv = (ggml_split_tensor_t *)model.layers[il].wv->extra;
-            auto wo = (ggml_split_tensor_t *)model.layers[il].wo->extra;
+            auto wq = (ggml_split_tensor_t *)model.layer_rt(il).wq->extra;
+            auto wk = (ggml_split_tensor_t *)model.layer_rt(il).wk->extra;
+            auto wv = (ggml_split_tensor_t *)model.layer_rt(il).wv->extra;
+            auto wo = (ggml_split_tensor_t *)model.layer_rt(il).wo->extra;
             GGML_ASSERT(wq->n_device == wk->n_device && wq->n_device == wv->n_device && wq->n_device == wo->n_device);
             auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
             auto vl = (ggml_split_tensor_t *)kv_self.v_l[il]->extra;
             GGML_ASSERT(wq->n_device == kl->n_device && wq->n_device == vl->n_device);
             ggml_split_tensor_t *bq = nullptr, *bo = nullptr, *bk = nullptr, *bv = nullptr;
-            if (model.layers[il].bq && model.layers[il].bq->extra) {
-                bq = (ggml_split_tensor_t *)model.layers[il].bq->extra;
+            if (model.layer_rt(il).bq && model.layer_rt(il).bq->extra) {
+                bq = (ggml_split_tensor_t *)model.layer_rt(il).bq->extra;
                 GGML_ASSERT(bq->n_device == wq->n_device);
             }
-            if (model.layers[il].bo && model.layers[il].bo->extra) {
-                bo = (ggml_split_tensor_t *)model.layers[il].bo->extra;
+            if (model.layer_rt(il).bo && model.layer_rt(il).bo->extra) {
+                bo = (ggml_split_tensor_t *)model.layer_rt(il).bo->extra;
                 GGML_ASSERT(bo->n_device == wq->n_device);
             }
-            if (model.layers[il].bk && model.layers[il].bk->extra) {
-                bk = (ggml_split_tensor_t *)model.layers[il].bk->extra;
+            if (model.layer_rt(il).bk && model.layer_rt(il).bk->extra) {
+                bk = (ggml_split_tensor_t *)model.layer_rt(il).bk->extra;
                 GGML_ASSERT(bk->n_device == wq->n_device);
             }
-            if (model.layers[il].bv && model.layers[il].bv->extra) {
-                bv = (ggml_split_tensor_t *)model.layers[il].bv->extra;
+            if (model.layer_rt(il).bv && model.layer_rt(il).bv->extra) {
+                bv = (ggml_split_tensor_t *)model.layer_rt(il).bv->extra;
                 GGML_ASSERT(bv->n_device == wq->n_device);
             }
             std::vector<ggml_tensor*> attn(wq->n_device, nullptr);
@@ -3277,10 +3278,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 }
                 cur = do_split_norm(ctx0, cur, the_attn_norm, lctx.model.hparams, cb, id, il_cb, is_norm);
                 auto input_normed = cur;
-                auto the_q_norm = model.layers[il].attn_q_norm ? model.layers[il].attn_q_norm->extra ?
-                    ((ggml_split_tensor_t *)model.layers[il].attn_q_norm->extra)->splits[id] : model.layers[il].attn_q_norm : nullptr;
-                auto the_k_norm = model.layers[il].attn_k_norm ? model.layers[il].attn_k_norm->extra ?
-                    ((ggml_split_tensor_t *)model.layers[il].attn_k_norm->extra)->splits[id] : model.layers[il].attn_k_norm : nullptr;
+                auto the_q_norm = model.layer_rt(il).attn_q_norm ? model.layer_rt(il).attn_q_norm->extra ?
+                    ((ggml_split_tensor_t *)model.layer_rt(il).attn_q_norm->extra)->splits[id] : model.layer_rt(il).attn_q_norm : nullptr;
+                auto the_k_norm = model.layer_rt(il).attn_k_norm ? model.layer_rt(il).attn_k_norm->extra ?
+                    ((ggml_split_tensor_t *)model.layer_rt(il).attn_k_norm->extra)->splits[id] : model.layer_rt(il).attn_k_norm : nullptr;
                 ggml_tensor *Qcur, *Kcur, *Vcur, *gate = nullptr;
                 if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN4EXP) {
                     auto [Q, K, V, G] = llm_build_mul_mat_qkv_gated(gf, cur, split_wq, split_wk, split_wv,
@@ -3306,8 +3307,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     rope_factors = ((ggml_split_tensor_t *)rope_factors->extra)->splits[id];
                     GGML_ASSERT(rope_factors);
                 }
-                else if (model.layers[il].rope_freqs && model.layers[il].rope_freqs->extra) {
-                    auto extra = (ggml_split_tensor_t *)model.layers[il].rope_freqs->extra;
+                else if (model.layer_rt(il).rope_freqs && model.layer_rt(il).rope_freqs->extra) {
+                    auto extra = (ggml_split_tensor_t *)model.layer_rt(il).rope_freqs->extra;
                     rope_factors = extra->splits[id];
                 }
                 if (do_rope) {
@@ -3407,8 +3408,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask, KQ_scale, hparams.f_max_alibi_bias,
                         hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
                 cb(cur, "flash_attn", il_cb);
-                if (model.layers[il].attn_sinks && model.layers[il].attn_sinks->extra) {
-                    auto split = (ggml_split_tensor_t *)model.layers[il].attn_sinks->extra;
+                if (model.layer_rt(il).attn_sinks && model.layer_rt(il).attn_sinks->extra) {
+                    auto split = (ggml_split_tensor_t *)model.layer_rt(il).attn_sinks->extra;
                     GGML_ASSERT(split->n_device == wq->n_device);
                     GGML_ASSERT(split->splits[id]);
                     ggml_flash_attn_ext_add_sinks(cur, split->splits[id]);
@@ -3430,8 +3431,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     }
                 }
 
-                if (model.layers[il].wqkv_gate) {
-                    auto wqkv_gate = (ggml_split_tensor_t *)model.layers[il].wqkv_gate->extra;
+                if (model.layer_rt(il).wqkv_gate) {
+                    auto wqkv_gate = (ggml_split_tensor_t *)model.layer_rt(il).wqkv_gate->extra;
                     GGML_ASSERT(wqkv_gate && wqkv_gate->splits[id]);
                     auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate->splits[id], input_normed);
                     if (model.arch == LLM_ARCH_LAGUNA) {
@@ -3532,15 +3533,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 
     ggml_tensor *Qcur, *Kcur, *Vcur, *gate = nullptr;
     if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN4EXP) {
-        auto [Q, K, V, G] = llm_build_mul_mat_qkv_gated(gf, cur, model.layers[il].wq, model.layers[il].wk, model.layers[il].wv,
-                model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, il);
+        auto [Q, K, V, G] = llm_build_mul_mat_qkv_gated(gf, cur, model.layer_rt(il).wq, model.layer_rt(il).wk, model.layer_rt(il).wv,
+                model.layer_rt(il).attn_q_norm, model.layer_rt(il).attn_k_norm, il);
         Qcur = Q; Kcur = K; Vcur = V; gate = G;
     } else {
         auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur,
-                model.layers[il].wqkv, model.layers[il].bqkv,
-                model.layers[il].wqk,  model.layers[il].bqk,
-                model.layers[il].wq,   model.layers[il].bq, model.layers[il].wk, model.layers[il].bk, model.layers[il].wv, model.layers[il].bv,
-                model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, f_attn_scale, il);
+                model.layer_rt(il).wqkv, model.layer_rt(il).bqkv,
+                model.layer_rt(il).wqk,  model.layer_rt(il).bqk,
+                model.layer_rt(il).wq,   model.layer_rt(il).bq, model.layer_rt(il).wk, model.layer_rt(il).bk, model.layer_rt(il).wv, model.layer_rt(il).bv,
+                model.layer_rt(il).attn_q_norm, model.layer_rt(il).attn_k_norm, f_attn_scale, il);
         Qcur = Q; Kcur = K; Vcur = V;
         if (model.arch == LLM_ARCH_MIMO2 && std::abs(model.hparams.f_attn_v_scale - 1) > 1e-4f) {
             Vcur = ggml_scale(ctx0, Vcur, model.hparams.f_attn_v_scale);
@@ -3577,7 +3578,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         cb(Qcur, "Qcur_temp_scaled", il);
     }
 
-    if (auto wqkv_gate = model.layers[il].wqkv_gate; wqkv_gate != nullptr) {
+    if (auto wqkv_gate = model.layer_rt(il).wqkv_gate; wqkv_gate != nullptr) {
         cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                 nullptr, nullptr,
                 Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
@@ -3614,9 +3615,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         cb(cur, "attn_gated_3d", il);
         cur = ggml_reshape_2d(ctx0, cur, n_embd_head_v * n_head_l, n_tokens);
         cb(cur, "attn_gated", il);
-        cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
-        if (model.layers[il].bo) {
-            cur = ggml_add(ctx0, cur, model.layers[il].bo);
+        cur = llm_build_lora_mm(lctx, ctx0, model.layer_rt(il).wo, cur);
+        if (model.layer_rt(il).bo) {
+            cur = ggml_add(ctx0, cur, model.layer_rt(il).bo);
         }
         cb(cur, "attn_out", il);
     } else {
@@ -3632,14 +3633,14 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 cur = ggml_mul(ctx0, cur, gate);
             }
             cb(cur, "qkv_gated", il);
-            cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
-            if (model.layers[il].bo) {
-                cur = ggml_add(ctx0, cur, model.layers[il].bo);
+            cur = llm_build_lora_mm(lctx, ctx0, model.layer_rt(il).wo, cur);
+            if (model.layer_rt(il).bo) {
+                cur = ggml_add(ctx0, cur, model.layer_rt(il).bo);
             }
             cb(cur, "attn_out", il);
         } else {
             cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                    model.layers[il].wo, model.layers[il].bo,
+                    model.layer_rt(il).wo, model.layer_rt(il).bo,
                     Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
                     k_view, v_view, swa_head);
         }
