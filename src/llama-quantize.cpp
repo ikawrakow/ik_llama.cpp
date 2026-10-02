@@ -1702,7 +1702,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 new_type = params->ffn_up_type;
             }
 
-            if (strcmp(tensor->name, "token_embd.weight") == 0) {
+            if (strcmp(tensor->name, "token_embd.weight") == 0 || strcmp(tensor->name, "per_layer_token_embd.weight") == 0) {
                 // token embeddings cannot be quantized with row-interleaved quants
                 auto working_type = interleaved_properties(new_type).first;
                 if (working_type != new_type) {
