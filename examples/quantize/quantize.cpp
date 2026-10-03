@@ -169,7 +169,7 @@ static void usage(const char * executable) {
     printf("  --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
     printf("  --cuda-quantize: quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1/IQ4_NL/IQ4_XS tensors on a CUDA device; other types use the CPU\n");
-    printf("  -dev DEVICES, --device DEVICES: first CUDA device in a common-style list used by --cuda-quantize (default: CUDA0; bare index N also accepted, e.g. -dev CUDA1)\n");
+    printf("  -dev DEVICES, --device DEVICES: CUDA device(s) used by --cuda-quantize (default: CUDA0; one device = mono, two = dual-GPU row-split, e.g. -dev CUDA0,CUDA1; bare index N also accepted)\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");
@@ -352,35 +352,43 @@ static bool parse_custom_quants(const std::string& arg, std::vector<CustomQ>& cu
     return true;
 }
 
-// Resolve the first CUDA entry of a common-style device list (e.g. CUDA1 or CUDA0,CUDA1)
-// to a CUDA ordinal for --cuda-quantize. A bare index (e.g. 1) is also accepted for
-// backward compatibility with the old --device N form. Returns -1 when unparseable.
-static int parse_cuda_device_list(const std::string & arg) {
-    std::string first = arg.substr(0, arg.find(','));
-    size_t beg = first.find_first_not_of(" \t");
-    size_t end = first.find_last_not_of(" \t");
-    if (beg == std::string::npos) {
-        return -1;
-    }
-    first = first.substr(beg, end - beg + 1);
-    std::string digits = first;
-    if (first.size() > 4 && (first.compare(0, 4, "CUDA") == 0 || first.compare(0, 4, "cuda") == 0)) {
-        digits = first.substr(4);
-    }
-    if (digits.empty()) {
-        return -1;
-    }
-    for (char c : digits) {
-        if (!isdigit((unsigned char) c)) {
-            return -1;
+// Resolve a common-style CUDA device list (e.g. CUDA1 or CUDA0,CUDA1) to
+// CUDA ordinals for --cuda-quantize. A bare index (e.g. 1) is also accepted
+// for backward compatibility with the old --device N form. Returns false
+// when any entry is unparseable (devs left untouched).
+static bool parse_cuda_device_list(const std::string & arg, std::vector<int> & devs) {
+    std::vector<int> out;
+    for (const auto & item : string_split<std::string>(arg, ',')) {
+        size_t beg = item.find_first_not_of(" \t");
+        size_t end = item.find_last_not_of(" \t");
+        if (beg == std::string::npos) {
+            return false;
+        }
+        std::string first = item.substr(beg, end - beg + 1);
+        std::string digits = first;
+        if (first.size() > 4 && (first.compare(0, 4, "CUDA") == 0 || first.compare(0, 4, "cuda") == 0)) {
+            digits = first.substr(4);
+        }
+        if (digits.empty()) {
+            return false;
+        }
+        for (char c : digits) {
+            if (!isdigit((unsigned char) c)) {
+                return false;
+            }
+        }
+        try {
+            out.push_back(std::stoi(digits));
+        }
+        catch (const std::exception &) {
+            return false;
         }
     }
-    try {
-        return std::stoi(digits);
+    if (out.empty()) {
+        return false;
     }
-    catch (const std::exception &) {
-        return -1;
-    }
+    devs = std::move(out);
+    return true;
 }
 
 static bool parse_fudge_factors(const std::string & arg, std::unordered_map<ggml_type, float> & factors) {
@@ -453,12 +461,17 @@ int main(int argc, char ** argv) {
             params.cuda_quantize = true;
         } else if (strcmp(argv[arg_idx], "--device") == 0 || strcmp(argv[arg_idx], "-dev") == 0) {
             if (arg_idx < argc-1) {
-                const int dev = parse_cuda_device_list(argv[++arg_idx]);
-                if (dev < 0) {
+                std::vector<int> devs;
+                if (!parse_cuda_device_list(argv[++arg_idx], devs)) {
                     fprintf(stderr, "%s: invalid CUDA device '%s' (expected CUDA<N> list, e.g. CUDA0,CUDA1, or bare index)\n", __func__, argv[arg_idx]);
                     return 1;
                 }
-                params.cuda_device = dev;
+                if (devs.size() > 2) {
+                    fprintf(stderr, "%s: listing more than 2 devices needs tensor-split ratios (-ts), coming next; got '%s'\n", __func__, argv[arg_idx]);
+                    return 1;
+                }
+                params.cuda_device = devs[0];
+                params.cuda_device2 = devs.size() > 1 ? devs[1] : -1;
             } else {
                 usage(argv[0]);
             }

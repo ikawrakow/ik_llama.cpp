@@ -15,6 +15,7 @@
 #include <thread>
 #include <regex>
 #include <mutex>
+#include <exception>
 #include <numeric>
 #include <fstream>
 #include <filesystem>
@@ -974,6 +975,61 @@ static llama_ftype repacked_ftype(llama_ftype ftype) {
     return ftype;
 }
 
+#ifdef GGML_USE_CUDA
+// Dual-GPU row-split for --cuda-quantize -dev CUDA0,CUDA1: each device quants
+// half the rows of every slice on its own thread (rows are independent and the
+// imatrix is a per-column broadcast, so each shard reuses the same kernels as
+// mono with identical bytes; a shard whose GPU call misses falls back to
+// ggml_quantize_chunk for that shard only). Returns 0 only when nothing was
+// written (caller falls back to the whole-tensor CPU path like mono).
+static size_t do_quantize_cuda_dual(const ggml_tensor * tensor, ggml_type new_type,
+        const float * f32_data, char * new_data, const float * imatrix,
+        int device0, int device1, const llama_model_quantize_params * params) {
+    const int64_t n_per_row = tensor->ne[0];
+    const int64_t nrows     = tensor->ne[1];
+    const int64_t nslice    = tensor->ne[2];
+    const size_t  row_size  = ggml_row_size(new_type, n_per_row);
+    const int64_t rows0     = nrows/2;
+
+    struct shard_out {
+        size_t bytes = 0;
+        std::exception_ptr eptr;
+    };
+    shard_out outs[2];
+
+    auto run_shard = [&](int idx, int device, int64_t r0, int64_t nr) {
+        try {
+            size_t bytes = 0;
+            for (int64_t s = 0; s < nslice; ++s) {
+                const float * src_s = f32_data + (s*nrows + r0)*n_per_row;
+                char *        dst_s = new_data + (s*nrows + r0)*row_size;
+                const float * im_s  = imatrix ? imatrix + s*n_per_row : nullptr;
+                size_t nb = ggml_cuda_quantize(device, new_type, src_s, dst_s, nr, n_per_row, 1, im_s);
+                if (nb != (size_t)nr*row_size) {
+                    nb = ggml_quantize_chunk(new_type, src_s, dst_s, 0, nr, n_per_row, im_s, params->user_data);
+                }
+                bytes += nb;
+            }
+            outs[idx].bytes = bytes;
+        }
+        catch (...) {
+            outs[idx].eptr = std::current_exception();
+        }
+    };
+
+    std::thread t1(run_shard, 1, device1, rows0, nrows - rows0);
+    run_shard(0, device0, 0, rows0);
+    t1.join();
+
+    for (int i = 0; i < 2; ++i) {
+        if (outs[i].eptr) {
+            std::rethrow_exception(outs[i].eptr);
+        }
+    }
+    return outs[0].bytes + outs[1].bytes;
+}
+#endif
+
 static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_type, const float * f32_data, char * new_data,
         const float * imatrix, std::vector<std::thread> & workers, size_t & new_size, int chunk_size_multiplier,
         const llama_model_quantize_params * params) {
@@ -983,7 +1039,13 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
         const bool symmetric_q4_0 = new_type == GGML_TYPE_Q4_0 && params->user_data &&
             static_cast<const quantize_user_data *>(params->user_data)->symmetric_q4_0;
         if (!symmetric_q4_0) {
-            new_size = ggml_cuda_quantize(params->cuda_device, new_type, f32_data, new_data, tensor->ne[1], tensor->ne[0], tensor->ne[2], imatrix);
+            if (params->cuda_device2 >= 0 && tensor->ne[1] >= 2) {
+                // Two devices listed (-dev CUDA0,CUDA1): row-split, same hashes as mono.
+                new_size = do_quantize_cuda_dual(tensor, new_type, f32_data, new_data, imatrix,
+                        params->cuda_device, params->cuda_device2, params);
+            } else {
+                new_size = ggml_cuda_quantize(params->cuda_device, new_type, f32_data, new_data, tensor->ne[1], tensor->ne[0], tensor->ne[2], imatrix);
+            }
             if (new_size > 0) {
                 if (!ggml_validate_row_data(new_type, new_data, new_size)) {
                     throw std::runtime_error("quantized data validation failed");
