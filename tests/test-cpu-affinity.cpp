@@ -1,12 +1,14 @@
 // Unit tests for the CPU affinity argument parsers (common/common.{h,cpp}).
 
 #undef NDEBUG
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 #include "common.h"
+#include "speculative.h"
 
 using cpus_t = std::vector<int32_t>;
 
@@ -57,6 +59,45 @@ int main() {
     assert(!cpu_affinity_parse_range("0,,1",            cpus)); // empty item
     assert(!cpu_affinity_parse_range("1024",            cpus)); // >= GGML_MAX_CPU_AFFINITY
     assert(!cpu_affinity_parse_range("0-2000000000",    cpus)); // must not loop/allocate
+
+    // P-core and E-core sets must stay disjoint
+    const cpus_t pcpus = cpu_get_math_cpus();
+    for (const int32_t cpu : cpu_get_efficiency_cpus()) {
+        assert(std::find(pcpus.begin(), pcpus.end(), cpu) == pcpus.end());
+    }
+
+    // empty list without auto = no pinning
+    assert(cpu_affinity_resolve({}, false).empty());
+    assert(cpu_affinity_resolve_draft({}, false).empty());
+
+    // --draft-params affinity is resolved and flagged, even when empty
+    {
+        gpt_params p;
+        p.speculative.params = "--cpu-affinity";
+        assert(common_speculative_prepare_startup(p, false));
+        assert(p.speculative.cpu_affinity_configured);
+        assert(p.speculative.cpu_affinity == cpu_affinity_resolve_draft({}, true));
+    }
+    {
+        gpt_params p;
+        p.speculative.params = "-cr 0-1";
+        assert(common_speculative_prepare_startup(p, false));
+        assert(p.speculative.cpu_affinity_configured);
+        assert(p.speculative.cpu_affinity == cpu_affinity_resolve_draft({0, 1}, false));
+    }
+    {
+        gpt_params p;
+        p.speculative.params = "-cm 0x3"; // bitmask = CPUs 0 and 1
+        assert(common_speculative_prepare_startup(p, false));
+        assert(p.speculative.cpu_affinity_configured);
+        assert(p.speculative.cpu_affinity == cpu_affinity_resolve_draft({0, 1}, false));
+    }
+    // invalid --draft-params aborts startup
+    {
+        gpt_params p;
+        p.speculative.params = "-cr nope";
+        assert(!common_speculative_prepare_startup(p, false));
+    }
 
     return 0;
 }
