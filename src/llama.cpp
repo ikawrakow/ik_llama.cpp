@@ -4908,7 +4908,9 @@ static bool llm_load_tensors(
                 }
                 for (int il = 0; il < i_gpu_start; ++il) {
                     model.default_layer_device[il] = -1;
-                    model.buft_layer[il] = llama_default_buffer_type_cpu(true);
+                    if (il < n_layer) {
+                        model.buft_layer[il] = llama_default_buffer_type_cpu(true);
+                    }
                 }
             }
         }
