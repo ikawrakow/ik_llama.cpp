@@ -1,4 +1,5 @@
 #include "server-task.h"
+#include "server-decision.h"
 #include "server-queue.h"
 #include "speculative.h"
 #include "json-schema-to-grammar.h"
@@ -255,6 +256,8 @@ struct server_context {
     // multimodal
     mtmd_context* mctx = nullptr;
 
+    server_decision_context decision;
+
     int32_t n_ctx; // total context for all clients / slots
 
     // system prompt
@@ -331,6 +334,8 @@ struct server_context {
     void send_final_response(server_slot& slot);
 
     void send_embedding(const server_slot& slot, const llama_batch& batch);
+
+    void send_decision(const server_slot& slot, int32_t i_batch);
 
     void apply_server_biases(server_slot& slot);
 
