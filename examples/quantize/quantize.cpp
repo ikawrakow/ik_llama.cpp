@@ -8,6 +8,7 @@
 #include "common.h"
 #include "llama.h"
 
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -158,7 +159,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [--cuda-device] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -168,7 +169,7 @@ static void usage(const char * executable) {
     printf("  --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
     printf("  --cuda-quantize: quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1/IQ4_NL/IQ4_XS tensors on a CUDA device; other types use the CPU\n");
-    printf("  --cuda-device N (--device N): CUDA device index used by --cuda-quantize (default: 0)\n");
+    printf("  -dev DEVICES, --device DEVICES: first CUDA device in a common-style list used by --cuda-quantize (default: CUDA0; bare index N also accepted, e.g. -dev CUDA1)\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");
@@ -351,6 +352,37 @@ static bool parse_custom_quants(const std::string& arg, std::vector<CustomQ>& cu
     return true;
 }
 
+// Resolve the first CUDA entry of a common-style device list (e.g. CUDA1 or CUDA0,CUDA1)
+// to a CUDA ordinal for --cuda-quantize. A bare index (e.g. 1) is also accepted for
+// backward compatibility with the old --device N form. Returns -1 when unparseable.
+static int parse_cuda_device_list(const std::string & arg) {
+    std::string first = arg.substr(0, arg.find(','));
+    size_t beg = first.find_first_not_of(" \t");
+    size_t end = first.find_last_not_of(" \t");
+    if (beg == std::string::npos) {
+        return -1;
+    }
+    first = first.substr(beg, end - beg + 1);
+    std::string digits = first;
+    if (first.size() > 4 && (first.compare(0, 4, "CUDA") == 0 || first.compare(0, 4, "cuda") == 0)) {
+        digits = first.substr(4);
+    }
+    if (digits.empty()) {
+        return -1;
+    }
+    for (char c : digits) {
+        if (!isdigit((unsigned char) c)) {
+            return -1;
+        }
+    }
+    try {
+        return std::stoi(digits);
+    }
+    catch (const std::exception &) {
+        return -1;
+    }
+}
+
 static bool parse_fudge_factors(const std::string & arg, std::unordered_map<ggml_type, float> & factors) {
     for (const auto & item : string_split<std::string>(arg, ',')) {
         auto pos = item.find('=');
@@ -398,7 +430,7 @@ int main(int argc, char ** argv) {
 
     bool hide_imatrix = false;
 
-    for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
+    for (; arg_idx < argc && (strncmp(argv[arg_idx], "--", 2) == 0 || strcmp(argv[arg_idx], "-dev") == 0); arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
             params.quantize_output_tensor = false;
         } else if (strcmp(argv[arg_idx], "--ignore-imatrix-rules") == 0) {
@@ -419,19 +451,14 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--cuda-quantize") == 0) {
             params.cuda_quantize = true;
-        } else if (strcmp(argv[arg_idx], "--cuda-device") == 0 || strcmp(argv[arg_idx], "--device") == 0) {
+        } else if (strcmp(argv[arg_idx], "--device") == 0 || strcmp(argv[arg_idx], "-dev") == 0) {
             if (arg_idx < argc-1) {
-                try {
-                    params.cuda_device = std::stoi(argv[++arg_idx]);
-                }
-                catch (const std::exception & e) {
-                    fprintf(stderr, "%s: invalid CUDA device '%s' (%s)\n", __func__, argv[arg_idx], e.what());
+                const int dev = parse_cuda_device_list(argv[++arg_idx]);
+                if (dev < 0) {
+                    fprintf(stderr, "%s: invalid CUDA device '%s' (expected CUDA<N> list, e.g. CUDA0,CUDA1, or bare index)\n", __func__, argv[arg_idx]);
                     return 1;
                 }
-                if (params.cuda_device < 0) {
-                    fprintf(stderr, "%s: invalid CUDA device '%s' (must be >= 0)\n", __func__, argv[arg_idx]);
-                    return 1;
-                }
+                params.cuda_device = dev;
             } else {
                 usage(argv[0]);
             }
