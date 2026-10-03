@@ -564,6 +564,9 @@ extern "C" {
         bool cuda_quantize;                  // quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1/IQ4_NL/IQ4_XS on a CUDA device
         int  cuda_device;                   // primary CUDA device index used by --cuda-quantize (default 0)
         int  cuda_device2;                  // second CUDA device for dual-GPU row-split (-dev CUDA0,CUDA1); -1 = disabled
+        int  cuda_n_devices;                // N-GPU row-split list size (0 = unused, use cuda_device/cuda_device2)
+        int  cuda_devices[16];              // N-GPU device ordinals (-dev CUDA0,CUDA1,CUDA2)
+        float cuda_split[16];               // N-GPU normalized row shares, sum 1 (-ts 3,3,2)
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules
