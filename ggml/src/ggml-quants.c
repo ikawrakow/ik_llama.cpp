@@ -15872,7 +15872,7 @@ static void ggml_vec_dot_ptq1_0_q8_0_generic(int n, float * GGML_RESTRICT s, siz
 }
 
 // Prism ternary vec_dot (SSSE3 PTQ1_0 / AVX2 PQ2_0)
-#if defined(__SSE2__)
+#if defined(__SSE2__) || defined(__SSSE3__)
 static inline int ik_hsum_i32_4_sse2(__m128i x) {
     x = _mm_add_epi32(x, _mm_srli_si128(x, 8));
     x = _mm_add_epi32(x, _mm_srli_si128(x, 4));
