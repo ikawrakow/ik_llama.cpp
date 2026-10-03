@@ -1517,6 +1517,51 @@ static void dequantize_block_q8_0_f16_cuda(const void * __restrict__ vx, half * 
     }
 }
 
+// IQ3KS_R16: 16-row interleaved IQ3_KS-class codebook. Band = 16 f32 row
+// scales + n/32 blocks of 204 B (block = 16 rows x 32 columns = 512 quants).
+template<typename dst_t>
+static __global__ void dequantize_block_iq3ks_r16(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
+    const int64_t nblock = n_per_row/32;
+    const int64_t ib512 = blockIdx.x;               // (16-row group, block)
+    const int64_t row16 = ib512 / nblock;
+    const int64_t ib    = ib512 - row16*nblock;
+    const float * dptr = (const float *)((const char *)vx + 16*row16*row_size);
+    const block_iq3_ks_r16 * x = (const block_iq3_ks_r16 *)(dptr + 16) + ib;
+
+    const int r    = threadIdx.x & 15;              // row within the block
+    const int half = threadIdx.x >> 4;              // columns 0..15 or 16..31
+    const float d = dptr[r];
+    const int ul = ((x->scales[r & 7] >> (4*(r >> 3))) & 0xf) | (((x->extra >> r) & 1) << 4);
+    const float dl = d * (ul - 16);
+    const int8_t * values = iq3nl_values + (((x->extra >> (16 + r)) & 1) << 3);
+
+    dst_t * y = yy + (16*row16 + r)*n_per_row + 32*ib + 16*half;
+    #pragma unroll
+    for (int c = 0; c < 16; ++c) {
+        const int cc = 16*half + c;
+        const int byte = r*4 + (cc & 3) + (cc >= 16 ? 64 : 0);
+        const int pair = (cc >> 2) & 3;
+        const int qhbyte = r*4 + (cc & 3);
+        const int idx = ((x->qs[byte] >> (2*pair)) & 3) | (((x->qh[qhbyte] >> (cc >> 2)) & 1) << 2);
+        if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
+            y[c] = __float2bfloat16(dl * values[idx]);
+        } else {
+            y[c] = dl * values[idx];
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_iq3ks_r16_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    GGML_ASSERT(n_per_row % 32 == 0);
+    GGML_ASSERT(nrows % 16 == 0);
+    const int64_t k = nrows * n_per_row;
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ3KS_R16, n_per_row);
+    const int nb = (k + 511) / 512;
+    dequantize_block_iq3ks_r16<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+}
+
+
 template<typename dst_t>
 static void dequantize_row_q2_K_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
     const int64_t k = nrows * n_per_row;
@@ -1970,6 +2015,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_q2_K_cuda;
         case GGML_TYPE_Q3_K:
             return dequantize_row_q3_K_cuda;
+        case GGML_TYPE_IQ3KS_R16:
+            return dequantize_row_iq3ks_r16_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
         case GGML_TYPE_Q5_K:
@@ -2073,6 +2120,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_q2_K_cuda;
         case GGML_TYPE_Q3_K:
             return dequantize_row_q3_K_cuda;
+        case GGML_TYPE_IQ3KS_R16:
+            return dequantize_row_iq3ks_r16_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
         case GGML_TYPE_Q5_K:

@@ -17,9 +17,20 @@ _KT_TAIL_BYTES = {
 }
 
 
+def _iq3ks_r16_row_bytes(n: int) -> int:
+    # 16 f32 row scales + n/32 blocks of 204 B, padded so that a band is a
+    # whole number of bytes per row (mirrors ggml_row_size).
+    if n % 32 != 0:
+        raise ValueError(f"Quantized tensor row size ({n}) is not a multiple of IQ3KS_R16 block size (32)")
+    band = 64 + n // 32 * 204
+    return (band + 15) // 16
+
+
 def quant_row_bytes(n: int, quant_type: GGMLQuantizationType) -> int:
     block_size, type_size = GGML_QUANT_SIZES[quant_type]
     row_meta_size = GGML_ROW_META_SIZES.get(quant_type, 0)
+    if quant_type == GGMLQuantizationType.IQ3KS_R16:
+        return _iq3ks_r16_row_bytes(n)
     if quant_type in _KT_TAIL_BYTES:
         if n % 32 != 0:
             raise ValueError(f"Quantized tensor row size ({n}) is not a multiple of {quant_type.name} block size (32)")
@@ -37,6 +48,14 @@ def quant_shape_to_byte_shape(shape: Sequence[int], quant_type: GGMLQuantization
 def quant_shape_from_byte_shape(shape: Sequence[int], quant_type: GGMLQuantizationType) -> tuple[int, ...]:
     block_size, type_size = GGML_QUANT_SIZES[quant_type]
     row_meta_size = GGML_ROW_META_SIZES.get(quant_type, 0)
+    if quant_type == GGMLQuantizationType.IQ3KS_R16:
+        b = shape[-1]
+        band = 16 * b
+        if band >= 64 and (band - 64) % 204 == 0:
+            n = (band - 64) // 204 * 32
+            if _iq3ks_r16_row_bytes(n) == b:
+                return (*shape[:-1], n)
+        raise ValueError(f"Quantized tensor bytes per row ({b}) is not a valid {quant_type.name} row size")
     if quant_type in _KT_TAIL_BYTES:
         if shape[-1] >= row_meta_size:
             n = (shape[-1] - row_meta_size) // type_size * block_size

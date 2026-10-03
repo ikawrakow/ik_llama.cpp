@@ -160,3 +160,89 @@ template <> struct mmq_kt_tail<GGML_TYPE_IQ4_KT> {
         }
     }
 };
+
+template <> struct mmq_kt_tail<GGML_TYPE_IQ3KS_R16> {
+    static constexpr bool value = true;
+    template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load(
+        const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, const int & nt) {
+
+#ifdef INT8_MMA_AVAILABLE
+        int   * x_qs = (int   *)  x_tile;
+        float * x_df = (float *) (x_qs + WARP_SIZE*2);
+#else
+        constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q8_0_16;
+        int   * x_qs = (int   *)  x_tile;
+        float * x_df = (float *) (x_qs + txs.qs);
+#endif // INT8_MMA_AVAILABLE
+
+        const int kqsx = threadIdx.x;
+
+#pragma unroll
+        for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
+            int i = i0 + threadIdx.y;
+
+            if (need_check) {
+                i = min(i, i_max);
+            }
+
+            const int ir = i % 16;
+            const char * band = x + (i - ir)*stride;
+
+            const int ib32 = kqsx/4;
+            const int j    = kqsx%4;
+            int2 v = {0, 0};
+            if (ib32 < nt) {
+                const block_iq3_ks_r16 * bxi = (const block_iq3_ks_r16 *)(band + 64) + kbx0*8 + ib32;
+                const uint32_t q0 = *(const uint32_t *)(bxi->qs + ir*4);
+                const uint32_t q1 = *(const uint32_t *)(bxi->qs + 64 + ir*4);
+                const uint32_t h  = *(const uint32_t *)(bxi->qh + ir*4);
+                const int page = (bxi->extra >> (16 + ir)) & 1;
+                const uint32_t * vtab = (const uint32_t *)iq3nl_values;
+                const uint32_t Tl = vtab[2*page + 0];
+                const uint32_t Th = vtab[2*page + 1];
+#pragma unroll
+                for (int m = 0; m < 2; ++m) {
+                    const int mm = 2*j + m;
+                    const uint32_t A = (mm < 4 ? ((q0 >> (2*mm)) & 0x03030303u) : ((q1 >> (2*(mm-4))) & 0x03030303u))
+                                     | (((h >> mm) & 0x01010101u) << 2);
+                    const uint32_t t = (A | (A >> 4)) & 0x00FF00FFu;
+                    const uint32_t s = (t | (t >> 8)) & 0x0000FFFFu;
+                    if (m == 0) v.x = __byte_perm(Tl, Th, s); else v.y = __byte_perm(Tl, Th, s);
+                }
+            }
+#ifdef INT8_MMA_AVAILABLE
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 8*ib32 + 2*j + 0] = v.x;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 8*ib32 + 2*j + 1] = v.y;
+#else
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*ib32 + 2*j + 0] = v.x;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*ib32 + 2*j + 1] = v.y;
+#endif // INT8_MMA_AVAILABLE
+        }
+
+#pragma unroll
+        for (int i0 = 0; i0 < mmq_y; i0 += nwarps * 4) {
+            int i = i0 + threadIdx.y * 4 + threadIdx.x / (WARP_SIZE/4);
+
+            if (need_check) {
+                i = min(i, i_max);
+            }
+
+            const int ir = i % 16;
+            const char * band = x + (i - ir)*stride;
+            const float d = ((const float *)band)[ir];
+            const block_iq3_ks_r16 * bxi = (const block_iq3_ks_r16 *)(band + 64) + kbx0*8;
+            const int ib32 = threadIdx.x % 8;
+            // only read the block when it is part of the tail (the others would
+            // be past the row's block area); padding rows get ul = 16 -> df = 0.
+            const int ul = ib32 < nt
+                ? (((bxi[ib32].scales[ir & 7] >> (4*(ir >> 3))) & 0xf) | (((bxi[ib32].extra >> ir) & 1) << 4))
+                : 16;
+
+#ifdef INT8_MMA_AVAILABLE
+            x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + threadIdx.x % 8] = d * (ul - 16);
+#else
+            x_df[i*(WARP_SIZE/4) + i/4   + threadIdx.x % 8] = d * (ul - 16);
+#endif // INT8_MMA_AVAILABLE
+        }
+    }
+};
