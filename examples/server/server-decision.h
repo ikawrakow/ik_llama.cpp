@@ -16,6 +16,7 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_NONE,    // not a decision model
     COMMON_DECISION_TYPE_OPENJEV, // logits of one label token per option, read at the last prompt token
     COMMON_DECISION_TYPE_LEV,     // same as openjev, noul is read from a rating scale
+    COMMON_DECISION_TYPE_NIMBLE,  // same as openjev, the prompt lists all the questions of the request
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
@@ -56,6 +57,7 @@ struct server_decision_context {
     // set the prompt of one variant of this question, and where to read its result
     void fill_task(
             const json & state,
+            const std::vector<server_decision_question> & questions,
             const server_decision_question & question,
             size_t variant,
             server_task & task) const;
@@ -71,11 +73,16 @@ private:
     size_t n_options_max   = 0;
     bool   noul_true_first = false; // noul options are [true, false] instead of [false, true]
 
-    // OPENJEV, LEV
+    // OPENJEV, LEV, NIMBLE
     std::vector<llama_token> labels;
     std::vector<std::string> label_texts; // only if the label of an option is given to the template
 
-    std::string render(const json & state, const server_decision_question & question, size_t variant) const;
+    std::string render(
+            const json & state,
+            const std::vector<server_decision_question> & questions,
+            const server_decision_question & question,
+            size_t variant) const;
+    json render_options(const server_decision_question & question, size_t variant) const;
     size_t n_outputs(const server_decision_question & question) const;
 
     float get_temperature(const server_decision_question & question) const;

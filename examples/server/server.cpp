@@ -1654,7 +1654,7 @@ int main(int argc, char ** argv) {
                     server_task task = server_task(SERVER_TASK_TYPE_DECISION);
                     task.id = ctx_server.queue_tasks.get_new_id();
                     task.index = tasks.size();
-                    decision.fill_task(state, question, variant, task);
+                    decision.fill_task(state, questions, question, variant, task);
                     tasks.push_back(std::move(task));
                 }
             }

@@ -819,7 +819,7 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
   - `score`: An array of 2 to 10 level descriptions, lowest level first.
   - `noul`: Optional. An object with the descriptions of `true` and `false`.
 
-The questions of a request are answered independently, an answer does not depend on the other questions.
+The questions of a request are answered independently, an answer does not depend on the other questions, except for nimble, whose prompt lists all the questions.
 
 The number of options of a `choice` question is limited by the model, for example: 52 for openjev.
 
