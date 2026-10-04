@@ -169,8 +169,8 @@ static void usage(const char * executable) {
     printf("  --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
     printf("  --cuda-quantize: quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1/IQ4_NL/IQ4_XS tensors on a CUDA device; other types use the CPU\n");
-    printf("  -dev DEVICES, --device DEVICES: CUDA device(s) used by --cuda-quantize (default: CUDA0; one device = mono, two = dual-GPU row-split, e.g. -dev CUDA0,CUDA1; bare index N also accepted)\n");
-    printf("  -ts SPLIT, --tensor-split SPLIT: row-split ratios for N-GPU --cuda-quantize (e.g. -dev CUDA0,CUDA1,CUDA2 -ts 3,3,2; entries must match device count, else shares are equal)\n");
+    printf("  -dev DEVICES, --device DEVICES: CUDA device(s) for --cuda-quantize (default CUDA0; 2+ devices = row-split, e.g. -dev CUDA0,CUDA1)\n");
+    printf("  -ts SPLIT, --tensor-split SPLIT: row-split shares for 2+ GPUs (e.g. -ts 3,3,2; equal when absent)\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");
@@ -353,10 +353,7 @@ static bool parse_custom_quants(const std::string& arg, std::vector<CustomQ>& cu
     return true;
 }
 
-// Resolve a common-style CUDA device list (e.g. CUDA1 or CUDA0,CUDA1) to
-// CUDA ordinals for --cuda-quantize. A bare index (e.g. 1) is also accepted
-// for backward compatibility with the old --device N form. Returns false
-// when any entry is unparseable (devs left untouched).
+// Parse a common-style CUDA list (CUDA0,CUDA1, bare index ok) into ordinals.
 static bool parse_cuda_device_list(const std::string & arg, std::vector<int> & devs) {
     std::vector<int> out;
     for (const auto & item : string_split<std::string>(arg, ',')) {
@@ -636,9 +633,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // Reconcile -dev/--device with -ts/--tensor-split: 1 device = mono, 2
-    // without -ts = legacy dual, otherwise N-way array form (equal shares
-    // when -ts is absent).
+    // 1 device = mono, otherwise N-way shares (equal when -ts is absent).
     if (!cuda_devs.empty() || have_cuda_ts) {
         if (cuda_devs.empty()) {
             fprintf(stderr, "%s: -ts/--tensor-split needs -dev/--device with at least 2 CUDA devices\n", __func__);
@@ -652,21 +647,16 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "%s: at most 16 CUDA devices supported, got %zu\n", __func__, cuda_devs.size());
             return 1;
         }
-        params.cuda_device = cuda_devs[0];
-        if (cuda_devs.size() == 2 && !have_cuda_ts) {
-            params.cuda_device2 = cuda_devs[1];
-        } else if (cuda_devs.size() == 1) {
-            params.cuda_device2 = -1;
-        } else {
-            params.cuda_device2 = -1;
-            params.cuda_n_devices = (int) cuda_devs.size();
+        params.cuda_quantize_device = cuda_devs[0];
+        if (cuda_devs.size() > 1) {
+            params.cuda_quantize_n_devices = (int) cuda_devs.size();
             float total = 0.0f;
             for (size_t i = 0; i < cuda_devs.size(); ++i) {
                 total += have_cuda_ts ? cuda_ts[i] : 1.0f;
             }
             for (size_t i = 0; i < cuda_devs.size(); ++i) {
-                params.cuda_devices[i] = cuda_devs[i];
-                params.cuda_split[i] = (have_cuda_ts ? cuda_ts[i] : 1.0f)/total;
+                params.cuda_quantize_devices[i] = cuda_devs[i];
+                params.cuda_quantize_split[i] = (have_cuda_ts ? cuda_ts[i] : 1.0f)/total;
             }
         }
     }
