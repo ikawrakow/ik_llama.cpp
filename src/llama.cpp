@@ -10971,6 +10971,7 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
 
 static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u;
 static constexpr uint32_t DSV4_STATE_VER = 2; // used-rows layout with compression ratios and shared-streams flag
+static constexpr uint32_t DSV4_STATE_VER_SHARED = 3;
 
 static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint32_t kv_rows) {
     const uint64_t n_rows = ((uint64_t) std::max<llama_pos>(0, pos_max) + 1) / (ratio ? ratio : 1);
@@ -11360,9 +11361,11 @@ struct llama_data_write {
             // --dsv4-legacy-state: emit the pre-PR full-slice layout (no MAGIC,
             // ratios or row counts), byte-identical to main and readable by old builds
             const bool dsv4_legacy_state = ctx->cparams.dsv4_legacy_state;
+            const bool dsv4_shared        = ctx->model.hparams.dsv4_shared_streams;
             if (!dsv4_legacy_state) {
+                const uint32_t dsv4_ver_out = dsv4_shared ? DSV4_STATE_VER_SHARED : DSV4_STATE_VER;
                 write(&DSV4_STATE_MAGIC, sizeof(DSV4_STATE_MAGIC));
-                write(&DSV4_STATE_VER, sizeof(DSV4_STATE_VER));
+                write(&dsv4_ver_out, sizeof(dsv4_ver_out));
             }
 
             const uint32_t dsv4_n_layer = n_layer;
@@ -11384,8 +11387,8 @@ struct llama_data_write {
             }
 
             if (!dsv4_legacy_state) {
-                const uint32_t dsv4_shared_streams = ctx->model.hparams.dsv4_shared_streams ? 1 : 0;
-                write(&dsv4_shared_streams, sizeof(dsv4_shared_streams));
+                const uint32_t dsv4_shared_flag = dsv4_shared ? 1 : 0;
+                write(&dsv4_shared_flag, sizeof(dsv4_shared_flag));
             }
 
             const uint32_t cap_csa_stream = dsv4_cache_stream_rows(ctx->dsv4.cache.csa_k, ctx->dsv4.cache.n_stream);
@@ -11400,7 +11403,9 @@ struct llama_data_write {
             };
             const uint32_t dsv4_n_rows_csa = dsv4_used_rows(dsv4_csa_ratio, cap_csa_stream);
             const uint32_t dsv4_n_rows_hca = dsv4_used_rows(dsv4_hca_ratio, cap_hca_stream);
-            const uint32_t dsv4_n_rows_lid = dsv4_used_rows(dsv4_csa_ratio, cap_lid_stream);
+            const uint32_t dsv4_n_rows_lid = dsv4_shared
+                ? dsv4_used_rows(std::min(dsv4_csa_ratio, dsv4_hca_ratio), cap_lid_stream)
+                : dsv4_used_rows(dsv4_csa_ratio, cap_lid_stream);
             if (!dsv4_legacy_state) {
                 write(&dsv4_n_rows_csa, sizeof(dsv4_n_rows_csa));
                 write(&dsv4_n_rows_hca, sizeof(dsv4_n_rows_hca));
@@ -11409,16 +11414,26 @@ struct llama_data_write {
 
             for (uint32_t il = 0; il < n_layer; ++il) {
                 uint32_t layer_type = 0;
-                // TODO(deepseek41): readers alias their source's storage and key owners carry no
-                // pooling state, which this per-layer layout does not describe yet. Save nothing
-                // for the compressed streams; the raw window still round-trips.
-                if (ctx->model.hparams.dsv4_shared_streams) {
-                    static bool did_warn = false;
-                    if (il == 0 && !did_warn) {
-                        LLAMA_LOG_WARN("%s: DeepSeek-V4.1 compressed-stream state is not saved; a restored session re-derives it from the prompt\n", __func__);
-                        did_warn = true;
+                if (dsv4_shared) {
+                    if (dsv4_legacy_state) {
+                        write(&layer_type, sizeof(layer_type));
+                        continue;
+                    }
+                    if (ctx->model.hparams.dsv41_is_kv_source(il)) {
+                        if (il < ctx->dsv4.cache.csa_k.size() && ctx->dsv4.cache.csa_k[il] != nullptr) {
+                            layer_type |= 1u; // CSA K + CSA pooling state
+                        } else if (il < ctx->dsv4.cache.hca_k.size() && ctx->dsv4.cache.hca_k[il] != nullptr) {
+                            layer_type |= 2u; // HCA K + HCA pooling state
+                        }
+                    }
+                    if (ctx->model.hparams.dsv41_owns_index_k(il) &&
+                        il < ctx->dsv4.cache.lid_k.size() && ctx->dsv4.cache.lid_k[il] != nullptr) {
+                        layer_type |= 4u; // index keys + LID pooling state
                     }
                     write(&layer_type, sizeof(layer_type));
+                    if (layer_type != 0) {
+                        write_dsv4_cache_shared(ctx, il, layer_type, dsv4_stream_idx, dsv4_n_rows_csa, dsv4_n_rows_hca, dsv4_n_rows_lid);
+                    }
                     continue;
                 }
                 if (il < ctx->dsv4.cache.csa_k.size() && ctx->dsv4.cache.csa_k[il] != nullptr) {
@@ -11467,6 +11482,45 @@ struct llama_data_write {
             write_tensor_stream(cache.hca_k[il], il, n_rows_hca);
             write_tensor_stream(cache.hca_state_kv[il], il);
             write_tensor_stream(cache.hca_state_score[il], il);
+        }
+    }
+
+    void write_dsv4_cache_shared(const struct llama_context * ctx, int il, uint32_t layer_type, int32_t stream_idx,
+            uint32_t n_rows_csa, uint32_t n_rows_hca, uint32_t n_rows_lid) {
+        const auto & cache = ctx->dsv4.cache;
+        const uint32_t n_stream = std::max<uint32_t>(1, cache.n_stream);
+        auto write_tensor_stream = [&](const struct ggml_tensor * tensor, uint32_t cap_rows = UINT32_MAX) {
+            if (tensor == nullptr) {
+                return;
+            }
+            if (stream_idx < 0) {
+                write_tensor_data(tensor, 0, ggml_nbytes(tensor), il);
+                return;
+            }
+            size_t offset, size;
+            GGML_ASSERT(dsv4_stream_offset_size(tensor, n_stream, stream_idx, offset, size));
+            const size_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+            const uint32_t stream_rows = row_size ? (uint32_t)(size / row_size) : 0;
+            const uint32_t wrows = std::min(stream_rows, cap_rows);
+            if (wrows == 0) {
+                return;
+            }
+            write_tensor_data(tensor, offset, (size_t) wrows * row_size, il);
+        };
+        if (layer_type & 1u) {
+            write_tensor_stream(cache.csa_k[il], n_rows_csa);
+            write_tensor_stream(cache.csa_state_kv[il]);
+            write_tensor_stream(cache.csa_state_score[il]);
+        }
+        if (layer_type & 2u) {
+            write_tensor_stream(cache.hca_k[il], n_rows_hca);
+            write_tensor_stream(cache.hca_state_kv[il]);
+            write_tensor_stream(cache.hca_state_score[il]);
+        }
+        if (layer_type & 4u) {
+            write_tensor_stream(cache.lid_k[il], n_rows_lid);
+            write_tensor_stream(cache.lid_state_kv[il]);
+            write_tensor_stream(cache.lid_state_score[il]);
         }
     }
 
@@ -12223,7 +12277,7 @@ struct llama_data_read {
             uint32_t dsv4_n_layer = 0;
             if (dsv4_ver2) {
                 read_to(&dsv4_ver, sizeof(dsv4_ver));
-                if (dsv4_ver != DSV4_STATE_VER) {
+                if (dsv4_ver != DSV4_STATE_VER && dsv4_ver != DSV4_STATE_VER_SHARED) {
                     LLAMA_LOG_ERROR("%s: DSV4 state version mismatch (%u)\n", __func__, dsv4_ver);
                     return false;
                 }
@@ -12293,8 +12347,9 @@ struct llama_data_read {
             // Destination stream: when restoring per-stream, write to seq_id's slot
             const int32_t dsv4_dst_stream = dsv4_single_stream ? (int32_t)seq_id : -1;
 
-            // Clear the destination only where the file restores stream data.
-            if (dsv4_ver2 && !ctx->model.hparams.dsv4_shared_streams) {
+            const bool dsv4_restores_streams = !ctx->model.hparams.dsv4_shared_streams ||
+                    dsv4_ver == DSV4_STATE_VER_SHARED;
+            if (dsv4_ver2 && dsv4_restores_streams) {
                 llama_reset_dsv4_state(ctx, dsv4_dst_stream);
             }
 
@@ -12323,7 +12378,23 @@ struct llama_data_read {
                     }
                 };
 
-                if (layer_type == 1) {
+                if (dsv4_ver == DSV4_STATE_VER_SHARED) {
+                    if (layer_type & 1u) {
+                        set_tensor_stream(cache.csa_k[il], dsv4_n_rows_csa);
+                        set_tensor_stream(cache.csa_state_kv[il]);
+                        set_tensor_stream(cache.csa_state_score[il]);
+                    }
+                    if (layer_type & 2u) {
+                        set_tensor_stream(cache.hca_k[il], dsv4_n_rows_hca);
+                        set_tensor_stream(cache.hca_state_kv[il]);
+                        set_tensor_stream(cache.hca_state_score[il]);
+                    }
+                    if (layer_type & 4u) {
+                        set_tensor_stream(cache.lid_k[il], dsv4_n_rows_lid);
+                        set_tensor_stream(cache.lid_state_kv[il]);
+                        set_tensor_stream(cache.lid_state_score[il]);
+                    }
+                } else if (layer_type == 1) {
                     set_tensor_stream(cache.csa_k[il], dsv4_n_rows_csa);
                     set_tensor_stream(cache.lid_k[il], dsv4_n_rows_lid);
                     set_tensor_stream(cache.csa_state_kv[il]);
