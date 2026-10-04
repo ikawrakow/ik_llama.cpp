@@ -3,8 +3,9 @@
 // MIT license
 // SPDX-License-Identifier: MIT
 //
-// Bit-exact CUDA GGUF quants (RN intrinsics, no FMA; host sigma2 in CPU order), via Joel's ggml_cuda_quantize() (kt-encoder.cu).
-// Order: Q8_0, Q6_0, Q5_0, Q4_0. Q4_0/Q5_0 removable (delete kernel+helpers+cases).
+// Bit-exact CUDA GGUF quants (RN intrinsics, no FMA; host sigma2 in CPU order),
+// via Joel's ggml_cuda_quantize() (kt-encoder.cu).
+// Order: Q8_0, Q6_0, Q5_0, Q4_0, Q5_1, Q4_1, IQ4_NL, IQ4_XS. Q4_0/Q5_0 removable (delete kernel+helpers+cases).
 // Q8_0 uses Q6_0 fudge quirk (ggml-quants.c:915), ignores imatrix; Q6_0 OLS kept (make_qx+fudge).
 
 #include "quantize_gguf.cuh"
@@ -16,6 +17,11 @@
 #include <cfloat>
 #include <algorithm>
 #include <vector>
+
+// Forward declaration: bit-twiddle FP16 matching ggml_compute_fp32_to_fp16
+// (defined below with the imatrix section). Declared early so the plain
+// kernels above can use it for NaN-payload-exact stores.
+static __device__ __forceinline__ uint16_t fp32_to_fp16_ggml(float f);
 
 // --- kernels ---
 
@@ -116,8 +122,9 @@ static __global__ void quantize_q8_0_kernel(
         y[ib].qs[lane] = (int8_t)roundf(xi*id);
 
         if (lane == 0) {
-            // Assign __half directly (ushort assignment corrupts bits, e.g. 0x29f2->0x713e).
-            y[ib].d = __float2half_rn(d);
+            // Raw-bit copy (ushort assignment would corrupt bits, e.g. 0x29f2->0x713e).
+            // Bit-twiddle (not hardware RN) so NaN payloads match ggml_compute_fp32_to_fp16.
+            y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(d));
         }
     }
 }
@@ -141,7 +148,7 @@ static __global__ void quantize_q4_0_kernel(
 
         block_q4_0 * y = (block_q4_0 *)vy;
         if (lane == 0) {
-            y[ib].d = __float2half_rn(d); // store the __half, see Q8_0 kernel
+            y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(d)); // raw bits, see Q8_0 kernel
         }
 
         pack_nibbles_shfl_device((uint32_t)q, y[ib].qs, lane);
@@ -168,7 +175,7 @@ static __global__ void quantize_q5_0_kernel(
 
         block_q5_0 * y = (block_q5_0 *)vy;
         if (lane == 0) {
-            y[ib].d = __float2half_rn(d); // store the __half, see Q8_0 kernel
+            y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(d)); // raw bits, see Q8_0 kernel
         }
 
         pack_nibbles_shfl_device((uint32_t)q, y[ib].qs, lane);
@@ -198,8 +205,9 @@ static __global__ void quantize_q5_1_kernel(
 
         block_q5_1 * y = (block_q5_1 *)vy;
         if (lane == 0) {
-            // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
-            y[ib].dm = __floats2half2_rn(d, bmin);
+            // Raw bits via twiddle (see Q8_0 kernel) so NaN payloads match CPU.
+            y[ib].dm = __halves2half2(__ushort_as_half(fp32_to_fp16_ggml(d)),
+                                      __ushort_as_half(fp32_to_fp16_ggml(bmin)));
         }
         pack_nibbles_shfl_device(q, y[ib].qs, lane);
         pack_qh_ballot_device(q, y[ib].qh, lane);
@@ -229,8 +237,9 @@ static __global__ void quantize_q4_1_kernel(
 
         block_q4_1 * y = (block_q4_1 *)vy;
         if (lane == 0) {
-            // CUDA packs d/m as half2 dm (ggml-common.h); one RN conversion each.
-            y[ib].dm = __floats2half2_rn(d, bmin);
+            // Raw bits via twiddle (see Q8_0 kernel) so NaN payloads match CPU.
+            y[ib].dm = __halves2half2(__ushort_as_half(fp32_to_fp16_ggml(d)),
+                                      __ushort_as_half(fp32_to_fp16_ggml(bmin)));
         }
         pack_nibbles_shfl_device(q, y[ib].qs, lane);
     }
@@ -483,8 +492,10 @@ static __device__ float make_qkx3_quants_device(int n, int nmax, const float * x
         sum_l2 = __dadd_rn(sum_l2, __dmul_rn(__dmul_rn(w, (double)l), (double)l));
         sum_xl = __dadd_rn(sum_xl, __dmul_rn(__dmul_rn(w, (double)l), (double)x[i]));
     }
-    double best = __dsub_rn(__dadd_rn(__dmul_rn(__dmul_rn(2.0, (double)scale), sum_xl), __dmul_rn(__dmul_rn(2.0, (double)min), sum_x)),
-        __dmul_rn(__dmul_rn(__dmul_rn(2.0, (double)scale), (double)min), sum_l));
+    double best = __dsub_rn(
+            __dadd_rn(__dmul_rn(__dmul_rn(2.0, (double)scale), sum_xl),
+                      __dmul_rn(__dmul_rn(2.0, (double)min), sum_x)),
+            __dmul_rn(__dmul_rn(__dmul_rn(2.0, (double)scale), (double)min), sum_l));
     best = __dsub_rn(best, __dmul_rn(__dmul_rn((double)scale, (double)scale), sum_l2));
     best = __dsub_rn(best, __dmul_rn(__dmul_rn((double)min, (double)min), sum_w));
     int last_j = -1, last_dir = 0;
@@ -600,14 +611,22 @@ static __device__ const int8_t kvalues_iq4nl_dev[16] = {
 
 // LUT from ggml-quants.c:14823; >=16 names boundary pair (ix-16, ix-15).
 static __device__ const int kIq4nlIndex[241] = {
-     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 16, 16,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
-     1, 17, 17,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 18,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
-     3,  3,  3,  3,  3,  3, 19,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4, 20,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5,
-     5,  5, 21, 21,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6, 22,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7, 23, 23,  8,  8,  8,  8,
-     8,  8,  8,  8,  8,  8, 24,  9,  9,  9,  9,  9,  9,  9,  9,  9,  9,  9, 25, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 26, 26,
-    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 27, 27, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 28, 13, 13, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 29, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
-    14, 14, 14, 14, 30, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 16, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 17, 17, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    2, 2, 2, 2, 2, 18, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+    3, 3, 3, 3, 3, 3, 19, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 20, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 21, 21, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 22,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 23, 23, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 24, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 9, 25, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 26, 26,
+    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 27, 27, 12, 12,
+    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 28, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 29, 14,
+    14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+    14, 14, 14, 14, 30, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15
 };
 
 static __device__ int best_index_iq4nl_device(const int8_t * values, float x) {
@@ -702,7 +721,8 @@ static __device__ float iq4nl_opt_block_device(const float * xb, const float * w
         const float w = weight[best_j];
         const int l0 = L[best_j];
         const int l1 = l0 + dir;
-        float new_sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, xb[best_j]), (float)(kvalues_iq4nl_dev[l1] - kvalues_iq4nl_dev[l0])));
+        const float dq = (float)(kvalues_iq4nl_dev[l1] - kvalues_iq4nl_dev[l0]);
+        float new_sumqx = __fadd_rn(sumqx, __fmul_rn(__fmul_rn(w, xb[best_j]), dq));
         const int q1sq = kvalues_iq4nl_dev[l1]*kvalues_iq4nl_dev[l1];
         const int q0sq = kvalues_iq4nl_dev[l0]*kvalues_iq4nl_dev[l0];
         float new_sumq2 = __fadd_rn(sumq2, __fmul_rn(w, (float)(q1sq - q0sq)));
@@ -722,7 +742,6 @@ static __device__ void iq4nl_requant_pack_device(const float * xb, float scale, 
 
 static __global__ void quantize_iq4_nl_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
-    (void) fudge; // no fudge for IQ4_NL (matches CPU)
     const int64_t ib = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
     if (ib >= nblocks) {
         return;
@@ -738,8 +757,9 @@ static __global__ void quantize_iq4_nl_kernel(
     const float scale = iq4nl_opt_block_device(xb, weight, L);
 
     // Finalize: re-quant with id=0 when scale=0; bit-twiddle FP16 for NaN payload.
+    // dh = FP16(fudge*scale) like the CPU (fudge defaults to 1 for IQ4_NL).
     block_iq4_nl * y = (block_iq4_nl *)vy;
-    y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(scale));
+    y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(__fmul_rn(fudge, scale)));
     iq4nl_requant_pack_device(xb, scale, L, y[ib].qs);
 }
 
@@ -757,7 +777,6 @@ static __global__ void quantize_iq4_nl_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t blocks_per_row,
         const float fudge) {
-    (void) fudge; // no fudge for IQ4_NL (matches CPU)
     const int64_t ib = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
     if (ib >= nblocks) {
         return;
@@ -773,22 +792,26 @@ static __global__ void quantize_iq4_nl_imatrix_kernel(
 
     const float scale = iq4nl_opt_block_device(xb, weight, L);
 
+    // dh = FP16(fudge*scale) like the CPU (bit-twiddle for NaN payload).
     block_iq4_nl * y = (block_iq4_nl *)vy;
-    y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(scale));
+    y[ib].d = __ushort_as_half(fp32_to_fp16_ggml(__fmul_rn(fudge, scale)));
     iq4nl_requant_pack_device(xb, scale, L, y[ib].qs);
 }
 
 // --- IQ4_XS (super_block=256, ntry=7) ---
 
 // XS global scale fit + re-quant + pack, shared by plain/imatrix kernels.
+// dh = FP16(fudge*gd) like the CPU (fudge defaults to 1 for IQ4_XS).
 static __device__ void iq4xs_finalize_device(const float * xs, float max_scale, float * scales, uint8_t * L,
-        block_iq4_xs * y, int64_t sb) {
-    const float gd = -max_scale/32.0f;
+        block_iq4_xs * y, int64_t sb, float fudge) {
+    const float gd = __fmul_rn(fudge, -max_scale/32.0f);
     y[sb].d = __ushort_as_half(fp32_to_fp16_ggml(gd));
     const float gid = gd ? __fdiv_rn(1.0f, gd) : 0.0f;
     uint16_t scales_h = 0;
     for (int ib = 0; ib < 8; ++ib) {
-        int l = fabsf(scales[ib]) <= FLT_MAX ? nearest_int_device(__fmul_rn(gid, scales[ib])) : 0; // deterministic degenerate path (see ggml-quants.c)
+        // Pin l=0 for non-finite scales (deterministic degenerate path, see ggml-quants.c).
+        const bool finite_scale = fabsf(scales[ib]) <= FLT_MAX;
+        int l = finite_scale ? nearest_int_device(__fmul_rn(gid, scales[ib])) : 0;
         l = l > 31 ? 31 : (l < -32 ? -32 : l);
         const float dl = __fmul_rn(gd, (float)l);
         const float idl = dl ? __fdiv_rn(1.0f, dl) : 0.0f;
@@ -817,7 +840,6 @@ static __device__ void iq4xs_finalize_device(const float * xs, float max_scale, 
 
 static __global__ void quantize_iq4_xs_kernel(
         const float * __restrict__ x, void * __restrict__ vy, const int64_t nblocks, const float fudge) {
-    (void) fudge; // no fudge for IQ4_XS (matches CPU)
     const int64_t sb = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
     if (sb >= nblocks) {
         return;
@@ -844,9 +866,9 @@ static __global__ void quantize_iq4_xs_kernel(
         }
     }
 
-    // Global scale + re-quant (CPU order, fudge=1; bit-twiddle FP16 for NaN).
+    // Global scale + re-quant (CPU order, dh = FP16(fudge*gd)).
     block_iq4_xs * y = (block_iq4_xs *)vy;
-    iq4xs_finalize_device(xs, max_scale, scales, L, y, sb);
+    iq4xs_finalize_device(xs, max_scale, scales, L, y, sb, fudge);
 }
 
 // --- IQ4_XS imatrix (same replay, qw*sqrt(sigma2+x*x)) ---
@@ -854,7 +876,6 @@ static __global__ void quantize_iq4_xs_imatrix_kernel(
         const float * __restrict__ x, const float * __restrict__ qw, const float * __restrict__ sigma2,
         void * __restrict__ vy, const int64_t base, const int64_t nblocks, const int32_t sb_per_row,
         const float fudge) {
-    (void) fudge; // no fudge for IQ4_XS (matches CPU)
     const int64_t sb = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
     if (sb >= nblocks) {
         return;
@@ -883,7 +904,7 @@ static __global__ void quantize_iq4_xs_imatrix_kernel(
     }
 
     block_iq4_xs * y = (block_iq4_xs *)vy;
-    iq4xs_finalize_device(xs, max_scale, scales, L, y, sb);
+    iq4xs_finalize_device(xs, max_scale, scales, L, y, sb, fudge);
 }
 
 // --- Removable Q5_0 imatrix (nmax=16 + qh bitmap) ---
@@ -1345,30 +1366,30 @@ size_t ggml_cuda_quantize_q4_1_imatrix(const float * src, void * dst, int64_t nr
             quantize_q4_1_imatrix_kernel, "q4_1_imatrix", 1.0f, false);
 }
 
-// --- IQ4_NL (no imatrix, ntry=7) ---
+// --- IQ4_NL (dh = FP16(fudge*scale)) ---
 size_t ggml_cuda_quantize_iq4_nl(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row, QK4_NL, sizeof(block_iq4_nl),
-            quantize_iq4_nl_kernel, "iq4_nl", 1.0f, 256);
+            quantize_iq4_nl_kernel, "iq4_nl", ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_NL), 256);
 }
 
 // --- IQ4_NL imatrix (qw*sqrt(sigma2+x*x), host sigma2 per 32-block) ---
 size_t ggml_cuda_quantize_iq4_nl_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     return ggml_cuda_quantize_imatrix_generic(src, dst, nrows, n_per_row, imatrix, QK4_NL, sizeof(block_iq4_nl),
-            quantize_iq4_nl_imatrix_kernel, "iq4_nl_imatrix", 1.0f, true);
+            quantize_iq4_nl_imatrix_kernel, "iq4_nl_imatrix", ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_NL), true);
 }
 
-// --- IQ4_XS (no imatrix, ntry=7) ---
+// --- IQ4_XS (dh = FP16(fudge*gd)) ---
 size_t ggml_cuda_quantize_iq4_xs(const float * src, void * dst, int64_t nrows, int64_t n_per_row) {
     return ggml_cuda_quantize_generic(src, dst, nrows, n_per_row, QK_K, sizeof(block_iq4_xs),
-            quantize_iq4_xs_kernel, "iq4_xs", 1.0f, 256);
+            quantize_iq4_xs_kernel, "iq4_xs", ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_XS), 256);
 }
 
 // --- IQ4_XS imatrix (host sigma2 per superblock) ---
 size_t ggml_cuda_quantize_iq4_xs_imatrix(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
         const float * imatrix) {
     return ggml_cuda_quantize_imatrix_generic(src, dst, nrows, n_per_row, imatrix, QK_K, sizeof(block_iq4_xs),
-            quantize_iq4_xs_imatrix_kernel, "iq4_xs_imatrix", 1.0f, true);
+            quantize_iq4_xs_imatrix_kernel, "iq4_xs_imatrix", ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_XS), true);
 }
 
 // --- Q6_0 OLS driver (w=x*x, make_qx+fudge) ---

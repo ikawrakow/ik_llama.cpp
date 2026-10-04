@@ -159,7 +159,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device] [-ts] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device] [-ts/--tensor-split] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -168,9 +168,9 @@ static void usage(const char * executable) {
     printf("  --ignore-imatrix-rules: ignore importance matrix rules when quantizing\n");
     printf("  --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
-    printf("  --cuda-quantize: quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1/IQ4_NL/IQ4_XS tensors on a CUDA device; other types use the CPU\n");
+    printf("  --cuda-quantize: quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1/IQ4_NL/IQ4_XS tensors on a CUDA device; other types use the CPU (symmetric Q4_0 --symmetric-q40 always uses the CPU)\n");
     printf("  -dev DEVICES, --device DEVICES: CUDA device(s) for --cuda-quantize (default CUDA0; 2+ devices = row-split, e.g. -dev CUDA0,CUDA1)\n");
-    printf("  -ts SPLIT, --tensor-split SPLIT: row-split shares for 2+ GPUs (e.g. -ts 3,3,2; equal when absent)\n");
+    printf("  -ts SPLIT, --tensor-split SPLIT: row-split shares for 2+ GPUs (e.g. -ts 3,3,2; equal when absent; requires -dev/--device with 2+ CUDA devices)\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");
@@ -649,7 +649,7 @@ int main(int argc, char ** argv) {
         }
         params.cuda_quantize_device = cuda_devs[0];
         if (cuda_devs.size() > 1) {
-            params.cuda_quantize_n_devices = (int) cuda_devs.size();
+            params.cuda_quantize_n_devices = static_cast<int>(cuda_devs.size());
             float total = 0.0f;
             for (size_t i = 0; i < cuda_devs.size(); ++i) {
                 total += have_cuda_ts ? cuda_ts[i] : 1.0f;

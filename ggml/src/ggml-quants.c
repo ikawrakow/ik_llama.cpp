@@ -1730,10 +1730,7 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
-// CUDA GGUF quantization replays this optimizer bit-for-bit with correctly-rounded
-// intrinsics: forbid FMA contraction (Clang contracts by default, which flips exact
-// ties by ~1 ulp). Clang-scoped: MSVC never contracts, GCC keeps its default so no
-// unknown-pragma warning there. Cost is negligible (quantization-time code only).
+// Bit-exact CUDA replay: forbid FMA contraction (Clang-scoped; MSVC/GCC defaults kept).
 #ifdef __clang__
 #pragma STDC FP_CONTRACT OFF
 #endif
@@ -14998,7 +14995,7 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
         dh[0] = GGML_FP32_TO_FP16(d*fudge);
         float id = d ? 1/d : 0.f;
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
-            // Pin l=0 for non-finite scales: avoids platform-UB, identical bytes.
+            // Pin l=0 for non-finite scales (deterministic; finite inputs unchanged).
             int l = isfinite(scales[ib]) ? nearest_int(id*scales[ib]) : 0;
             l = MAX(-32, MIN(31, l));
             float dl = d * l;
