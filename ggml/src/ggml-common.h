@@ -28,6 +28,8 @@ typedef half2 ggml_half2;
 #elif defined(GGML_COMMON_DECL_CUDA)
 #if defined(GGML_COMMON_DECL_MUSA)
 #include <musa_fp16.h>
+#elif defined(__HIP_PLATFORM_AMD__)
+#include <hip/hip_fp16.h>
 #else
 #include <cuda_fp16.h>
 #endif

@@ -127,10 +127,7 @@ static inline hipError_t cudaStreamWaitEvent(hipStream_t stream, hipEvent_t even
 #define cudaStreamNonBlocking hipStreamNonBlocking
 #define cudaStreamPerThread hipStreamPerThread
 #define cudaStreamSynchronize hipStreamSynchronize
-<<<<<<< HEAD
-#define cudaStreamWaitEvent hipStreamWaitEvent
-=======
->>>>>>> 1ba11cf6 (Add gfx900 (Vega10/MI25) HIP compatibility for ROCm builds)
+
 #define cudaStream_t hipStream_t
 #define cudaSuccess hipSuccess
 #define __trap() do { abort(); __builtin_unreachable(); } while(0)
@@ -163,6 +160,11 @@ static inline hipError_t cudaStreamWaitEvent(hipStream_t stream, hipEvent_t even
 #define __CUDA_ARCH__ 1300
 #ifndef GGML_USE_HIP
 #define GGML_USE_HIP
+#endif
+#if defined(__gfx900__) || defined(__gfx906__) || defined(__gfx908__)
+#define GGML_HIP_WARP_SIZE 64
+#else
+#define GGML_HIP_WARP_SIZE 32
 #endif
 
 #if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__) || \
