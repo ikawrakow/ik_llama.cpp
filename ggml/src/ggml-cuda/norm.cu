@@ -53,7 +53,7 @@ static __global__ void fused_norm_f32(const T * x, const float * c, float * dst,
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
-            const float xi = (float)x[row*ncols + col];
+            const float xi = ggml_hip_to_float(x[row*ncols + col]);
             mean_var.x += xi;
             mean_var.y += xi * xi;
         }
@@ -85,7 +85,7 @@ static __global__ void fused_norm_f32(const T * x, const float * c, float * dst,
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
-            dst[row*ncols + col] = ((float)x[row*ncols + col] - mean) * inv_std * c[col];
+            dst[row*ncols + col] = (ggml_hip_to_float(x[row*ncols + col]) - mean) * inv_std * c[col];
         }
     }
 }
@@ -444,7 +444,7 @@ static __global__ void fused_rms_norm_f32_nc(
     float tmp = 0.0f; // partial sum for thread in warp
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi = (float)x[col];
+        const float xi = ggml_hip_to_float(x[col]);
         tmp += xi * xi;
     }
 
@@ -472,7 +472,7 @@ static __global__ void fused_rms_norm_f32_nc(
     const float scale = rsqrtf(mean + eps);
 
     for (int col = tid; col < ncols; col += block_size) {
-        dst[col] = scale * y[col] * (float)x[col];
+        dst[col] = scale * y[col] * ggml_hip_to_float(x[col]);
     }
 }
 
@@ -1070,8 +1070,8 @@ static __global__ void fused_rms_rms_add_f32(int ncols, int nrows, float * dst,
     float tmp1 = 0.0f, tmp2 = 0.0f;
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi1 = (float)x1_row[col];
-        const float xi2 = (float)x2_row[col];
+        const float xi1 = ggml_hip_to_float(x1_row[col]);
+        const float xi2 = ggml_hip_to_float(x2_row[col]);
         tmp1 += xi1 * xi1;
         tmp2 += xi2 * xi2;
     }
@@ -1101,7 +1101,7 @@ static __global__ void fused_rms_rms_add_f32(int ncols, int nrows, float * dst,
     dst += row*ncols;
 
     for (int col = tid; col < ncols; col += block_size) {
-        dst[col] = scale1 * c1[col] * (float)x1_row[col] + scale2 * c2[col] * (float)x2_row[col];
+        dst[col] = scale1 * c1[col] * ggml_hip_to_float(x1_row[col]) + scale2 * c2[col] * ggml_hip_to_float(x2_row[col]);
     }
 }
 

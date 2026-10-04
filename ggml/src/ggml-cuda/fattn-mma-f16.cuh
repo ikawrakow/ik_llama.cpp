@@ -1,3 +1,4 @@
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 #include "common.cuh"
 #include "cp-async.cuh"
 #include "mma_new.cuh"
@@ -1575,3 +1576,5 @@ DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(256,  64)
 // DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(112, 128)
 // DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(128, 128)
 // DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(256, 128) // Needs too much shared memory.
+
+#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
