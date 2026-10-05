@@ -1347,6 +1347,8 @@ add_library(ggml
             ggml-backend.cpp
             ggml-moe-prefetch.cpp
             ggml-moe-prefetch.h
+            quill/quill-amx.cpp
+            quill/quill-amx.h
             ggml-quants.c
             ggml-quants.h
             ggml-utils.h

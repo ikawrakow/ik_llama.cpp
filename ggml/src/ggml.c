@@ -17,6 +17,7 @@
 #include "iqk/iqk_cpu_ops.h"
 #if GGML_USE_IQK_MULMAT
 #include "iqk/iqk_mul_mat.h"
+#include "quill/quill-amx.h"
 #include "iqk/iqk_config.h"
 #endif
 
@@ -43,7 +44,9 @@
 #include <syscall.h>
 #endif
 
+#ifndef IK_PRINT_TIMING
 #define IK_PRINT_TIMING 0
+#endif
 
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
@@ -18288,11 +18291,48 @@ static inline uint32_t simple_gcd(uint32_t a, uint32_t b) {
     return a;
 }
 
+// quillama.cpp: AMX BF16 path for large-batch (prompt processing) matmuls.
+// The same predicate decides the work buffer size (ggml_graph_plan) and the dispatch.
+static bool quill_amx_eligible(const struct ggml_tensor * src0, const struct ggml_tensor * src1,
+                               const struct ggml_tensor * dst) {
+    if (!src0 || !src1 || !dst) return false;
+    if (dst->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32) return false;
+    if (src1->ne[1] < quill_amx_min_batch()) return false;
+    if (src0->ne[0] < 64 || src0->ne[1] < 16) return false;
+    if (src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1) return false;
+    if (src1->nb[0] != sizeof(float) || src0->nb[0] != ggml_type_size(src0->type) || dst->nb[0] != sizeof(float)) return false;
+    if (!quill_amx_type_supported(src0->type)) return false;
+    return quill_amx_available();
+}
+
+static bool quill_amx_mul_mat(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    if (!quill_amx_eligible(src0, src1, dst)) return false;
+    const int64_t K = src0->ne[0], M = src0->ne[1], T = src1->ne[1];
+    GGML_ASSERT(params->wsize >= quill_amx_packed_size(K, T));
+    quill_amx_pack(src1->data, src1->nb[1], NULL, K, T, params->wdata, params->ith, params->nth);
+    ggml_barrier(params->shared);
+    quill_amx_gemm(src0->type, src0->data, src0->nb[1], K, M, T, params->wdata,
+                   (float *)dst->data, dst->nb[1], NULL, params->ith, params->nth);
+    return true;
+}
+
+static bool quill_amx_fused_up_gate_eligible(const struct ggml_tensor * dst) {
+    const struct ggml_tensor * up = dst->src[0], * gate = dst->src[1], * x = dst->src[2];
+    if (!up || !gate || !x || up->type != gate->type || up->nb[1] != gate->nb[1]) return false;
+    const enum ggml_unary_op op = (enum ggml_unary_op)dst->op_params[0];
+    if (op != GGML_UNARY_OP_SILU && op != GGML_UNARY_OP_RELU && op != GGML_UNARY_OP_GELU) return false;
+    return quill_amx_eligible(up, x, dst);
+}
+
 static int ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst,
         const struct ggml_cgraph * cgraph,
                  int node_n) {
+
+    if (quill_amx_mul_mat(params, dst)) return node_n;
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -18526,9 +18566,171 @@ static int ggml_compute_forward_mul_mat(
 
 // ggml_compute_forward_mul_mat_id
 
+
+// quillama.cpp: AMX path for MoE expert matmuls (GGML_OP_MUL_MAT_ID and GGML_OP_MOE_FUSED_UP_GATE).
+// The tokens routed to each expert are gathered and packed once (shared by all threads), then each
+// expert's GEMM is split over all threads; the outputs are scattered straight into dst rows.
+//
+// work buffer: [counts n_as][row offsets n_as+1][pack offsets n_as+1][row ids][dst row ptrs][packed]
+struct quill_amx_moe_layout {
+    size_t off_counts, off_rows, off_pack, off_ids, off_dst, off_packed, total;
+};
+
+static struct quill_amx_moe_layout quill_amx_moe_get_layout(int64_t n_as, int64_t n_rows, int64_t K) {
+    struct quill_amx_moe_layout l;
+    size_t o = 0;
+    l.off_counts = o; o += n_as*sizeof(int64_t);
+    l.off_rows   = o; o += (n_as + 1)*sizeof(int64_t);
+    l.off_pack   = o; o += (n_as + 1)*sizeof(int64_t);
+    l.off_ids    = o; o += GGML_PAD(n_rows*sizeof(int32_t), sizeof(int64_t));
+    l.off_dst    = o; o += n_rows*sizeof(float *);
+    o = GGML_PAD(o, 64);
+    l.off_packed = o;
+    // every active expert pads its rows to a multiple of 32
+    o += quill_amx_packed_size(K, n_rows + 32*MIN(n_as, n_rows));
+    l.total = o;
+    return l;
+}
+
+// src0: first weight tensor (up for the fused op), src1: activations, ids: selected experts
+static bool quill_amx_moe_eligible(const struct ggml_tensor * dst, const struct ggml_tensor * src0,
+                                   const struct ggml_tensor * src1, const struct ggml_tensor * ids) {
+    if (!src0 || !src1 || !ids || !dst) return false;
+    if (dst->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32) return false;
+    if (ids->ne[1] < quill_amx_min_batch()) return false;
+    if (src0->ne[0] < 64 || src0->ne[3] != 1 || src1->ne[3] != 1) return false;
+    if (src1->nb[0] != sizeof(float) || src0->nb[0] != ggml_type_size(src0->type)) return false;
+    if (src1->nb[2] % src1->nb[1] != 0) return false;
+    if (ggml_nrows(src1) > INT32_MAX/2) return false;
+    if (!quill_amx_type_supported(src0->type)) return false;
+    return quill_amx_available();
+}
+
+static bool quill_amx_moe_up_gate_eligible(const struct ggml_tensor * dst) {
+    if (dst->op != GGML_OP_MOE_FUSED_UP_GATE) return false;
+    if (dst->src[4] || dst->src[5]) return false; // biases: leave to iqk
+    const enum ggml_unary_op op = (enum ggml_unary_op)dst->op_params[0];
+    if (op != GGML_UNARY_OP_SILU && op != GGML_UNARY_OP_RELU && op != GGML_UNARY_OP_GELU) return false;
+    if (dst->src[1] && (dst->src[1]->type != dst->src[0]->type || dst->src[1]->nb[1] != dst->src[0]->nb[1])) return false;
+    return quill_amx_moe_eligible(dst, dst->src[0], dst->src[2], dst->src[3]);
+}
+
+static size_t quill_amx_moe_wsize(const struct ggml_tensor * node) {
+    const struct ggml_tensor * src0 = node->src[0];
+    const struct ggml_tensor * src1 = node->op == GGML_OP_MUL_MAT_ID ? node->src[1] : node->src[2];
+    const struct ggml_tensor * ids  = node->op == GGML_OP_MUL_MAT_ID ? node->src[2] : node->src[3];
+    const bool ok = node->op == GGML_OP_MUL_MAT_ID ? quill_amx_moe_eligible(node, src0, src1, ids)
+                                                   : quill_amx_moe_up_gate_eligible(node);
+    if (!ok) return 0;
+    return quill_amx_moe_get_layout(src0->ne[2], ids->ne[0]*ids->ne[1], src0->ne[0]).total;
+}
+
+static bool quill_amx_moe(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const bool up_gate = dst->op == GGML_OP_MOE_FUSED_UP_GATE;
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = up_gate ? dst->src[2] : dst->src[1];
+    const struct ggml_tensor * ids  = up_gate ? dst->src[3] : dst->src[2];
+    if (up_gate ? !quill_amx_moe_up_gate_eligible(dst) : !quill_amx_moe_eligible(dst, src0, src1, ids)) return false;
+
+    const int ith = params->ith, nth = params->nth;
+
+    // keep the SSD read-ahead of the selected experts (mmap'd models larger than RAM)
+    if (params->shared->cplan && params->shared->cplan->moe_expert_prefetch) {
+        ggml_moe_prefetch_kernel_hook(dst, ith);
+    }
+
+    const int64_t n_as  = src0->ne[2];
+    const int64_t n_ids = ids->ne[0];
+    const int64_t n_tok = ids->ne[1];
+    const int64_t K     = src0->ne[0];
+    const int64_t M     = up_gate && !dst->src[1] ? src0->ne[1]/2 : src0->ne[1];
+    const int64_t ne11  = src1->ne[1];
+    const size_t  nb11  = src1->nb[1], nb12 = src1->nb[2];
+    const struct quill_amx_moe_layout L = quill_amx_moe_get_layout(n_as, n_ids*n_tok, K);
+    GGML_ASSERT(params->wsize >= L.total);
+
+    char * w = (char *)params->wdata;
+    int64_t * counts   = (int64_t *)(w + L.off_counts);
+    int64_t * row_off  = (int64_t *)(w + L.off_rows);
+    int64_t * pack_off = (int64_t *)(w + L.off_pack);
+    int32_t * row_ids  = (int32_t *)(w + L.off_ids);
+    float  ** dst_rows = (float  **)(w + L.off_dst);
+    char    * packed   = w + L.off_packed;
+    const int64_t Kp   = GGML_PAD(K, 32);
+
+    // rows that select no expert (SER) must be cleared, as in the iqk path
+    for (int64_t t = ith; t < n_tok; t += nth) {
+        for (int64_t id = 0; id < n_ids; ++id) {
+            const int32_t e = *(const int32_t *)((const char *)ids->data + t*ids->nb[1] + id*ids->nb[0]);
+            if (e < 0 || e >= n_as) memset((char *)dst->data + id*dst->nb[1] + t*dst->nb[2], 0, dst->ne[0]*sizeof(float));
+        }
+    }
+
+    if (ith == 0) {
+        memset(counts, 0, n_as*sizeof(int64_t));
+        for (int64_t t = 0; t < n_tok; ++t) {
+            for (int64_t id = 0; id < n_ids; ++id) {
+                const int32_t e = *(const int32_t *)((const char *)ids->data + t*ids->nb[1] + id*ids->nb[0]);
+                if (e >= 0 && e < n_as) counts[e]++;
+            }
+        }
+        row_off[0] = pack_off[0] = 0;
+        for (int64_t e = 0; e < n_as; ++e) {
+            row_off[e+1]  = row_off[e]  + counts[e];
+            pack_off[e+1] = pack_off[e] + GGML_PAD(counts[e], 32);
+            counts[e] = 0;
+        }
+        for (int64_t t = 0; t < n_tok; ++t) {
+            for (int64_t id = 0; id < n_ids; ++id) {
+                const int32_t e = *(const int32_t *)((const char *)ids->data + t*ids->nb[1] + id*ids->nb[0]);
+                if (e < 0 || e >= n_as) continue;
+                const int64_t r = row_off[e] + counts[e]++;
+                row_ids[r]  = (int32_t)(((id % ne11)*nb11 + t*nb12)/nb11);
+                dst_rows[r] = (float *)((char *)dst->data + id*dst->nb[1] + t*dst->nb[2]);
+            }
+        }
+    }
+    ggml_barrier(params->shared);
+
+    // pack: 16-row groups of all experts, round robin over the threads
+    const int64_t n_groups = pack_off[n_as]/16;
+    int64_t e = 0;
+    for (int64_t g = ith; g < n_groups; g += nth) {
+        while (pack_off[e+1] <= g*16) ++e;
+        quill_amx_pack_group(src1->data, nb11, row_ids + row_off[e], K, counts[e],
+                             packed + pack_off[e]*Kp*sizeof(ggml_bf16_t), (g*16 - pack_off[e])/16);
+    }
+    ggml_barrier(params->shared);
+
+    for (int64_t a = 0; a < n_as; ++a) {
+        if (!counts[a]) continue;
+        const char * pk = packed + pack_off[a]*Kp*sizeof(ggml_bf16_t);
+        if (up_gate) {
+            const char * w_up, * w_gate;
+            if (dst->src[1]) {
+                w_up   = (const char *)src0->data         + a*src0->nb[2];
+                w_gate = (const char *)dst->src[1]->data  + a*src0->nb[2];
+            } else {
+                // merged tensor: gate rows first, then up rows
+                w_gate = (const char *)src0->data + a*src0->nb[2];
+                w_up   = w_gate + src0->nb[2]/2;
+            }
+            const float limit = *(const float *)(dst->op_params + 1);
+            quill_amx_gemm_up_gate(src0->type, w_up, w_gate, src0->nb[1], K, M, counts[a], pk,
+                                   NULL, 0, dst_rows + row_off[a], dst->op_params[0], limit, ith, nth);
+        } else {
+            quill_amx_gemm(src0->type, (const char *)src0->data + a*src0->nb[2], src0->nb[1], K, M, counts[a], pk,
+                           NULL, 0, dst_rows + row_off[a], ith, nth);
+        }
+    }
+    return true;
+}
+
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
+
+    if (quill_amx_moe(params, dst)) return;
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -18849,6 +19051,8 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
 
+    if (quill_amx_moe(params, dst)) return;
+
     GGML_ASSERT(!dst->src[1] || dst->src[0]->type == dst->src[1]->type);
     GGML_ASSERT(!dst->src[1] || ggml_are_same_shape(dst->src[0], dst->src[1]));
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -19093,6 +19297,18 @@ static void ggml_compute_forward_mul_mat_up_gate(
     const struct ggml_tensor * src0 = src0_1; // so GGML_TENSOR_BINARY_OP_LOCALS works
 
     GGML_ASSERT(ggml_is_quantized(src0_1->type) && src0_1->type == src0_2->type);
+
+    if (quill_amx_fused_up_gate_eligible(dst)) {
+        const int64_t K = src0_1->ne[0], M = src0_1->ne[1], T = src1->ne[1];
+        GGML_ASSERT(params->wsize >= quill_amx_packed_size(K, T));
+        quill_amx_pack(src1->data, src1->nb[1], NULL, K, T, params->wdata, params->ith, params->nth);
+        ggml_barrier(params->shared);
+        const float limit = *(const float *)(dst->op_params + 1);
+        if (quill_amx_gemm_up_gate(src0_1->type, src0_1->data, src0_2->data, src0_1->nb[1], K, M, T, params->wdata,
+                                   (float *)dst->data, dst->nb[1], NULL, dst->op_params[0], limit,
+                                   params->ith, params->nth)) return;
+        GGML_ABORT("quill AMX: unsupported fused up/gate");
+    }
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -29311,6 +29527,9 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                             cur += n_tasks*node->src[1]->ne[0]*sizeof(float); // src1->type -> f32 -> vec_dot_type
                         }
                     }
+                    if (quill_amx_eligible(node->src[0], node->src[1], node)) {
+                        cur = MAX(cur, quill_amx_packed_size(node->src[0]->ne[0], node->src[1]->ne[1]));
+                    }
                 } break;
             case GGML_OP_MUL_MAT_ID:
                 {
@@ -29325,6 +29544,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * src1->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur = MAX(cur, quill_amx_moe_wsize(node));
                 } break;
             case GGML_OP_MOE_FUSED_UP_GATE:
                 {
@@ -29340,6 +29560,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * src2->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur = MAX(cur, quill_amx_moe_wsize(node));
                 } break;
             case GGML_OP_FUSED_UP_GATE:
                 {
@@ -29349,6 +29570,9 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const enum ggml_type vec_dot_type = type_traits[src0->type].vec_dot_type;
                     if (src2->type != vec_dot_type) {
                         cur += ggml_row_size(vec_dot_type, node->src[1]->ne[0]) * ggml_nrows(node->src[1]);
+                    }
+                    if (quill_amx_fused_up_gate_eligible(node)) {
+                        cur = MAX(cur, quill_amx_packed_size(src0->ne[0], src2->ne[1]));
                     }
                 } break;
             case GGML_OP_OUT_PROD:

@@ -122,6 +122,9 @@ endfunction()
 llama_build(test-sampling-history.cpp)
 llama_test(test-sampling-history)
 
+# quillama.cpp: AMX prompt-processing GEMM
+llama_target_and_test(test-quill-amx.cpp)
+
 # build test-tokenizer-0 target once and add many tests
 add_executable(test-tokenizer-0 test-tokenizer-0.cpp)
 target_link_libraries(test-tokenizer-0 PRIVATE common)
