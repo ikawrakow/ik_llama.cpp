@@ -337,8 +337,14 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 LLM_KV::LLM_KV(llm_arch arch, const char* suffix) : arch(arch), suffix(suffix) {}
 
 std::string LLM_KV::operator()(llm_kv kv) const {
-    return suffix ? ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch), suffix)
-        : ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
+    std::string name = ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
+
+    if (suffix != nullptr) {
+        name += ".";
+        name += suffix;
+    }
+
+    return name;
 }
 
 const char * llama_model_arch_name(llm_arch arch) {
