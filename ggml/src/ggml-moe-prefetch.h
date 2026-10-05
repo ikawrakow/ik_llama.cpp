@@ -27,6 +27,11 @@ void ggml_moe_prefetch_new_epoch(void);
 // host-visible) and enqueues the selected expert ranges of src weights.
 void ggml_moe_prefetch_node(const struct ggml_tensor * node);
 
+// quillama.cpp: low-priority enqueue of the experts a router lookahead predicts (ids) for the
+// next layer, under a separate ticket so the demand enqueue still runs; falls back to
+// madvise(MADV_WILLNEED) when the engine is off
+void ggml_moe_prefetch_predicted(const struct ggml_tensor * w, const struct ggml_tensor * ids);
+
 // full-tensor lookahead enqueue (low priority), e.g. for prompt processing
 // where the next layer's experts are needed in bulk.
 void ggml_moe_prefetch_tensor(const struct ggml_tensor * w);

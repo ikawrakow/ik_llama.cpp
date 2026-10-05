@@ -1064,7 +1064,10 @@ static void quill_auto_repack(gpt_params & params) {
         fprintf(stderr, "quillama: model (%.1f GiB) fits in RAM (%.1f GiB available): run-time repack enabled (--no-repack to disable)\n",
                 model_bytes/1073741824.0, avail/1073741824.0);
     } else {
-        fprintf(stderr, "quillama: model (%.1f GiB) does not fit comfortably in RAM (%.1f GiB available): keeping mmap, no run-time repack\n",
+        // stream MoE experts from SSD: read-ahead of the selected experts plus the router lookahead
+        params.prefetch_experts = true;
+        fprintf(stderr, "quillama: model (%.1f GiB) does not fit comfortably in RAM (%.1f GiB available): keeping mmap, "
+                "no run-time repack, MoE expert prefetch from storage enabled\n",
                 model_bytes/1073741824.0, avail/1073741824.0);
     }
 }
@@ -2510,6 +2513,16 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.repack_explicit = true;
         return true;
     }
+    if (arg == "--moe-lookahead") {
+        // read by the graph builder (src/llama-build-context.cpp)
+#ifdef _WIN32
+        _putenv_s("QUILL_MOE_LOOKAHEAD", "1");
+#else
+        setenv("QUILL_MOE_LOOKAHEAD", "1", 1);
+#endif
+        params.prefetch_experts = true;
+        return true;
+    }
     if (arg == "-nrtr" || arg == "--no-repack") {
         params.repack_tensors = false;
         params.repack_explicit = true;
@@ -3627,6 +3640,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
+    options.push_back({ "*",           "       --moe-lookahead",         "quillama (experimental): run the next layer's MoE router early and read its predicted\n"
+                                                                        "experts ahead from storage (implies --prefetch-experts)"});
     options.push_back({ "*",           "-nrtr,  --no-repack",           "quillama: do not repack the weights at load time (by default they are repacked\n"
                                                                         "for faster CPU inference when the model fits in RAM)"});
     options.push_back({ "*",           "-dexp,  --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});

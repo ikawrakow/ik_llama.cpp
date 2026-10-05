@@ -228,7 +228,8 @@ static void collect_selected_ranges(const ggml_tensor * w, const ggml_tensor * i
 }
 
 // enqueue ranges of tensor w; returns false when the engine is off or w is not mmap-registered
-static bool enqueue_ranges(const ggml_tensor * w, const std::vector<std::pair<size_t, size_t>> & ranges, bool urgent, bool track_reads) {
+static bool enqueue_ranges(const ggml_tensor * w, const std::vector<std::pair<size_t, size_t>> & ranges, bool urgent, bool track_reads,
+                           const void * key = nullptr) {
     auto & s = state();
     std::shared_ptr<prefetch_pool> pool_sp;
     {
@@ -245,7 +246,8 @@ static bool enqueue_ranges(const ggml_tensor * w, const std::vector<std::pair<si
     std::lock_guard<std::mutex> lock(pool.mtx);
     if (pool.shutdown) return false;
 
-    auto & tk = pool.tickets[w];
+    // predictions use their own ticket, so the demand enqueue of the same tensor still runs
+    auto & tk = pool.tickets[key ? key : (const void *)w];
     if (!tk) tk = std::make_shared<ticket>();
     if (tk->epoch == cur_epoch) {
         return true; // already enqueued for this scheduler pass
@@ -379,6 +381,15 @@ void ggml_moe_prefetch_node(const struct ggml_tensor * node) {
     }
 }
 
+void ggml_moe_prefetch_predicted(const struct ggml_tensor * w, const struct ggml_tensor * ids) {
+    if (!w || !w->data || !ids || !ids->data) return;
+    std::vector<std::pair<size_t, size_t>> ranges;
+    collect_selected_ranges(w, ids, ranges);
+    if (!enqueue_ranges(w, ranges, /*urgent =*/ false, /*track_reads =*/ false, (const char *)w + 1)) {
+        legacy_madvise(w, ids);
+    }
+}
+
 void ggml_moe_prefetch_tensor(const struct ggml_tensor * w) {
     if (!w || !w->data) return;
     std::vector<std::pair<size_t, size_t>> ranges;
@@ -463,6 +474,7 @@ bool ggml_moe_prefetch_enabled(void) { return false; }
 void ggml_moe_prefetch_new_epoch(void) {}
 void ggml_moe_prefetch_node(const struct ggml_tensor *) {}
 void ggml_moe_prefetch_tensor(const struct ggml_tensor *) {}
+void ggml_moe_prefetch_predicted(const struct ggml_tensor *, const struct ggml_tensor *) {}
 void ggml_moe_prefetch_wait(const struct ggml_tensor *) {}
 void ggml_moe_prefetch_kernel_hook(const struct ggml_tensor *, int) {}
 void ggml_moe_prefetch_cold(const struct ggml_tensor *) {}

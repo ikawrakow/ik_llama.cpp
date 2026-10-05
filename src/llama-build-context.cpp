@@ -6,6 +6,7 @@
 #include "llama-delta-net.h"
 
 #include "ggml.h"
+#include "ggml-moe-prefetch.h"
 
 #include <unordered_set>
 #include <algorithm>
@@ -1516,6 +1517,40 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     return cur;
 }
 
+// quillama.cpp: MoE router lookahead ("early router", as in Strata and the MoE-cache llama.cpp fork,
+// moved to a CPU-only tier: SSD -> RAM). While layer il computes, the next layer's router is run on
+// layer il's FFN input; the predicted experts of layer il+1 are queued for read-ahead, so their
+// pages stream in from storage while layer il's experts compute. A wrong guess only costs I/O: the
+// real selection is fetched on demand as before. Opt-in (--moe-lookahead, needs --prefetch-experts),
+// small batches only: on synthetic models it lost to plain demand read-ahead (see docs/quillama.md),
+// so it stays off until measured on real MoE models.
+static void quill_moe_lookahead_op(ggml_tensor * dst, const ggml_tensor * ids, int ith, int nth, void * userdata) {
+    (void) dst; (void) nth;
+    if (ith != 0) return;
+    const auto * layer = (const llama_layer *) userdata;
+    for (const ggml_tensor * w : { layer->ffn_up_exps, layer->ffn_gate_exps, layer->ffn_down_exps, layer->ffn_up_gate_exps }) {
+        if (w) ggml_moe_prefetch_predicted(w, ids);
+    }
+}
+
+static void quill_moe_lookahead(ggml_context * ctx, llama_context & lctx, ggml_tensor * cur, int il,
+                                int64_t n_expert, int64_t n_expert_used, ggml_cgraph * graph) {
+    static const bool enabled = [] { const char * e = getenv("QUILL_MOE_LOOKAHEAD"); return e && atoi(e) != 0; }();
+    if (!enabled || !lctx.cparams.prefetch_experts || !graph || il < 0) return;
+    if (cur->ne[1] > 8) return;   // prompt processing already streams whole layers ahead
+    const auto & layers = lctx.model.layers;
+    if (il + 1 >= (int) layers.size()) return;
+    const llama_layer & next = layers[il + 1];
+    if (!next.ffn_gate_inp || next.ffn_gate_inp->ne[0] != cur->ne[0] || next.ffn_gate_inp->ne[1] != n_expert) return;
+    if (!next.ffn_up_exps && !next.ffn_up_gate_exps) return;
+    if (!ggml_backend_buffer_is_host(next.ffn_gate_inp->buffer)) return;
+    ggml_tensor * logits = ggml_mul_mat(ctx, next.ffn_gate_inp, cur);   // ranking only: no softmax needed
+    ggml_tensor * ids    = ggml_top_k(ctx, logits, n_expert_used);
+    ggml_tensor * pf     = ggml_map_custom1(ctx, ids, quill_moe_lookahead_op, 1, (void *) &next);
+    ggml_set_name(pf, "quill_moe_lookahead");
+    ggml_build_forward_expand(graph, pf);
+}
+
 ggml_tensor * llm_build_context::llm_build_moe_ffn(
         ggml_context * ctx,
        llama_context & lctx,
@@ -1610,6 +1645,9 @@ llm_expert_gating_func_type   gating_op,
         }
     }
     cb(selected_experts, "ffn_moe_topk", il);
+    if (gate_inp) {
+        quill_moe_lookahead(ctx, lctx, cur, il, n_expert, n_expert_used, graph);
+    }
     ggml_tensor * weights = ggml_get_rows(ctx,
             ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);

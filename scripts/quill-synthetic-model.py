@@ -32,6 +32,10 @@ def main():
     ap.add_argument("--experts", type=int, default=0)
     ap.add_argument("--embd", type=int, default=0)
     ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--shared-router", action="store_true",
+                    help="same router weights in every layer (correlated routing across layers, as in real MoE models)")
+    ap.add_argument("--residual-scale", type=float, default=1.0,
+                    help="scale of the attn_output / ffn_down weights; < 1 keeps the residual stream slowly varying")
     args = ap.parse_args()
 
     p = dict(PRESETS[args.arch])
@@ -106,13 +110,21 @@ def main():
             F = p["n_ff"]
             specs += [(b + "ffn_gate.weight", (F, E)), (b + "ffn_up.weight", (F, E)), (b + "ffn_down.weight", (E, F))]
 
+    shared_router = {}
     def make(name, shape):
         if len(shape) == 1:
             return np.ones(shape, dtype=np.float32)
+        if args.shared_router and name.endswith("ffn_gate_inp.weight") and "r" in shared_router:
+            return shared_router["r"]
         fan_in = shape[-1]
         a = rng.standard_normal(shape, dtype=np.float32)
         a *= (1.0 / np.sqrt(fan_in)) if "token_embd" not in name else 1.0
-        return a.astype(np.float16)
+        if name.endswith("attn_output.weight") or "ffn_down" in name:
+            a *= args.residual_scale
+        a = a.astype(np.float16)
+        if args.shared_router and name.endswith("ffn_gate_inp.weight"):
+            shared_router["r"] = a
+        return a
 
     for name, shape in specs:
         dt = np.float32 if len(shape) == 1 else np.float16
