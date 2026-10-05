@@ -6,7 +6,7 @@ __device__ __forceinline__ void vec_dot_iq4_ks_r4_q8_1(
     const float * dptr = (const float *)vbq;
     const block_iq4_ks_r4 * bq4 = (const block_iq4_ks_r4 *)(dptr + 4) + kbx;
 
-    // iqs is 0...28 in steps of 2
+    // iqs is 0...30 in steps of 2
     const int ib16 = iqs/2;
     const float d8 = __low2float(bq8_1[ib16/2].ds);
     const int32_t  * q8 = (const int *)bq8_1[ib16/2].qs + 4*(ib16%2);
@@ -33,4 +33,3 @@ __device__ __forceinline__ void vec_dot_iq4_ks_r4_q8_1(
 void mul_mat_vec_iq4_ks_r4_q8_1_cuda(const mmvq_args & args, cudaStream_t stream) {
     iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ4_KS_R4, 2, vec_dot_iq4_ks_r4_q8_1, 4>(args, stream);
 }
-
