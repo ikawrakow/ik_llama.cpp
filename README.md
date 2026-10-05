@@ -1,3 +1,33 @@
+# quillama.cpp: ik_llama.cpp tuned for CPU-only servers
+
+quillama.cpp is [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (history kept, so upstream
+changes merge) with changes for running models on a server without a GPU, such as a VPS with lots
+of RAM and an SSD:
+
+- **JSON output follows the requested schema.** `response_format: {"type": "json_object"}` was not
+  enforced at all in ik_llama.cpp (upstream llama.cpp does enforce it), and two smaller gaps let
+  output escape the schema. Grammar-constrained sampling is also 1.7× faster, with an identical
+  token mask.
+- **Prompt processing on Intel AMX** (Sapphire Rapids and newer Xeons, common on cloud VPS): BF16
+  tile kernels for dense and MoE matmuls and for flash attention. 2.6-3.2× faster prompts on a
+  dense model and 1.2-2.4× on a MoE model than ik_llama.cpp in our measurements, more at longer
+  contexts.
+- **Faster token generation by default**: ik's run-time weight repacking (+25-40% generation) is
+  switched on automatically when the model fits in RAM.
+- **Models larger than RAM** keep `mmap` and stream MoE experts from SSD with read-ahead.
+- Grammar jump-forward drafting, transparent huge pages that work without reserved hugetlbfs pages,
+  and tests for all of the above (including upstream llama.cpp's grammar / JSON-schema suite).
+
+```bash
+./scripts/quill-build-cpu.sh
+./build/bin/llama-server -m model.gguf -t $(nproc) -c 16384 --jinja
+```
+
+Details, measurements, flags and limits: **[docs/quillama.md](docs/quillama.md)**. Everything below
+is ik_llama.cpp's README.
+
+---
+
 # ik_llama.cpp: llama.cpp fork with better CPU performance
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
