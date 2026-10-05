@@ -320,6 +320,36 @@ struct llama_mmap::impl {
             }
             else {
                 fprintf(stderr, "%s: mmap with huge page size %zu MiB failed (%s)\n", __func__, huge/(1024*1024), strerror(errno));
+                // quillama.cpp: MAP_HUGETLB needs pages reserved in vm.nr_hugepages, which a typical VPS
+                // does not have. Fall back to transparent huge pages: an anonymous 2 MiB-aligned mapping
+                // marked MADV_HUGEPAGE (works with THP "always" or "madvise"), filled from the file.
+                const size_t thp = 2u*1024u*1024u;
+                const size_t len = thp*((file->size() + thp - 1)/thp);
+                void * raw = mmap(nullptr, len + thp, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                if (raw != MAP_FAILED) {
+                    char * aligned = (char *)(((uintptr_t)raw + thp - 1) & ~(uintptr_t)(thp - 1));
+                    if (aligned > (char *)raw) munmap(raw, aligned - (char *)raw);
+                    const size_t tail = ((char *)raw + len + thp) - (aligned + len);
+                    if (tail) munmap(aligned + len, tail);
+                    if (madvise(aligned, len, MADV_HUGEPAGE) != 0) {
+                        fprintf(stderr, "%s: madvise(MADV_HUGEPAGE) failed (%s)\n", __func__, strerror(errno));
+                    }
+                    printf("%s: using transparent huge pages (2 MiB) ", __func__);
+                    fflush(stdout);
+                    size_t tot = 0;
+                    while (tot < file->size()) {
+                        auto n_read = pread(fd, aligned + tot, file->size() - tot, tot);
+                        if (n_read <= 0) throw std::runtime_error(format("Reading into transparent huge pages failed at %zu (%s)", tot, strerror(errno)));
+                        tot += n_read;
+                    }
+                    printf("done\n");
+                    // the file pages are no longer needed in the page cache
+                    posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+                    addr = aligned;
+                    mapped_fragments.emplace_back(0, file->size());
+                    mapped_page_size = thp;
+                    return;
+                }
             }
         }
 #endif
