@@ -2739,6 +2739,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             sparams.grammar = { COMMON_GRAMMAR_TYPE_USER, argv[i] };
         return true;
     }
+    if (arg == "--grammar-draft") {
+        CHECK_ARG
+        params.grammar_draft_n = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--grammar-file") {
         CHECK_ARG
         std::ifstream file(argv[i]);
@@ -3462,6 +3467,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "main",        "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
             "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n" });
     options.push_back({ "grammar" });
+    options.push_back({ "server",      "       --grammar-draft N",      "quillama: draft up to N grammar-forced tokens per step and verify them in one batch;\n"
+                                                                        "the output is unchanged, JSON-schema output gets faster (default: %d, 0 = off)", params.grammar_draft_n });
     options.push_back({ "*",           "       --grammar GRAMMAR",      "BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", sparams.grammar.grammar.c_str() });
     options.push_back({ "*",           "       --grammar-file FNAME",   "file to read grammar from" });
     options.push_back({ "*",           "-j,    --json-schema SCHEMA",

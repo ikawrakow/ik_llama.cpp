@@ -3616,6 +3616,26 @@ void server_context::context_shift() {
     }
 }
 
+// quillama.cpp: tokens the slot's grammar forces next, to be verified in one batch (see
+// common_sampler_grammar_draft). Only without another speculative method and only for models whose
+// KV cache can drop a rejected tail (no recurrent state).
+std::vector<llama_token> server_context::grammar_draft(server_slot & slot) {
+    if (params_base.grammar_draft_n <= 0 || slot.can_speculate() || !slot.ctx_sampling || !slot.ctx_sampling->grammar) {
+        return {};
+    }
+    if (mctx || common_speculative_needs_checkpoint(model)) {
+        return {};
+    }
+    int n_max = std::min(params_base.grammar_draft_n, slot.n_ctx - slot.n_past - 2);
+    if (slot.n_remaining > 0) {   // set by has_budget(): request or server n_predict
+        n_max = std::min(n_max, slot.n_remaining - 1);
+    }
+    if (n_max <= 0) {
+        return {};
+    }
+    return common_sampler_grammar_draft(slot.ctx_sampling, ctx, n_max);
+}
+
 void server_context::add_sampled_tokens() {
     for (auto& slot : slots) {
         slot.released = false;
@@ -3712,6 +3732,20 @@ void server_context::add_sampled_tokens() {
                 slot.drafted = std::move(draft);
                 slot.draft_proposal_dists = std::move(proposal_dists);
             }
+        }
+        else if (auto gdraft = grammar_draft(slot); !gdraft.empty()) {
+            // quillama.cpp: grammar jump-forward, verified like any other draft
+            slot.i_batch_dft.push_back(batch.n_tokens);
+            common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
+            slot.cache_tokens.push_back(slot.sampled);
+            slot.n_draft_total += gdraft.size();
+            for (size_t i = 0; i < gdraft.size(); i++) {
+                slot.i_batch_dft.push_back(batch.n_tokens);
+                common_batch_add(batch, gdraft[i], slot.cache_tokens.pos_next(), { slot.id }, true);
+                slot.cache_tokens.push_back(gdraft[i]);
+            }
+            slot.drafted = std::move(gdraft);
+            slot.draft_proposal_dists.clear();
         }
         else {
             // no speculative decoding
@@ -4506,7 +4540,10 @@ void server_context::speculative_decoding_accept() {
         slot.sampled = ids.back(); // last accepted token
         slot.n_past = slot.cache_tokens.n_tokens();
 
-        if (!common_speculative_commit(
+        if (!slot.spec) {
+            // grammar jump-forward draft (no speculative context): drop the rejected tail from the KV cache
+            llama_kv_cache_seq_rm(ctx, slot.id, spec_pos_base + (llama_pos) (ids.size() - 1), -1);
+        } else if (!common_speculative_commit(
             slot.spec,
             ctx,
             slot.ctx_sampling,

@@ -509,6 +509,88 @@ static bool grammar_should_apply(struct common_sampler * gsmpl) {
     return true;
 }
 
+// quillama.cpp: grammar jump-forward drafting.
+// Walk the grammar from its current state while every parse stack agrees on one single next
+// character; that text is forced, whatever the model would prefer. Its tokenization is returned as
+// a speculative draft, which the normal grammar-constrained sampling then verifies, so the output
+// is unchanged while runs of forced JSON (keys, quotes, braces, enum prefixes) cost one batched
+// forward pass instead of one pass per token.
+static void quill_append_utf8(std::string & out, uint32_t cp) {
+    if (cp < 0x80) {
+        out += (char) cp;
+    } else if (cp < 0x800) {
+        out += (char) (0xC0 | (cp >> 6));
+        out += (char) (0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += (char) (0xE0 | (cp >> 12));
+        out += (char) (0x80 | ((cp >> 6) & 0x3F));
+        out += (char) (0x80 | (cp & 0x3F));
+    } else {
+        out += (char) (0xF0 | (cp >> 18));
+        out += (char) (0x80 | ((cp >> 12) & 0x3F));
+        out += (char) (0x80 | ((cp >> 6) & 0x3F));
+        out += (char) (0x80 | (cp & 0x3F));
+    }
+}
+
+static bool grammar_should_apply(struct common_sampler * gsmpl);
+
+std::string common_sampler_grammar_forced_text(struct common_sampler * gsmpl, size_t max_chars) {
+    std::string out;
+    if (!gsmpl || !gsmpl->grammar || max_chars == 0) {
+        return out;
+    }
+    const llama_grammar * g = gsmpl->grammar;
+    if ((g->lazy && g->awaiting_trigger) || g->partial_utf8.n_remain != 0 || !grammar_should_apply(gsmpl)) {
+        return out;
+    }
+    llama_grammar * clone = llama_grammar_clone_impl(*g);
+    for (size_t n = 0; n < max_chars; ++n) {
+        const auto & stacks = clone->stacks;
+        if (stacks.empty()) {
+            break;
+        }
+        uint32_t forced = 0;
+        bool ok = true;
+        for (const auto & stack : stacks) {
+            if (stack.empty()) { ok = false; break; }             // the grammar may end here
+            const llama_grammar_element * pos = stack.back();
+            if (pos->type != LLAMA_GRETYPE_CHAR) { ok = false; break; }
+            const auto next = pos[1].type;
+            if (next == LLAMA_GRETYPE_CHAR_ALT || next == LLAMA_GRETYPE_CHAR_RNG_UPPER) { ok = false; break; }
+            if (pos->value == 0 || (forced != 0 && forced != pos->value)) { ok = false; break; }
+            forced = pos->value;
+        }
+        if (!ok || forced == 0) {
+            break;
+        }
+        quill_append_utf8(out, forced);
+        llama_grammar_accept(clone, forced);
+    }
+    llama_grammar_free_impl(clone);
+    return out;
+}
+
+std::vector<llama_token> common_sampler_grammar_draft(struct common_sampler * gsmpl, struct llama_context * ctx, int n_max) {
+    std::vector<llama_token> draft;
+    if (n_max <= 0) {
+        return draft;
+    }
+    const std::string forced = common_sampler_grammar_forced_text(gsmpl, 8*(size_t)n_max);
+    if (forced.empty()) {
+        return draft;
+    }
+    draft = common_tokenize(ctx, forced, false, false);
+    // the last token may merge with the free text that follows, so it is not a reliable guess
+    if (!draft.empty()) {
+        draft.pop_back();
+    }
+    if ((int) draft.size() > n_max) {
+        draft.resize(n_max);
+    }
+    return draft;
+}
+
 static llama_token llama_sampling_sample_impl(
                   struct common_sampler * ctx_sampling,
                   struct llama_context * ctx_main,
@@ -744,6 +826,17 @@ void common_sampler_accept(
     const auto accept_grammar = is_generated && grammar_should_apply(ctx_sampling);
     if (ctx_sampling->rbudget && is_generated) {
         common_reasoning_budget_accept(ctx_sampling->rbudget, token);
+
+        // if reasoning just ended, replay the end sequence into the grammar: a lazy grammar
+        // did not see it while reasoning was active, and it may carry the grammar trigger
+        const bool is_done = common_reasoning_budget_get_state(ctx_sampling->rbudget) == REASONING_BUDGET_DONE;
+        if (ctx_sampling->grammar && !accept_grammar && is_done) {
+            if (const auto * end_seq = common_reasoning_budget_get_end_match(ctx_sampling->rbudget)) {
+                for (const llama_token end_token : *end_seq) {
+                    llama_grammar_accept_token(ctx_sampling->grammar, ctx_main, end_token);
+                }
+            }
+        }
     }
 
     if (ctx_sampling->grammar && accept_grammar) {
