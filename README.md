@@ -9,11 +9,11 @@ of RAM and an SSD:
   output escape the schema. Grammar-constrained sampling is also 1.7× faster, with an identical
   token mask.
 - **Prompt processing on Intel AMX** (Sapphire Rapids and newer Xeons, common on cloud VPS): BF16
-  tile kernels for dense and MoE matmuls and for flash attention. 2.6-3.2× faster prompts on a
-  dense model and 1.2-2.4× on a MoE model than ik_llama.cpp in our measurements, more at longer
-  contexts.
-- **Faster token generation by default**: ik's run-time weight repacking (+25-40% generation) is
-  switched on automatically when the model fits in RAM.
+  tile kernels for dense and MoE matmuls and for flash attention, with 2048-token micro-batches.
+  2.1-2.8× faster prompts on a dense model and 1.7-2.7× on a MoE model than a hand-tuned
+  ik_llama.cpp in our measurements; the gap grows with the context.
+- **Faster token generation by default**: ik's run-time weight repacking (+25-60% generation over
+  ik's defaults) is switched on automatically when the model fits in RAM.
 - **Models larger than RAM** keep `mmap` and stream MoE experts from SSD with read-ahead.
 - Grammar jump-forward drafting, transparent huge pages that work without reserved hugetlbfs pages,
   and tests for all of the above (including upstream llama.cpp's grammar / JSON-schema suite).

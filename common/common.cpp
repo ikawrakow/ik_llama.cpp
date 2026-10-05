@@ -1051,10 +1051,23 @@ static size_t quill_mem_available_bytes() {
 #endif
 }
 
+extern "C" bool quill_amx_available(void);
+
+// quillama.cpp: with AMX, larger micro-batches keep the tile units busy (each MoE expert sees more
+// tokens per batch); ik_llama.cpp's kernels gain nothing from them. Measured on a 4-core VM:
+// MoE pp2048 648 -> 865 t/s going from -ub 512 to -ub 2048. Only for CPU-only runs without -ub.
+static void quill_auto_ubatch(gpt_params & params) {
+    if (params.ubatch_explicit || params.n_ubatch != 512) return;
+    if (llama_supports_gpu_offload() && params.n_gpu_layers != 0) return;
+    if (!quill_amx_available()) return;
+    params.n_ubatch = std::min<int32_t>(2048, std::max<int32_t>(params.n_batch, 512));
+}
+
 static void quill_auto_repack(gpt_params & params) {
     if (params.repack_explicit || params.repack_tensors || !params.use_mmap || params.model.empty()) return;
     if (llama_supports_gpu_offload() && params.n_gpu_layers != 0) return;
     if (!params.tensor_buft_overrides.empty()) return;
+    if (!params.lora_adapters.empty() || !params.control_vectors.empty()) return;   // adapters expect the original layout
     const size_t model_bytes = quill_model_file_bytes(params.model);
     const size_t avail       = quill_mem_available_bytes();
     if (model_bytes == 0 || avail == 0) return;
@@ -1092,6 +1105,7 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
     params.cpu_affinity = cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
 
     quill_auto_repack(params);
+    quill_auto_ubatch(params);
 
     return true;
 }
@@ -1806,6 +1820,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-ub" || arg == "--ubatch-size") {
         CHECK_ARG
         params.n_ubatch = std::stoi(argv[i]);
+        params.ubatch_explicit = true;
         return true;
     }
     if (arg == "--keep") {

@@ -41,9 +41,10 @@ or, for a model larger than RAM:
 quillama: model (380.0 GiB) does not fit comfortably in RAM (120.4 GiB available): keeping mmap, no run-time repack, MoE expert prefetch from storage enabled
 ```
 
-Use a physical-core thread count (`-t`). Prompts are processed in micro-batches of `-ub` tokens
-(default 512). With AMX, a larger `-ub` (1024-2048) keeps the tile units busier on MoE models,
-because each expert then sees more tokens per batch.
+Use a physical-core thread count (`-t`). On a CPU with AMX, prompts are processed in micro-batches
+of 2048 tokens (`-ub 2048`, instead of ik's 512) unless `-ub` is given. Each MoE expert then sees
+more tokens per batch, which keeps the tile units busy: MoE prompt speed 648 → 865 t/s at 2048
+tokens. The compute buffer grows accordingly (a few hundred MB to ~2 GB, depending on the model).
 
 ## What changed
 
@@ -181,23 +182,30 @@ Hugging Face was not reachable from the build environment). Speed does not depen
 values. Both builds use `GGML_NATIVE=ON`, 4 threads, ik_llama.cpp at commit `3d27f5bb` (main, Oct
 2026). The VM is shared, so runs vary by about ±5-10%.
 
+Three configurations: ik_llama.cpp with its defaults; ik_llama.cpp hand-tuned with `-rtr 1 -ub 2048`;
+and quillama.cpp with the settings it picks by itself on this machine (repack on because the model
+fits in RAM; `-ub 2048` because the CPU has AMX). llama-bench does not apply the automatic choices,
+so they are passed explicitly there.
+
 **Dense, 1.6B parameters, Q4_K_M** (llama architecture, 16 layers, 2048 hidden, 8192 FFN, 152k vocab)
 
-| | ik_llama.cpp | quillama.cpp | |
-| --- | ---: | ---: | ---: |
-| prompt, 512 tokens | 342 t/s | 897 t/s | 2.6× |
-| prompt, 2048 tokens | 287 t/s | 887 t/s | 3.1× |
-| prompt, 4096 tokens | 268 t/s | 857 t/s | 3.2× |
-| generation | 17.9 t/s | 25.0 t/s | 1.4× |
+| | ik defaults | ik tuned | quillama.cpp | vs ik tuned |
+| --- | ---: | ---: | ---: | ---: |
+| prompt, 512 tokens | 383 t/s | 468 t/s | **974 t/s** | 2.1× |
+| prompt, 4096 tokens | 287 t/s | 313 t/s | **888 t/s** | 2.8× |
+| generation | 17.2 t/s | 27.2 t/s | **27.9 t/s** | same kernels |
 
 **MoE, 4.5B total parameters, Q4_K_M** (qwen3moe architecture, 12 layers, 64 experts, top-8)
 
-| | ik_llama.cpp | quillama.cpp | |
-| --- | ---: | ---: | ---: |
-| prompt, 512 tokens | 411 t/s | 473-530 t/s | 1.2-1.3× |
-| prompt, 2048 tokens | 304 t/s | 530 t/s | 1.7× |
-| prompt, 4096 tokens | 238 t/s | 566 t/s | 2.4× |
-| generation | 25.6 t/s | 29.6 t/s | 1.16× |
+| | ik defaults | ik tuned | quillama.cpp | vs ik tuned |
+| --- | ---: | ---: | ---: | ---: |
+| prompt, 512 tokens | 419 t/s | 418 t/s | **700 t/s** | 1.7× |
+| prompt, 4096 tokens | 257 t/s | 267 t/s | **727 t/s** | 2.7× |
+| generation | 25.7 t/s | 34.8 t/s | **32.0 t/s** | same kernels |
+
+Token generation uses ik's own kernels in both cases, so a hand-tuned ik matches quillama there (the
+differences are within this shared VM's run-to-run noise). The generation gain over ik's defaults
+comes from enabling ik's run-time repack automatically (section 5).
 
 **JSON-schema generation** (dense model, server `/completion` with a nested schema): 10.3 t/s →
 21.9 t/s.
@@ -205,13 +213,14 @@ values. Both builds use `GGML_NATIVE=ON`, 4 threads, ik_llama.cpp at commit `3d2
 For comparison, upstream llama.cpp (Oct 2026) on the same machine: dense prompt 512 tokens 330 t/s,
 generation 20.4 t/s; MoE prompt 512 tokens 185 t/s, generation 25.1 t/s.
 
-How the numbers above split:
+How the gains split (prompt numbers at 512 tokens unless noted):
 
 | Change | Prompt (dense / MoE) | Generation |
 | --- | --- | --- |
 | AMX GEMM + fast dequantization | 2.2× / 1.3-1.5× | n/a |
-| AMX flash attention | grows with context; 2.6-3.2× total at 4K tokens | n/a |
-| run-time repack by default | unchanged | +25-40% |
+| AMX flash attention | grows with context: 2.8× / 2.7× vs tuned ik at 4096 tokens | n/a |
+| `-ub 2048` by default on AMX (no gain for ik's kernels) | +10% / +35-50% | n/a |
+| run-time repack by default (ik's `-rtr`) | unchanged | +25-60% vs ik defaults |
 | THP fallback (`-thp`) | n/a | +2% |
 | grammar mask | n/a | 1.7× for JSON-schema output (2.1× vs ik together with repack) |
 
