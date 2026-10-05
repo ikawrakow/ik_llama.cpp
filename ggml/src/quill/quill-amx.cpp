@@ -310,6 +310,94 @@ void dq_q6_k(const uint8_t * x, int64_t K, float * y) {
     }
 }
 
+// --- 4-row interleaved repacks (ik's run-time repack, -rtr): write 4 consecutive rows of K floats ---
+//
+// Within each 32-value sub-block, the 64 quant bytes hold four 16-byte groups X0..X3; dword k of each
+// group belongs to row k. With v0 = lo(X0), v1 = hi(X0), v2 = lo(X1), v3 = hi(X1), v4 = lo(X2),
+// v5 = hi(X2), v6 = lo(X3), v7 = hi(X3), row k is the dwords [v0 v4 v1 v5 | v2 v6 v3 v7] (k-th each).
+inline void transpose4x4_epi32(__m128i & a, __m128i & b, __m128i & c, __m128i & d) {
+    __m128 fa = _mm_castsi128_ps(a), fb = _mm_castsi128_ps(b), fc = _mm_castsi128_ps(c), fd = _mm_castsi128_ps(d);
+    _MM_TRANSPOSE4_PS(fa, fb, fc, fd);
+    a = _mm_castps_si128(fa); b = _mm_castps_si128(fb); c = _mm_castps_si128(fc); d = _mm_castps_si128(fd);
+}
+
+void dq_q4_k_r4(const uint8_t * x, int64_t K, float * y) {
+    // { half d[8] (d for rows 0-3, dmin for rows 0-3); uint8 scales_h[16]; uint8 scales_l[32]; uint8 qs[512] } = 576 bytes
+    const __m128i m4 = _mm_set1_epi8(0x0f);
+    for (int64_t ibl = 0; ibl < K/256; ++ibl, x += 576) {
+        float d[4], m[4];
+        for (int k = 0; k < 4; ++k) { d[k] = h2f(x + 2*k); m[k] = h2f(x + 8 + 2*k); }
+        const uint8_t * sh = x + 16;
+        const uint8_t * sl = x + 32;
+        const uint8_t * qs = x + 64;
+        for (int ib = 0; ib < 8; ++ib, qs += 64) {
+            __m128i X[4];
+            for (int g = 0; g < 4; ++g) X[g] = _mm_loadu_si128((const __m128i *)(qs + 16*g));
+            __m128i v[8];
+            for (int g = 0; g < 4; ++g) {
+                v[2*g+0] = _mm_and_si128(X[g], m4);
+                v[2*g+1] = _mm_and_si128(_mm_srli_epi16(X[g], 4), m4);
+            }
+            __m128i a0 = v[0], a1 = v[4], a2 = v[1], a3 = v[5];
+            __m128i b0 = v[2], b1 = v[6], b2 = v[3], b3 = v[7];
+            transpose4x4_epi32(a0, a1, a2, a3);
+            transpose4x4_epi32(b0, b1, b2, b3);
+            const __m128i lo[4] = {a0, a1, a2, a3}, hi[4] = {b0, b1, b2, b3};
+            for (int k = 0; k < 4; ++k) {
+                const int is = 4*ib + k;
+                const int s6 = (sh[is%16] >> 4*(is/16));
+                const float dl = d[k]*((sl[is] & 0xf) | ((s6 & 0x03) << 4));
+                const float ml = m[k]*((sl[is] >>  4) | ((s6 & 0x0c) << 2));
+                const __m512 a = _mm512_set1_ps(dl), b = _mm512_set1_ps(-ml);
+                float * yk = y + k*K + 256*ibl + 32*ib;
+                fma_u8(yk,      lo[k], a, b);
+                fma_u8(yk + 16, hi[k], a, b);
+            }
+        }
+    }
+}
+
+void dq_q6_k_r4(const uint8_t * x, int64_t K, float * y) {
+    // { half d[4]; int8 scales[64]; uint8 qh[256]; uint8 ql[512] } = 840 bytes
+    const __m128i m4 = _mm_set1_epi8(0x0f), m30 = _mm_set1_epi8(0x30), m32 = _mm_set1_epi8(32);
+    for (int64_t ibl = 0; ibl < K/256; ++ibl, x += 840) {
+        float d[4];
+        for (int k = 0; k < 4; ++k) d[k] = h2f(x + 2*k);
+        const int8_t  * sc = (const int8_t *)(x + 8);
+        const uint8_t * qh = x + 72;
+        const uint8_t * ql = x + 328;
+        for (int ib = 0; ib < 8; ++ib, ql += 64, qh += 32) {
+            const __m128i X0 = _mm_loadu_si128((const __m128i *)(ql +  0));
+            const __m128i X1 = _mm_loadu_si128((const __m128i *)(ql + 16));
+            const __m128i X2 = _mm_loadu_si128((const __m128i *)(ql + 32));
+            const __m128i X3 = _mm_loadu_si128((const __m128i *)(ql + 48));
+            const __m128i H0 = _mm_loadu_si128((const __m128i *)(qh +  0));
+            const __m128i H1 = _mm_loadu_si128((const __m128i *)(qh + 16));
+            auto lo = [&](__m128i q) { return _mm_and_si128(q, m4); };
+            auto hi = [&](__m128i q) { return _mm_and_si128(_mm_srli_epi16(q, 4), m4); };
+            __m128i v[8];
+            v[0] = _mm_or_si128(lo(X0), _mm_and_si128(_mm_slli_epi16(H0, 4), m30));
+            v[1] = _mm_or_si128(hi(X0), _mm_and_si128(_mm_slli_epi16(H0, 2), m30));
+            v[2] = _mm_or_si128(lo(X1), _mm_and_si128(_mm_slli_epi16(H1, 4), m30));
+            v[3] = _mm_or_si128(hi(X1), _mm_and_si128(_mm_slli_epi16(H1, 2), m30));
+            v[4] = _mm_or_si128(lo(X2), _mm_and_si128(H0, m30));
+            v[5] = _mm_or_si128(hi(X2), _mm_and_si128(_mm_srli_epi16(H0, 2), m30));
+            v[6] = _mm_or_si128(lo(X3), _mm_and_si128(H1, m30));
+            v[7] = _mm_or_si128(hi(X3), _mm_and_si128(_mm_srli_epi16(H1, 2), m30));
+            __m128i a0 = v[0], a1 = v[4], a2 = v[1], a3 = v[5];
+            __m128i b0 = v[2], b1 = v[6], b2 = v[3], b3 = v[7];
+            transpose4x4_epi32(a0, a1, a2, a3);
+            transpose4x4_epi32(b0, b1, b2, b3);
+            const __m128i first[4] = {a0, a1, a2, a3}, second[4] = {b0, b1, b2, b3};
+            for (int k = 0; k < 4; ++k) {
+                float * yk = y + k*K + 256*ibl + 32*ib;
+                mul_s8(yk,      _mm_sub_epi8(first[k],  m32), _mm512_set1_ps(d[k]*sc[8*ib + k + 0]));
+                mul_s8(yk + 16, _mm_sub_epi8(second[k], m32), _mm512_set1_ps(d[k]*sc[8*ib + k + 4]));
+            }
+        }
+    }
+}
+
 typedef void (*fast_dq_t)(const uint8_t *, int64_t, float *);
 
 fast_dq_t fast_dequantizer(ggml_type type, int64_t K) {
@@ -322,6 +410,8 @@ fast_dq_t fast_dequantizer(ggml_type type, int64_t K) {
         case GGML_TYPE_Q4_K:   return K % 256 == 0 ? dq_q4_k   : nullptr;
         case GGML_TYPE_Q5_K:   return K % 256 == 0 ? dq_q5_k   : nullptr;
         case GGML_TYPE_Q6_K:   return K % 256 == 0 ? dq_q6_k   : nullptr;
+        case GGML_TYPE_Q4_K_R4: return K % 256 == 0 ? dq_q4_k_r4 : nullptr;
+        case GGML_TYPE_Q6_K_R4: return K % 256 == 0 ? dq_q6_k_r4 : nullptr;
         default:               return nullptr;
     }
 }
@@ -331,6 +421,7 @@ struct dequantizer {
     ggml_to_float_t to_float;
     int64_t         K, Kp;
     fast_dq_t       fast = nullptr;
+    int64_t         ileave = 1;   // rows interleaved per group (*_R4, *_R8, *_R16 repacks)
 
     void row(const char * src, ggml_bf16_t * dst, float * tmp) const {
         switch (type) {
@@ -349,6 +440,20 @@ struct dequantizer {
 // dequantize rows [m0, m0+mr) of W into a [mr_alloc][Kp] BF16 panel; rows >= M are zero
 void dequantize_panel(const dequantizer & dq, const char * w, size_t w_stride, int64_t M,
                       int64_t m0, int64_t mr, ggml_bf16_t * panel, float * tmp) {
+    if (dq.ileave > 1) {
+        // row-interleaved repack: to_float() of a group of R rows yields the R rows one after another
+        const int64_t R = dq.ileave;
+        for (int64_t i = 0; i < mr; i += R) {
+            if (m0 + i < M) {
+                if (dq.fast) dq.fast((const uint8_t *)(w + (m0 + i)*w_stride), dq.K, tmp);
+                else         dq.to_float(w + (m0 + i)*w_stride, tmp, R*dq.K);
+                for (int64_t r = 0; r < R; ++r) f32_to_bf16_row(tmp + r*dq.K, dq.K, dq.Kp, panel + (i + r)*dq.Kp);
+            } else {
+                memset(panel + i*dq.Kp, 0, R*dq.Kp*sizeof(ggml_bf16_t));
+            }
+        }
+        return;
+    }
     for (int64_t i = 0; i < mr; ++i) {
         ggml_bf16_t * dst = panel + i*dq.Kp;
         if (m0 + i < M) {
@@ -428,15 +533,24 @@ extern "C" int quill_amx_min_batch(void) {
     return n;
 }
 
+// rows interleaved by a repacked type: the _r<N> suffix of its name (q4_k_r4, iq4_xs_r8, ...), else 1
+static int64_t interleave_of(enum ggml_type type) {
+    const char * name = ggml_type_name(type);
+    if (!name) return 1;
+    const char * p = strrchr(name, '_');
+    if (!p || (p[1] != 'r' && p[1] != 'R') || !p[2]) return 1;
+    for (const char * c = p + 2; *c; ++c) if (*c < '0' || *c > '9') return 1;
+    const int64_t r = atoi(p + 2);
+    return r == 4 || r == 8 || r == 16 ? r : 1;
+}
+
 extern "C" bool quill_amx_type_supported(enum ggml_type type) {
     if (type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16) return true;
     if (!ggml_is_quantized(type)) return false;
     const auto traits = ggml_internal_get_type_traits(type);
     if (!traits.to_float) return false;
-    // row-interleaved repacks (*_R4, *_R8, *_R16) do not dequantize row by row
-    const char * name = ggml_type_name(type);
-    if (!name || strstr(name, "_r") || strstr(name, "_R")) return false;
-    // row-wise meta data (e.g. IQ4_KS) is fine: we always dequantize whole rows
+    // row-wise meta data (e.g. IQ4_KS) is fine: whole rows (or row groups) are always dequantized
+    if (getenv("QUILL_AMX_NO_REPACKED") && interleave_of(type) > 1) return false;
     return true;
 }
 
@@ -493,9 +607,9 @@ extern "C" void quill_amx_gemm(enum ggml_type type, const void * w, size_t w_str
     thread_local aligned_buffer<float>       tmp_buf;
     alignas(64) float c[4][256];
 
-    const dequantizer dq{type, ggml_internal_get_type_traits(type).to_float, K, Kp, fast_dequantizer(type, K)};
+    const dequantizer dq{type, ggml_internal_get_type_traits(type).to_float, K, Kp, fast_dequantizer(type, K), interleave_of(type)};
     ggml_bf16_t * panel = panel_buf.get(s.mr*Kp);
-    float *       tmp   = tmp_buf.get(K + 32);
+    float *       tmp   = tmp_buf.get(dq.ileave*K + 32);
     const int64_t a_stride = Kp*sizeof(ggml_bf16_t);
     auto identity = [](__m512 v, int64_t) { return v; };
 
@@ -596,10 +710,10 @@ extern "C" bool quill_amx_gemm_up_gate(enum ggml_type type, const void * w_up, c
     thread_local aligned_buffer<float>       tmp_buf;
     alignas(64) float c[4][256];   // up(t0), up(t0+16), gate(t0), gate(t0+16)
 
-    const dequantizer dq{type, ggml_internal_get_type_traits(type).to_float, K, Kp, fast_dequantizer(type, K)};
+    const dequantizer dq{type, ggml_internal_get_type_traits(type).to_float, K, Kp, fast_dequantizer(type, K), interleave_of(type)};
     ggml_bf16_t * panel_up   = panel_buf.get(2*s.mr*Kp);
     ggml_bf16_t * panel_gate = panel_up + s.mr*Kp;
-    float *       tmp        = tmp_buf.get(K + 32);
+    float *       tmp        = tmp_buf.get(dq.ileave*K + 32);
     const int64_t a_stride   = Kp*sizeof(ggml_bf16_t);
     const bool    clamp      = limit > 1e-6f;
     const __m512  vlim       = _mm512_set1_ps(limit);

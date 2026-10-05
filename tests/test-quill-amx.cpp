@@ -10,6 +10,13 @@
 
 static float silu(float x) { return x/(1.0f + expf(-x)); }
 
+static int64_t interleave_of(ggml_type type) {
+    const char * name = ggml_type_name(type);
+    const char * p = strrchr(name, '_');
+    if (!p || p[1] != 'r' || !p[2]) return 1;
+    return atoi(p + 2);
+}
+
 static bool run_case(ggml_type type, int64_t K, int64_t M, int64_t T, int nth, bool up_gate) {
     std::mt19937 rng(1234 + K + M*7 + T*13 + type);
     std::normal_distribution<float> nd(0.0f, 1.0f);
@@ -25,10 +32,16 @@ static bool run_case(ggml_type type, int64_t K, int64_t M, int64_t T, int nth, b
         if (type == GGML_TYPE_F32) { memcpy(q.data(), src.data(), M*K*sizeof(float)); dq = src; return; }
         ggml_quantize_chunk(type, src.data(), q.data(), 0, M, K, nullptr, nullptr);
         auto tr = ggml_internal_get_type_traits(type);
-        for (int64_t m = 0; m < M; ++m) tr.to_float(q.data() + m*row_size, dq.data() + m*K, K);
+        const int64_t R = interleave_of(type);
+        for (int64_t m = 0; m < M; m += R) tr.to_float(q.data() + m*row_size, dq.data() + m*K, R*K);
     };
     quant(wf, wq, wd);
     if (up_gate) quant(wg, wgq, wgd);
+    {   // the dequantized weights must resemble the originals (catches a wrong row-group layout)
+        double e = 0, n = 0;
+        for (int64_t i = 0; i < M*K; ++i) { e += (wd[i] - wf[i])*(wd[i] - wf[i]); n += wf[i]*wf[i]; }
+        if (e > 0.05*n) { printf("%s: dequantized weights do not match the originals (rel %.3f)\n", ggml_type_name(type), e/n); return false; }
+    }
 
     std::vector<char> packed(quill_amx_packed_size(K, T));
     for (int ith = 0; ith < nth; ++ith) quill_amx_pack(x.data(), K*sizeof(float), nullptr, K, T, packed.data(), ith, nth);
@@ -71,6 +84,12 @@ int main() {
         ok &= run_case(t, 256, 64, 32, 1, false);
         ok &= run_case(t, 512, 96, 45, 3, false);
         ok &= run_case(t, 512, 50, 17, 4, true);
+    }
+    const ggml_type repacked[] = { GGML_TYPE_Q4_K_R4, GGML_TYPE_Q5_K_R4, GGML_TYPE_Q6_K_R4, GGML_TYPE_IQ4_XS_R8,
+                                   GGML_TYPE_Q8_0_R8, GGML_TYPE_Q4_0_R8, GGML_TYPE_IQ4_KS_R4, GGML_TYPE_Q8_K_R8 };
+    for (auto t : repacked) {
+        ok &= run_case(t, 512, 64, 40, 3, false);
+        ok &= run_case(t, 512, 48, 33, 4, true);
     }
     ok &= run_case(GGML_TYPE_F32, 40, 33, 5, 2, false);      // K, M, T not multiples of the tile sizes
     ok &= run_case(GGML_TYPE_Q4_K, 2048, 300, 130, 4, false);

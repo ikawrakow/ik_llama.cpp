@@ -1008,6 +1008,67 @@ void gpt_params_parse_from_env(gpt_params & params) {
 
 }
 
+// quillama.cpp: on a CPU-only run, repack the weights into ik's row-interleaved layouts (-rtr)
+// when the model fits comfortably in RAM: token generation is 25-40% faster and the AMX prompt
+// path handles the repacked types. Models that do not fit keep mmap, so their experts can still be
+// streamed from SSD. Disable with --no-repack (or force with -rtr).
+static size_t quill_model_file_bytes(const std::string & path) {
+#ifndef __linux__
+    (void) path;
+    return 0;
+#else
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) return 0;
+    size_t total = st.st_size;
+    // split GGUF: <name>-00001-of-0000N.gguf
+    static const std::regex re("^(.*)-00001-of-([0-9]{5})\\.gguf$");
+    std::smatch m;
+    if (std::regex_match(path, m, re)) {
+        const int n = std::stoi(m[2].str());
+        for (int i = 2; i <= n; ++i) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "-%05d-of-%05d.gguf", i, n);
+            if (stat((m[1].str() + buf).c_str(), &st) == 0) total += st.st_size;
+        }
+    }
+    return total;
+#endif
+}
+
+static size_t quill_mem_available_bytes() {
+#ifdef __linux__
+    FILE * f = fopen("/proc/meminfo", "r");
+    if (!f) return 0;
+    char line[256];
+    size_t kb = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "MemAvailable: %zu kB", &kb) == 1) break;
+    }
+    fclose(f);
+    return kb*1024;
+#else
+    return 0;
+#endif
+}
+
+static void quill_auto_repack(gpt_params & params) {
+    if (params.repack_explicit || params.repack_tensors || !params.use_mmap || params.model.empty()) return;
+    if (llama_supports_gpu_offload() && params.n_gpu_layers != 0) return;
+    if (!params.tensor_buft_overrides.empty()) return;
+    const size_t model_bytes = quill_model_file_bytes(params.model);
+    const size_t avail       = quill_mem_available_bytes();
+    if (model_bytes == 0 || avail == 0) return;
+    if (model_bytes < avail/10*7) {
+        params.repack_tensors = true;
+        params.use_mmap       = false;
+        fprintf(stderr, "quillama: model (%.1f GiB) fits in RAM (%.1f GiB available): run-time repack enabled (--no-repack to disable)\n",
+                model_bytes/1073741824.0, avail/1073741824.0);
+    } else {
+        fprintf(stderr, "quillama: model (%.1f GiB) does not fit comfortably in RAM (%.1f GiB available): keeping mmap, no run-time repack\n",
+                model_bytes/1073741824.0, avail/1073741824.0);
+    }
+}
+
 bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
     gpt_params_parse_from_env(params);
     const auto params_org = params; // the example can modify the default params
@@ -1026,6 +1087,8 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
 
     // resolve the CPU affinity once, so the list stays alive until the context is created
     params.cpu_affinity = cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
+
+    quill_auto_repack(params);
 
     return true;
 }
@@ -2438,11 +2501,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-nmm" || arg == "--no-mmap") {
         params.use_mmap = false;
+        params.repack_explicit = true;
         return true;
     }
     if (arg == "-rtr" || arg == "--run-time-repack") {
         params.repack_tensors = true;
         params.use_mmap = false;
+        params.repack_explicit = true;
+        return true;
+    }
+    if (arg == "-nrtr" || arg == "--no-repack") {
+        params.repack_tensors = false;
+        params.repack_explicit = true;
         return true;
     }
     if (arg == "-thp" || arg == "--transparent-huge-pages") {
@@ -3557,6 +3627,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
+    options.push_back({ "*",           "-nrtr,  --no-repack",           "quillama: do not repack the weights at load time (by default they are repacked\n"
+                                                                        "for faster CPU inference when the model fits in RAM)"});
     options.push_back({ "*",           "-dexp,  --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
     options.push_back({ "*",           "-dple,  --defer-ple",            "keep sparse tables (PLE, engram) on the file instead of resident in memory (Linux, Windows)"});
     options.push_back({ "*",           "-prexp, --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
