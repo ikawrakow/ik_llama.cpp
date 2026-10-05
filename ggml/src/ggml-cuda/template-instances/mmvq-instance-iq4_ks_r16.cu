@@ -1,12 +1,5 @@
 #include "../iqk_mmvq_templates.cuh"
 
-template<>
-struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KS_R16> {
-    static constexpr int qk = QK8_0;
-    static constexpr int qr = QR4_0;
-    static constexpr int qi = 16;
-};
-
 __device__ __forceinline__ void vec_dot_iq4_ks_r16_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
 
