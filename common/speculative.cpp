@@ -2004,6 +2004,58 @@ static bool common_speculative_has_target_features(const common_speculative * sp
     });
 }
 
+// parse --draft-params into draft model/context parameters
+static bool common_speculative_parse_params(const std::string & args, gpt_params & out, bool print_usage) {
+    auto [argc, argv] = parse_command_line("llama " + args);
+    const bool ok = gpt_params_parse(argc, argv, out);
+    if (!ok && print_usage) {
+        gpt_params_print_usage(argc, argv, out);
+    }
+    free_command_line(argc, argv);
+    return ok;
+}
+
+// apply -td/--threads-draft to a draft params copy
+void common_speculative_apply_draft_threads(const common_params_speculative & spec, gpt_params & out) {
+    if (spec.n_threads > 0) {
+        out.n_threads = spec.n_threads;
+        if (spec.n_threads_batch <= 0) {
+            out.n_threads_batch = spec.n_threads; // follow -td
+        }
+    }
+    if (spec.n_threads_batch > 0) {
+        out.n_threads_batch = spec.n_threads_batch;
+    }
+}
+
+// store the draft affinity from parsed --draft-params
+static void common_speculative_apply_draft_affinity(const gpt_params & parsed, common_params_speculative & params) {
+    if (!parsed.cpu_affinity_configured) {
+        return;
+    }
+    // --cpu-affinity = hybrid E-cores
+    params.cpu_affinity = parsed.cpu_affinity_auto
+        ? cpu_affinity_resolve_draft({}, true)
+        : cpu_affinity_resolve_draft(parsed.cpu_affinity, false);
+    params.cpu_affinity_configured = true;
+    if (params.cpu_affinity.empty()) {
+        if (parsed.cpu_affinity_auto) {
+            LOG_WRN("%s: no efficiency cores available for the draft affinity\n", __func__);
+        }
+    } else {
+        std::string cpus;
+        for (size_t i = 0; i < params.cpu_affinity.size(); ++i) {
+            cpus += (i == 0 ? "" : ",") + std::to_string(params.cpu_affinity[i]);
+        }
+        LOG_INF("%s: draft CPU affinity: %s\n", __func__, cpus.c_str());
+    }
+    const int n_dft_threads = parsed.n_threads > 0 ? parsed.n_threads : (int) params.cpu_affinity.size();
+    if (!params.cpu_affinity.empty() && n_dft_threads > (int) params.cpu_affinity.size()) {
+        LOG_WRN("%s: draft uses %d threads on %zu pinned CPUs; consider -t %zu in --draft-params\n",
+                __func__, n_dft_threads, params.cpu_affinity.size(), params.cpu_affinity.size());
+    }
+}
+
 bool common_speculative_load_draft_model(
         common_params_speculative & params,
         const gpt_params         & params_base) {
@@ -2011,7 +2063,14 @@ bool common_speculative_load_draft_model(
         return true;
     }
 
+    // never inherit the target affinity flags into the draft copy
+    params.cpu_affinity.clear();
+    params.cpu_affinity_configured = false;
+
     gpt_params params_dft = params_base;
+    params_dft.cpu_affinity.clear();
+    params_dft.cpu_affinity_auto = false;
+    params_dft.cpu_affinity_configured = false;
     if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         params_dft.has_mtp = true;
     }
@@ -2044,14 +2103,12 @@ bool common_speculative_load_draft_model(
             params_dft.fit_margin_array.pop_back();
             params_dft.fit_margin_array.pop_back();
         }
-        auto [argc, argv] = parse_command_line("llama-server " + params.params);
-        if (!gpt_params_parse(argc, argv, params_dft)) {
-            gpt_params_print_usage(argc, argv, params_dft);
-            free_command_line(argc, argv);
+        if (!common_speculative_parse_params(params.params, params_dft, true)) {
             return false;
         }
-        free_command_line(argc, argv);
     }
+    common_speculative_apply_draft_threads(params, params_dft);
+    common_speculative_apply_draft_affinity(params_dft, params);
 
     LOG_INF("%s: loading draft model '%s'\n", __func__, params_dft.model.c_str());
 
@@ -2077,9 +2134,12 @@ bool common_speculative_load_draft_model(
 
     params.model_dft = loaded_model;
     params.cparams_dft = common_context_params_to_llama(params_dft);
-    // params_dft is a local copy: point the affinity at params_base, which outlives it
-    params.cparams_dft.cpu_affinity   = params_base.cpu_affinity.empty() ? nullptr : params_base.cpu_affinity.data();
-    params.cparams_dft.n_cpu_affinity = (int32_t) params_base.cpu_affinity.size();
+    // draft affinity; inherits the target one when not requested
+    const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
+        ? params.cpu_affinity
+        : params_base.cpu_affinity;
+    params.cparams_dft.cpu_affinity   = cpu_affinity_dft.empty() ? nullptr : cpu_affinity_dft.data();
+    params.cparams_dft.n_cpu_affinity = (int32_t) cpu_affinity_dft.size();
     return true;
 }
 
@@ -2120,10 +2180,14 @@ bool common_speculative_prepare_mtp_runtime(
     if (!has_external_mtp) {
         gpt_params params_mtp = params_base;
         params_mtp.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        common_speculative_apply_draft_threads(params, params_mtp);
         params.cparams_dft = common_context_params_to_llama(params_mtp);
-        // params_mtp is a local copy: point the affinity at params_base, which outlives it
-        params.cparams_dft.cpu_affinity   = params_base.cpu_affinity.empty() ? nullptr : params_base.cpu_affinity.data();
-        params.cparams_dft.n_cpu_affinity = (int32_t) params_base.cpu_affinity.size();
+        // same draft affinity as the external draft path
+        const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
+            ? params.cpu_affinity
+            : params_base.cpu_affinity;
+        params.cparams_dft.cpu_affinity   = cpu_affinity_dft.empty() ? nullptr : cpu_affinity_dft.data();
+        params.cparams_dft.n_cpu_affinity = (int32_t) cpu_affinity_dft.size();
     }
 
     params.cparams_dft.mtp         = true;
@@ -2163,10 +2227,25 @@ common_speculative_init_status common_speculative_try_init(
     return COMMON_SPECULATIVE_INIT_ERR_GENERIC;
 }
 
-void common_speculative_prepare_startup(
+bool common_speculative_prepare_startup(
         gpt_params & params_base,
         bool         allow_parallel_mtp) {
     auto & params = params_base.speculative;
+
+    // resolve draft affinity for embedded stages (external: on load)
+    params.cpu_affinity.clear();
+    params.cpu_affinity_configured = false;
+    if (!params.has_dft() && !params.params.empty()) {
+        gpt_params params_dft = params_base;
+        params_dft.cpu_affinity.clear();
+        params_dft.cpu_affinity_auto = false;
+        params_dft.cpu_affinity_configured = false;
+        if (!common_speculative_parse_params(params.params, params_dft, false)) {
+            return false; // invalid --draft-params must abort startup
+        }
+        common_speculative_apply_draft_threads(params, params_dft);
+        common_speculative_apply_draft_affinity(params_dft, params);
+    }
 
     if (!allow_parallel_mtp && params_base.n_parallel > 1 && params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         LOG_WRN("%s: MTP is not supported with parallel slots yet, removing the MTP stage to avoid cross-slot corruption. n_parallel=%d, stage_chain=%s\n",
@@ -2179,6 +2258,8 @@ void common_speculative_prepare_startup(
     }
 
     params_base.has_mtp = params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+
+    return true;
 }
 
 bool common_speculative_finalize_startup(
