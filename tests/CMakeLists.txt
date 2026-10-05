@@ -124,6 +124,9 @@ llama_test(test-sampling-history)
 
 # quillama.cpp: AMX prompt-processing GEMM
 llama_target_and_test(test-quill-amx.cpp)
+# upstream llama.cpp's behavioural grammar / JSON-schema tests (strings that must or must not match)
+llama_target_and_test(test-grammar-integration-upstream.cpp)
+target_include_directories(test-grammar-integration-upstream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
 llama_target_and_test(test-quill-grammar.cpp ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-qwen2.gguf)
 target_include_directories(test-quill-grammar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
 
