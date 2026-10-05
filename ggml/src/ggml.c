@@ -23534,6 +23534,12 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
 
+    // quillama.cpp: AMX flash attention for prompt processing
+    if (quill_amx_flash_attn_eligible(dst)) {
+        quill_amx_flash_attn(dst, params->ith, params->nth);
+        return;
+    }
+
     const struct ggml_tensor * q     = dst->src[0];
     const struct ggml_tensor * k     = dst->src[1];
     const struct ggml_tensor * v     = dst->src[2];

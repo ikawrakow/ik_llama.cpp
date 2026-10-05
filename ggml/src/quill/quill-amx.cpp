@@ -777,6 +777,326 @@ extern "C" bool quill_amx_gemm_up_gate(enum ggml_type type, const void * w_up, c
     return true;
 }
 
+
+// =============================================================================================
+// Flash attention (prompt processing): S = Q.K^T and O += P.V on AMX tiles, online softmax in
+// AVX-512. A work unit is (sequence, KV head, query range); the query heads that share a KV head
+// (GQA) reuse each packed K/V chunk.
+// =============================================================================================
+namespace {
+
+constexpr int64_t kFaChunk = 256;   // keys per K/V chunk
+
+// one K/V row (D values) as floats
+inline void kv_row_to_f32(ggml_type type, const char * src, int64_t D, float * y) {
+    switch (type) {
+        case GGML_TYPE_F32: memcpy(y, src, D*sizeof(float)); break;
+        case GGML_TYPE_F16:
+            for (int64_t i = 0; i < D; i += 16) _mm512_storeu_ps(y + i, _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(src + 2*i))));
+            break;
+        case GGML_TYPE_BF16:
+            for (int64_t i = 0; i < D; i += 16) {
+                const __m256i b = _mm256_loadu_si256((const __m256i *)(src + 2*i));
+                _mm512_storeu_ps(y + i, _mm512_castsi512_ps(_mm512_slli_epi32(_mm512_cvtepu16_epi32(b), 16)));
+            }
+            break;
+        case GGML_TYPE_Q8_0: dq_q8_0((const uint8_t *)src, D, y); break;
+        default: GGML_ABORT("quill AMX FA: unsupported K/V type");
+    }
+}
+
+inline __m512 v_tanh(__m512 x) {
+    const __m512 e = v_expf(_mm512_add_ps(x, x));
+    return _mm512_sub_ps(_mm512_set1_ps(1.0f), _mm512_div_ps(_mm512_set1_ps(2.0f), _mm512_add_ps(e, _mm512_set1_ps(1.0f))));
+}
+
+struct fa_args {
+    const char * q; const char * k; const char * v; const char * mask;
+    size_t nbq1, nbq2, nbq3, nbk1, nbk2, nbk3, nbv1, nbv2, nbv3, nbm1, nbm2, nbm3;
+    int64_t D, N, n_kv, H, H_kv, B, Bk, Bv, mask_ne2, mask_ne3;
+    ggml_type kt, vt;
+    float scale, softcap;
+    char * dst; size_t nb1; int64_t ne1, ne2;
+};
+
+void fa_unit(const fa_args & a, int64_t b, int64_t hk, int64_t q0, int64_t q1) {
+    const int64_t D   = a.D;
+    const int64_t rk  = a.H/a.H_kv;
+    const int64_t nq  = q1 - q0;
+    const int64_t nqp = round_up(nq, 32);
+    const int64_t bk  = b % a.Bk, bv = b % a.Bv;
+
+    thread_local aligned_buffer<ggml_bf16_t> qbuf_b, kbuf_b, vbuf_b, pbuf_b;
+    thread_local aligned_buffer<float>       obuf_b, sbuf_b, ml_b, row_b;
+    ggml_bf16_t * qbuf = qbuf_b.get(rk*nqp*D);               // [rk][nqp][D]   (scaled Q)
+    ggml_bf16_t * kbuf = kbuf_b.get(kFaChunk*D);              // VNNI [16-key groups][D/2][16][2]
+    ggml_bf16_t * vbuf = vbuf_b.get(kFaChunk*D);              // VNNI [D/16][keys/2][16][2]
+    ggml_bf16_t * pbuf = pbuf_b.get(32*kFaChunk);             // [32][kFaChunk]
+    float * obuf = obuf_b.get(rk*nqp*D);                      // [rk][nqp][D]
+    float * sbuf = sbuf_b.get(32*kFaChunk);                   // [32][kFaChunk]
+    float * mrow = ml_b.get(2*rk*nqp);                        // running max, then running sum
+    float * lrow = mrow + rk*nqp;
+    float * row  = row_b.get(D + 32);
+
+    // scaled Q -> BF16
+    for (int64_t j = 0; j < rk; ++j) {
+        const int64_t h = hk*rk + j;
+        for (int64_t i = 0; i < nqp; ++i) {
+            ggml_bf16_t * dstq = qbuf + (j*nqp + i)*D;
+            if (i < nq) {
+                const float * src = (const float *)(a.q + (q0 + i)*a.nbq1 + h*a.nbq2 + b*a.nbq3);
+                const __m512 sc = _mm512_set1_ps(a.scale);
+                for (int64_t d = 0; d < D; d += 16) _mm512_storeu_ps(row + d, _mm512_mul_ps(_mm512_loadu_ps(src + d), sc));
+                f32_to_bf16_row(row, D, D, dstq);
+            } else {
+                memset(dstq, 0, D*sizeof(ggml_bf16_t));
+            }
+        }
+    }
+    memset(obuf, 0, rk*nqp*D*sizeof(float));
+    for (int64_t i = 0; i < rk*nqp; ++i) { mrow[i] = -INFINITY; lrow[i] = 0.0f; }
+
+    const char * kbase = a.k + hk*a.nbk2 + bk*a.nbk3;
+    const char * vbase = a.v + hk*a.nbv2 + bv*a.nbv3;
+    const __m512 vninf = _mm512_set1_ps(-INFINITY);
+
+    for (int64_t c0 = 0; c0 < a.n_kv; c0 += kFaChunk) {
+        const int64_t kc  = std::min<int64_t>(kFaChunk, a.n_kv - c0);
+        const int64_t kcp = round_up(kc, 32);
+
+        // pack K: keys play the role of tokens, D the role of K
+        for (int64_t g = 0; g < kcp/16; ++g) {
+            __m512i r[16];
+            alignas(64) float rows[16][16];
+            for (int64_t d0 = 0; d0 < D; d0 += 32) {
+                for (int jj = 0; jj < 16; ++jj) {
+                    const int64_t key = g*16 + jj;
+                    if (key < kc) {
+                        if (d0 == 0) {
+                            // dequantize the full row once into the per-key scratch of this group
+                            kv_row_to_f32(a.kt, kbase + (c0 + key)*a.nbk1, D, sbuf + jj*D);
+                        }
+                        const float * x = sbuf + jj*D + d0;
+                        r[jj] = (__m512i)_mm512_cvtne2ps_pbh(_mm512_loadu_ps(x + 16), _mm512_loadu_ps(x));
+                    } else {
+                        r[jj] = _mm512_setzero_si512();
+                    }
+                }
+                transpose16x16(r);
+                ggml_bf16_t * out = kbuf + (g*(D/2) + d0/2)*32;
+                for (int p = 0; p < 16; ++p) _mm512_store_si512((__m512i *)(out + 32*p), r[p]);
+            }
+            (void) rows;
+        }
+        // pack V: B tile rows are key pairs, 16 head dims x (key 2p, key 2p+1)
+        for (int64_t p = 0; p < kcp/2; ++p) {
+            float * v0 = row;
+            float * v1 = sbuf;   // scratch (S is not live here)
+            if (2*p     < kc) kv_row_to_f32(a.vt, vbase + (c0 + 2*p    )*a.nbv1, D, v0); else memset(v0, 0, D*sizeof(float));
+            if (2*p + 1 < kc) kv_row_to_f32(a.vt, vbase + (c0 + 2*p + 1)*a.nbv1, D, v1); else memset(v1, 0, D*sizeof(float));
+            for (int64_t db = 0; db < D/16; ++db) {
+                const __m256i b0 = (__m256i)_mm512_cvtneps_pbh(_mm512_loadu_ps(v0 + 16*db));
+                const __m256i b1 = (__m256i)_mm512_cvtneps_pbh(_mm512_loadu_ps(v1 + 16*db));
+                // interleave 16-bit lanes: (v0[d], v1[d]) for d = 0..15
+                const __m512i w0 = _mm512_cvtepu16_epi32(b0);
+                const __m512i w1 = _mm512_slli_epi32(_mm512_cvtepu16_epi32(b1), 16);
+                _mm512_store_si512((__m512i *)(vbuf + (db*(kFaChunk/2) + p)*32), _mm512_or_si512(w0, w1));
+            }
+        }
+
+        for (int64_t j = 0; j < rk; ++j) {
+            const int64_t h = hk*rk + j;
+            for (int64_t i0 = 0; i0 < nqp; i0 += 32) {
+                const int64_t nr = std::min<int64_t>(32, nq - i0);
+                if (nr <= 0) break;
+                const ggml_fp16_t * mrows[32];
+                for (int r = 0; r < 32; ++r) {
+                    mrows[r] = a.mask && r < nr
+                        ? (const ggml_fp16_t *)(a.mask + (q0 + i0 + r)*a.nbm1 + (h % a.mask_ne2)*a.nbm2 + (b % a.mask_ne3)*a.nbm3) + c0
+                        : nullptr;
+                }
+                // which 32-key blocks are fully masked for these 32 queries (causal attention)
+                bool active[kFaChunk/32];
+                bool any = false;
+                for (int64_t kb = 0; kb < kcp; kb += 32) {
+                    bool act = !a.mask;
+                    if (a.mask) {
+                        const int64_t nk = std::min<int64_t>(32, kc - kb);
+                        for (int r = 0; r < nr && !act; ++r) {
+                            for (int64_t t = 0; t < nk; ++t) {
+                                if ((mrows[r][kb + t] & 0x7fff) != 0x7c00) { act = true; break; }   // not +-inf
+                            }
+                        }
+                    }
+                    active[kb/32] = act;
+                    any |= act;
+                }
+                if (!any) continue;
+
+                // S = Q.K^T
+                const ggml_bf16_t * qa = qbuf + (j*nqp + i0)*D;
+                for (int64_t kb = 0; kb < kcp; kb += 32) {
+                    if (!active[kb/32]) continue;
+                    _tile_zero(0); _tile_zero(1); _tile_zero(2); _tile_zero(3);
+                    for (int64_t d0 = 0; d0 < D; d0 += 32) {
+                        _tile_loadd(4, qa + d0,        D*sizeof(ggml_bf16_t));
+                        _tile_loadd(5, qa + 16*D + d0, D*sizeof(ggml_bf16_t));
+                        _tile_loadd(6, kbuf + ((kb/16    )*(D/2) + d0/2)*32, 64);
+                        _tile_loadd(7, kbuf + ((kb/16 + 1)*(D/2) + d0/2)*32, 64);
+                        _tile_dpbf16ps(0, 4, 6);
+                        _tile_dpbf16ps(1, 4, 7);
+                        _tile_dpbf16ps(2, 5, 6);
+                        _tile_dpbf16ps(3, 5, 7);
+                    }
+                    _tile_stored(0, sbuf + kb,                 kFaChunk*sizeof(float));
+                    _tile_stored(1, sbuf + kb + 16,            kFaChunk*sizeof(float));
+                    _tile_stored(2, sbuf + 16*kFaChunk + kb,      kFaChunk*sizeof(float));
+                    _tile_stored(3, sbuf + 16*kFaChunk + kb + 16, kFaChunk*sizeof(float));
+                }
+
+                // online softmax over this chunk
+                for (int r = 0; r < 32; ++r) {
+                    float * srow = sbuf + r*kFaChunk;
+                    ggml_bf16_t * prow = pbuf + r*kFaChunk;
+                    if (r >= nr) {
+                        for (int64_t kb = 0; kb < kcp; kb += 32) if (active[kb/32]) memset(prow + kb, 0, 64);
+                        continue;
+                    }
+                    // logits: softcap, mask, padding
+                    __m512 vmax = vninf;
+                    for (int64_t kb = 0; kb < kcp; kb += 16) {
+                        if (!active[kb/32]) continue;
+                        __m512 sv = _mm512_loadu_ps(srow + kb);
+                        if (a.softcap != 0.0f) sv = _mm512_mul_ps(_mm512_set1_ps(a.softcap), v_tanh(sv));
+                        const __mmask16 valid = tail_mask(kc - kb);
+                        if (mrows[r]) {
+                            const __m256i mh = _mm256_maskz_loadu_epi16(valid, mrows[r] + kb);
+                            sv = _mm512_add_ps(sv, _mm512_cvtph_ps(mh));
+                        }
+                        sv = _mm512_mask_blend_ps(valid, vninf, sv);
+                        _mm512_storeu_ps(srow + kb, sv);
+                        vmax = _mm512_max_ps(vmax, sv);
+                    }
+                    float * m = mrow + j*nqp + i0 + r;
+                    float * l = lrow + j*nqp + i0 + r;
+                    const float m_new = std::max(*m, _mm512_reduce_max_ps(vmax));
+                    if (m_new == -INFINITY) {
+                        for (int64_t kb = 0; kb < kcp; kb += 32) if (active[kb/32]) memset(prow + kb, 0, 64);
+                        continue;
+                    }
+                    const float corr = *m == -INFINITY ? 0.0f : expf(*m - m_new);
+                    const __m512 vm = _mm512_set1_ps(m_new);
+                    __m512 vsum = _mm512_setzero_ps();
+                    for (int64_t kb = 0; kb < kcp; kb += 32) {
+                        if (!active[kb/32]) continue;
+                        const __m512 e0 = v_expf(_mm512_sub_ps(_mm512_loadu_ps(srow + kb),      vm));
+                        const __m512 e1 = v_expf(_mm512_sub_ps(_mm512_loadu_ps(srow + kb + 16), vm));
+                        vsum = _mm512_add_ps(vsum, _mm512_add_ps(e0, e1));
+                        _mm512_storeu_si512((__m512i *)(prow + kb), (__m512i)_mm512_cvtne2ps_pbh(e1, e0));
+                    }
+                    *l = *l*corr + _mm512_reduce_add_ps(vsum);
+                    *m = m_new;
+                    if (corr != 1.0f) {
+                        float * o = obuf + (j*nqp + i0 + r)*D;
+                        const __m512 vc = _mm512_set1_ps(corr);
+                        for (int64_t d = 0; d < D; d += 16) _mm512_storeu_ps(o + d, _mm512_mul_ps(_mm512_loadu_ps(o + d), vc));
+                    }
+                }
+
+                // O += P.V
+                float * o = obuf + (j*nqp + i0)*D;
+                for (int64_t d0 = 0; d0 < D; d0 += 32) {
+                    _tile_loadd(0, o + d0,             D*sizeof(float));
+                    _tile_loadd(1, o + d0 + 16,        D*sizeof(float));
+                    _tile_loadd(2, o + 16*D + d0,      D*sizeof(float));
+                    _tile_loadd(3, o + 16*D + d0 + 16, D*sizeof(float));
+                    for (int64_t kb = 0; kb < kcp; kb += 32) {
+                        if (!active[kb/32]) continue;
+                        _tile_loadd(4, pbuf + kb,                 kFaChunk*sizeof(ggml_bf16_t));
+                        _tile_loadd(5, pbuf + 16*kFaChunk + kb,   kFaChunk*sizeof(ggml_bf16_t));
+                        _tile_loadd(6, vbuf + ((d0/16    )*(kFaChunk/2) + kb/2)*32, 64);
+                        _tile_loadd(7, vbuf + ((d0/16 + 1)*(kFaChunk/2) + kb/2)*32, 64);
+                        _tile_dpbf16ps(0, 4, 6);
+                        _tile_dpbf16ps(1, 4, 7);
+                        _tile_dpbf16ps(2, 5, 6);
+                        _tile_dpbf16ps(3, 5, 7);
+                    }
+                    _tile_stored(0, o + d0,             D*sizeof(float));
+                    _tile_stored(1, o + d0 + 16,        D*sizeof(float));
+                    _tile_stored(2, o + 16*D + d0,      D*sizeof(float));
+                    _tile_stored(3, o + 16*D + d0 + 16, D*sizeof(float));
+                }
+            }
+        }
+    }
+
+    // normalize and write: dst row for (query i, head h) is at ((b*ne2 + i)*ne1 + h)*nb1
+    for (int64_t j = 0; j < rk; ++j) {
+        const int64_t h = hk*rk + j;
+        for (int64_t i = 0; i < nq; ++i) {
+            const float l = lrow[j*nqp + i];
+            const __m512 vinv = _mm512_set1_ps(l > 0.0f ? 1.0f/l : 0.0f);
+            const float * o = obuf + (j*nqp + i)*D;
+            float * y = (float *)(a.dst + ((b*a.ne2 + q0 + i)*a.ne1 + h)*a.nb1);
+            for (int64_t d = 0; d < D; d += 16) _mm512_storeu_ps(y + d, _mm512_mul_ps(_mm512_loadu_ps(o + d), vinv));
+        }
+    }
+}
+
+} // namespace
+
+extern "C" bool quill_amx_flash_attn_eligible(const struct ggml_tensor * dst) {
+    const ggml_tensor * q = dst->src[0], * k = dst->src[1], * v = dst->src[2], * mask = dst->src[3];
+    if (dst->src[4] || dst->src[5]) return false;                       // sinks / extra inputs
+    if (dst->op_params[4] != 0) return false;                            // backend hints
+    float max_bias; memcpy(&max_bias, (const float *)dst->op_params + 1, sizeof(float));
+    if (max_bias != 0.0f) return false;                                  // ALiBi
+    if (q->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) return false;
+    auto kv_ok = [](ggml_type t) { return t == GGML_TYPE_F16 || t == GGML_TYPE_BF16 || t == GGML_TYPE_Q8_0 || t == GGML_TYPE_F32; };
+    if (!kv_ok(k->type) || !kv_ok(v->type)) return false;
+    const int64_t D = q->ne[0];
+    if (k->ne[0] != D || v->ne[0] != D || D % 32 != 0 || D > 512) return false;
+    if (q->ne[1] < quill_amx_min_batch()) return false;
+    if (q->ne[2] % k->ne[2] != 0 || k->ne[2] != v->ne[2] || k->ne[1] != v->ne[1]) return false;
+    if (q->ne[3] % k->ne[3] != 0 || q->ne[3] % v->ne[3] != 0) return false;
+    if (mask && (mask->type != GGML_TYPE_F16 || mask->ne[0] < k->ne[1] || mask->ne[1] < q->ne[1])) return false;
+    if (q->nb[0] != sizeof(float) || k->nb[0] != ggml_type_size(k->type) || v->nb[0] != ggml_type_size(v->type)) return false;
+    if (dst->ne[0] != D || dst->ne[1] != q->ne[2] || dst->ne[2] != q->ne[1]) return false;
+    return quill_amx_available();
+}
+
+extern "C" void quill_amx_flash_attn(struct ggml_tensor * dst, int ith, int nth) {
+    const ggml_tensor * q = dst->src[0], * k = dst->src[1], * v = dst->src[2], * mask = dst->src[3];
+    fa_args a;
+    a.q = (const char *)q->data; a.k = (const char *)k->data; a.v = (const char *)v->data;
+    a.mask = mask ? (const char *)mask->data : nullptr;
+    a.nbq1 = q->nb[1]; a.nbq2 = q->nb[2]; a.nbq3 = q->nb[3];
+    a.nbk1 = k->nb[1]; a.nbk2 = k->nb[2]; a.nbk3 = k->nb[3];
+    a.nbv1 = v->nb[1]; a.nbv2 = v->nb[2]; a.nbv3 = v->nb[3];
+    a.nbm1 = mask ? mask->nb[1] : 0; a.nbm2 = mask ? mask->nb[2] : 0; a.nbm3 = mask ? mask->nb[3] : 0;
+    a.mask_ne2 = mask ? mask->ne[2] : 1; a.mask_ne3 = mask ? mask->ne[3] : 1;
+    a.D = q->ne[0]; a.N = q->ne[1]; a.n_kv = k->ne[1]; a.H = q->ne[2]; a.H_kv = k->ne[2];
+    a.B = q->ne[3]; a.Bk = k->ne[3]; a.Bv = v->ne[3];
+    a.kt = k->type; a.vt = v->type;
+    memcpy(&a.scale,   (const float *)dst->op_params + 0, sizeof(float));
+    memcpy(&a.softcap, (const float *)dst->op_params + 2, sizeof(float));
+    if (a.softcap != 0.0f) a.scale /= a.softcap;
+    a.dst = (char *)dst->data; a.nb1 = dst->nb[1]; a.ne1 = dst->ne[1]; a.ne2 = dst->ne[2];
+
+    ensure_tile_config();
+    const int64_t n_groups = a.B*a.H_kv;
+    const int64_t nqb      = (a.N + 31)/32;
+    const int64_t qsplit   = std::max<int64_t>(1, std::min<int64_t>(nqb, (nth + n_groups - 1)/n_groups));
+    const int64_t qstep    = ((nqb + qsplit - 1)/qsplit)*32;
+    const int64_t n_units  = n_groups*qsplit;
+    for (int64_t u = ith; u < n_units; u += nth) {
+        const int64_t g  = u / qsplit, qs = u % qsplit;
+        const int64_t b  = g / a.H_kv, hk = g % a.H_kv;
+        const int64_t q0 = qs*qstep, q1 = std::min<int64_t>(a.N, q0 + qstep);
+        if (q0 < q1) fa_unit(a, b, hk, q0, q1);
+    }
+}
+
 #else // !QUILL_AMX_BUILD
 
 extern "C" bool   quill_amx_available(void) { return false; }
@@ -787,6 +1107,8 @@ extern "C" void   quill_amx_pack(const void *, size_t, const int32_t *, int64_t,
 extern "C" void   quill_amx_pack_group(const void *, size_t, const int32_t *, int64_t, int64_t, void *, int64_t) {}
 extern "C" void   quill_amx_gemm(enum ggml_type, const void *, size_t, int64_t, int64_t, int64_t, const void *,
                                  float *, size_t, float * const *, int, int) {}
+extern "C" bool   quill_amx_flash_attn_eligible(const struct ggml_tensor *) { return false; }
+extern "C" void   quill_amx_flash_attn(struct ggml_tensor *, int, int) {}
 extern "C" bool   quill_amx_gemm_up_gate(enum ggml_type, const void *, const void *, size_t, int64_t, int64_t, int64_t,
                                          const void *, float *, size_t, float * const *, int, float, int, int) { return false; }
 

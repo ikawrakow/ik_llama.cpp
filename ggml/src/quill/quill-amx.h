@@ -55,6 +55,10 @@ bool quill_amx_gemm_up_gate(enum ggml_type type, const void * w_up, const void *
                             float * dst, size_t dst_stride, float * const * dst_rows,
                             int unary_op, float limit, int ith, int nth);
 
+// flash attention for prompt processing (F32 Q; F16/BF16/Q8_0/F32 K and V; F16 mask; no ALiBi/sinks)
+bool quill_amx_flash_attn_eligible(const struct ggml_tensor * dst);
+void quill_amx_flash_attn(struct ggml_tensor * dst, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif
