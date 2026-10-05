@@ -3049,10 +3049,23 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         data.prompt                    = common_chat_template_direct_apply_impl(tmpl, params_copy);
         data.format                    = COMMON_CHAT_FORMAT_PEG_NATIVE;
         data.generation_prompt         = params.generation_prompt;
-        auto parser                    = build_chat_peg_parser([&params](common_chat_peg_builder &p) {
+        const bool has_response_format = params.json_schema.is_object() && !params.json_schema.empty();
+        auto parser                    = build_chat_peg_parser([&params, has_response_format](common_chat_peg_builder &p) {
+            if (has_response_format) {
+                // a pure-content template must still honour the requested schema
+                return p.prefix(params.generation_prompt) << p.content(p.schema(p.json(), "response-format", params.json_schema));
+            }
             return p.prefix(params.generation_prompt) << p.content(p.rest());
         });
         data.parser                    = parser.save();
+        if (has_response_format) {
+            data.grammar_lazy = false;
+            data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+                auto schema = params.json_schema;
+                builder.resolve_refs(schema);
+                parser.build_grammar(builder, false);
+            });
+        }
         return data;
     }
 

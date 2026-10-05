@@ -50,6 +50,11 @@ struct common_reasoning_budget_ctx {
 
     // for forcing
     size_t force_pos;         // next position in forced_tokens to force
+
+    // true when the transition to DONE completed the end sequence (naturally or by forcing);
+    // the sampler replays that sequence into a lazy grammar, which did not see it while
+    // reasoning was active (otherwise e.g. a "</think>" trigger is lost)
+    bool end_matched = false;
 };
 
 static const char * common_reasoning_budget_name(const common_reasoning_budget_ctx * /*smpl*/) {
@@ -80,6 +85,7 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
     {
         if (ctx->end_matcher.advance(token)) {
             ctx->state = REASONING_BUDGET_DONE;
+            ctx->end_matched = true;
             LOG_DBG("reasoning-budget: deactivated (natural end)\n");
             break;
         }
@@ -115,12 +121,17 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
         break;
     }
     case REASONING_BUDGET_FORCING:
+    {
+        // track the end sequence within forced_tokens so it is also reported on DONE
+        const bool match = ctx->end_matcher.advance(token);
         ctx->force_pos++;
         if (ctx->force_pos >= ctx->forced_tokens.size()) {
             ctx->state = REASONING_BUDGET_DONE;
+            ctx->end_matched = match;
             LOG_DBG("reasoning-budget: forced sequence complete, done\n");
         }
         break;
+    }
     case REASONING_BUDGET_DONE:
         // Re-arm on a new start tag: some models emit multiple <think> blocks
 // per response, and each should get a fresh budget window.
@@ -128,6 +139,7 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
             ctx->state = REASONING_BUDGET_COUNTING;
             ctx->remaining = ctx->budget;
             ctx->end_matcher.reset();
+            ctx->end_matched = false;
             LOG_DBG("reasoning-budget: re-activated on new start tag, budget=%d tokens\n", ctx->budget);
 
             if (ctx->remaining <= 0) {
@@ -171,6 +183,15 @@ static void common_reasoning_budget_reset(common_reasoning_budget_ctx * smpl) {
     ctx->start_matcher.reset();
     ctx->end_matcher.reset();
     ctx->force_pos = 0;
+    ctx->end_matched = false;
+}
+
+// end sequence that moved the sampler to DONE, nullptr if it ended any other way
+static const std::vector<llama_token> * common_reasoning_budget_get_end_match(const common_reasoning_budget_ctx * ctx) {
+    if (!ctx || ctx->state != REASONING_BUDGET_DONE || !ctx->end_matched) {
+        return nullptr;
+    }
+    return &ctx->end_matcher.tokens;
 }
 
 // forward declaration for use in clone

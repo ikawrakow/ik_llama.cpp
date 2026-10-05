@@ -677,7 +677,10 @@ json oaicompat_chat_params_parse(
         json response_format = json_value(body, "response_format", json::object());
         std::string response_type = json_value(response_format, "type", std::string());
         if (response_type == "json_object") {
-            json_schema = json_value(response_format, "schema", json::object());
+            // keep a top-level "json_schema" when response_format carries no schema of its own
+            if (response_format.contains("schema") || json_schema.is_null() || json_schema.empty()) {
+                json_schema = json_value(response_format, "schema", json::object());
+            }
         }
         else if (response_type == "json_schema") {
             auto schema_wrapper = json_value(response_format, "json_schema", json::object());
@@ -686,6 +689,13 @@ json oaicompat_chat_params_parse(
         else if (!response_type.empty() && response_type != "text") {
             throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
         }
+    }
+
+    // an empty schema ({"type":"json_object"} without "schema") still means "any JSON object":
+    // the chat layer treats an empty schema as "no response format", which used to leave the
+    // output completely unconstrained
+    if (json_schema.is_object() && json_schema.empty()) {
+        json_schema["type"] = "object";
     }
 
     // get input files
