@@ -10,6 +10,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
 #include "llama-vocab.h"
 #include "llama-grammar.h"
 #include "llama-sampling.h"
@@ -552,6 +555,28 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     ggml_backend_cann_get_device_memory(device, &free, &total);
     return free;
 #else
+    // CPU-only build: report free host RAM instead of the 1-byte placeholder.
+#if defined(_WIN32)
+    MEMORYSTATUSEX st = {};
+    st.dwLength = sizeof(st);
+    if (GlobalMemoryStatusEx(&st)) {
+        return (size_t) st.ullAvailPhys;
+    }
+#elif defined(__linux__)
+    const long avphys = sysconf(_SC_AVPHYS_PAGES);
+    const long pagesz = sysconf(_SC_PAGESIZE);
+    if (avphys > 0 && pagesz > 0) {
+        return (size_t) avphys * (size_t) pagesz;
+    }
+#elif defined(__APPLE__)
+    vm_statistics64_data_t vmstat;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    vm_size_t page_size = 0;
+    if (host_page_size(mach_host_self(), &page_size) == KERN_SUCCESS &&
+            host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t) &vmstat, &count) == KERN_SUCCESS) {
+        return (size_t) vmstat.free_count * (size_t) page_size;
+    }
+#endif
     return 1;
 #endif
     GGML_UNUSED(model);
@@ -4716,7 +4741,7 @@ static bool llm_load_tensors(
             if (device_mem[id] > max_compute) {
                 available_mem += device_mem[id] - max_compute;
             } else {
-                LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the required compute buffer size %g MiB\n", device_mem[id]/(1024*1024), id, max_compute/(1024*1024));
+                LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the required compute buffer size %g MiB\n", device_mem[id]/(1024*1024), model.devices[id], max_compute/(1024*1024));
             }
         }
         LLAMA_LOG_INFO("Memory required for model tensors + cache: %.f MiB\n", required_mem/(1024.*1024.));
@@ -4998,7 +5023,23 @@ static bool llm_load_tensors(
     }
 
     use_mmap_buffer = cth->create_tensors();
-    if (!use_mmap_buffer) {
+    // Keep file mappings for deferred tables when the mmap path is off; what
+    // aliases vs copies is decided per tensor at load (dense copies under --no-mmap).
+    bool keep_ple_mapping = false;
+    const bool mmap_disabled = !ml.use_mmap; // --no-mmap / -rtr
+    if (ml.defer_ple && !ml.ple_tensor_index.empty() && (!use_mmap_buffer || mmap_disabled)) {
+        keep_ple_mapping = true;
+        ml.use_mmap = true;
+        ml.defer_copy_dense = mmap_disabled && !ml.repack_tensors;
+        if (mmap_disabled && !ml.repack_tensors) {
+            LLAMA_LOG_WARN("%s: mmap is disabled (--no-mmap): file mappings are kept for %.2f GiB of deferred tables, dense weights are copied, not aliased\n",
+                    __func__, ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
+        } else {
+            LLAMA_LOG_INFO("%s: keeping file mappings for %.2f GiB of deferred tables although the mmap buffer path is off\n",
+                    __func__, ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
+        }
+    }
+    if (!use_mmap_buffer && !keep_ple_mapping) {
         ml.use_mmap = false;
     }
 
@@ -5023,8 +5064,23 @@ static bool llm_load_tensors(
 
     ml.done_getting_tensors();
 
+#if defined(_WIN32)
+    // Device tensors stream from disk; bulk prefetch would only pollute RAM.
+    bool win_skip_bulk_prefetch = false;
+    for (auto & it : ctx_map) {
+        if (it.first != llama_default_buffer_type_cpu(true) && it.first != ggml_backend_cpu_buffer_type()) {
+            win_skip_bulk_prefetch = true;
+            break;
+        }
+    }
+#endif
+
     // --dry-run skips MAP_POPULATE/WILLNEED — tensor data is never read.
-    ml.init_mappings(!defer_expert_mmap && !defer_ple_mmap && !dry_run, use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
+    ml.init_mappings(!defer_expert_mmap && !defer_ple_mmap && !dry_run
+#if defined(_WIN32)
+        && !win_skip_bulk_prefetch
+#endif
+        , use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
 
     // dropping a range discards an anonymous huge-page mapping, so test the mapping and not the -thp flag
     if (ml.has_anonymous_mapping()) {
@@ -5038,7 +5094,7 @@ static bool llm_load_tensors(
         }
     }
     if (defer_ple_mmap && !dry_run) {
-        LLAMA_LOG_INFO("%s: deferring %.2f GiB of per-layer token embedding to the file\n", __func__,
+        LLAMA_LOG_INFO("%s: deferring %.2f GiB of sparse tables to the file\n", __func__,
                 ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
@@ -5062,7 +5118,7 @@ static bool llm_load_tensors(
         // only the mmap region containing the tensors in the model is mapped to the backend buffer
         // this is important for metal with apple silicon: if the entire model could be mapped to a metal buffer, then we could just use metal for all layers
         // this allows using partial offloading when the model size exceeds the metal buffer size, but not the RAM size
-        if (ml.use_mmap && use_mmap_buffer && (buft == llama_default_buffer_type_cpu(true) || buft == ggml_backend_cpu_buffer_type())) {
+        if (ml.use_mmap && (use_mmap_buffer || keep_ple_mapping) && (buft == llama_default_buffer_type_cpu(true) || buft == ggml_backend_cpu_buffer_type())) {
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 void * addr = nullptr;
                 size_t first, last;
@@ -5077,10 +5133,15 @@ static bool llm_load_tensors(
                 model.bufs.push_back(buf);
                 bufs.emplace(idx, buf);
 #ifdef GGML_USE_CUDA
-                if (n_layer >= n_gpu_layers) {
+                // Pin only resident ranges: cudaHostRegister promises residency, which
+                // cold file pages break; unpinned ranges transparently use copies.
+                if (n_layer >= n_gpu_layers && !defer_ple_mmap && !ml.ple_range_overlaps(idx, first, last)) {
                     ggml_backend_cuda_register_host_buffer(
                         ggml_backend_buffer_get_base(buf),
                         ggml_backend_buffer_get_size(buf));
+                } else if (n_layer >= n_gpu_layers) {
+                    LLAMA_LOG_DEBUG("%s: skipped CUDA host pinning for file %u (defer-ple residency: unpinned ranges copy instead)\n",
+                            __func__, idx);
                 }
 #endif
             }
@@ -5158,9 +5219,79 @@ static bool llm_load_tensors(
     }
 
     // print memory requirements
+    // Split display: deferred bytes get their own line, the rest counts as resident.
+    // Resident totals are grouped by backend name since is_host covers CUDA_Host too.
+    auto buf_deferred_mib = [&](ggml_backend_buffer_t buf) -> double {
+        if (!ggml_backend_buffer_is_host(buf)) {
+            return 0.0;
+        }
+        const auto * base = (const uint8_t *) ggml_backend_buffer_get_base(buf);
+        const size_t size = ggml_backend_buffer_get_size(buf);
+        for (size_t mi = 0; mi < ml.mappings.size(); ++mi) {
+            const auto & mapping = ml.mappings[mi];
+            const auto * begin = (const uint8_t *) mapping->addr();
+            if (size > 0 && base >= begin && base + size <= begin + mapping->size()) {
+                // Only genuinely deferred ranges count; dense neighbours share the span.
+                return defer_ple_mmap ? ml.ple_deferred_bytes_in((int) mi, base - begin, base - begin + size) / 1024.0 / 1024.0 : 0.0;
+            }
+        }
+        return 0.0;
+    };
+    std::map<std::string, std::pair<double, int>> host_totals;
     for (ggml_backend_buffer_t buf : model.bufs) {
+        if (!ggml_backend_buffer_is_host(buf)) {
+            continue;
+        }
+        const double deferred_mib = buf_deferred_mib(buf);
+        const double size_mib = ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0;
+        if (deferred_mib > 0.0) {
+            LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB (deferred, stays on file)\n", __func__, ggml_backend_buffer_name(buf), deferred_mib);
+        }
+        if (size_mib > deferred_mib) {
+            auto & slot = host_totals[ggml_backend_buffer_name(buf)];
+            slot.first += size_mib - deferred_mib;
+            slot.second += 1;
+        }
+    }
+    for (const auto & kv : host_totals) {
+        LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB (total of %d resident buffers)\n", __func__, kv.first.c_str(), kv.second.first, kv.second.second);
+    }
+    for (ggml_backend_buffer_t buf : model.bufs) {
+        if (ggml_backend_buffer_is_host(buf)) {
+            continue;
+        }
         LLAMA_LOG_INFO("%s: %10s buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
     }
+#ifndef NDEBUG
+    bool first_group = true;
+    for (auto & it : ctx_bufs) {
+        bool group_open = false;
+        for (auto & kv : it.second) {
+            ggml_backend_buffer_t buf = kv.second;
+            if (!ggml_backend_buffer_is_host(buf)) {
+                continue;
+            }
+            const double deferred_mib = buf_deferred_mib(buf);
+            const double size_mib = ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0;
+            if (size_mib == 0.0) {
+                continue;
+            }
+            if (!group_open) {
+                if (!first_group) {
+                    LLAMA_LOG_DEBUG("\n");
+                }
+                group_open = true;
+                first_group = false;
+            }
+            if (deferred_mib > 0.0) {
+                LLAMA_LOG_DEBUG("%s: %10s buffer size = %8.2f MiB (deferred, stays on file)\n", __func__, ggml_backend_buffer_name(buf), deferred_mib);
+            }
+            if (size_mib > deferred_mib) {
+                LLAMA_LOG_DEBUG("%s: %10s buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), size_mib - deferred_mib);
+            }
+        }
+    }
+#endif
 
     // populate tensors_by_name
     for (ggml_context * ctx : model.ctxs) {
@@ -5186,6 +5317,71 @@ static bool llm_load_tensors(
         if (defer_ple_mmap) {
             ml.apply_ple_mmap_policy();
         }
+#if defined(_WIN32)
+        // Without --defer-ple, fault sparse tables in synchronously (prefetch is best-effort).
+        auto touch_host = [](struct ggml_tensor * t) {
+            if (t && t->data && t->buffer && ggml_backend_buffer_is_host(t->buffer)) {
+                volatile const char * p = (volatile const char *) t->data;
+                volatile size_t acc = 0;
+                for (size_t i = 0, n = ggml_nbytes(t); i < n; i += 4096) {
+                    acc += p[i];
+                }
+                (void) acc;
+            }
+        };
+        if (ml.use_mmap && use_mmap_buffer && !defer_ple_mmap) {
+            touch_host(model.tok_embd_per_layer);
+            for (auto & layer : model.layers) {
+                touch_host(layer.engram_embd);
+            }
+        }
+#endif
+#if defined(_WIN32)
+        // Bulk prefetch was skipped: warm file-aliased host ranges, deferred stay
+        // cold, as does everything under explicit --no-mmap (fault on demand).
+        if (ml.use_mmap && !use_mlock && !ml.defer_copy_dense && win_skip_bulk_prefetch) {
+            struct host_range { uint32_t idx; size_t first; size_t last; };
+            std::vector<host_range> host_ranges;
+            for (auto & it : ctx_bufs) {
+                ggml_context * ctx = it.first;
+                for (auto * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+                    if (cur->buffer == nullptr || !ggml_backend_buffer_is_host(cur->buffer) || cur->data == nullptr) {
+                        continue;
+                    }
+                    const auto * weight = ml.get_weight(ggml_get_name(cur));
+                    if (weight == nullptr) {
+                        continue;
+                    }
+                    const size_t first = weight->offs;
+                    const size_t last  = weight->offs + ggml_nbytes(cur);
+                    if (defer_ple_mmap && ml.ple_range_overlaps(weight->idx, first, last)) {
+                        continue;
+                    }
+                    // Owned/malloc'd copies are resident; warm file aliases only.
+                    const auto * dp = (const uint8_t *) cur->data;
+                    bool aliased = false;
+                    for (const auto & mapping : ml.mappings) {
+                        const auto * begin = (const uint8_t *) mapping->addr();
+                        if (dp >= begin && dp < begin + mapping->size()) {
+                            aliased = true;
+                            break;
+                        }
+                    }
+                    if (!aliased) {
+                        continue;
+                    }
+                    host_ranges.push_back({ weight->idx, first, last });
+                }
+            }
+            if (!host_ranges.empty()) {
+                LLAMA_LOG_INFO("%s: warming %zu host ranges (device tensors streamed from disk)\n",
+                        __func__, host_ranges.size());
+                for (const auto & r : host_ranges) {
+                    ml.mappings.at(r.idx)->prefetch_fragment(r.first, r.last);
+                }
+            }
+        }
+#endif
     }
 
     if (model.is_mla_model()) {
@@ -5206,16 +5402,34 @@ static bool llm_load_tensors(
         llm_requantize_output_tensor(model, extra_output_type);
     }
 
-    if (use_mmap_buffer) {
+    if (use_mmap_buffer || keep_ple_mapping) {
         for (auto & mapping : ml.mappings) {
             model.mappings.emplace_back(std::move(mapping));
         }
     }
 
-    if (!ml.use_mmap) {
+    // Read-only check against model.mappings (ml.mappings was moved there above).
+    auto tensor_is_file_aliased = [&](const struct ggml_tensor * t) -> bool {
+        if (!keep_ple_mapping || t->data == nullptr) {
+            return false;
+        }
+        const auto * p = (const uint8_t *) t->data;
+        for (const auto & mapping : model.mappings) {
+            const auto * begin = (const uint8_t *) mapping->addr();
+            if (p >= begin && p < begin + mapping->size()) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    if (!ml.use_mmap || keep_ple_mapping) {
         int n_modified = 0;
         for (auto& it : model.tensors_by_name) {
             if (ggml_backend_buffer_is_host(it.second->buffer)) {
+                if (tensor_is_file_aliased(it.second)) {
+                    continue;
+                }
                 if (iqk_modify_tensor(it.second)) ++n_modified;
             }
         }
@@ -5243,17 +5457,27 @@ static bool llm_load_tensors(
                 ml.expert_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
-    if (!ml.use_mmap && ml.repack_tensors) {
+    // Skipped aliases inside; result always prints with -rtr to expose lost flags.
+    if (ml.repack_tensors) {
         int n_repacked = 0;
-        for (auto& it : model.tensors_by_name) {
-            if (ggml_backend_buffer_is_host(it.second->buffer)) {
-                auto orig_type = it.second->type;
-                if (it.second->view_src) continue;
-                iqk_repack_tensor(it.second);
-                if (it.second->type != orig_type) ++n_repacked;
+        int n_skipped = 0;
+        if (!ml.use_mmap || keep_ple_mapping) {
+            for (auto& it : model.tensors_by_name) {
+                if (ggml_backend_buffer_is_host(it.second->buffer)) {
+                    auto orig_type = it.second->type;
+                    if (it.second->view_src) continue;
+                    if (tensor_is_file_aliased(it.second)) {
+                        if ((ggml_type) iqk_repacked_type(it.second) != it.second->type) {
+                            ++n_skipped;
+                        }
+                        continue;
+                    }
+                    iqk_repack_tensor(it.second);
+                    if (it.second->type != orig_type) ++n_repacked;
+                }
             }
         }
-        if (n_repacked > 0) LLAMA_LOG_INFO("============ Repacked %d tensors\n", n_repacked);
+        LLAMA_LOG_INFO("============ Repacked %d tensors (%d skipped file-aliased)\n", n_repacked, n_skipped);
     }
 
     if (model.arch == LLM_ARCH_BITNET) {
@@ -5340,13 +5564,13 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         }
         if (params.defer_ple) {
 #if defined(__linux__) || defined(_WIN32)
-            if (!params.use_mmap) {
-                LLAMA_LOG_WARN("%s: --defer-ple had no effect: mmap is disabled\n", __func__);
-            } else {
-                ml.build_ple_tensor_index();
-                if (ml.ple_tensor_index.empty()) {
-                    LLAMA_LOG_WARN("%s: --defer-ple had no effect: no per-layer token embedding\n", __func__);
-                }
+            ml.build_ple_tensor_index();
+            if (ml.ple_tensor_index.empty()) {
+                LLAMA_LOG_WARN("%s: --defer-ple had no effect: no per-layer token embedding or engram tables\n", __func__);
+            } else if (!params.use_mmap) {
+                // Mappings are kept for deferred tables; dense handling depends
+                // on -rtr (see llm_load_tensors): copied under --no-mmap, aliased otherwise.
+                LLAMA_LOG_INFO("%s: mmap is disabled, file mappings will be kept for the deferred tables only\n", __func__);
             }
 #else
             LLAMA_LOG_WARN("%s: deferred per-layer token embedding is only supported on Linux and Windows; ignoring defer_ple\n", __func__);

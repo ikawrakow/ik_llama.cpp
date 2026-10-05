@@ -54,6 +54,8 @@ struct llama_model_loader {
     bool merge_up_gate_exps = false;
     bool defer_experts = false;
     bool defer_ple = false;
+    // Explicit --no-mmap with deferred tables: copy dense weights out, alias deferred only.
+    bool defer_copy_dense = false;
 
     llama_files files;
     llama_ftype ftype;
@@ -200,6 +202,14 @@ struct llama_model_loader {
     bool should_defer_ple_mmaps() const;
 
     void apply_ple_mmap_policy() const;
+
+    // File holds deferred ranges (PLE, engram): skip prefetch and pinning for it.
+    bool file_has_deferred_ple(int idx) const;
+
+    bool ple_range_overlaps(int idx, size_t first, size_t last) const;
+
+    // deferred bytes of the index inside [first, last) of file idx
+    size_t ple_deferred_bytes_in(int idx, size_t first, size_t last) const;
 
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 

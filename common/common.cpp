@@ -2352,12 +2352,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.fit = true;
         return true;
     }
-    if (arg == "--defer-experts") {
+    if (arg == "-dexp" || arg == "--defer-experts") {
         params.defer_experts = true;
         params.warmup = false;
         return true;
     }
-    if (arg == "--defer-ple") {
+    if (arg == "-dple" || arg == "--defer-ple") {
         params.defer_ple = true;
         return true;
     }
@@ -2386,11 +2386,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cpu_affinity_auto = true;
         return true;
     }
-    if (arg == "--prefetch-experts") {
+    if (arg == "-prexp" || arg == "--prefetch-experts") {
         params.prefetch_experts = true;
         return true;
     }
-    if (arg == "--prefetch-experts-threads") {
+    if (arg == "-prexp-t" || arg == "--prefetch-experts-threads") {
         CHECK_ARG;
         params.prefetch_experts_threads = std::stoi(argv[i]);
         return true;
@@ -2411,7 +2411,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.worst_graph_tokens = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--no-mmap") {
+    if (arg == "-nmm" || arg == "--no-mmap") {
         params.use_mmap = false;
         return true;
     }
@@ -3519,16 +3519,16 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
     if (llama_supports_mmap()) {
-        options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
+        options.push_back({ "*",       "-nmm,   --no-mmap",               "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
     options.push_back({ "*",           "-rtr,   --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
-    options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
-    options.push_back({ "*",           "       --defer-ple",            "keep the per-layer token embedding on the file instead of resident in memory (Linux, Windows)"});
-    options.push_back({ "*",           "       --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
-    options.push_back({ "*",           "       --prefetch-experts-threads N",
+    options.push_back({ "*",           "-dexp,  --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
+    options.push_back({ "*",           "-dple,  --defer-ple",            "keep sparse tables (PLE, engram) on the file instead of resident in memory (Linux, Windows)"});
+    options.push_back({ "*",           "-prexp, --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
+    options.push_back({ "*",           "-prexp-t, --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
     options.push_back({ "*",           "       --cpu-affinity",          "pin CPU workers to the physical P-cores (hybrid CPUs only)"});
     options.push_back({ "*",           "-cm,   --cpu-mask MASK",         "pin CPU workers to the logical CPUs set in MASK (hex or decimal bitmask, e.g. 0x55; 64 CPUs max, use --cpu-range for more)"});

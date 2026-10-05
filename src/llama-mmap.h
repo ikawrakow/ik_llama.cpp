@@ -51,6 +51,9 @@ struct llama_mmap {
 
     void random_fragment(size_t first, size_t last);
 
+    // Selectively warm [first,last); deferred/VRAM-bound ranges stay cold.
+    void prefetch_fragment(size_t first, size_t last);
+
     void unmap_fragment(size_t first, size_t last);
 
     static const bool SUPPORTED;
