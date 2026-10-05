@@ -4,6 +4,9 @@ ARG UBUNTU_VERSION=24.04
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 
 # Build arguments
+# GGML_NATIVE=ON compiles for the CPU of the machine that builds the image (AVX-512, VNNI, ...):
+# build the image on the server that will run it. The AMX kernels are always compiled and are
+# switched on at run time only on CPUs that have AMX.
 ARG GGML_NATIVE=ON
 ARG GGML_AVX2=ON
 ARG USE_CCACHE=true
@@ -37,7 +40,10 @@ RUN --mount=type=cache,target=/ccache \
         ccache -z; \
     fi && \
     cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
         -DGGML_NATIVE=${GGML_NATIVE} \
+        -DGGML_CUDA=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_CURL=ON && \
     cmake --build build --config Release -j$(nproc) && \
     if [ "${USE_CCACHE}" = "true" ]; then \
@@ -77,7 +83,8 @@ ENTRYPOINT ["/app/tools.sh"]
 FROM base AS server
 ENV LLAMA_ARG_HOST=0.0.0.0
 COPY --from=build /app/dist/bin/llama-server /app/llama-server
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# loading (and repacking) a large model can take minutes
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15m --retries=3 \
     CMD [ "curl", "-f", "http://localhost:8080/health" ]
 ENTRYPOINT [ "/app/llama-server" ]
 

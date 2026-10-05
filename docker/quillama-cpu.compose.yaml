@@ -1,0 +1,56 @@
+# quillama.cpp: CPU-only llama-server with Docker Compose.
+#
+#   docker compose -f docker/quillama-cpu.compose.yaml up -d --build
+#
+# Put the GGUF file(s) in ./models next to this repository's root (or change the volume).
+# The image is compiled for the CPU it is built on (GGML_NATIVE=ON): build it on the server that
+# runs it. On start the log says whether the weights were repacked into RAM (model fits in the
+# container's memory limit) or kept memory-mapped with expert streaming from disk.
+services:
+  quillama:
+    build:
+      context: ..
+      dockerfile: docker/ik_llama-cpu.Containerfile
+      target: server
+    image: quillama:cpu-server
+    container_name: quillama
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${MODELS_DIR:-../models}:/models:ro   # host folder with your GGUF files
+    # the arguments of llama-server (the image's entrypoint)
+    command:
+      - --model
+      - /models/model.gguf          # your GGUF file
+      - --alias
+      - local-model
+      - --ctx-size
+      - "32768"
+      - --threads
+      - "8"                         # number of PHYSICAL cores available to the container
+      - --parallel
+      - "2"                         # concurrent requests (the context is split between them)
+      - --jinja                     # chat templates, tool calls, response_format / json_schema
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      # - --api-key
+      # - change-me                 # set one when the port is reachable from outside
+    environment:
+      - LC_ALL=C.utf8
+    # Optional: cap the memory. quillama reads this limit when deciding whether to repack the model
+    # into RAM; give it at least the model size plus ~20% for the KV cache and buffers.
+    # mem_limit: 48g
+    # Optional: pin to cores, e.g. on a shared host
+    # cpuset: "0-7"
+    # Optional: only needed if you add --mlock to the command (not allowed by rootless Docker)
+    # ulimits:
+    #   memlock: -1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15m

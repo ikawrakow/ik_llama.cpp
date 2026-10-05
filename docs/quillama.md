@@ -5,6 +5,7 @@ upstream ik changes can be merged) tuned for **CPU-only servers**, such as a VPS
 fast SSD and no GPU. This page lists every change, what it does, how it was measured, and its limits.
 
 - [Build and run](#build-and-run)
+- [Docker](#docker)
 - [What changed](#what-changed)
   - [1. JSON schema / structured output now always constrains the output](#1-json-schema--structured-output-now-always-constrains-the-output)
   - [2. Faster grammar-constrained sampling](#2-faster-grammar-constrained-sampling)
@@ -46,7 +47,31 @@ of 2048 tokens (`-ub 2048`, instead of ik's 512) unless `-ub` is given. Each MoE
 more tokens per batch, which keeps the tile units busy: MoE prompt speed 648 → 865 t/s at 2048
 tokens. The compute buffer grows accordingly (a few hundred MB to ~2 GB, depending on the model).
 
-## What changed
+## Docker
+
+The CPU image is built from `docker/ik_llama-cpu.Containerfile`. It is compiled for the CPU of the
+machine that builds it (`GGML_NATIVE=ON`), so build it on the server that will run it:
+
+```bash
+docker build -f docker/ik_llama-cpu.Containerfile --target server -t quillama:cpu-server .
+docker run -d --name quillama -p 8080:8080 -v /path/to/models:/models:ro quillama:cpu-server \
+    --model /models/model.gguf --ctx-size 32768 --threads 8 --jinja
+```
+
+or with Compose (edit the model file name and thread count first):
+
+```bash
+MODELS_DIR=/path/to/models docker compose -f docker/quillama-cpu.compose.yaml up -d --build
+docker logs -f quillama          # shows whether the model was repacked into RAM
+```
+
+- Inside a container, quillama reads the container's memory limit (cgroup v1 or v2), not the
+  host's RAM, when it decides between repacking into RAM and streaming from disk. If you set
+  `mem_limit`, leave room for the KV cache.
+- AMX works in containers with Docker's default seccomp profile. The log line
+  `quillama: ...` and the speed of a long prompt tell whether it is in use.
+- The healthcheck allows 15 minutes for loading, because repacking a large model takes a while.
+
 
 ### 1. JSON schema / structured output now always constrains the output
 

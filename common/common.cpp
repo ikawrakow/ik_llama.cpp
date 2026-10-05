@@ -1035,6 +1035,20 @@ static size_t quill_model_file_bytes(const std::string & path) {
 #endif
 }
 
+#ifdef __linux__
+// first unsigned number in a file, 0 when missing or not a number (e.g. cgroup v2 "max")
+static size_t quill_read_size(const char * path) {
+    FILE * f = fopen(path, "r");
+    if (!f) return 0;
+    unsigned long long v = 0;
+    const int n = fscanf(f, "%llu", &v);
+    fclose(f);
+    return n == 1 ? (size_t) v : 0;
+}
+#endif
+
+// memory this process can still use: MemAvailable, capped by the cgroup limit of a container
+// (inside Docker/Podman /proc/meminfo shows the host's memory, not the container's mem_limit)
 static size_t quill_mem_available_bytes() {
 #ifdef __linux__
     FILE * f = fopen("/proc/meminfo", "r");
@@ -1045,7 +1059,40 @@ static size_t quill_mem_available_bytes() {
         if (sscanf(line, "MemAvailable: %zu kB", &kb) == 1) break;
     }
     fclose(f);
-    return kb*1024;
+    size_t avail = kb*1024;
+    // this process' cgroup: "0::/path" (v2) or "N:...memory...:/path" (v1); "/" inside a container
+    std::string v2_path, v1_path;
+    if (FILE * cf = fopen("/proc/self/cgroup", "r")) {
+        char cl[1024];
+        while (fgets(cl, sizeof(cl), cf)) {
+            std::string ln(cl);
+            while (!ln.empty() && (ln.back() == '\n' || ln.back() == '\r')) ln.pop_back();
+            const size_t c1 = ln.find(':'), c2 = c1 == std::string::npos ? c1 : ln.find(':', c1 + 1);
+            if (c2 == std::string::npos) continue;
+            const std::string ctrl = ln.substr(c1 + 1, c2 - c1 - 1), path = ln.substr(c2 + 1);
+            if (ln.compare(0, 2, "0:") == 0 && ctrl.empty()) v2_path = path;
+            for (const auto & tok : string_split<std::string>(ctrl, ',')) if (tok == "memory") v1_path = path;
+        }
+        fclose(cf);
+    }
+    std::vector<std::pair<std::string, std::string>> cg;   // (limit file, usage file), most specific first
+    if (!v1_path.empty()) {
+        cg.push_back({"/sys/fs/cgroup/memory" + v1_path + "/memory.limit_in_bytes", "/sys/fs/cgroup/memory" + v1_path + "/memory.usage_in_bytes"});
+    }
+    if (!v2_path.empty()) {
+        cg.push_back({"/sys/fs/cgroup" + v2_path + "/memory.max", "/sys/fs/cgroup" + v2_path + "/memory.current"});
+    }
+    cg.push_back({"/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes"});
+    cg.push_back({"/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"});
+    for (const auto & c : cg) {
+        const size_t limit = quill_read_size(c.first.c_str());
+        if (limit == 0 || limit >= (size_t(1) << 60)) continue;   // missing or unlimited
+        const size_t usage = quill_read_size(c.second.c_str());
+        const size_t room  = limit > usage ? limit - usage : 0;
+        avail = std::min(avail, room);
+        break;
+    }
+    return avail;
 #else
     return 0;
 #endif
@@ -1057,7 +1104,7 @@ extern "C" bool quill_amx_available(void);
 // tokens per batch); ik_llama.cpp's kernels gain nothing from them. Measured on a 4-core VM:
 // MoE pp2048 648 -> 865 t/s going from -ub 512 to -ub 2048. Only for CPU-only runs without -ub.
 static void quill_auto_ubatch(gpt_params & params) {
-    if (params.ubatch_explicit || params.n_ubatch != 512) return;
+    if (params.ubatch_explicit || params.n_ubatch != 512 || getenv("LLAMA_ARG_UBATCH")) return;
     if (llama_supports_gpu_offload() && params.n_gpu_layers != 0) return;
     if (!quill_amx_available()) return;
     params.n_ubatch = std::min<int32_t>(2048, std::max<int32_t>(params.n_batch, 512));
