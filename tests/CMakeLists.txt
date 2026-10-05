@@ -124,6 +124,8 @@ llama_test(test-sampling-history)
 
 # quillama.cpp: AMX prompt-processing GEMM
 llama_target_and_test(test-quill-amx.cpp)
+llama_target_and_test(test-quill-grammar.cpp ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-qwen2.gguf)
+target_include_directories(test-quill-grammar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
 
 # build test-tokenizer-0 target once and add many tests
 add_executable(test-tokenizer-0 test-tokenizer-0.cpp)

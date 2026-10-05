@@ -5,6 +5,9 @@
 
 #include <cmath>
 #include <algorithm>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <cstdint>
 #include <set>
 #include <stdexcept>
@@ -1374,6 +1377,28 @@ struct llama_grammar* llama_grammar_clone_impl(const struct llama_grammar& gramm
     return result;
 }
 
+// quillama.cpp: per-vocab cache of the decoded code points of every token (decoding from a clean
+// UTF-8 state, the common case), so masking does not allocate one vector per candidate per token.
+struct quill_decoded_vocab {
+    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> tokens;
+};
+
+static const quill_decoded_vocab & quill_get_decoded_vocab(const llama_vocab * vocab) {
+    static std::mutex mtx;
+    static std::unordered_map<const llama_vocab *, std::unique_ptr<quill_decoded_vocab>> caches;
+    std::lock_guard<std::mutex> lock(mtx);
+    auto & c = caches[vocab];
+    if (!c) {
+        c = std::make_unique<quill_decoded_vocab>();
+        const uint32_t n = vocab->n_tokens();
+        c->tokens.resize(n);
+        for (uint32_t id = 0; id < n; ++id) {
+            c->tokens[id] = decode_utf8(vocab->token_to_piece(id), {0, 0});
+        }
+    }
+    return *c;
+}
+
 void llama_grammar_sample_impl(const struct llama_grammar * grammar, const struct llama_vocab * vocab, const struct llama_sampling * smpl, llama_token_data_array * candidates) {
     GGML_ASSERT(grammar);
     GGML_ASSERT(vocab);
@@ -1396,15 +1421,53 @@ void llama_grammar_sample_impl(const struct llama_grammar * grammar, const struc
     llama_grammar_candidates candidates_grammar;
     candidates_grammar.reserve(candidates->size);
 
+    // quillama.cpp: from a clean UTF-8 state use the cached decoding, and reject up front every token
+    // whose first code point no parse stack accepts (exact: such a token can never match). At
+    // structural JSON positions this leaves a handful of tokens for the full check.
+    const bool use_cache = grammar->partial_utf8.n_remain == 0 && !getenv("QUILL_GRAMMAR_REFERENCE");
+    const quill_decoded_vocab * cache = use_cache ? &quill_get_decoded_vocab(vocab) : nullptr;
+    bool first_char_filter = use_cache;
+    for (const auto & stack : grammar->stacks) {
+        if (!stack.empty()) {
+            const auto type = stack.back()->type;
+            if (type == LLAMA_GRETYPE_TOKEN || type == LLAMA_GRETYPE_TOKEN_NOT) first_char_filter = false;
+        }
+    }
+    std::vector<int8_t> first_ok;   // per first code point < 128: -1 unknown, 0 rejected, 1 accepted
+    if (first_char_filter) first_ok.assign(128, -1);
+    auto accepts_first = [&](uint32_t c) {
+        if (c < 128 && first_ok[c] >= 0) return first_ok[c] == 1;
+        bool ok = false;
+        for (const auto & stack : grammar->stacks) {
+            if (!stack.empty() && llama_grammar_match_char(stack.back(), c).first) { ok = true; break; }
+        }
+        if (c < 128) first_ok[c] = ok ? 1 : 0;
+        return ok;
+    };
+
     for (size_t i = 0; i < candidates->size; ++i) {
         const llama_token id      = candidates->data[i].id;
-        const std::string & piece = vocab->token_to_piece(id);
 
         if (vocab->is_eog(id)) {
             if (!allow_eog) {
                 candidates->data[i].logit = -INFINITY;
             }
-        } else if (piece.empty() || piece[0] == 0) {
+            continue;
+        }
+        if (cache && (size_t) id < cache->tokens.size()) {
+            const auto & dec = cache->tokens[id];
+            const bool no_code_point = dec.first.empty() || dec.first[0] == 0;
+            if (no_code_point && dec.second.n_remain == 0) {
+                candidates->data[i].logit = -INFINITY;   // empty piece
+            } else if (first_char_filter && !no_code_point && !accepts_first(dec.first[0])) {
+                candidates->data[i].logit = -INFINITY;
+            } else {
+                candidates_grammar.push_back({ i, dec.first.data(), dec.second, id });
+            }
+            continue;
+        }
+        const std::string & piece = vocab->token_to_piece(id);
+        if (piece.empty() || piece[0] == 0) {
             candidates->data[i].logit = -INFINITY;
         } else {
             candidates_decoded.push_back(decode_utf8(piece, grammar->partial_utf8));

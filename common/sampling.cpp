@@ -591,6 +591,68 @@ std::vector<llama_token> common_sampler_grammar_draft(struct common_sampler * gs
     return draft;
 }
 
+// quillama.cpp: grammar masking restricted to the candidates that can matter.
+// Masking the whole vocabulary (150k+ tokens) costs tens of ms per token on CPU. When the sampler
+// is greedy, or its first active step is top-k, only the k highest-logit grammar-valid tokens can
+// be sampled; they are found by scanning the candidates in descending logit order, in growing
+// chunks, until k valid ones are found. Grammar rejection is per token, so the result is identical
+// to masking everything and then applying top-k.
+static size_t grammar_topk_need(const common_sampler * s) {
+    // exact, but measured no faster than the (now cheap) full mask on CPU: opt-in
+    static const bool enabled = [] { const char * e = getenv("QUILL_GRAMMAR_TOPK"); return e && atoi(e) != 0; }();
+    const auto & p = s->params;
+    if (!enabled) return 0;
+    if (p.temp <= 0.0f) return 1;                                          // greedy
+    if (p.mirostat != 0) return 0;
+    if (p.adaptive_target >= 0.0f && s->adapt_p_ctx != nullptr) return 0;
+    for (auto t : p.samplers_sequence) {
+        if (t == llama_sampler_type::DRY) {
+            if (p.dry_multiplier != 0.0f && s->smpl) return 0;
+            continue;
+        }
+        if (t == llama_sampler_type::TOP_K) return p.top_k > 0 ? (size_t) p.top_k : 0;
+        return 0;
+    }
+    return 0;
+}
+
+static void grammar_apply_topk(common_sampler * s, llama_context * ctx, llama_token_data_array & cur_p, size_t need) {
+    llama_token_data * data = cur_p.data;
+    const size_t n = cur_p.size;
+    auto by_logit = [](const llama_token_data & a, const llama_token_data & b) { return a.logit > b.logit; };
+    size_t start = 0, n_valid = 0;
+    size_t chunk = std::max<size_t>(64, 2*need);
+    while (start < n && n_valid < need) {
+        // past a few thousand candidates, mask the whole remainder in one call instead of sorting more
+        const size_t end = start >= 4096 ? n : std::min(n, start + chunk);
+        if (end == n && start > 0) {
+            llama_token_data_array rest = { data + start, n - start, false };
+            llama_grammar_apply(s->grammar, ctx, &rest);
+            for (size_t i = start; i < n; ++i) {
+                if (data[i].logit != -INFINITY) data[n_valid++] = data[i];
+            }
+            std::sort(data, data + n_valid, by_logit);
+            start = n;
+            break;
+        }
+        std::partial_sort(data + start, data + end, data + n, by_logit);
+        llama_token_data_array sub = { data + start, end - start, true };
+        llama_grammar_apply(s->grammar, ctx, &sub);
+        // compact the valid ones (still in descending order) to the front
+        for (size_t i = start; i < end; ++i) {
+            if (data[i].logit != -INFINITY) data[n_valid++] = data[i];
+        }
+        start = end;
+        chunk *= 4;
+    }
+    cur_p.size   = n_valid;
+    cur_p.sorted = true;
+    if (n_valid == 0) {
+        // nothing valid: keep one -inf candidate so the samplers do not see an empty array
+        cur_p.size = 1;
+    }
+}
+
 static llama_token llama_sampling_sample_impl(
                   struct common_sampler * ctx_sampling,
                   struct llama_context * ctx_main,
@@ -619,8 +681,12 @@ static llama_token llama_sampling_sample_impl(
     common_reasoning_budget_apply(rbudget, &cur_p);
     // Sample grammar first for resampling
     if (ctx_sampling->grammar != NULL && grammar_first && grammar_should_apply(ctx_sampling)) {
-        // Apply grammar constraints to all candidates
-        llama_grammar_apply(ctx_sampling->grammar, ctx_main, &cur_p);
+        if (const size_t need = grammar_topk_need(ctx_sampling); need > 0) {
+            grammar_apply_topk(ctx_sampling, ctx_main, cur_p, need);
+        } else {
+            // Apply grammar constraints to all candidates
+            llama_grammar_apply(ctx_sampling->grammar, ctx_main, &cur_p);
+        }
     }
 
     // llama_sampler_apply
@@ -775,7 +841,8 @@ static llama_token_data_array llama_sampling_prepare_impl(
     }
 
     // apply grammar checks before sampling logic
-    if (grammar_first && ctx_sampling->grammar != NULL) {
+    // (the sampling itself masks again, restricted to the top candidates when possible: see grammar_topk_need)
+    if (grammar_first && ctx_sampling->grammar != NULL && grammar_should_apply(ctx_sampling) && grammar_topk_need(ctx_sampling) == 0) {
         llama_grammar_apply(ctx_sampling->grammar, ctx_main, &cur_p);
     }
 
