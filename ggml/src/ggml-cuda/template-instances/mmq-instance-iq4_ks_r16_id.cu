@@ -3,7 +3,7 @@
 #include "../mmq_id_common.cuh"
 
 template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_iq4_ks_r16(
-    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
+    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride, [[maybe_unused]] int blocks_per_ne00) {
 
     constexpr int nwarps = mmq_get_nwarps_device();
 
@@ -17,6 +17,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #endif // INT8_MMA_AVAILABLE
 
     const int kqsx = threadIdx.x%8;
+    int block_id = (kbx0 + kqsx) % blocks_per_ne00;
 
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += 4*nwarps) {
@@ -29,7 +30,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         int ir  = i%16;
 
         const float * dptr = (const float *)(x + 16*i16*stride);
-        const block_iq4_ks_r16 * bxi = (const block_iq4_ks_r16 *)(dptr + 16) + kbx0 + kqsx;
+        const block_iq4_ks_r16 * bxi = (const block_iq4_ks_r16 *)(dptr + 16) + block_id;
 
         const int ls = (bxi->scales[ir] & 254) - 127;
         auto values = iq4k_values + ((bxi->scales[ir] & 1) << 4);
