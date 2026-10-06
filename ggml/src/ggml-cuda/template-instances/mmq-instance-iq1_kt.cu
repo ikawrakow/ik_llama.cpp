@@ -3,7 +3,7 @@
 #include "../mmq.cuh"
 
 template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq1_kt(
-    const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride) {
+    const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, [[maybe_unused]] int blocks_per_ne00) {
 
     constexpr uint32_t ka = 0xCBAC1FED;
     constexpr uint32_t km = 0x3f3f3f3f;
