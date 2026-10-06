@@ -3384,8 +3384,8 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 && l.wo && l.wo->extra;
 
             auto materialize = [&](ggml_tensor * source,
-                                   std::unique_ptr<ggml_tensor> & computed,
-                                   std::vector<std::unique_ptr<ggml_tensor>> & replicas,
+                                   std::shared_ptr<ggml_tensor> & computed,
+                                   std::vector<std::shared_ptr<ggml_tensor>> & replicas,
                                    llama_split_tensor & split,
                                    const std::string & tname) -> ggml_tensor * {
                 if (tp_replicate) {
@@ -3914,7 +3914,7 @@ static void llm_prepare_openpangu_param_sinks(llama_model & model) {
     };
 
     auto materialize = [&model](ggml_tensor * source,
-                                std::unique_ptr<ggml_tensor> & computed,
+                                std::shared_ptr<ggml_tensor> & computed,
                                 ggml_backend_buffer_type_t buft,
                                 const std::string & name) -> ggml_tensor * {
         computed = std::make_unique<ggml_tensor>(*source);
@@ -4261,6 +4261,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         int amb, int worst_case_tokens, bool flash_attn, bool swa_compress,
         std::vector<expert_tensors> & experts) {
     int n_layer = model.hparams.n_layer;
+    // looped models have one KV slot per logical layer
+    const double kv_loops = model.hparams.n_layer_all > (uint32_t) n_layer
+        ? double(model.hparams.n_layer_all) / n_layer : 1.0;
     std::vector<double> result(n_layer+1, 0);
     std::vector<double> compute(n_layer+1, 0);
     struct mla_tensors {
@@ -4482,7 +4485,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
-        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn,
+        auto kv_size = kv_loops * model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn,
                                         swa_compress, (uint32_t) n_ubatch);
         LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f   %9.2f  MiB\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024., compute[il]/1024./1024.);
         max_compute = std::max(max_compute, compute[il]);
@@ -10075,6 +10078,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_NANBEIGE:
         case LLM_ARCH_DECI:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_BAICHUAN:

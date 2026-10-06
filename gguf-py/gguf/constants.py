@@ -215,6 +215,10 @@ class Keys:
         CHUNK_SIZE  = "imatrix.chunk_size"
         DATASETS    = "imatrix.datasets"
 
+    class Nanbeige:
+        NUM_LOOPS            = "{arch}.num_loops"
+        SKIP_LOOP_FINAL_NORM = "{arch}.skip_loop_final_norm"
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
@@ -228,6 +232,7 @@ class GGUFType:
 
 class MODEL_ARCH(IntEnum):
     LLAMA        = auto()
+    NANBEIGE     = auto()
     DECI         = auto()
     FALCON       = auto()
     BAICHUAN     = auto()
@@ -477,6 +482,7 @@ class MODEL_TENSOR(IntEnum):
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LLAMA:          "llama",
+    MODEL_ARCH.NANBEIGE:       "nanbeige",
     MODEL_ARCH.DECI:           "deci",
     MODEL_ARCH.FALCON:         "falcon",
     MODEL_ARCH.BAICHUAN:       "baichuan",
@@ -2030,6 +2036,8 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ROPE_FREQS,
     ],
 }
+
+MODEL_TENSORS[MODEL_ARCH.NANBEIGE] = MODEL_TENSORS[MODEL_ARCH.LLAMA]  # same tensor names
 
 #
 # types
