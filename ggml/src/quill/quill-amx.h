@@ -25,6 +25,9 @@ bool quill_amx_available(void);
 // can this weight type be dequantized row-wise to BF16 for AMX?
 bool quill_amx_type_supported(enum ggml_type type);
 
+// rows interleaved by a row-repacked type (*_R4/_R8/_R16), else 1
+int64_t quill_amx_interleave(enum ggml_type type);
+
 // minimum number of activation rows (tokens) for which AMX is used
 int  quill_amx_min_batch(void);
 
