@@ -10,6 +10,7 @@
 #endif
 
 #include "common.h"
+#include "speculative.h"
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "llama-vocab.h"
@@ -179,6 +180,15 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
     if (stage.has_ngram_min_hits_override()) {
         result.ngram_min_hits = stage.ngram_min_hits;
     }
+    if (stage.has_ngram_tree_max_nodes_override()) {
+        result.ngram_tree_max_nodes = stage.ngram_tree_max_nodes;
+    }
+    if (stage.has_ngram_tree_max_branches_override()) {
+        result.ngram_tree_max_branches = stage.ngram_tree_max_branches;
+    }
+    if (stage.has_ngram_tree_branch_depth_override()) {
+        result.ngram_tree_branch_depth = stage.ngram_tree_branch_depth;
+    }
     if (stage.has_suffix_min_match_len_override()) {
         result.suffix_min_match_len = stage.suffix_min_match_len;
     }
@@ -206,6 +216,22 @@ bool common_params_speculative::has_stage_type(common_speculative_type stage_typ
     return std::any_of(resolved.begin(), resolved.end(), [stage_type](const common_speculative_stage_params & stage) {
         return stage.type == stage_type;
     });
+}
+
+bool common_params_speculative::has_ngram_tree_branches() const {
+    if (ngram_tree_max_branches > 0) {
+        return true;
+    }
+    for (const auto & stage : get_resolved_stages()) {
+        if (stage.type != COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K &&
+            stage.type != COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V) {
+            continue;
+        }
+        if (with_stage_overrides(stage).ngram_tree_max_branches > 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool common_params_speculative::has_dflash_family_stage() const {
@@ -1162,6 +1188,27 @@ static void common_speculative_stage_apply_kv(
         stage.ngram_min_hits = std::stoi(value_raw);
         if (stage.ngram_min_hits < 1) {
             throw std::invalid_argument("speculative stage ngram_min_hits must be at least 1");
+        }
+        return;
+    }
+    if (key == "ngram_tree_max_nodes") {
+        stage.ngram_tree_max_nodes = std::stoi(value_raw);
+        if (stage.ngram_tree_max_nodes < 1) {
+            throw std::invalid_argument("speculative stage ngram_tree_max_nodes must be at least 1");
+        }
+        return;
+    }
+    if (key == "ngram_tree_max_branches") {
+        stage.ngram_tree_max_branches = std::stoi(value_raw);
+        if (stage.ngram_tree_max_branches < 0) {
+            throw std::invalid_argument("speculative stage ngram_tree_max_branches must be at least 0");
+        }
+        return;
+    }
+    if (key == "ngram_tree_branch_depth") {
+        stage.ngram_tree_branch_depth = std::stoi(value_raw);
+        if (stage.ngram_tree_branch_depth < 0) {
+            throw std::invalid_argument("speculative stage ngram_tree_branch_depth must be at least 0");
         }
         return;
     }
@@ -4597,7 +4644,8 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     auto [n_batch, n_ubatch] = get_batch_ubatch(params);
 
     cparams.n_ctx             = params.n_ctx;
-    cparams.n_seq_max         = params.n_parallel;
+    // tree speculation reserves COMMON_SPECULATIVE_TREE_MAX_PATHS seq ids per slot
+    cparams.n_seq_max         = params.n_parallel * (1 + COMMON_SPECULATIVE_TREE_MAX_PATHS);
     cparams.n_batch           = n_batch;
     cparams.n_ubatch          = n_ubatch;
     cparams.n_threads         = params.n_threads;

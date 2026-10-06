@@ -128,6 +128,11 @@ struct server_slot {
     std::vector<common_speculative_token_dist> draft_proposal_dists;
     bool spec_target_only = false;
 
+    // tree verification (multi-branch drafts)
+    common_speculative_tree        tree;
+    common_speculative_tree_layout tree_layout;
+    bool                           tree_active = false;
+
     json json_schema;
 
     common_chat_format chat_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;

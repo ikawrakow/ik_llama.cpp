@@ -39,12 +39,90 @@ struct common_speculative_checkpoint {
     void clear();
 };
 
+// Multi-branch speculative draft tree, verified in one target pass.
+// nodes[0] = root (last accepted token); `path` = branch id (one llama_seq_id per branch).
+struct common_speculative_tree_node {
+    llama_token tok    = LLAMA_TOKEN_NULL;
+    int32_t     parent = -1;   // index into nodes, -1 for the root
+    int32_t     path   = -1;   // branch id (0..n_paths-1), -1 for the root
+    int32_t     depth  = 0;    // 0 = root
+    float       score  = 0.0f; // confidence (e.g. ngram map count)
+};
+
+struct common_speculative_tree {
+    std::vector<common_speculative_tree_node> nodes; // nodes[0] = root
+    int n_paths = 0;                                 // number of branches (paths)
+
+    bool empty() const { return nodes.size() <= 1; }
+};
+
+// each branch gets one llama_seq_id; the caller's batch must reserve these extra ids per token
+constexpr int COMMON_SPECULATIVE_TREE_MAX_PATHS = 4;
+
+struct common_speculative_tree_layout {
+    llama_seq_id     tree_seq_base = 0;
+    int              n_paths       = 0;
+    llama_pos        root_pos      = 0;
+    std::vector<int> node_batch_index;
+};
+
+// add the tree to the batch, delta-tagging the shared prefix with the branch seq ids
+common_speculative_tree_layout common_speculative_tree_add(
+        common_speculative * spec,
+        llama_context * ctx,
+        llama_batch & batch,
+        llama_pos n_past,
+        llama_seq_id seq_id,
+        const common_speculative_tree & tree,
+        int root_batch_index = -1);
+
+// Elect the most likely root->leaf path using the target's greedy token at every node.
+void common_speculative_tree_elect(
+        llama_context * ctx,
+        const common_speculative_tree & tree,
+        const common_speculative_tree_layout & layout,
+        llama_tokens & winner,
+        std::vector<int> & winner_indices,
+        llama_seq_id & winner_path);
+
+// drop branch cells at positions >= n_past, keep the prefix membership
+void common_speculative_tree_drop_branches(
+        llama_context * ctx,
+        const common_speculative_tree_layout & layout,
+        llama_pos n_past);
+
+void common_speculative_tree_mark_tagged(common_speculative * spec, llama_pos pos);
+
 struct common_speculative_draft_result {
     llama_tokens tokens;
     std::vector<common_speculative_token_dist> proposal_dists; // Sparse proposal distributions populated by stochastic DFlash2
+    common_speculative_tree tree;                              // non-empty => verify as a tree
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
     bool target_only = false;
 };
+
+// Result of verifying a draft (linear chain or tree) against the target model.
+struct common_speculative_verify_result {
+    llama_tokens             ids;                     // accepted tokens
+    std::vector<int32_t>     accepted_output_indices; // indices into the verify batch
+    int                      n_elected = 0;           // length of the elected draft (for commit)
+    bool                     used_tree = false;
+    bool                     ok = true;
+    std::string              error;
+};
+
+// verify a draft (linear, or tree when draft_result.tree is set) in one target decode
+common_speculative_verify_result common_speculative_verify(
+        common_speculative * spec,
+        llama_context * ctx,
+        common_sampler * sampler,
+        const common_speculative_draft_result & draft_result,
+        llama_token sampled_before,
+        llama_pos n_past,
+        llama_seq_id seq_id);
+
+// learn a token->successors transition from the target logits at batch index `logits_idx`
+void common_speculative_observe(common_speculative * spec, llama_context * ctx, int logits_idx, llama_token tok);
 
 struct common_speculative_metrics_stage_snapshot {
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;

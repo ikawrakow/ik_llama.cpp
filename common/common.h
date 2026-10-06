@@ -195,6 +195,9 @@ struct common_speculative_stage_params {
     uint16_t ngram_size_n = 0;
     uint16_t ngram_size_m = 0;
     uint16_t ngram_min_hits = 0;
+    int32_t  ngram_tree_max_nodes = -1;
+    int32_t  ngram_tree_max_branches = -1;
+    int32_t  ngram_tree_branch_depth = -1;
 
     int32_t suffix_min_match_len = -1;
     int32_t suffix_max_depth = -1;
@@ -207,6 +210,9 @@ struct common_speculative_stage_params {
     bool has_ngram_size_n_override() const { return ngram_size_n > 0; }
     bool has_ngram_size_m_override() const { return ngram_size_m > 0; }
     bool has_ngram_min_hits_override() const { return ngram_min_hits > 0; }
+    bool has_ngram_tree_max_nodes_override() const { return ngram_tree_max_nodes >= 0; }
+    bool has_ngram_tree_max_branches_override() const { return ngram_tree_max_branches >= 0; }
+    bool has_ngram_tree_branch_depth_override() const { return ngram_tree_branch_depth >= 0; }
     bool has_suffix_min_match_len_override() const { return suffix_min_match_len >= 0; }
     bool has_suffix_max_depth_override() const { return suffix_max_depth >= 0; }
     bool has_suffix_corpus_override() const { return !suffix_corpus.empty(); }
@@ -251,6 +257,10 @@ struct common_params_speculative {
     uint16_t ngram_size_m = 48; // mgram size for speculative tokens
     uint16_t ngram_min_hits = 1; // minimum hits at ngram/mgram lookup for mgram to be proposed
 
+    int32_t  ngram_tree_max_nodes    = 8;  // max draft-tree nodes (<= IQK_MAX_NY avoids the 4+5 GEMM split)
+    int32_t  ngram_tree_max_branches = 0;  // 0 = disabled (linear path)
+    int32_t  ngram_tree_branch_depth = 0;  // 0 = half the spine length
+
     std::shared_ptr<common_ngram_mod> ngram_mod;
 
     // suffix-decoding specific
@@ -291,6 +301,8 @@ struct common_params_speculative {
     common_params_speculative with_stage_overrides(const common_speculative_stage_params & stage) const;
     bool has_stage_chain() const;
     bool has_stage_type(common_speculative_type stage_type) const;
+    // draft tree enabled globally or by any ngram-map stage override
+    bool has_ngram_tree_branches() const;
     bool has_dflash_family_stage() const;
     bool uses_target_features() const;
     void remove_stage_type(common_speculative_type stage_type);

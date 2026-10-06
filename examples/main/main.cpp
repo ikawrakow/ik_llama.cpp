@@ -1013,36 +1013,13 @@ int main(int argc, char ** argv) {
                     }
 
                     if (!draft.empty() || draft_result.target_only) {
-                        llama_batch verify_batch = llama_batch_init((int) draft.size() + 1, 0, 1);
-                        std::vector<int> verify_indices;
-                        verify_indices.reserve(draft.size() + 1);
-
-                        common_batch_add(verify_batch, sampled_before, n_past, { 0 }, true);
-                        verify_indices.push_back(0);
-                        for (size_t i = 0; i < draft.size(); ++i) {
-                            common_batch_add(verify_batch, draft[i], n_past + 1 + (llama_pos) i, { 0 }, true);
-                            verify_indices.push_back((int) i + 1);
-                        }
-
-                        if (llama_decode(ctx, verify_batch)) {
-                            llama_batch_free(verify_batch);
-                            LOG_TEE("%s : failed to eval speculative batch\n", __func__);
+                        auto verify = common_speculative_verify(spec, ctx, ctx_sampling, draft_result, sampled_before, n_past, 0);
+                        if (!verify.ok) {
+                            LOG_TEE("%s : speculative verify failed: %s\n", __func__, verify.error.c_str());
                             return 1;
                         }
-                        std::vector<llama_token> ids;
-                        try {
-                            ids = proposal_dists.empty()
-                                ? common_sampler_sample_and_accept_n(ctx_sampling, ctx, verify_indices, draft)
-                                : common_sampler_sample_and_accept_n(ctx_sampling, ctx, verify_indices, draft, proposal_dists);
-                        } catch (const std::exception & e) {
-                            llama_batch_free(verify_batch);
-                            LOG_TEE("%s: speculative sampling failed: %s\n", __func__, e.what());
-                            return 1;
-                        }
-                        std::vector<int32_t> accepted_output_indices;
-                        if (!ids.empty()) {
-                            accepted_output_indices.assign(verify_indices.begin(), verify_indices.begin() + ids.size());
-                        }
+                        std::vector<llama_token> ids = std::move(verify.ids);
+                        std::vector<int32_t> accepted_output_indices = std::move(verify.accepted_output_indices);
 
                         if (!common_speculative_commit(
                             spec,
@@ -1051,14 +1028,12 @@ int main(int argc, char ** argv) {
                             0,
                             sampled_before,
                             ids,
-                            (int) draft.size(),
+                            verify.n_elected,
                             n_past + 1,
                             accepted_output_indices)) {
-                            llama_batch_free(verify_batch);
                             LOG_TEE("%s: speculative checkpoint restore/commit failed\n", __func__);
                             return 1;
                         }
-                        llama_batch_free(verify_batch);
 
                         if (!ids.empty()) {
                             have_speculative_sampled = true;
@@ -1076,6 +1051,9 @@ int main(int argc, char ** argv) {
                             }
                             n_past += (int) ids.size();
                             n_remain -= (int) emitted.size();
+                            if (n_remain < 0) {
+                                n_remain = 0;
+                            }
                             LOG("n_remain: %d\n", n_remain);
                         }
                     }

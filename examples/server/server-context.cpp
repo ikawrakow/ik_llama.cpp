@@ -427,8 +427,11 @@ void server_context::init() {
     {
         const int32_t n_batch = llama_n_batch(ctx);
 
-        // only a single seq_id per token is needed
-        batch = llama_batch_init(std::max(n_batch, params_base.n_parallel), 0, 1);
+        // tree drafts use one seq_id per branch. Always reserve the extra ids so the tree can
+        // be enabled per request without restarting the server (matches the unconditional
+        // sequence reservation in common_context_params_to_llama); the cost is 16 bytes/token.
+        const int n_seq_per_token = 1 + COMMON_SPECULATIVE_TREE_MAX_PATHS;
+        batch = llama_batch_init(std::max(n_batch, params_base.n_parallel), 0, n_seq_per_token);
     }
 
     metrics.init();
@@ -561,6 +564,10 @@ void server_slot::reset() {
     draft_proposal_dists.clear();
     spec_target_only = false;
     i_batch_dft.clear();
+    tree.nodes.clear();
+    tree_active = false;
+    tree_layout = {};
+    common_speculative_tree_mark_tagged(spec, 0);
     spec_prompt_warmup_failed = false;
     n_sent_token_probs = 0;
     infill = false;
@@ -3683,13 +3690,29 @@ void server_context::add_sampled_tokens() {
             slot.cache_tokens.push_back(slot.sampled);
 
             const int min_usable_draft = slot.params.speculative.get_min_usable_stage_n_min();
-            if (!slot.spec_target_only && min_usable_draft > (int)draft.size()) {
+            // the context and the shared batch are always sized for tree drafts (see init
+            // and common_context_params_to_llama), so the tree may be enabled per request via
+            // the slot's speculative params; a non-empty draft_result.tree already implies it
+            const bool has_tree = !draft_result.tree.empty() &&
+                !llama_model_has_recurrent(llama_get_model(ctx));
+            if (!slot.spec_target_only && !has_tree && min_usable_draft > (int)draft.size()) {
                 SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int)draft.size(), min_usable_draft);
                 // fallback to normal decoding
                 slot.i_batch = slot.i_batch_dft[0];
                 slot.drafted.clear();
                 slot.draft_proposal_dists.clear();
                 slot.i_batch_dft.clear();
+            } else if (has_tree) {
+                // multi-branch tree draft: root children, one seq_id per branch
+                slot.tree = std::move(draft_result.tree);
+                slot.tree_active = true;
+                const llama_pos root_pos = slot.cache_tokens.pos_next() - 1; // root added above
+                slot.tree_layout = common_speculative_tree_add(slot.spec, ctx, batch,
+                        root_pos, slot.id, slot.tree, slot.i_batch_dft[0]);
+                slot.n_draft_total += slot.tree.nodes.size() - 1;
+                slot.drafted.clear();
+                slot.draft_proposal_dists.clear();
+                SLT_DBG(slot, "tree draft: nodes=%d paths=%d\n", (int) slot.tree.nodes.size(), slot.tree_layout.n_paths);
             } else {
                 if (slot.spec_target_only) {
                     SLT_DBG(slot, "%s\n", "selected DFlash target-only arm: root-only target batch");
@@ -4439,7 +4462,18 @@ void server_context::speculative_decoding_accept() {
         }
 
         const llama_token sampled_before = slot.sampled;
+
+        llama_seq_id tree_winner_path = -1;
+        if (slot.tree_active) {
+            llama_tokens     winner;
+            std::vector<int> winner_indices;
+            common_speculative_tree_elect(ctx, slot.tree, slot.tree_layout, winner, winner_indices, tree_winner_path);
+            slot.i_batch_dft = std::move(winner_indices);
+            slot.drafted = std::move(winner);
+        }
         size_t n_draft = slot.drafted.size();
+        // for a tree draft nothing was pushed to cache_tokens, so nothing to roll back here
+        const size_t n_draft_rollback = slot.tree_active ? 0 : n_draft;
 
         apply_server_biases(slot);
 
@@ -4477,6 +4511,28 @@ void server_context::speculative_decoding_accept() {
             }
         }
 
+        if (slot.tree_active) {
+            // move the committed path into the slot sequence (root cell already there)
+            if (tree_winner_path >= 0 && !ids.empty()) {
+                llama_kv_cache_seq_cp(ctx, slot.tree_layout.tree_seq_base + tree_winner_path, slot.id,
+                        slot.tree_layout.root_pos + 1,
+                        slot.tree_layout.root_pos + (llama_pos) ids.size());
+            }
+            common_speculative_tree_drop_branches(ctx, slot.tree_layout, slot.tree_layout.root_pos);
+            common_speculative_tree_mark_tagged(slot.spec, slot.tree_layout.root_pos);
+            slot.tree_active = false;
+            slot.tree.nodes.clear();
+        }
+
+        if (slot.spec != nullptr && !ids.empty() && !slot.i_batch_dft.empty()) {
+            // learn transitions from known-accepted inputs (root + last accepted draft)
+            common_speculative_observe(slot.spec, ctx, slot.i_batch_dft[0], sampled_before);
+            if (ids.size() >= 2 && ids.size() <= slot.i_batch_dft.size()) {
+                const size_t k = ids.size() - 1;
+                common_speculative_observe(slot.spec, ctx, slot.i_batch_dft[k], ids[k - 1]);
+            }
+        }
+
         slot.i_batch_dft.clear();
         slot.drafted.clear();
         slot.draft_proposal_dists.clear();
@@ -4496,7 +4552,7 @@ void server_context::speculative_decoding_accept() {
         }
 
         // rollback to the state before sampling the draft tokens
-        slot.cache_tokens.keep_first(slot.cache_tokens.n_tokens() - n_draft);
+        slot.cache_tokens.keep_first(slot.cache_tokens.n_tokens() - n_draft_rollback);
         const llama_pos spec_pos_base = slot.cache_tokens.pos_next();
 
         // add accepted tokens to the prompt
