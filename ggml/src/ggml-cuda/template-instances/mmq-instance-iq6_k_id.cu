@@ -1,7 +1,7 @@
 #include "../mmq_id_common.cuh"
 
 template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_iq6_k(
-    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
+    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride, [[maybe_unused]] int blocks_per_ne00) {
 
     constexpr int nwarps = mmq_get_nwarps_device();
 
