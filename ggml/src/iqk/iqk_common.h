@@ -625,6 +625,108 @@ static inline float convert_to_q8_k_r8(int k, float d0, const __m256i * qx, cons
     return dnew;
 }
 
+template <int nr, int scale_block = 16> struct Q8KRowRepacker {
+    uint32_t block[8];
+    template <typename Dst>
+    inline void row(int k, float d, float d0, const __m256i * qx, const int16_t * scales, Dst * y_d, int8_t * y_qs) {
+        set_scale(y_d, k, d*convert_to_q8_k_r8<nr>(k, d0, qx, scales, block, y_qs));
+    }
+    template <typename Dst>
+    inline void flush(Dst *, int8_t *) {}
+};
+
+#ifdef HAVE_FANCY_SIMD
+template <int scale_block> struct Q8KRowRepacker<16, scale_block> {
+    alignas(64) __m512i prod[8*16];
+    alignas(64) __m256i stage[8*16];
+    alignas(64) int32_t rmax[16];
+    alignas(64) float   drow[16];
+    alignas(64) float   inv[16];
+    float d0 = 1.f;
+    IQK_ALWAYS_INLINE inline void row(int k, float d, float d0_row, const __m256i * qx, const int16_t * scales, float *, int8_t *) {
+        d0 = d0_row;
+        drow[k] = d;
+        auto max_i16 = _mm512_setzero_si512();
+        for (int ib32 = 0; ib32 < 8; ++ib32) {
+            auto s = scale_block == 32 ? _mm512_set1_epi16(scales[2*ib32])
+                                       : _mm512_inserti64x4(_mm512_set1_epi16(scales[2*ib32+0]), _mm256_set1_epi16(scales[2*ib32+1]), 1);
+            auto q = _mm512_mullo_epi16(_mm512_cvtepi8_epi16(qx[ib32]), s);
+            _mm512_store_si512(prod + 8*k + ib32, q);
+            max_i16 = _mm512_max_epi16(max_i16, _mm512_abs_epi16(q));
+        }
+        auto max16 = _mm256_max_epi16(_mm512_castsi512_si256(max_i16), _mm512_extracti64x4_epi64(max_i16, 1));
+        auto max8 = _mm_max_epi16(_mm256_castsi256_si128(max16), _mm256_extracti128_si256(max16, 1));
+        rmax[k] = 0xffff - _mm_extract_epi16(_mm_minpos_epu16(_mm_xor_si128(max8, _mm_set1_epi16(-1))), 0);
+    }
+    inline void flush(float * y_d, int8_t * y_qs) {
+        auto dn = _mm512_mul_ps(_mm512_cvtepi32_ps(_mm512_load_si512(rmax)), _mm512_set1_ps(d0));
+        auto small = _mm512_cmp_ps_mask(dn, _mm512_set1_ps(1.f), _CMP_LT_OQ);
+        dn = _mm512_mask_blend_ps(small, dn, _mm512_set1_ps(1.f));
+        _mm512_store_ps(inv, _mm512_div_ps(_mm512_set1_ps(1.f), dn));
+        _mm512_storeu_ps(y_d, _mm512_mul_ps(_mm512_load_ps(drow), dn));
+        for (int k = 0; k < 16; ++k) rescale(prod + 8*k, inv[k], !((small >> k) & 1), stage + k);
+        transpose_xor(stage, y_qs);
+    }
+    static IQK_ALWAYS_INLINE inline void rescale(const __m512i * prod, float inv, bool needs_scaling, __m256i * stage) {
+        if (needs_scaling) {
+            auto scale = _mm512_set1_ps(inv);
+            for (int ib32 = 0; ib32 < 8; ++ib32) {
+                auto p = (const __m256i *)(prod + ib32);
+                auto w0 = _mm512_cvt_roundps_epi32(_mm512_mul_ps(scale, _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(_mm256_load_si256(p + 0)))), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+                auto w1 = _mm512_cvt_roundps_epi32(_mm512_mul_ps(scale, _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(_mm256_load_si256(p + 1)))), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+                _mm256_store_si256(stage + 16*ib32, _mm512_cvtsepi16_epi8(_mm512_packs_epi32(w0, w1)));
+            }
+        } else {
+            const auto order = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+            for (int ib32 = 0; ib32 < 8; ++ib32) {
+                _mm256_store_si256(stage + 16*ib32, _mm256_permutevar8x32_epi32(_mm512_cvtsepi16_epi8(_mm512_load_si512(prod + ib32)), order));
+            }
+        }
+    }
+    static inline void transpose_xor(const __m256i * stage, int8_t * qs) {
+        const auto ia0 = _mm512_setr_epi32(0, 16, 2, 18, 4, 20, 6, 22, 8, 24, 10, 26, 12, 28, 14, 30);
+        const auto ia1 = _mm512_setr_epi32(1, 17, 3, 19, 5, 21, 7, 23, 9, 25, 11, 27, 13, 29, 15, 31);
+        const auto ib0 = _mm512_setr_epi32(0, 1, 16, 17, 4, 5, 20, 21, 8, 9, 24, 25, 12, 13, 28, 29);
+        const auto ib1 = _mm512_setr_epi32(2, 3, 18, 19, 6, 7, 22, 23, 10, 11, 26, 27, 14, 15, 30, 31);
+        const auto ic0 = _mm512_setr_epi32(0, 8, 1, 9, 2, 10, 3, 11, 16, 24, 17, 25, 18, 26, 19, 27);
+        const auto ic1 = _mm512_setr_epi32(4, 12, 5, 13, 6, 14, 7, 15, 20, 28, 21, 29, 22, 30, 23, 31);
+        const auto flip = _mm512_set1_epi8(-128);
+        for (int ib32 = 0; ib32 < 8; ++ib32) {
+            auto in = (const __m512i *)(stage + 16*ib32);
+            __m512i z[8];
+            for (int j = 0; j < 8; ++j) z[j] = _mm512_load_si512(in + j);
+            __m512i a[8];
+            a[0] = _mm512_permutex2var_epi32(z[0], ia0, z[1]);
+            a[1] = _mm512_permutex2var_epi32(z[0], ia1, z[1]);
+            a[2] = _mm512_permutex2var_epi32(z[2], ia0, z[3]);
+            a[3] = _mm512_permutex2var_epi32(z[2], ia1, z[3]);
+            a[4] = _mm512_permutex2var_epi32(z[4], ia0, z[5]);
+            a[5] = _mm512_permutex2var_epi32(z[4], ia1, z[5]);
+            a[6] = _mm512_permutex2var_epi32(z[6], ia0, z[7]);
+            a[7] = _mm512_permutex2var_epi32(z[6], ia1, z[7]);
+            __m512i b[8];
+            b[0] = _mm512_permutex2var_epi32(a[0], ib0, a[2]);
+            b[1] = _mm512_permutex2var_epi32(a[1], ib0, a[3]);
+            b[2] = _mm512_permutex2var_epi32(a[0], ib1, a[2]);
+            b[3] = _mm512_permutex2var_epi32(a[1], ib1, a[3]);
+            b[4] = _mm512_permutex2var_epi32(a[4], ib0, a[6]);
+            b[5] = _mm512_permutex2var_epi32(a[5], ib0, a[7]);
+            b[6] = _mm512_permutex2var_epi32(a[4], ib1, a[6]);
+            b[7] = _mm512_permutex2var_epi32(a[5], ib1, a[7]);
+            auto out = (__m512i *)qs + 8*ib32;
+            _mm512_storeu_si512(out + 0, _mm512_xor_si512(_mm512_permutex2var_epi32(b[0], ic0, b[4]), flip));
+            _mm512_storeu_si512(out + 1, _mm512_xor_si512(_mm512_permutex2var_epi32(b[2], ic0, b[6]), flip));
+            _mm512_storeu_si512(out + 2, _mm512_xor_si512(_mm512_permutex2var_epi32(b[0], ic1, b[4]), flip));
+            _mm512_storeu_si512(out + 3, _mm512_xor_si512(_mm512_permutex2var_epi32(b[2], ic1, b[6]), flip));
+            _mm512_storeu_si512(out + 4, _mm512_xor_si512(_mm512_permutex2var_epi32(b[1], ic0, b[5]), flip));
+            _mm512_storeu_si512(out + 5, _mm512_xor_si512(_mm512_permutex2var_epi32(b[3], ic0, b[7]), flip));
+            _mm512_storeu_si512(out + 6, _mm512_xor_si512(_mm512_permutex2var_epi32(b[1], ic1, b[5]), flip));
+            _mm512_storeu_si512(out + 7, _mm512_xor_si512(_mm512_permutex2var_epi32(b[3], ic1, b[7]), flip));
+        }
+    }
+};
+#endif
+
 #else
 // ------------------------------------ __aarch64__ --------------------------------------------------
 
