@@ -491,6 +491,7 @@ extern "C" {
         GGML_TYPE_IQ4_KS_R16= 345,
         GGML_TYPE_IQ5_KS_R4 = 352,
         GGML_TYPE_MXFP4_R8  = 353,
+        GGML_TYPE_IQ3KS_R16 = 354,
         GGML_TYPE_Q8_K_R16  = 397,
         GGML_TYPE_Q8_KV_R8  = 398,
         GGML_TYPE_Q8_K_R8   = 399,
@@ -540,6 +541,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_Q4_0_4_8 = 27, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q4_0_8_8 = 28, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q1_0_128 = 29, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q3KS_R16 = 400, // except 1d tensors (16-row interleaved iq3ks-class codebook 3-bit)
         //
         GGML_FTYPE_MOSTLY_Q6_0    = 127, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_BN  = 128, // except 1d tensors

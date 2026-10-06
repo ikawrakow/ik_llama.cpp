@@ -757,6 +757,16 @@ typedef struct {
 } block_iq3_ks;
 static_assert(sizeof(block_iq3_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/8, "wrong iq3_ks block size/padding");
 
+// IQ3KS_R16: 16-row interleaved IQ3_KS-class codebook 3-bit type.
+// Block = 16 rows x 32 columns = 512 quants in 204 bytes.
+typedef struct {
+    uint32_t extra;      // bit r: scale bit 4 of row r; bit 16+r: codebook page of row r
+    uint8_t  scales[8];  // low nibble: scale bits 0..3 of rows 0..7; high nibble: rows 8..15
+    uint8_t  qs[128];    // 2 low bits of the 512 quants
+    uint8_t  qh[64];     // high bit of the 512 quants
+} block_iq3_ks_r16;
+static_assert(sizeof(block_iq3_ks_r16) == 204, "wrong iq3_ks_r16 block size/padding");
+
 typedef struct {
     ggml_half d[4];
     uint8_t extra[8];
