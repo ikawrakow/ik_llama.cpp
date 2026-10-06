@@ -177,6 +177,15 @@ void llama_grammar_sample_impl(
        const struct llama_sampling * smpl,
             llama_token_data_array * candidates);
 
+// quillama.cpp: the tokens the grammar allows next, if their number is at most max_n (cheap to find
+// at structural positions thanks to the first code point filter). false when the set is larger,
+// when the grammar waits for a trigger, or when the state is mid UTF-8 sequence.
+bool llama_grammar_small_allowed_set(
+        const struct llama_grammar * grammar,
+          const struct llama_vocab * vocab,
+                            size_t   max_n,
+          std::vector<llama_token> & out);
+
 void llama_grammar_accept_impl(
               struct llama_grammar & grammar,
           const struct llama_vocab * vocab,

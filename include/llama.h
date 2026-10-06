@@ -1143,6 +1143,12 @@ extern "C" {
     // If true, embeddings will be returned but logits will not
     LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
 
+    // quillama.cpp: for the next llama_decode() whose batch has a single output row, compute the
+    // logits only for these token ids (-inf for every other token). Meant for grammar-constrained
+    // decoding where the grammar allows only these tokens: the sampled result is unchanged while most
+    // of the output matrix is not read. n = 0 (or ids = NULL) clears it.
+    LLAMA_API void llama_set_logit_subset(struct llama_context * ctx, const llama_token * ids, int32_t n);
+
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);

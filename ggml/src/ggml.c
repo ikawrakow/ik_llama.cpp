@@ -18,6 +18,7 @@
 #if GGML_USE_IQK_MULMAT
 #include "iqk/iqk_mul_mat.h"
 #include "quill/quill-amx.h"
+#include "quill/quill-sparse.h"
 #include "iqk/iqk_config.h"
 #endif
 
@@ -18326,6 +18327,105 @@ static bool quill_amx_fused_up_gate_eligible(const struct ggml_tensor * dst) {
     return quill_amx_eligible(up, x, dst);
 }
 
+// quillama.cpp: sparse output projection, see quill/quill-sparse.h
+static struct {
+    const struct ggml_tensor * w;
+    int32_t * ids;       // requested token ids
+    int64_t * groups;    // distinct row groups holding them
+    int       n_ids;
+    int       n_groups;
+    int       cap;
+    bool      broken;    // the kernel refused a row group once: always compute the full product
+} g_quill_subset;
+
+static int64_t quill_row_interleave(enum ggml_type type) {
+    // the _r<N> suffix of a row-interleaved repack (q4_k_r4, iq4_xs_r8, q8_k_r16, ...)
+    const char * name = ggml_type_name(type);
+    const char * p = name ? strrchr(name, '_') : NULL;
+    if (!p || (p[1] != 'r' && p[1] != 'R') || !p[2]) return 1;
+    for (const char * c = p + 2; *c; ++c) if (*c < '0' || *c > '9') return 1;
+    const int r = atoi(p + 2);
+    return r == 4 || r == 8 || r == 16 ? r : 1;
+}
+
+static int quill_cmp_i64(const void * a, const void * b) {
+    const int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+void ggml_quill_set_logit_subset(const struct ggml_tensor * w, const int32_t * ids, int n) {
+    if (!w || !ids || n <= 0 || g_quill_subset.broken) {
+        g_quill_subset.w = NULL;
+        g_quill_subset.n_ids = 0;
+        return;
+    }
+    if (n > g_quill_subset.cap) {
+        free(g_quill_subset.ids);
+        free(g_quill_subset.groups);
+        g_quill_subset.ids    = (int32_t *) malloc(n*sizeof(int32_t));
+        g_quill_subset.groups = (int64_t *) malloc(n*sizeof(int64_t));
+        g_quill_subset.cap    = n;
+    }
+    const int64_t R = quill_row_interleave(w->type);
+    int ng = 0;
+    for (int i = 0; i < n; ++i) {
+        g_quill_subset.ids[i] = ids[i];
+        g_quill_subset.groups[ng++] = ids[i] / R;
+    }
+    qsort(g_quill_subset.groups, ng, sizeof(int64_t), quill_cmp_i64);
+    int u = 0;
+    for (int i = 0; i < ng; ++i) {
+        if (u == 0 || g_quill_subset.groups[u-1] != g_quill_subset.groups[i]) g_quill_subset.groups[u++] = g_quill_subset.groups[i];
+    }
+    g_quill_subset.n_groups = u;
+    g_quill_subset.n_ids    = n;
+    g_quill_subset.w        = w;
+}
+
+static bool quill_sparse_mul_mat(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+#if GGML_USE_IQK_MULMAT
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    if (g_quill_subset.n_ids <= 0 || src0 != g_quill_subset.w || g_quill_subset.broken) return false;
+    if (dst->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1) return false;
+    if (src0->ne[2] != 1 || src0->ne[3] != 1 || dst->nb[0] != sizeof(float)) return false;
+
+    const int ith = params->ith, nth = params->nth;
+    const enum ggml_type type = src0->type;
+    const enum ggml_type vec_dot_type = type_traits[type].vec_dot_type;
+    const int64_t K = src0->ne[0], M = src0->ne[1];
+    const int64_t R = quill_row_interleave(type);
+    const size_t row_size = ggml_row_size(vec_dot_type, K);
+    float * y = (float *) dst->data;
+
+    // the activation row in the kernels' format, and -inf everywhere
+    const void * x = src1->data;
+    if (src1->type != vec_dot_type) {
+        if (ith == 0) type_traits[vec_dot_type].from_float((const float *) src1->data, params->wdata, K);
+        x = params->wdata;
+    }
+    for (int64_t i = ith; i < M; i += nth) y[i] = -INFINITY;
+    ggml_barrier(params->shared);
+
+    // the row groups holding the requested ids, with the same kernels as the full product
+    float tmp[16];
+    for (int g = ith; g < g_quill_subset.n_groups; g += nth) {
+        const int64_t r0 = g_quill_subset.groups[g]*R;
+        if (r0 + R > M) continue;
+        if (!iqk_mul_mat(R, 1, K, type, (const char *) src0->data + r0*src0->nb[1], src0->nb[1],
+                         vec_dot_type, x, row_size, tmp, R, 0, 1)) {
+            g_quill_subset.broken = true;   // fall back next time; this evaluation is already partial
+            continue;
+        }
+        for (int64_t r = 0; r < R; ++r) y[r0 + r] = tmp[r];
+    }
+    return true;
+#else
+    (void) params; (void) dst;
+    return false;
+#endif
+}
+
 static int ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst,
@@ -18333,6 +18433,7 @@ static int ggml_compute_forward_mul_mat(
                  int node_n) {
 
     if (quill_amx_mul_mat(params, dst)) return node_n;
+    if (quill_sparse_mul_mat(params, dst)) return node_n;
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -18726,6 +18827,26 @@ static bool quill_amx_moe(const struct ggml_compute_params * params, struct ggml
     return true;
 }
 
+
+// quillama.cpp: how many row chunks each selected expert is split into. ik splits every expert into
+// n_threads chunks (minimum 32 rows). For a single token on many cores that makes very short memory
+// streams (12 threads: 64-row, ~74 KB chunks of a 768-row expert), which stream measurably slower
+// than chunks of 128+ rows; experts are many enough to keep all threads busy with fewer, longer
+// chunks. Batches (prompt processing) keep ik's split. QUILL_MOE_MIN_CHUNK sets the minimum.
+static int quill_moe_chunks_per_expert(int nth, int64_t nrows, int64_t n_tokens) {
+    static int min_rows = -1;
+    static int forced   = -1;
+    if (min_rows < 0) {
+        const char * e = getenv("QUILL_MOE_MIN_CHUNK");
+        min_rows = e ? MAX(32, atoi(e)) : 128;
+        const char * f = getenv("QUILL_MOE_CHUNKS");   // testing only: force the count
+        forced = f ? MAX(1, atoi(f)) : 0;
+    }
+    if (forced > 0) return MAX(1, MIN(forced, (int)(nrows / 32)));
+    const int rows_min = n_tokens <= 4 ? min_rows : 32;
+    return MAX(1, MIN(nth, (int)(nrows / rows_min)));
+}
+
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -18847,7 +18968,7 @@ static void ggml_compute_forward_mul_mat_id(
         const void * wdata_mm    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size_mm = ggml_row_size(vec_dot_type, ne10);
 
-        const int chunks_per_expert = MAX(1, MIN(nth, (int)(ne01 / 32)));
+        const int chunks_per_expert = quill_moe_chunks_per_expert(nth, ne01, ids->ne[1]);
 
         int total_chunks = 0;
         for (int a = 0; a < n_as; a++) {
@@ -19180,7 +19301,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     const size_t row_size_ug = ggml_row_size(vec_dot_type, ne10);
     const int64_t nr0_base = src0_2 ? ne01 : ne01/2;
 
-    const int chunks_per_expert_ug = MAX(1, MIN(nth, (int)(nr0_base / 32)));
+    const int chunks_per_expert_ug = quill_moe_chunks_per_expert(nth, nr0_base, ids->ne[1]);
 
     int total_chunks_ug = 0;
     for (int a = 0; a < n_as; a++) {

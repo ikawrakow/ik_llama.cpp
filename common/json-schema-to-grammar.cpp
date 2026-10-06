@@ -1005,6 +1005,17 @@ public:
             _errors.push_back("Unrecognized schema: " + schema.dump());
             return "";
         }
+        // quillama: a "number" with minimum / exclusiveMinimum >= 0 must not start with '-'
+        // (the remaining bounds of "number" are still not enforced, as upstream)
+        if (schema_type == "number") {
+            auto non_negative = [&](const char * key) {
+                return schema.contains(key) && schema[key].is_number() && schema[key].get<double>() >= 0.0;
+            };
+            if (non_negative("minimum") || non_negative("exclusiveMinimum")) {
+                return _add_primitive(rule_name == "root" ? "root" : "nonneg-number",
+                    BuiltinRule{"integral-part (\".\" decimal-part)? ([eE] [-+]? integral-part)? space", {"integral-part", "decimal-part"}});
+            }
+        }
         // TODO: support minimum, maximum, exclusiveMinimum, exclusiveMaximum at least for zero
         return _add_primitive(rule_name == "root" ? "root" : schema_type.get<std::string>(), PRIMITIVE_RULES.at(schema_type.get<std::string>()));
     }

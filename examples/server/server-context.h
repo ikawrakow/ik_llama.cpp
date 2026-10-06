@@ -367,6 +367,7 @@ struct server_context {
     void add_sampled_tokens();
 
     std::vector<llama_token> grammar_draft(server_slot & slot);
+    bool set_grammar_logit_subset(const llama_batch & batch_view, int32_t offset);
 
     void batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type);
 

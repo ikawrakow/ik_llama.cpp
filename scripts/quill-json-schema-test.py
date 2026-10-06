@@ -129,7 +129,8 @@ def main():
                 else:
                     body["prompt"] = "Output: "
                     r = post(args.url + "/completion", body)
-                    text, finish = r["content"], ("length" if r.get("stop_type") == "limit" else "stop")
+                    limit = r.get("stop_type") == "limit" or r.get("stopped_limit", False)
+                    text, finish = r["content"], ("length" if limit else "stop")
                 err = check(text, schema)
                 if err and finish == "length":
                     skipped += 1  # cut off mid-value: the prefix is grammar-constrained, but not checkable

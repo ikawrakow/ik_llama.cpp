@@ -199,6 +199,49 @@ anonymous 2 MiB-aligned mapping with `MADV_HUGEPAGE`, which works with the defau
 (`madvise`). It measured +2% token generation on a 1 GB model; larger models gain more from fewer
 TLB misses.
 
+### 9. Huge pages for repacked weights and other large CPU buffers
+
+With `-rtr` (on by default when the model fits in RAM) the weights are not served from the mmap.
+They live in an anonymous CPU backend buffer, and `-thp` never applied to that buffer. quillama
+allocates every CPU buffer of 32 MiB or more as a 2 MiB-aligned mapping with `MADV_HUGEPAGE`. This
+needs no flag and no reserved huge pages. On an AVX2-only build (`-march=znver3`-class), a
+Qwen3-30B-A3B-shaped Q4_K_M MoE generated tokens **~20% faster**, because decode streams
+gigabytes of expert weights and 4 KiB pages make it TLB-bound. `QUILL_THP=0` turns it off.
+
+### 10. MoE work split for decode
+
+ik splits each expert's matmul into chunks of at least 32 rows. When decoding a few tokens, a
+Qwen3-30B-A3B expert (768 rows for up/gate) became up to 24 tiny streams per expert, and every
+stream paid for its own prefetcher ramp-up. For batches of 4 tokens or fewer, quillama uses a
+128-row minimum (+2% TG on AVX2). Prompt processing is unchanged. To tune it, set
+`QUILL_MOE_MIN_CHUNK=N` (minimum rows per chunk), or `QUILL_MOE_CHUNKS=N` to force N chunks per
+expert.
+
+### 11. Sparse output layer under a grammar
+
+When a grammar is active and few tokens can come next (inside a JSON key, after `"`, a number,
+`true`/`false`, ...), the server computes logits only for the tokens the grammar allows.
+Everything else is masked to -inf anyway, so the result is exact. Greedy outputs are
+byte-identical with and without it. The 151936 x 2048 output matrix is ~10% of the per-token
+weight traffic of Qwen3-30B-A3B, and schema-constrained generation on the AVX2 build went from
+**28.1 to 33.4 tokens/s**. The limit `--grammar-sparse-logits N` defaults to 4096 allowed tokens;
+0 disables it. It is skipped when `n_probs` is requested, during speculative drafts, and while a
+lazy grammar waits for its trigger.
+
+### 12. JSON schema: non-negative numbers
+
+`{"type": "number", "minimum": 0}` (or `exclusiveMinimum >= 0`) now forbids a leading `-`. Upstream
+llama.cpp ignores bounds on `number`, so models could emit negative values for such fields.
+
+### Recommended settings for an AVX2 EPYC VPS (Zen 2/3, no AVX-512)
+
+* `-ctk q8_0 -ctv q8_0`: at long context, decode is bandwidth-bound on the KV cache as well as on
+  the weights. q8_0 halves that traffic, and its quality loss is negligible.
+* `--threads` close to the number of physical cores that actually deliver memory bandwidth. On a
+  12-vCPU VPS, try 6, 8 and 12 with `llama-bench -t 6,8,12`; decode often peaks below the core
+  count. Prompt processing is compute-bound, so use all cores with `--threads-batch 12`.
+* Keep `-fa on` and `-rtr` (default). Leave THP at the kernel default (`madvise`) or `always`.
+
 ## Benchmarks
 
 Machine: cloud VM with 4 vCPUs of an Intel Xeon (Sapphire Rapids class, AMX-BF16/INT8), 15 GB RAM.
@@ -286,6 +329,9 @@ keeps hot experts in VRAM. Both are GPU-centric. On a CPU-only server their idea
 | `QUILL_GRAMMAR_REFERENCE=1` | original grammar masking (debugging) |
 | `QUILL_GRAMMAR_TOPK=1` | exact top-k-aware grammar masking (experimental) |
 | `QUILL_MOE_LOOKAHEAD=1` | same as `--moe-lookahead` |
+| `QUILL_THP=0` | no huge pages for large CPU buffers |
+| `QUILL_MOE_MIN_CHUNK=N` | minimum rows per expert chunk at decode (default 128) |
+| `QUILL_MOE_CHUNKS=N` | force N chunks per expert |
 
 ## Tests
 

@@ -702,7 +702,68 @@ GGML_CALL static const char * ggml_backend_cpu_buffer_type_get_name(ggml_backend
     GGML_UNUSED(buft);
 }
 
+// quillama.cpp: large CPU buffers (repacked weights, KV cache, compute buffers) are backed by
+// transparent huge pages. A plain malloc'd buffer gets 4 KiB pages unless THP is set to "always",
+// and the default on most distributions (and VPS images) is "madvise": streaming the weights for
+// every generated token then costs a TLB miss per 4 KiB. QUILL_THP=0 disables it.
+#if defined(__linux__)
+#include <sys/mman.h>
+static constexpr size_t QUILL_THP_SIZE = 2u*1024u*1024u;
+static constexpr size_t QUILL_THP_MIN  = 32u*1024u*1024u;
+
+static bool quill_thp_enabled() {
+    static const bool enabled = [] {
+        const char * e = getenv("QUILL_THP");
+        return !(e && (strcmp(e, "0") == 0 || strcmp(e, "off") == 0));
+    }();
+    return enabled;
+}
+
+GGML_CALL static void ggml_backend_cpu_buffer_free_buffer_thp(ggml_backend_buffer_t buffer) {
+    munmap(buffer->context, GGML_PAD(buffer->size, QUILL_THP_SIZE));
+}
+
+static struct ggml_backend_buffer_i cpu_backend_buffer_i_thp = {
+    /* .get_name        = */ ggml_backend_cpu_buffer_name,
+    /* .free_buffer     = */ ggml_backend_cpu_buffer_free_buffer_thp,
+    /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
+    /* .init_tensor     = */ NULL, // no initialization required
+    /* .memset_tensor   = */ ggml_backend_cpu_buffer_memset_tensor,
+    /* .set_tensor      = */ ggml_backend_cpu_buffer_set_tensor,
+    /* .get_tensor      = */ ggml_backend_cpu_buffer_get_tensor,
+    /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
+    /* .clear           = */ ggml_backend_cpu_buffer_clear,
+    /* .reset           = */ NULL,
+};
+
+// 2 MiB-aligned anonymous mapping marked MADV_HUGEPAGE; nullptr if that is not possible
+static void * quill_thp_alloc(size_t size) {
+    const size_t len = GGML_PAD(size, QUILL_THP_SIZE);
+    void * raw = mmap(nullptr, len + QUILL_THP_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (raw == MAP_FAILED) {
+        return nullptr;
+    }
+    char * aligned = (char *)GGML_PAD((uintptr_t)raw, QUILL_THP_SIZE);
+    if (aligned > (char *)raw) {
+        munmap(raw, aligned - (char *)raw);
+    }
+    const size_t tail = ((char *)raw + len + QUILL_THP_SIZE) - (aligned + len);
+    if (tail) {
+        munmap(aligned + len, tail);
+    }
+    madvise(aligned, len, MADV_HUGEPAGE);
+    return aligned;
+}
+#endif
+
 GGML_CALL static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+#if defined(__linux__)
+    if (size >= QUILL_THP_MIN && quill_thp_enabled()) {
+        if (void * data = quill_thp_alloc(size)) {
+            return ggml_backend_buffer_init(buft, cpu_backend_buffer_i_thp, data, size);
+        }
+    }
+#endif
     size += TENSOR_ALIGNMENT;   // malloc may return an address that is not aligned
     void * data = malloc(size); // TODO: use GGML_ALIGNED_MALLOC (move to ggml-impl.h)
     if (data == NULL) {

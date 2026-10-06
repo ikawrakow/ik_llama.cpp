@@ -1484,6 +1484,67 @@ void llama_grammar_sample_impl(const struct llama_grammar * grammar, const struc
     }
 }
 
+bool llama_grammar_small_allowed_set(const struct llama_grammar * grammar, const struct llama_vocab * vocab,
+                                     size_t max_n, std::vector<llama_token> & out) {
+    out.clear();
+    if (!grammar || !vocab || grammar->awaiting_trigger || grammar->partial_utf8.n_remain != 0) {
+        return false;
+    }
+    bool allow_eog = false;
+    for (const auto & stack : grammar->stacks) {
+        if (stack.empty()) {
+            allow_eog = true;
+        } else if (stack.back()->type == LLAMA_GRETYPE_TOKEN || stack.back()->type == LLAMA_GRETYPE_TOKEN_NOT) {
+            return false;
+        }
+    }
+    const auto & cache = quill_get_decoded_vocab(vocab);
+    bool first_ok[128];
+    for (uint32_t c = 0; c < 128; ++c) {
+        first_ok[c] = false;
+        for (const auto & stack : grammar->stacks) {
+            if (!stack.empty() && llama_grammar_match_char(stack.back(), c).first) { first_ok[c] = true; break; }
+        }
+    }
+    llama_grammar_candidates cands;
+    const uint32_t n_vocab = vocab->n_tokens();
+    for (uint32_t id = 0; id < n_vocab; ++id) {
+        if (vocab->is_eog((llama_token) id)) {
+            if (allow_eog) out.push_back((llama_token) id);
+            continue;
+        }
+        const auto & dec = cache.tokens[id];
+        const bool no_code_point = dec.first.empty() || dec.first[0] == 0;
+        if (no_code_point) {
+            if (dec.second.n_remain == 0) continue;   // empty piece
+        } else {
+            const uint32_t c = dec.first[0];
+            bool ok;
+            if (c < 128) {
+                ok = first_ok[c];
+            } else {
+                ok = false;
+                for (const auto & stack : grammar->stacks) {
+                    if (!stack.empty() && llama_grammar_match_char(stack.back(), c).first) { ok = true; break; }
+                }
+            }
+            if (!ok) continue;
+        }
+        cands.push_back({ (size_t) id, dec.first.data(), dec.second, (llama_token) id });
+        if (cands.size() + out.size() > max_n) {
+            out.clear();
+            return false;
+        }
+    }
+    const auto rejects = llama_grammar_reject_candidates(grammar->rules, grammar->stacks, cands);
+    std::vector<char> rejected(n_vocab, 0);
+    for (const auto & r : rejects) rejected[r.id] = 1;
+    for (const auto & c : cands) {
+        if (!rejected[c.id]) out.push_back(c.id);
+    }
+    return !out.empty();
+}
+
 void llama_grammar_accept_impl(struct llama_grammar & grammar, const struct llama_vocab * vocab, const struct llama_sampling * smpl, llama_token token) {
     const int64_t t_start_sample_us = ggml_time_us();
     GGML_ASSERT(grammar.vocab != nullptr);

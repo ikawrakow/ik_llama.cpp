@@ -535,6 +535,22 @@ static void quill_append_utf8(std::string & out, uint32_t cp) {
 
 static bool grammar_should_apply(struct common_sampler * gsmpl);
 
+bool common_sampler_grammar_allowed_set(struct common_sampler * gsmpl, struct llama_context * ctx, size_t max_n,
+                                        std::vector<llama_token> & out) {
+    out.clear();
+    if (!gsmpl || !gsmpl->grammar || !grammar_should_apply(gsmpl)) {
+        return false;
+    }
+    // reasoning-budget forcing and requested token probabilities need the full logits
+    if (gsmpl->rbudget && common_reasoning_budget_get_state(gsmpl->rbudget) == REASONING_BUDGET_FORCING) {
+        return false;
+    }
+    if (gsmpl->params.n_probs > 0) {
+        return false;
+    }
+    return llama_grammar_small_allowed_set(gsmpl->grammar, llama_get_model_vocab(llama_get_model(ctx)), max_n, out);
+}
+
 std::string common_sampler_grammar_forced_text(struct common_sampler * gsmpl, size_t max_chars) {
     std::string out;
     if (!gsmpl || !gsmpl->grammar || max_chars == 0) {

@@ -390,6 +390,7 @@ struct gpt_params {
     size_t n_buffer                  =  0; // number of token buffers for string ban
     bool can_ban_phrases             = true;  // whether to ban strings
     int32_t grammar_draft_n          = 16;    // quillama.cpp: max grammar-forced tokens drafted per step (0 = off)
+    int32_t grammar_sparse_logits    = 4096;  // quillama.cpp: compute only the allowed logits when the grammar allows at most N tokens (0 = off)
 
     std::vector<std::vector<std::tuple<
         uint32_t        // lower codepoint

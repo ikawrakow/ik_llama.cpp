@@ -360,6 +360,11 @@ llama_token_data_array llama_sampling_prepare(
 // if is_generated is true, the token is accepted by the sampling chain, the reasoning budget sampler, and the grammar sampler
 // quillama.cpp: text the active grammar forces next (empty when there is a choice), and its
 // tokenization as a speculative draft (see sampling.cpp)
+// quillama.cpp: tokens the active grammar allows next, if there are at most max_n of them
+// (see llama_set_logit_subset); false when there is no active grammar or the set is larger
+bool common_sampler_grammar_allowed_set(struct common_sampler * gsmpl, struct llama_context * ctx, size_t max_n,
+                                        std::vector<llama_token> & out);
+
 std::string common_sampler_grammar_forced_text(struct common_sampler * gsmpl, size_t max_chars);
 std::vector<llama_token> common_sampler_grammar_draft(struct common_sampler * gsmpl, struct llama_context * ctx, int n_max);
 

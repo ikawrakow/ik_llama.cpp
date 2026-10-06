@@ -4903,6 +4903,41 @@ void server_context::update_allowlist_state(server_slot& slot) {
     }
 }
 
+// quillama.cpp: when this batch has a single output row and the slot sampling it has a grammar that
+// allows only a few tokens next (structural JSON: braces, quotes, keys, digits, enum values), compute
+// only those logits (see llama_set_logit_subset). The grammar masks every other token anyway, so the
+// sampled token is unchanged; most of the output matrix is not read.
+bool server_context::set_grammar_logit_subset(const llama_batch & batch_view, int32_t offset) {
+    if (params_base.grammar_sparse_logits <= 0) {
+        return false;
+    }
+    int32_t out_idx = -1;
+    for (int32_t k = 0; k < batch_view.n_tokens; ++k) {
+        if (batch_view.logits[k]) {
+            if (out_idx >= 0) return false;   // more than one output row
+            out_idx = k;
+        }
+    }
+    if (out_idx < 0) {
+        return false;
+    }
+    for (auto & slot : slots) {
+        if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch != offset + out_idx || !slot.i_batch_dft.empty()) {
+            continue;
+        }
+        if (!slot.ctx_sampling || slot.n_decoded == 0 && slot.n_past == 0) {
+            return false;
+        }
+        thread_local std::vector<llama_token> allowed;
+        if (!common_sampler_grammar_allowed_set(slot.ctx_sampling, ctx, (size_t) params_base.grammar_sparse_logits, allowed)) {
+            return false;
+        }
+        llama_set_logit_subset(ctx, allowed.data(), (int32_t) allowed.size());
+        return true;
+    }
+    return false;
+}
+
 void server_context::process_batch_tokens(int32_t & n_batch) {
     for (int32_t i = 0; i < batch.n_tokens; i += n_batch) {
         const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
@@ -4920,7 +4955,11 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             0, 0, 0, // unused
         };
 
+        const bool sparse_logits = set_grammar_logit_subset(batch_view, i);
         const int ret = server_decode(ctx, batch_view);
+        if (sparse_logits) {
+            llama_set_logit_subset(ctx, nullptr, 0);
+        }
         if (ret != 0) {
             if (n_batch == 1 || ret < 0) {
                 int user_cancel = -3;

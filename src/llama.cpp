@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: MIT
 //
 
+#include "quill/quill-sparse.h"
 #include "llama-impl.h"
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/mman.h>
@@ -13020,6 +13021,16 @@ uint32_t llama_n_threads_batch(struct llama_context * ctx) {
 void llama_set_abort_callback(struct llama_context * ctx, bool (*abort_callback)(void * data), void * abort_callback_data) {
     ctx->abort_callback      = abort_callback;
     ctx->abort_callback_data = abort_callback_data;
+}
+
+void llama_set_logit_subset(struct llama_context * ctx, const llama_token * ids, int32_t n) {
+    const ggml_tensor * w = ctx ? ctx->model.output : nullptr;
+    // tensor-split outputs and models without a separate output matrix keep the full product
+    if (!w || w->extra || !ggml_backend_buffer_is_host(w->buffer)) {
+        ggml_quill_set_logit_subset(nullptr, nullptr, 0);
+        return;
+    }
+    ggml_quill_set_logit_subset(w, ids, n);
 }
 
 void llama_set_embeddings(struct llama_context * ctx, bool embeddings) {
