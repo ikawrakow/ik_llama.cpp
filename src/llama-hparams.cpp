@@ -1698,6 +1698,8 @@ void llm_load_hparams(
                     throw std::runtime_error("bailingmoe3: kda.safe_gate = false is not supported");
                 }
                 ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND,               hparams.kda_gate_lower_bound);
+                // VL files carry mrope sections ([t, h, w] + padding); text-only files omit the key
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,     hparams.rope_sections, 4, false);
                 // Ling-3.0-tiny sets both limit lists null. 0 is the unclamped value where it is read.
                 hparams.swiglu_limits.fill(0.0f);
                 hparams.swiglu_limits_shared.fill(0.0f);
