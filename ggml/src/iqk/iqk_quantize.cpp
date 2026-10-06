@@ -2946,15 +2946,91 @@ inline int best_index_iq4nl(const int8_t * values, float x) {
     ix = iq4nl_index[ix];
     return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
+#ifdef __AVX2__
+template <int block_size>
+inline void best_index_iq4k(float id, const int8_t * values, const float * f_values,
+        const __m256 * vx, /*__m256i * vidx,*/ __m256 * vq) {
+    static_assert(block_size == 32 || block_size == 16);
+    static const int8_t k_simple_index[256] = {
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,
+         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5,
+         5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+         8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,10,10,10,10,10,10,10,10,
+        10,10,10,10,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,12,12,12,12,12,12,12,12,12,12,12,12,
+        12,12,12,12,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,14,14,14,14,14,14,14,14,
+        14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,
+    };
 
-static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int block_size, const float * x,
+    auto vid = _mm256_set1_ps(id);
+    auto flip = _mm256_set1_ps(-0.0f);
+    auto val0 = _mm256_set1_epi32(values[0]);
+    for (int i = 0; i < block_size/8; ++i) {
+        auto vxi_p = _mm256_mul_ps(vid, vx[i]);
+        auto vxi_m = _mm256_xor_ps(vxi_p, flip);
+        auto vidx_p = _mm256_sub_epi32(_mm256_cvttps_epi32(vxi_p), val0);
+        auto vidx_m = _mm256_sub_epi32(_mm256_cvttps_epi32(vxi_m), val0);
+        vidx_p = _mm256_min_epi32(_mm256_max_epi32(vidx_p, _mm256_setzero_si256()), _mm256_set1_epi32(240));
+        vidx_m = _mm256_min_epi32(_mm256_max_epi32(vidx_m, _mm256_setzero_si256()), _mm256_set1_epi32(240));
+        auto tab_p0 = _mm256_i32gather_epi32((const int32_t *)k_simple_index, vidx_p, 1);
+        auto tab_m0 = _mm256_i32gather_epi32((const int32_t *)k_simple_index, vidx_m, 1);
+        tab_p0 = _mm256_and_si256(tab_p0, _mm256_set1_epi32(0xff));
+        tab_m0 = _mm256_and_si256(tab_m0, _mm256_set1_epi32(0xff));
+        auto tab_p1 = _mm256_add_epi32(tab_p0, _mm256_set1_epi32(1));
+        auto tab_m1 = _mm256_add_epi32(tab_m0, _mm256_set1_epi32(1));
+        auto cand0_p = _mm256_castsi256_ps(_mm256_i32gather_epi32((const int32_t *)f_values, tab_p0,  4));
+        auto cand1_p = _mm256_castsi256_ps(_mm256_i32gather_epi32((const int32_t *)f_values, tab_p1,  4));
+        auto cand0_m = _mm256_castsi256_ps(_mm256_i32gather_epi32((const int32_t *)f_values, tab_m0,  4));
+        auto cand1_m = _mm256_castsi256_ps(_mm256_i32gather_epi32((const int32_t *)f_values, tab_m1,  4));
+        auto mask_p  = _mm256_castps_si256(_mm256_cmp_ps(_mm256_sub_ps(vxi_p, cand0_p), _mm256_sub_ps(cand1_p, vxi_p), _CMP_LT_OQ));
+        auto mask_m  = _mm256_castps_si256(_mm256_cmp_ps(_mm256_sub_ps(vxi_m, cand0_m), _mm256_sub_ps(cand1_m, vxi_m), _CMP_LT_OQ));
+        //vidx[2*i+0]  = _mm256_blendv_epi8(tab_p0, tab_p1, mask_p);
+        //vidx[2*i+1]  = _mm256_blendv_epi8(tab_m0, tab_m1, mask_m);
+        vq[2*i+0]    = _mm256_castsi256_ps(_mm256_blendv_epi8(_mm256_castps_si256(cand1_p), _mm256_castps_si256(cand0_p), mask_p));
+        vq[2*i+1]    = _mm256_castsi256_ps(_mm256_blendv_epi8(_mm256_castps_si256(cand1_m), _mm256_castps_si256(cand0_m), mask_m));
+    }
+}
+template <int block_size>
+inline bool evaluate_block_iq4k(float id, const int8_t * values, const float * f_values,
+        const __m256 * vx, const __m256 * vw, float & d, float & best) {
+    __m256  vq[block_size/4];
+    //__m256i vidx[block_size/4];
+    //best_index_iq4k<block_size>(id, values, f_values, vx, vidx, vq);
+    best_index_iq4k<block_size>(id, values, f_values, vx, vq);
+    __m256 sumqx_p = _mm256_setzero_ps(), sumq2_p = _mm256_setzero_ps();
+    __m256 sumqx_m = _mm256_setzero_ps(), sumq2_m = _mm256_setzero_ps();
+    for (int i = 0; i < block_size/8; ++i) {
+        auto wp = _mm256_mul_ps(vw[i], vq[2*i+0]);
+        auto wm = _mm256_mul_ps(vw[i], vq[2*i+1]);
+        sumqx_p = _mm256_fmadd_ps(wp, vx[i],     sumqx_p);
+        sumq2_p = _mm256_fmadd_ps(wp, vq[2*i+0], sumq2_p);
+        sumqx_m = _mm256_fmadd_ps(wm, vx[i],     sumqx_m);
+        sumq2_m = _mm256_fmadd_ps(wm, vq[2*i+1], sumq2_m);
+    }
+    auto sqx_p = hsum_float_8(sumqx_p);
+    auto sq2_p = hsum_float_8(sumq2_p);
+    auto sqx_m = hsum_float_8(sumqx_m);
+    auto sq2_m = hsum_float_8(sumq2_m);
+    bool updated = false;
+    if (sq2_p > 0 && sqx_p*sqx_p > sq2_p*best) {
+        d = sqx_p/sq2_p; best = d * sqx_p; updated = true;
+    }
+    if (sq2_m > 0 && sqx_m*sqx_m > sq2_m*best) {
+        d = sqx_m/sq2_m; best = d * sqx_m; updated = true;
+    }
+    return updated;
+}
+#endif
+
+static void quantize_row_iq4_k_impl_bs16(const float * x,
         block_iq4_k * y,
         float * scales, float * weight, uint8_t * L,
         const int8_t * values,
         const float * quant_weights,
         const int ntry) {
 
-    GGML_ASSERT(super_block_size == 256 && block_size == 16);
+    constexpr int super_block_size = 256;
+    constexpr int block_size = 16;
 
     float sigma2 = 0;
     for (int j = 0; j < super_block_size; ++j) sigma2 += x[j]*x[j];
@@ -2968,6 +3044,11 @@ static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int b
     const int8_t * shifted_values = values + 16;
 
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_K);
+
+#ifdef __AVX2__
+    float f_values[32];
+    for (int j = 0; j < 32; ++j) f_values[j] = values[j];
+#endif
 
     float max_scale = 0, amax_scale = 0;
     uint16_t extra = 0;
@@ -2992,6 +3073,16 @@ static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int b
         }
         float d = ntry > 0 ? -max/values[0] : max/values[0];
         float id = 1/d;
+        bool is_shifted = false;
+#ifdef __AVX2__
+        float best = 0;
+        __m256 vx[block_size/8], vw[block_size/8];
+        for (int j = 0; j < block_size/8; ++j) vx[j] = _mm256_loadu_ps(xb + 8*j);
+        for (int j = 0; j < block_size/8; ++j) vw[j] = _mm256_loadu_ps(weight + 8*j);
+        if (!evaluate_block_iq4k<block_size>(id, values, f_values, vx, vw, d, best)) {
+            GGML_ABORT("Fatal error");
+        }
+#else
         float sumqx_p = 0, sumq2_p = 0;
         float sumqx_m = 0, sumq2_m = 0;
         for (int j = 0; j < block_size; ++j) {
@@ -3007,13 +3098,18 @@ static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int b
             sumq2_m += w*q*q;
         }
         d = sumqx_p/sumq2_p;
-        bool is_shifted = false;
         float best = d*sumqx_p;
         if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
             d = sumqx_m/sumq2_m; best = d*sumqx_m;
         }
+#endif
         for (int itry = -ntry; itry <= ntry; ++itry) {
             id = (itry + values[0])/max;
+#ifdef __AVX2__
+            if (evaluate_block_iq4k<block_size>(id, values, f_values, vx, vw, d, best)) {
+                is_shifted = false;
+            }
+#else
             sumqx_p = sumq2_p = 0;
             sumqx_m = sumq2_m = 0;
             for (int j = 0; j < block_size; ++j) {
@@ -3034,7 +3130,13 @@ static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int b
             if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
                 d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = false;
             }
+#endif
             id = (itry + shifted_values[0])/max;
+#ifdef __AVX2__
+            if (evaluate_block_iq4k<block_size>(id, values+16, f_values+16, vx, vw, d, best)) {
+                is_shifted = true;
+            }
+#else
             sumqx_p = sumq2_p = 0;
             sumqx_m = sumq2_m = 0;
             for (int j = 0; j < block_size; ++j) {
@@ -3055,6 +3157,7 @@ static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int b
             if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
                 d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = true;
             }
+#endif
         }
         if (is_shifted) extra |= (1 << ib);
         scales[ib] = d;
@@ -3130,7 +3233,7 @@ size_t quantize_iq4_k(const float * src, void * dst, int64_t nrows, int64_t n_pe
         int nblock = n_per_row/QK_K;
         for (int ibl = 0; ibl < nblock; ++ibl) {
             const float * qw = imatrix ? imatrix + QK_K*ibl : nullptr;
-            quantize_row_iq4_k_impl_bs16(QK_K, 16, x + QK_K*ibl, iq4 + ibl,
+            quantize_row_iq4_k_impl_bs16(x + QK_K*ibl, iq4 + ibl,
                     scales, weight, L, iq4k_values, qw, 7);
         }
     };
@@ -4410,14 +4513,14 @@ void vec_dot_mxfp4_r8_q8_2_x4(int n, float * s, size_t bs, const void * vx, size
 }
 
 namespace {
-static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int block_size,
-        int n_per_row, const float * x, char * cy,
+static void quantize_row_iq4_k_impl_bs32(int n_per_row, const float * x, char * cy,
         float * all_scales, float * weight,
         const int8_t * values,
         const float * quant_weights,
         const int ntry) {
 
-    //GGML_ASSERT(super_block_size == 256 && block_size == 128);
+    constexpr int super_block_size = 256;
+    constexpr int block_size = 32;
 
     float * dptr = (float *)cy;
     block_iq4_ks * y = (block_iq4_ks *)(dptr + 1);
@@ -4427,6 +4530,11 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
     float amax_scale = 0;
 
     const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_KS);
+
+#ifdef __AVX2__
+    float f_values[32];
+    for (int j = 0; j < 32; ++j) f_values[j] = values[j];
+#endif
 
     for (int ibl = 0; ibl < n_per_row/super_block_size; ++ibl) {
         memset(&y[ibl], 0, sizeof(block_iq4_ks));
@@ -4456,6 +4564,16 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
             }
             float d = ntry > 0 ? -max/values[0] : max/values[0];
             float id = 1/d;
+            bool is_shifted = false;
+            float best = 0;
+#ifdef __AVX2__
+            __m256 vx[block_size/8], vw[block_size/8];
+            for (int j = 0; j < block_size/8; ++j) vx[j] = _mm256_loadu_ps(xb + 8*j);
+            for (int j = 0; j < block_size/8; ++j) vw[j] = _mm256_loadu_ps(weight + 8*j);
+            if (!evaluate_block_iq4k<block_size>(id, values, f_values, vx, vw, d, best)) {
+                GGML_ABORT("Fatal error");
+            }
+#else
             float sumqx_p = 0, sumq2_p = 0;
             float sumqx_m = 0, sumq2_m = 0;
             for (int j = 0; j < block_size; ++j) {
@@ -4471,13 +4589,22 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
                 sumq2_m += w*q*q;
             }
             d = sumqx_p/sumq2_p;
-            bool is_shifted = false;
-            float best = d*sumqx_p;
+            best = d*sumqx_p;
             if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
                 d = sumqx_m/sumq2_m; best = d*sumqx_m;
             }
+#endif
             for (int itry = -ntry; itry <= ntry; ++itry) {
                 id = (itry + values[0])/max;
+#ifdef __AVX2__
+                if (evaluate_block_iq4k<block_size>(id, values, f_values, vx, vw, d, best)) {
+                    is_shifted = false;
+                }
+                id = (itry + shifted_values[0])/max;
+                if (evaluate_block_iq4k<block_size>(id, values+16, f_values+16, vx, vw, d, best)) {
+                    is_shifted = true;
+                }
+#else
                 sumqx_p = sumq2_p = 0;
                 sumqx_m = sumq2_m = 0;
                 for (int j = 0; j < block_size; ++j) {
@@ -4519,6 +4646,7 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
                 if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
                     d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = true;
                 }
+#endif
             }
             if (is_shifted) y[ibl].scales[ib] = 0x01;
             scales[ib] = d;
@@ -4530,7 +4658,6 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
     if (!d) return;
     float id = d ? 1/d : 0.f;
     float sumqx = 0, sumq2 = 0;
-    //float mse = 0;
     for (int ibl = 0; ibl < n_per_row/super_block_size; ++ibl) {
         const float * xbl = x + ibl*super_block_size;
         float sigma2 = 0;
@@ -4541,7 +4668,6 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
             const int8_t * block_values = y[ibl].scales[ib] & 0x01 ? shifted_values : values;
             int l = nearest_int(0.5f*(id*scales[ib]+127.f));
             l = std::max(0, std::min(127, l)) << 1;
-            //printf("d = %g, id = %g, scales = %g, l = %d, dl = %g\n", d, id, scales[ib], l, d*(l - 127));
             y[ibl].scales[ib] |= l;
             l -= 127;
             float dl = d * l;
@@ -4564,12 +4690,9 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
                 float q2 = block_values[i2]*l;
                 sumqx += w1*q1*xb[j] + w2*q2*xb[j+block_size/2];
                 sumq2 += w1*q1*q1 + w2*q2*q2;
-                //float diff = xb[j] - d*q1; mse += diff*diff;
-                //diff = xb[j+block_size/2] - d*q2; mse += diff*diff;
             }
         }
     }
-    //printf("rmse = %g\n", sqrt(mse/n_per_row));
     if (sumq2 > 0) *dptr = fudge*sumqx/sumq2;
 }
 }
@@ -4590,9 +4713,9 @@ size_t quantize_iq4_ks(const float * src, void * dst, int64_t nrows, int64_t n_p
     float weight[kBlockSize];
     std::vector<float> all_scales(n_per_row/kBlockSize);
     QHelper helper(imatrix, user_data, n_per_row, kBlockSize);
-    auto q_func = [&all_scales, &weight, block_size = kBlockSize] (const float * x, void * vy, int n_per_row, const float * imatrix,
+    auto q_func = [&all_scales, &weight] (const float * x, void * vy, int n_per_row, const float * imatrix,
              [[maybe_unused]] const quantize_user_data * user_data) {
-        quantize_row_iq4_k_impl_bs128(QK_K, block_size, n_per_row, x, (char *)vy, all_scales.data(), weight, iq4k_values, imatrix, 7);
+        quantize_row_iq4_k_impl_bs32(n_per_row, x, (char *)vy, all_scales.data(), weight, iq4k_values, imatrix, 7);
     };
     helper.quantize(nrows, src, dst, row_size, q_func);
     return nrows * row_size;
