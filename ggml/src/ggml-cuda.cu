@@ -1491,8 +1491,33 @@ static void * ggml_cuda_host_malloc(size_t size) {
 }
 
 #else // !__linux__
+// WDDM limits the size of a single pinned allocation and the total pinned memory of a process.
+// GGML_CUDA_PINNED_CAP_GIB caps the total; requests beyond the cap fall back to pageable memory.
+static size_t g_cuda_pinned_bytes = 0;
+static int    g_cuda_pinned_count = 0;
+
+static size_t ggml_cuda_pinned_cap() {
+    static const size_t cap = [] {
+        const char * e = getenv("GGML_CUDA_PINNED_CAP_GIB");
+        const long long v = e ? atoll(e) : 0;
+        return v > 0 ? (size_t) v << 30 : SIZE_MAX;
+    }();
+    return cap;
+}
+
 static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
+        return nullptr;
+    }
+    if (size > ggml_cuda_pinned_cap() - g_cuda_pinned_bytes) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            GGML_CUDA_LOG_INFO("%s: pinned cap %zu GiB: %.2f MiB request refused with %.2f GiB pinned "
+                               "in %d buffers; requests that do not fit stay pageable\n", __func__,
+                               ggml_cuda_pinned_cap() >> 30, size / 1024.0 / 1024.0,
+                               g_cuda_pinned_bytes/(1024.*1024.*1024.), g_cuda_pinned_count);
+        }
         return nullptr;
     }
     constexpr double k_warn_limit = 8.0;
@@ -1519,21 +1544,48 @@ static void * ggml_cuda_host_malloc(size_t size) {
         return nullptr;
     }
 
+    g_cuda_pinned_bytes += size;
+    g_cuda_pinned_count += 1;
+    if (size >= ((size_t) 1 << 30)) {
+        GGML_CUDA_LOG_INFO("%s: pinned %.2f MiB (buffer %d, total %.2f GiB)\n", __func__,
+                           size / 1024.0 / 1024.0, g_cuda_pinned_count,
+                           g_cuda_pinned_bytes/(1024.*1024.*1024.));
+    }
     return ptr;
 }
 
 GGML_CALL static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     CUDA_CHECK(cudaFreeHost(buffer->context));
+    g_cuda_pinned_bytes -= std::min(g_cuda_pinned_bytes, buffer->size);
+    g_cuda_pinned_count -= g_cuda_pinned_count > 0 ? 1 : 0;
 }
 
 #endif // __linux__
+
+// GGML_CUDA_HOST_CHUNK_GIB: split host weight buffers into pieces of at most this size,
+// so that each piece can be pinned on its own
+GGML_CALL static size_t ggml_backend_cuda_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    static const size_t chunk = [] {
+        const char * e = getenv("GGML_CUDA_HOST_CHUNK_GIB");
+        const long long v = e ? atoll(e) : 0;
+        return v > 0 ? (size_t) v << 30 : SIZE_MAX;
+    }();
+    return chunk;
+
+    GGML_UNUSED(buft);
+}
 
 GGML_CALL static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     void * ptr = ggml_cuda_host_malloc(size);
 
     if (ptr == nullptr) {
         // fallback to cpu buffer
-        return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
+        ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
+        // a chunked buffer must not look CPU-typed: ~llama_model() calls get_base() on those
+        if (buffer != nullptr && ggml_backend_cuda_host_buffer_type_get_max_size(buft) != SIZE_MAX) {
+            buffer->buft = buft;
+        }
+        return buffer;
     }
 
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
@@ -1550,7 +1602,7 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
             /* .get_name         = */ ggml_backend_cuda_host_buffer_type_name,
             /* .alloc_buffer     = */ ggml_backend_cuda_host_buffer_type_alloc_buffer,
             /* .get_alignment    = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
-            /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
+            /* .get_max_size     = */ ggml_backend_cuda_host_buffer_type_get_max_size,
             /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
         },

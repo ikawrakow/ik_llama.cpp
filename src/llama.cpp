@@ -5179,7 +5179,7 @@ static bool llm_load_tensors(
                     throw std::runtime_error("unable to allocate backend buffer");
                 }
                 model.bufs.push_back(buf);
-                if (use_mlock && ggml_backend_buffer_is_host(buf)) {
+                if (use_mlock && ggml_backend_buffer_is_host(buf) && !ggml_backend_buffer_is_multi_buffer(buf)) {
                     model.mlock_bufs.emplace_back(new llama_mlock);
                     auto & mlock_buf = model.mlock_bufs.back();
                     mlock_buf->init   (ggml_backend_buffer_get_base(buf));
@@ -5224,7 +5224,7 @@ static bool llm_load_tensors(
     // Split display: deferred bytes get their own line, the rest counts as resident.
     // Resident totals are grouped by backend name since is_host covers CUDA_Host too.
     auto buf_deferred_mib = [&](ggml_backend_buffer_t buf) -> double {
-        if (!ggml_backend_buffer_is_host(buf)) {
+        if (!ggml_backend_buffer_is_host(buf) || ggml_backend_buffer_is_multi_buffer(buf)) {
             return 0.0;
         }
         const auto * base = (const uint8_t *) ggml_backend_buffer_get_base(buf);
