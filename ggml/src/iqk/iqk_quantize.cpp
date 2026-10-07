@@ -9728,6 +9728,22 @@ std::vector<float> QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_in
 
 // ========================================== iq1_kt ====================================================
 
+namespace {
+void iqk_kt_can_quantize([[maybe_unused]] ggml_type type) {
+#ifndef __AVX2__
+    if (type == GGML_TYPE_IQ1_KT || type == GGML_TYPE_IQ2_KT || type == GGML_TYPE_IQ3_KT || type == GGML_TYPE_IQ4_KT) {
+        fprintf(stderr, "\n==========================================================================================\n");
+        fprintf(stderr, "Trellis quantization is not supported on CPUs without AVX2 or AVX512 -> aborting\n");
+        fprintf(stderr, "\nFor IQ3_KT and IQ4_KT quantization can be done with the CUDA backend by adding\n");
+        fprintf(stderr, "    --cuda-quantize\n");
+        fprintf(stderr, "to the command line\n");
+        fprintf(stderr, "==========================================================================================\n\n\n");
+        GGML_ABORT("Fatal error");
+    }
+#endif
+}
+}
+
 using QuantizerIQ1KT = QuantizerIQKT<32, 8, 13, false, true>;
 
 const QuantizerIQ1KT& iq1kt_quantizer() {
@@ -9946,6 +9962,7 @@ void quantize_row_iq1_kt(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
 
 size_t quantize_iq1_kt(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         [[maybe_unused]] const quantize_user_data * user_data) {
+    iqk_kt_can_quantize(GGML_TYPE_IQ1_KT);
     GGML_ASSERT(n_per_row%QK_K == 0);
     auto row_size = ggml_row_size(GGML_TYPE_IQ1_KT, n_per_row);
     std::vector<float> scales(n_per_row/QuantizerIQ1KT::kBlockSize);
@@ -10312,6 +10329,7 @@ void quantize_row_iq2_kt(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
 
 size_t quantize_iq2_kt(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         [[maybe_unused]] const quantize_user_data * user_data) {
+    iqk_kt_can_quantize(GGML_TYPE_IQ2_KT);
     GGML_ASSERT(n_per_row%QK_K == 0);
     auto row_size = ggml_row_size(GGML_TYPE_IQ2_KT, n_per_row);
     std::vector<float> scales(n_per_row/QuantizerIQ2KT::kBlockSize);
@@ -10585,6 +10603,7 @@ void quantize_row_iq3_kt(const float * x, void * vy, int64_t k) {
 
 size_t quantize_iq3_kt(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         [[maybe_unused]] const quantize_user_data * user_data) {
+    iqk_kt_can_quantize(GGML_TYPE_IQ3_KT);
     std::vector<float> scales(GGML_PAD(n_per_row, QK_K)/QuantizerIQ3KT::kBlockSize);
     std::vector<float> weights(GGML_PAD(n_per_row, QK_K));
     std::vector<float> xtmp(GGML_PAD(n_per_row, QK_K));
@@ -10889,6 +10908,7 @@ void quantize_row_iq4_kt(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
 
 size_t quantize_iq4_kt(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         [[maybe_unused]] const quantize_user_data * user_data) {
+    iqk_kt_can_quantize(GGML_TYPE_IQ4_KT);
     std::vector<float> scales(GGML_PAD(n_per_row, QK_K)/QuantizerIQ4KT::kBlockSize);
     std::vector<float> weights(GGML_PAD(n_per_row, QK_K));
     return quantize_kt_rows(GGML_TYPE_IQ4_KT, src, dst, nrows, n_per_row, imatrix,
