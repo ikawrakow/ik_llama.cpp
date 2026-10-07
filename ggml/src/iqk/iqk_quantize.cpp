@@ -8922,7 +8922,15 @@ const Modify * get_modify_info(ggml_type type) {
     return it != k_mod_map.end() ? &it->second : nullptr;
 }
 bool is_forbidden_tensor(const std::string& name) {
-    return (name == "token_embd.weight" || name == "per_layer_token_embd.weight");
+    static std::vector<std::string> k_exact_matches = { {"token_embd.weight"}, {"per_layer_token_embd.weight"} };
+    static std::vector<std::string> k_patterns = { {"engram_k.weight"}, {"engram_q.weight"}, {"engram_embd.weight"} };
+    for (auto & match : k_exact_matches) {
+        if (name == match) return true;
+    }
+    for (auto & match : k_patterns) {
+        if (auto pos = name.find(match); pos != std::string::npos) return true;
+    }
+    return false;
 }
 }
 
