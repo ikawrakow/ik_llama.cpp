@@ -321,8 +321,8 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
 }
 
 static bool is_repack_forbidden(const std::string& name) {
-    static std::vector<std::string> k_exact_matches = { {"token_embd.weight"}, {"per_layer_token_embd.weight"} };
-    static std::vector<std::string> k_patterns = { {"engram_k.weight"}, {"engram_q.weight"}, {"engram_embd.weight"} };
+    static const std::vector<std::string> k_exact_matches = { {"token_embd.weight"}, {"per_layer_token_embd.weight"} };
+    static const std::vector<std::string> k_patterns = { {"engram_k.weight"}, {"engram_q.weight"}, {"engram_embd.weight"} };
     for (auto & match : k_exact_matches) {
         if (name == match) return true;
     }
