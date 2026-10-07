@@ -320,6 +320,22 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
     return new_type;
 }
 
+static bool is_repack_forbidden(const std::string& name) {
+    static const std::vector<std::string> k_exact_matches = { {"token_embd.weight"}, {"per_layer_token_embd.weight"} };
+    static const std::vector<std::string> k_patterns = { {"engram_k.weight"}, {"engram_q.weight"}, {"engram_embd.weight"} };
+    for (auto & match : k_exact_matches) {
+        if (name == match) return true;
+    }
+    for (auto & match : k_patterns) {
+        if (auto pos = name.find(match); pos != std::string::npos) return true;
+    }
+    return false;
+}
+static bool is_repack_forbidden(const char * tensor_name) {
+    std::string name{tensor_name};
+    return is_repack_forbidden(name);
+}
+
 static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype) {
     const std::string name = ggml_get_name(tensor);
 
@@ -858,30 +874,25 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         LLAMA_LOG_INFO("Using custom type %s for tensor %s\n", ggml_type_name(new_type), name.c_str());
     }
 
+    auto tentative_new_type = new_type;
+
     auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
     if (working_type != new_type) {
-        ++qs.n_fallback;
         new_type = working_type;
     }
 
-    if (name == "token_embd.weight") {
+    if (is_repack_forbidden(name)) {
         auto working_type = interleaved_properties(new_type).first;
         if (working_type != new_type) {
-            printf("\n============ Token embeddings cannot be quantized with row-interleaved quants\n");
-            printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(working_type));
-            new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
-            if (new_type != working_type) ++qs.n_fallback;
+            auto next_new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
+            printf("\n============ %s tensors cannot be quantized with row-interleaved quants\n", name.c_str());
+            printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(next_new_type));
+            new_type = next_new_type;
         }
     }
 
-    if (name == "per_layer_token_embd.weight") {
-        auto working_type = interleaved_properties(new_type).first;
-        if (working_type != new_type) {
-            printf("\n============ Per-layer Token embeddings cannot be quantized with row-interleaved quants\n");
-            printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(working_type));
-            new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
-            if (new_type != working_type) ++qs.n_fallback;
-        }
+    if (new_type != tentative_new_type) {
+        ++qs.n_fallback;
     }
 
     return new_type;
@@ -1702,14 +1713,15 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 new_type = params->ffn_up_type;
             }
 
-            if (strcmp(tensor->name, "token_embd.weight") == 0 || strcmp(tensor->name, "per_layer_token_embd.weight") == 0) {
-                // token embeddings cannot be quantized with row-interleaved quants
+            if (is_repack_forbidden(tensor->name)) {
+                // token embeddings and engram tensors cannot be quantized with row-interleaved quants
                 auto working_type = interleaved_properties(new_type).first;
                 if (working_type != new_type) {
-                    printf("\n============ Token embeddings cannot be quantized with row-interleaved quants\n");
-                    printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(working_type));
-                    new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
-                    if (new_type != working_type) ++qs.n_fallback;
+                    printf("\n============ %s tensors cannot be quantized with row-interleaved quants\n", tensor->name);
+                    auto next_new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
+                    printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(next_new_type));
+                    if (next_new_type != working_type) ++qs.n_fallback;
+                    new_type = next_new_type;
                 }
             }
 
