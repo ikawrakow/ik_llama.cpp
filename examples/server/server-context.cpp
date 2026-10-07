@@ -249,6 +249,13 @@ bool server_context::load_model(const gpt_params& params_) {
         return false;
     }
 
+    try {
+        decision.init(model);
+    } catch (const std::exception & e) {
+        SRV_ERR("failed to init decision model: %s\n", e.what());
+        return false;
+    }
+
     n_ctx = llama_n_ctx(ctx);
 
     add_bos_token = llama_should_add_bos_token(model);
@@ -2657,6 +2664,25 @@ void server_context::send_embedding(const server_slot& slot, const llama_batch& 
     queue_results.send(std::move(res));
 }
 
+void server_context::send_decision(const server_slot& slot, int32_t i_batch) {
+    auto res = std::make_unique<server_task_result_decision>();
+    res->id = slot.task->id;
+    res->index = slot.task->index;
+    res->n_tokens = slot.n_prompt_tokens;
+
+    const float * logits = llama_get_logits_ith(ctx, i_batch);
+    if (logits == nullptr) {
+        send_error(slot, "failed to get logits", ERROR_TYPE_SERVER);
+        return;
+    }
+    const int32_t n_vocab = llama_n_vocab(model);
+    for (const llama_token label : slot.task->decision.labels) {
+        GGML_ASSERT(label >= 0 && label < n_vocab);
+        res->scores.push_back(logits[label]);
+    }
+    queue_results.send(std::move(res));
+}
+
 void server_context::apply_server_biases(server_slot& slot) {
     auto& server_biases = slot.ctx_sampling->server_biases;
 
@@ -2916,6 +2942,7 @@ void server_context::process_single_task(server_task&& task) {
     case SERVER_TASK_TYPE_INFILL:
     case SERVER_TASK_TYPE_EMBEDDING:
     case SERVER_TASK_TYPE_RERANK:
+    case SERVER_TASK_TYPE_DECISION:
     {
         const int id_slot = json_value(task.data, "id_slot", -1);
 
@@ -4971,6 +4998,13 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             // prompt evaluated for embedding
             if (slot.embedding) {
                 send_embedding(slot, batch_view);
+                slot.release();
+                slot.i_batch = -1;
+                continue; // continue loop of slots
+            }
+
+            if (slot.task->type == SERVER_TASK_TYPE_DECISION) {
+                send_decision(slot, slot.i_batch - i);
                 slot.release();
                 slot.i_batch = -1;
                 continue; // continue loop of slots
