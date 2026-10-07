@@ -83,6 +83,8 @@ ENTRYPOINT ["/app/tools.sh"]
 FROM base AS server
 ENV LLAMA_ARG_HOST=0.0.0.0
 COPY --from=build /app/dist/bin/llama-server /app/llama-server
+# for tuning --threads on the target machine: docker run --rm --entrypoint /app/llama-bench ...
+COPY --from=build /app/dist/bin/llama-bench /app/llama-bench
 # loading (and repacking) a large model can take minutes
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15m --retries=3 \
     CMD [ "curl", "-f", "http://localhost:8080/health" ]
