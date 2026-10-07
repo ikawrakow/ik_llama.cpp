@@ -543,6 +543,10 @@ struct llama_hparams {
         return v ? v : swa_layers[il] ? n_rot_swa : n_rot;
     }
 
+    bool use_mrope() const {
+        return rope_sections[0] > 0 && rope_sections[1] > 0;
+    }
+
     static const char * rope_scaling_type_name(llama_rope_scaling_type);
 
 };
