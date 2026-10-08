@@ -10340,11 +10340,40 @@ size_t quantize_iq2_kt(const float * src, void * dst, int64_t nrows, int64_t n_p
         [[maybe_unused]] const quantize_user_data * user_data) {
     iqk_kt_can_quantize(GGML_TYPE_IQ2_KT);
     GGML_ASSERT(n_per_row%32== 0);
-    std::vector<float> scales(GGML_PAD(n_per_row, QK_K)/QuantizerIQ2KT::kBlockSize);
-    std::vector<float> weights(GGML_PAD(n_per_row, QK_K));
-    std::vector<int>   idx(GGML_PAD(n_per_row, QK_K)/QuantizerIQ2KT::kGroupSize);
+    int n_per_row_padded = GGML_PAD(n_per_row, QK_K);
+    std::vector<float> scales(n_per_row_padded/QuantizerIQ2KT::kBlockSize);
+    std::vector<float> weights(n_per_row_padded);
+    std::vector<int>   idx(n_per_row_padded/QuantizerIQ2KT::kGroupSize);
+    if (n_per_row % QK_K == 0) {
     return quantize_kt_rows(GGML_TYPE_IQ2_KT, src, dst, nrows, n_per_row, imatrix,
             [&] (const float * x, void * y, const float * w) { quantize_row_iq2_kt_impl(x, y, n_per_row, w, scales.data(), weights.data(), idx.data()); });
+    }
+    size_t row_size = ggml_row_size(GGML_TYPE_IQ2_KT, n_per_row);
+    size_t row_size_padded = ggml_row_size(GGML_TYPE_IQ2_KT, n_per_row_padded);
+    std::vector<float> xpad(n_per_row_padded);
+    std::vector<char>  ypad(row_size_padded);
+    int n_extra = n_per_row_padded - n_per_row;
+    int nt = n_extra/32;
+    if (imatrix) {
+        std::memcpy(weights.data(), imatrix, n_per_row*sizeof(float));
+        std::memcpy(weights.data() + n_per_row, imatrix + n_per_row - n_extra, n_extra*sizeof(float));
+    }
+    size_t size = 0;
+    auto cy = (char *)dst;
+    for (int row = 0; row < nrows; ++row) {
+        std::memcpy(xpad.data(), src, n_per_row*sizeof(float));
+        std::memcpy(xpad.data() + n_per_row, src + n_per_row - n_extra, n_extra*sizeof(float));
+        quantize_row_iq2_kt_impl(xpad.data(), ypad.data(), n_per_row_padded, imatrix ? weights.data() : nullptr, scales.data(), weights.data(), idx.data());
+        std::memcpy(cy, ypad.data(), row_size);
+        auto qy = (block_iq2_kt *)(cy + 4) + n_per_row/QK_K;
+        auto qy_padded = (block_iq2_kt *)(ypad.data() + 4) + n_per_row/QK_K;
+        std::memcpy(qy->scales, qy_padded->scales, 4);
+        std::memcpy(qy->ql, qy_padded->ql, 8*nt);
+        src += n_per_row;
+        cy  += row_size;
+        size += row_size;
+    }
+    return size;
 }
 
 void dequantize_row_iq2_kt(const block_iq2_kt * x, float * y, int64_t k) {
