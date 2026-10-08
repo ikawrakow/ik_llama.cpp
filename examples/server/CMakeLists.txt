@@ -23,6 +23,7 @@ set(TARGET_SRCS
     server-decision.cpp
     server-decision.h
     server-context.cpp
+    server-context-chat.cpp
     server-context.h
 )
 set(PUBLIC_ASSETS
