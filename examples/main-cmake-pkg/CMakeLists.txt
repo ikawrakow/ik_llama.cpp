@@ -20,7 +20,7 @@ target_sources(common PRIVATE ${_common_files})
 # tionality is separate, but dependent upon the defines, it must be
 # explicitly extracted from the "llama" target.
 #
-get_target_property(_llama_transient_defines llama
+get_target_property(_llama_transient_defines ik_llama
     INTERFACE_COMPILE_DEFINITIONS)
 
 target_compile_definitions(common PRIVATE "${_llama_transient_defines}")
@@ -28,5 +28,5 @@ target_compile_definitions(common PRIVATE "${_llama_transient_defines}")
 add_executable(${TARGET} ${CMAKE_CURRENT_LIST_DIR}/../main/main.cpp)
 target_include_directories(${TARGET} PRIVATE ${_common_path})
 install(TARGETS ${TARGET} RUNTIME)
-target_link_libraries(${TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PRIVATE common ik_llama ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_11)

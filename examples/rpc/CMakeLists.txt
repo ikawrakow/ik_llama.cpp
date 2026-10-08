@@ -1,6 +1,6 @@
 set(TARGET rpc-server)
 add_executable(${TARGET} rpc-server.cpp)
-target_link_libraries(${TARGET} PRIVATE ggml)
+target_link_libraries(${TARGET} PRIVATE noml)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 if (MSVC)
 	target_link_options(${TARGET} PRIVATE
