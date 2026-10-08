@@ -2325,7 +2325,7 @@ void vec_dot_iq2_kl_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
 
 #ifdef __AVX2__
 namespace {
-template <int block_size>
+template <int block_size, int nmap>
 inline void best_index_avx2(float id, const int8_t * values, const float * f_values, const int8_t * k_simple_index,
         const __m256 * vx, __m256 * vq) {
     static_assert(block_size == 32 || block_size == 16);
@@ -2337,8 +2337,8 @@ inline void best_index_avx2(float id, const int8_t * values, const float * f_val
         auto vxi_m = _mm256_xor_ps(vxi_p, flip);
         auto vidx_p = _mm256_sub_epi32(_mm256_cvttps_epi32(vxi_p), val0);
         auto vidx_m = _mm256_sub_epi32(_mm256_cvttps_epi32(vxi_m), val0);
-        vidx_p = _mm256_min_epi32(_mm256_max_epi32(vidx_p, _mm256_setzero_si256()), _mm256_set1_epi32(240));
-        vidx_m = _mm256_min_epi32(_mm256_max_epi32(vidx_m, _mm256_setzero_si256()), _mm256_set1_epi32(240));
+        vidx_p = _mm256_min_epi32(_mm256_max_epi32(vidx_p, _mm256_setzero_si256()), _mm256_set1_epi32(nmap));
+        vidx_m = _mm256_min_epi32(_mm256_max_epi32(vidx_m, _mm256_setzero_si256()), _mm256_set1_epi32(nmap));
         auto tab_p0 = _mm256_i32gather_epi32((const int32_t *)k_simple_index, vidx_p, 1);
         auto tab_m0 = _mm256_i32gather_epi32((const int32_t *)k_simple_index, vidx_m, 1);
         tab_p0 = _mm256_and_si256(tab_p0, _mm256_set1_epi32(0xff));
@@ -2357,11 +2357,11 @@ inline void best_index_avx2(float id, const int8_t * values, const float * f_val
         vq[2*i+1]    = _mm256_castsi256_ps(_mm256_blendv_epi8(_mm256_castps_si256(cand1_m), _mm256_castps_si256(cand0_m), mask_m));
     }
 }
-template <int block_size>
+template <int block_size, int nmap>
 inline bool evaluate_block_avx2(float id, const int8_t * values, const float * f_values, const int8_t * k_simple_index,
         const __m256 * vx, const __m256 * vw, float & d, float & best) {
     __m256  vq[block_size/4];
-    best_index_avx2<block_size>(id, values, f_values, k_simple_index, vx, vq);
+    best_index_avx2<block_size, nmap>(id, values, f_values, k_simple_index, vx, vq);
     __m256 sumqx_p = _mm256_setzero_ps(), sumq2_p = _mm256_setzero_ps();
     __m256 sumqx_m = _mm256_setzero_ps(), sumq2_m = _mm256_setzero_ps();
     for (int i = 0; i < block_size/8; ++i) {
@@ -2385,7 +2385,7 @@ inline bool evaluate_block_avx2(float id, const int8_t * values, const float * f
     }
     return updated;
 }
-template <int block_size>
+template <int block_size, int nmap>
 std::tuple<float, float, bool> find_best_scale_avx2(int nval, const int8_t * values, const float * f_values, const int8_t * k_simple_index,
         const float * xb, const float * imatrix, float sigma2, int ntry, bool use_sigma2 = false, float step = 1.0f) {
     __m256 vx[block_size/8], vw[block_size/8];
@@ -2421,16 +2421,16 @@ std::tuple<float, float, bool> find_best_scale_avx2(int nval, const int8_t * val
     float id = 1/d;
     bool is_shifted = false;
     float best = 0;
-    if (!evaluate_block_avx2<block_size>(id, values, f_values, k_simple_index, vx, vw, d, best)) {
+    if (!evaluate_block_avx2<block_size, nmap>(id, values, f_values, k_simple_index, vx, vw, d, best)) {
         GGML_ABORT("Fatal error");
     }
     for (int itry = -ntry; itry <= ntry; ++itry) {
         id = (step*itry + values[0])/max;
-        if (evaluate_block_avx2<block_size>(id, values, f_values, k_simple_index, vx, vw, d, best)) {
+        if (evaluate_block_avx2<block_size, nmap>(id, values, f_values, k_simple_index, vx, vw, d, best)) {
             is_shifted = false;
         }
         id = (step*itry + values[nval])/max;
-        if (evaluate_block_avx2<block_size>(id, values+nval, f_values+nval, k_simple_index, vx, vw, d, best)) {
+        if (evaluate_block_avx2<block_size, nmap>(id, values+nval, f_values+nval, k_simple_index, vx, vw, d, best)) {
             is_shifted = true;
         }
     }
@@ -2481,7 +2481,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
 #ifdef __AVX2__
         for (int ib = 0; ib < QK_K/16; ++ib) {
             auto xb = xbl + ib*16;
-            auto [d, _, is_shifted] = find_best_scale_avx2<16>(8, iq3nl_values, f_values, k_simple_index_iq3nl, xb,
+            auto [d, _, is_shifted] = find_best_scale_avx2<16, 127>(8, iq3nl_values, f_values, k_simple_index_iq3nl, xb,
                     quant_weights ? quant_weights + QK_K*ibl + 16*ib : nullptr, sigma2, ntry, true, 2.0f);
 
             scales[ib] = d;
@@ -2745,7 +2745,7 @@ static void quantize_row_iq3_ks_impl(int n_per_row, const float * x, char * cy,
         sigma2 *= 2.f/super_block_size;
 #ifdef __AVX2__
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
-            auto [d, _, is_shifted] = find_best_scale_avx2<block_size>(8, values, f_values, k_simple_index_iq3nl, xbl + ib*block_size,
+            auto [d, _, is_shifted] = find_best_scale_avx2<block_size, 127>(8, values, f_values, k_simple_index_iq3nl, xbl + ib*block_size,
                     quant_weights ? quant_weights + super_block_size*ibl + block_size*ib : nullptr, sigma2, ntry);
             if (is_shifted) y[ibl].extra |= (1 << (8 + ib));
             scales[ib] = d;
@@ -3535,7 +3535,7 @@ void quantize_row_iq5_k_impl(const float * x, void * vy, int n_per_row, const fl
 
 #ifdef __AVX2__
         for (int ib = 0; ib < QK_K/16; ++ib) {
-            auto [d, _, is_shifted] = find_best_scale_avx2<16>(32, iq5nl_values, f_values, k_simple_index_iq5nl, xbl + ib*16,
+            auto [d, _, is_shifted] = find_best_scale_avx2<16, 240>(32, iq5nl_values, f_values, k_simple_index_iq5nl, xbl + ib*16,
                     quant_weights ? quant_weights + QK_K*ibl + 16*ib : nullptr, sigma2, ntry); //, true);
             scales[ib] = d;
             if (is_shifted) extra |= (1 << ib);
@@ -4968,7 +4968,7 @@ static void quantize_row_iq5_ks_impl(int n_per_row, const float * x, char * cy,
         sigma2 *= 2.f/super_block_size;
 #ifdef __AVX2__
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
-            auto [d, _, is_shifted] = find_best_scale_avx2<block_size>(32, values, f_values, k_simple_index_iq5nl, xbl + ib*block_size,
+            auto [d, _, is_shifted] = find_best_scale_avx2<block_size, 240>(32, values, f_values, k_simple_index_iq5nl, xbl + ib*block_size,
                     quant_weights ? quant_weights + super_block_size*ibl + block_size*ib : nullptr, sigma2, ntry);
             if (is_shifted) y[ibl].scales[ib] = 0x01;
             scales[ib] = d;
