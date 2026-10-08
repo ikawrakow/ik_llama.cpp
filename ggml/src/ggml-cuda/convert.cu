@@ -402,12 +402,6 @@ static __global__ void dequantize_block_iq2_kt(const void * __restrict__ vx, dst
     const int64_t ib = tid; // 0...31
     dst_t * y = yy + ii*QK_K + 8*ib;
     dequantize_group_iq2t(scale, ib, x[i], y);
-    //const uint16_t * ql = (const uint16_t *)x[i].ql;
-    //uint32_t idx = ql[ib] + 4096;
-    //const float dl = scale * iq4k_values[((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf)] * 1.05f;
-    //for (int j = 0; j < 8; ++j) {
-    //    y[j] = dl * trellis_next_int(idx);
-    //}
 }
 
 template<typename dst_t>

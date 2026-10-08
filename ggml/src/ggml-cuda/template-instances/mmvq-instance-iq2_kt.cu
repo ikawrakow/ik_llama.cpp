@@ -14,9 +14,6 @@ static __device__ __forceinline__ int iq2kt_trellis(uint32_t & val) {
 __device__ __forceinline__ void vec_dot_iq2_kt_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
 
-    //constexpr uint32_t ka = 0xCBAC1FED;
-    //constexpr uint32_t km = 0x3f3f3f3f;
-
     float scale = *(const float *)vbq;
     const block_iq2_kt * bq2 = (const block_iq2_kt *)((const char *)vbq + sizeof(float)) + kbx;
 
@@ -31,18 +28,6 @@ __device__ __forceinline__ void vec_dot_iq2_kt_q8_1(
         uint32_t val = ql[4*ib32+j] + 4096;
         sumi = ggml_cuda_dp4a(iq2kt_trellis(val), q8[2*j+0], sumi);
         sumi = ggml_cuda_dp4a(iq2kt_trellis(val), q8[2*j+1], sumi);
-        //int v4 = 0;
-        //for (int k = 0; k < 4; ++k) {
-        //    val *= ka;
-        //    v4 |= (ggml_cuda_dp4a(val & km, 0x01010101, -126) & 0xff) << 8*k;
-        //}
-        //sumi = ggml_cuda_dp4a(v4, q8[2*j+0], sumi);
-        //v4 = 0;
-        //for (int k = 0; k < 4; ++k) {
-        //    val *= ka;
-        //    v4 |= (ggml_cuda_dp4a(val & km, 0x01010101, -126) & 0xff) << 8*k;
-        //}
-        //sumi = ggml_cuda_dp4a(v4, q8[2*j+1], sumi);
     }
     *result += dl * __low2float(bq8_1[ib32].ds) * sumi;
 }
