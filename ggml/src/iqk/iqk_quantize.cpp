@@ -10350,23 +10350,43 @@ size_t quantize_iq2_kt(const float * src, void * dst, int64_t nrows, int64_t n_p
     }
     size_t row_size = ggml_row_size(GGML_TYPE_IQ2_KT, n_per_row);
     size_t row_size_padded = ggml_row_size(GGML_TYPE_IQ2_KT, n_per_row_padded);
+    size_t row_size_nb = ggml_row_size(GGML_TYPE_IQ2_KT, QK_K*(n_per_row/QK_K));
     std::vector<float> xpad(n_per_row_padded);
     std::vector<char>  ypad(row_size_padded);
     int n_extra = n_per_row_padded - n_per_row;
-    int nt = n_extra/32;
+    int n_padding = n_extra/32;
+    std::vector<float> padded_imatrix;
     if (imatrix) {
-        std::memcpy(weights.data(), imatrix, n_per_row*sizeof(float));
-        std::memcpy(weights.data() + n_per_row, imatrix + n_per_row - n_extra, n_extra*sizeof(float));
+        padded_imatrix.resize(n_per_row_padded);
+        std::memcpy(padded_imatrix.data(), imatrix, n_per_row*sizeof(float));
+        if (n_per_row >= n_extra) {
+            std::memcpy(padded_imatrix.data() + n_per_row, imatrix + n_per_row - n_extra, n_extra*sizeof(float));
+        } else {
+            for (int ib = 0; ib < n_padding; ++ib) std::memcpy(padded_imatrix.data() + n_per_row + 32*ib, imatrix + n_per_row - 32, 32*sizeof(float));
+        }
     }
+    int nblock256 = n_per_row/QK_K;
+    int nt = (n_per_row - nblock256*QK_K)/32;
     size_t size = 0;
     auto cy = (char *)dst;
     for (int row = 0; row < nrows; ++row) {
         std::memcpy(xpad.data(), src, n_per_row*sizeof(float));
-        std::memcpy(xpad.data() + n_per_row, src + n_per_row - n_extra, n_extra*sizeof(float));
-        quantize_row_iq2_kt_impl(xpad.data(), ypad.data(), n_per_row_padded, imatrix ? weights.data() : nullptr, scales.data(), weights.data(), idx.data());
-        std::memcpy(cy, ypad.data(), row_size);
-        auto qy = (block_iq2_kt *)(cy + 4) + n_per_row/QK_K;
-        auto qy_padded = (block_iq2_kt *)(ypad.data() + 4) + n_per_row/QK_K;
+        if (n_per_row >= n_extra) {
+            std::memcpy(xpad.data() + n_per_row, src + n_per_row - n_extra, n_extra*sizeof(float));
+        } else {
+            for (int ib = 0; ib < n_padding; ++ib) std::memcpy(xpad.data() + n_per_row + 32*ib, src + n_per_row - 32, 32*sizeof(float));
+        }
+        quantize_row_iq2_kt_impl(xpad.data(), ypad.data(), n_per_row_padded, imatrix ? padded_imatrix.data() : nullptr, scales.data(), weights.data(), idx.data());
+        block_iq2_kt *qy, *qy_padded;
+        if (nblock256 >= 1) {
+            std::memcpy(cy, ypad.data(), row_size_nb);
+            qy = (block_iq2_kt *)(cy + row_size_nb);
+            qy_padded = (block_iq2_kt *)(ypad.data() + row_size_nb);
+        } else {
+            std::memcpy(cy, ypad.data(), 4);
+            qy = (block_iq2_kt *)(cy + sizeof(float));
+            qy_padded = (block_iq2_kt *)(ypad.data() + sizeof(float));
+        }
         std::memcpy(qy->scales, qy_padded->scales, 4);
         std::memcpy(qy->ql, qy_padded->ql, 8*nt);
         src += n_per_row;
