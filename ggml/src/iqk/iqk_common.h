@@ -29,7 +29,9 @@
 static inline void set_scale(ggml_half * d, int k, float v) { d[k] = GGML_FP32_TO_FP16(v); }
 static inline void set_scale(float     * d, int k, float v) { d[k] = v; }
 
+#ifndef FA_TIMING
 #define FA_TIMING 0
+#endif
 
 #include <utility>
 #include <array>

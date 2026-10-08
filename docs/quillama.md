@@ -233,6 +233,26 @@ lazy grammar waits for its trigger.
 `{"type": "number", "minimum": 0}` (or `exclusiveMinimum >= 0`) now forbids a leading `-`. Upstream
 llama.cpp ignores bounds on `number`, so models could emit negative values for such fields.
 
+### 13. Faster attention during generation at long context (AVX2)
+
+On an AVX2 CPU at 8k context, flash attention takes about half of each generated token's time
+for a Qwen3-30B-A3B-shaped model (1.7 ms per layer, against 1.2 ms for the MoE FFN). It is limited
+by compute, not memory: f16, q8_0 and q6_0 KV caches all decode at the same speed. Of that
+attention time, 53% goes to accumulating V. quillama converts each 32-row V tile to f32 once,
+keeps 64 output columns per query head in registers across the tile, and feeds V to the FMAs
+straight from L1. This takes 1 broadcast + 8 FMAs per V row, where ik reloaded and stored the
+accumulators every 4 rows. The products and their summation order are unchanged, and outputs are
+bit-identical, tested across KV types, context lengths, batch sizes and thread counts.
+
+Results: the attention kernel is 18% faster on one thread at 8k context, and generation at 8k
+depth is about 5% faster end to end. Prompt processing is unchanged within noise.
+`QUILL_FA_VBLOCK=0` restores the original loop. AVX-512 builds keep ik's AVX-512 path.
+
+TurboQuant (KV-cache compression to 2-4 bits) was evaluated for CPU and not adopted. Because
+CPU attention is compute-bound, a smaller KV cache does not decode faster (measured: q4_0 KV was
+4% faster than q8_0 at 8k, f16 the same as q8_0). Its CPU grouped-query decode change is
+already in ik's kernel.
+
 ### Recommended settings for an AVX2 EPYC VPS (Zen 2/3, no AVX-512)
 
 * `-ctk q8_0 -ctv q8_0`: at long context, decode is bandwidth-bound on the KV cache as well as on
@@ -332,6 +352,7 @@ keeps hot experts in VRAM. Both are GPU-centric. On a CPU-only server their idea
 | `QUILL_THP=0` | no huge pages for large CPU buffers |
 | `QUILL_MOE_MIN_CHUNK=N` | minimum rows per expert chunk at decode (default 128) |
 | `QUILL_MOE_CHUNKS=N` | force N chunks per expert |
+| `QUILL_FA_VBLOCK=0` | original AVX2 flash-attention V accumulation |
 
 ## Tests
 

@@ -738,6 +738,11 @@ struct HelperQ60 final : public BaseHelper {
 #endif
 };
 
+static inline bool quill_fa_vblock() {
+    static const bool on = [] { const char * e = getenv("QUILL_FA_VBLOCK"); return !(e && e[0] == '0'); }();
+    return on;
+}
+
 template <int q_step_in, int k_step_in>
 struct FlashMS {
     constexpr static int q_step = q_step_in;
@@ -1038,6 +1043,57 @@ struct FlashQKV {
                 }
             }
         }
+#if defined(__AVX2__) && !defined(__AVX512F__) && !defined(__aarch64__)
+        // quillama: register-blocked V accumulation for AVX2 (decode with GQA: the q rows are the
+        // query heads sharing one KV head). The V tile is converted to f32 once, in 32-row chunks
+        // that stay in L1. Then, per q row, 64 output columns live in 8 registers for all 32 rows of
+        // the chunk: one broadcast + 8 FMAs with a folded load per V row, instead of reloading and
+        // storing the accumulators every 4 rows. Same products, summed in the same order.
+        // QUILL_FA_VBLOCK=0 restores the original loop.
+        if constexpr (q_step > 1 && D%64 == 0 && k_step%32 == 0 && std::is_same_v<qkv_cache_t, float>) {
+            if (quill_fa_vblock()) {
+                constexpr int kc = 32;
+                alignas(32) float vbuf[kc*D];
+                for (int l0 = 0; l0 < k_step; l0 += kc) {
+                    for (int l = 0; l < kc; ++l) {
+                        for (int i = 0; i < D/8; i += 2) {
+                            __m256 v0, v1;
+                            vh.load(l0+l, i, v0, v1);
+                            _mm256_store_ps(vbuf + l*D + 8*i + 0, v0);
+                            _mm256_store_ps(vbuf + l*D + 8*i + 8, v1);
+                        }
+                    }
+                    for (int j = 0; j < q_step; ++j) {
+                        const float * pj = fms.cache + k_step*j + l0;
+                        float * R = qkv_cache + D*j;
+                        for (int i = 0; i < D; i += 64) {
+                            __m256 a0 = _mm256_loadu_ps(R + i +  0), a1 = _mm256_loadu_ps(R + i +  8);
+                            __m256 a2 = _mm256_loadu_ps(R + i + 16), a3 = _mm256_loadu_ps(R + i + 24);
+                            __m256 a4 = _mm256_loadu_ps(R + i + 32), a5 = _mm256_loadu_ps(R + i + 40);
+                            __m256 a6 = _mm256_loadu_ps(R + i + 48), a7 = _mm256_loadu_ps(R + i + 56);
+                            const float * vb = vbuf + i;
+                            for (int l = 0; l < kc; ++l, vb += D) {
+                                const __m256 b = _mm256_broadcast_ss(pj + l);
+                                a0 = _mm256_fmadd_ps(_mm256_load_ps(vb +  0), b, a0);
+                                a1 = _mm256_fmadd_ps(_mm256_load_ps(vb +  8), b, a1);
+                                a2 = _mm256_fmadd_ps(_mm256_load_ps(vb + 16), b, a2);
+                                a3 = _mm256_fmadd_ps(_mm256_load_ps(vb + 24), b, a3);
+                                a4 = _mm256_fmadd_ps(_mm256_load_ps(vb + 32), b, a4);
+                                a5 = _mm256_fmadd_ps(_mm256_load_ps(vb + 40), b, a5);
+                                a6 = _mm256_fmadd_ps(_mm256_load_ps(vb + 48), b, a6);
+                                a7 = _mm256_fmadd_ps(_mm256_load_ps(vb + 56), b, a7);
+                            }
+                            _mm256_storeu_ps(R + i +  0, a0); _mm256_storeu_ps(R + i +  8, a1);
+                            _mm256_storeu_ps(R + i + 16, a2); _mm256_storeu_ps(R + i + 24, a3);
+                            _mm256_storeu_ps(R + i + 32, a4); _mm256_storeu_ps(R + i + 40, a5);
+                            _mm256_storeu_ps(R + i + 48, a6); _mm256_storeu_ps(R + i + 56, a7);
+                        }
+                    }
+                }
+                return;
+            }
+        }
+#endif
 #ifdef __AVX512F__
         if constexpr ((D/F16::block_size)%4 == 0) {
             F16::Data v[16];
@@ -1446,15 +1502,31 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
             HelperQ80::convert<Dk>(q_step, stride_q, q, q8r);
             auto mr = mask;
             int nk1_eff = mask_effective_nk1(mr, q_step, stride_m, nk1, k_step);
+#if FA_TIMING
+            Perf perf(false);
+#endif
             for (int k1 = 0; k1 < nk1_eff/k_step; ++k1) {
+#if FA_TIMING
+                auto t1 = Perf::cur_time();
+                HelperQ80R8<Dk>::repack(k_step, kh.block, kh.stride, q8r8);
+                perf.accum_nolock(0, t1); t1 = Perf::cur_time();
+                KQHelper::mul_mask_kq(khr8, stride_m, q8r, mr, fms);
+                perf.accum_nolock(1, t1); t1 = Perf::cur_time();
+                fqkv.accumulate_qkv(vh, fms);
+                perf.accum_nolock(2, t1);
+#else
                 HelperQ80R8<Dk>::repack(k_step, kh.block, kh.stride, q8r8);
                 KQHelper::mul_mask_kq(khr8, stride_m, q8r, mr, fms);
                 fqkv.accumulate_qkv(vh, fms);
+#endif
                 kh.next_block(k_step);
                 vh.next_block(k_step);
                 mr += k_step*sizeof(ggml_half);
             }
             fqkv.normalize_and_store(fms, stride_qkv, qkv, sinkf, sink_stride, M, S);
+#if FA_TIMING
+            Perf::instance().add(perf);
+#endif
             return;
         }
     }
@@ -1572,7 +1644,7 @@ struct FlashAttn {
                     if constexpr (std::is_same_v<KHelper, HelperQ80>) {
 #if FA_TIMING
                         auto t1 = Perf::cur_time();
-                        HelperQ80R8<Dk, k_step> khr4(nk1, kh);
+                        HelperQ80R8<Dk> khr4(nk1, kh);
                         Perf::instance().accum(4, t1);
 #else
                         HelperQ80R8<Dk> khr4(nk1, kh);
@@ -1586,7 +1658,7 @@ struct FlashAttn {
                     if constexpr (std::is_same_v<KHelper, HelperQ8KV<Dk>>) {
 #if FA_TIMING
                         auto t1 = Perf::cur_time();
-                        HelperQ8KVR8<Dk, k_step> khr4(nk1, kh);
+                        HelperQ8KVR8<Dk> khr4(nk1, kh);
                         Perf::instance().accum(4, t1);
 #else
                         HelperQ8KVR8<Dk> khr4(nk1, kh);
