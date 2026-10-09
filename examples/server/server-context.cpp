@@ -778,7 +778,7 @@ const common_chat_msg& server_slot::update_chat_msg(bool is_partial, std::vector
     auto msg_prv_copy = chat_msg;
     auto new_msg = common_chat_parse(
         generated_text,
-        /* is_partial= */ stop != STOP_TYPE_EOS,
+        /* is_partial= */ is_partial,
         params.chat_parser_params);
     if (!new_msg.empty()) {
         //new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
