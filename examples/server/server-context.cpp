@@ -4308,7 +4308,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     && slot.prompt_tokens[slot.n_past_prompt] == LLAMA_TOKEN_NULL) {
                     // process the image
                     size_t n_tokens_out = 0;
-                    llama_pos p1 = slot.cache_tokens.pos_next() + slot.n_past_prompt - slot.n_past; // add offset to prompt
+                    llama_pos p1 = slot.cache_tokens.pos_next();
                     server_mtp_warmup mtp_media_warmup {
                         ctx,
                         slot.uses_mtp() && slot.spec ? &slot : nullptr,
