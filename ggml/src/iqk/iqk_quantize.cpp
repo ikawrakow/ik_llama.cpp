@@ -3142,7 +3142,7 @@ size_t quantize_iq3ks_r16(const float * src, void * dst, int64_t nrows, int64_t 
     GGML_ASSERT(nrows%16 == 0);
     GGML_ASSERT(n_per_row%32 == 0);
     constexpr int kBlockSize = 32;
-    auto row_size = ggml_row_size(GGML_TYPE_IQ3KS_R16, n_per_row);
+    auto row_size = ggml_row_size(GGML_TYPE_IQ3_KS_R16, n_per_row);
     float weight[kBlockSize];
     std::vector<float> all_scales(n_per_row/kBlockSize);
     QHelper helper(imatrix, user_data, n_per_row, kBlockSize);
@@ -3194,7 +3194,7 @@ void dequantize_row_iq3ks_r16(const block_iq3_ks_r16 * x, float * y, int64_t k) 
 
 void vec_dot_iq3ks_r16_q8_2(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3KS_R16, vx, 0, GGML_TYPE_Q8_0_X4, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_KS_R16, vx, 0, GGML_TYPE_Q8_0_X4, vy, 0, s, 0, 0, 1)) {
         return;
     }
 #endif

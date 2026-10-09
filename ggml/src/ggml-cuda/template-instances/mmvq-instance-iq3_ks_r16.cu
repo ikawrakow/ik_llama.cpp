@@ -1,6 +1,6 @@
 #include "../iqk_mmvq_templates.cuh"
 
-// The ggml_cuda_type_traits<GGML_TYPE_IQ3KS_R16> specialization lives in
+// The ggml_cuda_type_traits<GGML_TYPE_IQ3_KS_R16> specialization lives in
 // common.cuh (qk = 32, qr = 2, qi = 8) so that both the MMVQ and the MMQ
 // translation units see it.
 
@@ -57,5 +57,5 @@ __device__ __forceinline__ void vec_dot_iq3ks_r16_q8_1(
 }
 
 void mul_mat_vec_iq3ks_r16_q8_1_cuda(const mmvq_args & args, cudaStream_t stream) {
-    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ3KS_R16, 8, vec_dot_iq3ks_r16_q8_1, 4>(args, stream);
+    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ3_KS_R16, 8, vec_dot_iq3ks_r16_q8_1, 4>(args, stream);
 }

@@ -1632,7 +1632,7 @@ static void dequantize_row_iq3ks_r16_cuda(const void * vx, dst_t * y, const int6
     GGML_ASSERT(n_per_row % 32 == 0);
     GGML_ASSERT(nrows % 16 == 0);
     const int64_t k = nrows * n_per_row;
-    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ3KS_R16, n_per_row);
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ3_KS_R16, n_per_row);
     const int nb = (k + 511) / 512;
     dequantize_block_iq3ks_r16<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
 }
@@ -2107,7 +2107,7 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_q2_K_cuda;
         case GGML_TYPE_Q3_K:
             return dequantize_row_q3_K_cuda;
-        case GGML_TYPE_IQ3KS_R16:
+        case GGML_TYPE_IQ3_KS_R16:
             return dequantize_row_iq3ks_r16_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
@@ -2214,7 +2214,7 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_q2_K_cuda;
         case GGML_TYPE_Q3_K:
             return dequantize_row_q3_K_cuda;
-        case GGML_TYPE_IQ3KS_R16:
+        case GGML_TYPE_IQ3_KS_R16:
             return dequantize_row_iq3ks_r16_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;

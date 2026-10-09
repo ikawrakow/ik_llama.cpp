@@ -26,7 +26,7 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ1_M_R4> {
 
 template <ggml_type type>
 constexpr int __device__ ggml_cuda_actual_row0(int row0) {
-    if constexpr (type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ3KS_R16) {
+    if constexpr (type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ3_KS_R16) {
         return 16*(row0/16);
     } else {
         return row0;

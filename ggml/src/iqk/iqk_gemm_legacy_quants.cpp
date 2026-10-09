@@ -2963,11 +2963,10 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
         case GGML_TYPE_MXFP4:
             set_functions<MXFP4_Unpacker>(kernels);
             break;
-        case GGML_TYPE_IQ3KS_R16:
+        case GGML_TYPE_IQ3_KS_R16:
             expected_typeB = GGML_TYPE_Q8_0_X4;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq3ks_r16_q8_0_x4, kernels)
             break;
-        
         case GGML_TYPE_Q4_0_R8:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q4_0_r8_q8_2, kernels)
 #ifdef HAVE_FANCY_SIMD
