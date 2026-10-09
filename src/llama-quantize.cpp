@@ -122,6 +122,7 @@ std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
         { GGML_TYPE_Q8_KV_R8,    { GGML_TYPE_Q8_KV, 8} },
         { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_0, 8} },
         { GGML_TYPE_BF16_R16,    { GGML_TYPE_BF16, 16} },
+        { GGML_TYPE_IQ3_KS_R16,   { GGML_TYPE_IQ3_KT, 16} },
     };
     if (auto it = k_map.find(type); it != k_map.end()) return it->second;
     return {type, 1};
@@ -257,6 +258,12 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             convert_incompatible_tensor = true;
         }
     }
+    if (new_type == GGML_TYPE_IQ3_KS_R16) {
+        if (nx % 32 != 0 || ny % 16 != 0) {
+            LLAMA_LOG_WARN("\n\n%s : tensor %d x %d is not compatible with %s (needs cols %% 32 == 0 and rows %% 16 == 0)", __func__, nx, ny, ggml_type_name(new_type));
+            convert_incompatible_tensor = true;
+        }
+    }
     if (convert_incompatible_tensor) {
         switch (new_type) {
             case GGML_TYPE_IQ2_XXS:
@@ -285,6 +292,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_Q3_K_R4:
             case GGML_TYPE_IQ3_KS:
             case GGML_TYPE_IQ3_K:
+            case GGML_TYPE_IQ3_KS_R16:
             case GGML_TYPE_IQ3_K_R4: new_type = GGML_TYPE_IQ4_KT; break;
             case GGML_TYPE_IQ4_KSS:
             case GGML_TYPE_IQ4_KS:
@@ -1194,6 +1202,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_IQ4_KS:  default_type = GGML_TYPE_IQ4_KS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KS_R4:default_type = GGML_TYPE_IQ4_KS_R4;break;
         case LLAMA_FTYPE_MOSTLY_IQ5_KS_R4:default_type = GGML_TYPE_IQ5_KS_R4;break;
+        case LLAMA_FTYPE_MOSTLY_IQ3_KS_R16:default_type = GGML_TYPE_IQ3_KS_R16; break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KS_R16:default_type = GGML_TYPE_IQ4_KS_R16;break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KSS: default_type = GGML_TYPE_IQ4_KSS; break;
         case LLAMA_FTYPE_MOSTLY_IQ5_KS:  default_type = GGML_TYPE_IQ5_KS;  break;

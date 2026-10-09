@@ -705,6 +705,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KS_R4> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ3_KS_R16> {
+    static constexpr int qk = 32;   // block = 16 rows x 32 columns
+    static constexpr int qr = 2;
+    static constexpr int qi = 8;    // one lane per block (vdr = 8)
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KS_R16> {
     static constexpr int qk = QK8_0;
     static constexpr int qr = QR4_0;

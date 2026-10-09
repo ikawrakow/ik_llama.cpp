@@ -991,6 +991,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         { GGML_TYPE_IQ4_XS_R8 , 8},
         { GGML_TYPE_IQ1_M_R4  , 4},
         { GGML_TYPE_BF16_R16  , 16},
+        { GGML_TYPE_IQ3_KS_R16 , 16},
         { GGML_TYPE_Q6_0_R4   , 4},
         { GGML_TYPE_IQ2_BN_R4 , 4},
         { GGML_TYPE_IQ2_K_R4  , 4},
@@ -4951,6 +4952,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_IQ5_KS_R4:
                     case GGML_TYPE_IQ1_S_R4:
                     case GGML_TYPE_IQ1_M_R4:
+                    case GGML_TYPE_IQ3_KS_R16:
                     case GGML_TYPE_IQ4_KS_R16:
                         return true;
                     default:
