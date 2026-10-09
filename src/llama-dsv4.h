@@ -7,6 +7,10 @@ struct llama_batch;
 struct llama_context;
 struct ggml_tensor;
 
+// Per-step capture is limited to the eight-row CSA/LID ring.
+// TODO: Expand to a larger number
+static constexpr int DSV4_PER_STEP_MAX_STATE_ROWS = 8;
+
 bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & batch, bool set_tensors, bool reserve_plan);
 void llama_reset_dsv4_state(llama_context * ctx, int32_t seq_id = -1);
 bool llama_dsv4_spec_ckpt_prepare(llama_context * ctx, int mode, int max_tokens);

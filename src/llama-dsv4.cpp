@@ -48,10 +48,6 @@ static bool dsv4_cache_type_supported(ggml_type type) {
     return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
 }
 
-// Per-step capture is limited to the eight-row CSA/LID ring.
-// TODO: Expand to a larger number
-static constexpr int DSV4_PER_STEP_MAX_STATE_ROWS = 8;
-
 static bool dsv4_validate_cache_type(ggml_type type, int64_t width, const char * name) {
     if (!dsv4_cache_type_supported(type)) {
         LLAMA_LOG_ERROR("%s: unsupported DSV4 %s cache type %s\n", __func__, name, ggml_type_name(type));
@@ -1397,6 +1393,18 @@ static bool dsv4_per_step_capture_group(
             return false;
         }
 
+        // Capture token i's row from the per-token rows of the graph. After persist the ring holds, per slot, only the
+        // last token mapped to it, which is a later token's row when two tokens of the ubatch share a slot.
+        if (plan.state_delta_src_idxs.empty()) {
+            continue;
+        }
+        const auto cap_it = ctx.dsv4.capture_rows.find(state);
+        ggml_tensor * rows = cap_it != ctx.dsv4.capture_rows.end() ? cap_it->second : nullptr;
+        if (rows != nullptr && (rows->type != state->type || rows->ne[0] != state->ne[0] || rows->data == nullptr ||
+                                ggml_backend_sched_get_tensor_backend(ctx.sched, rows) != backend)) {
+            rows = nullptr;
+        }
+
         for (size_t row = 0; row < plan.state_delta_src_idxs.size(); ++row) {
             const int32_t src_idx = plan.state_delta_src_idxs[row];
             const int32_t dst_idx = plan.state_delta_dst_idxs[row];
@@ -1404,14 +1412,19 @@ static bool dsv4_per_step_capture_group(
                 dst_idx < 0 || (uint64_t) dst_idx >= (uint64_t) state->ne[1]) {
                 return false;
             }
+            if (rows != nullptr && (uint64_t) src_idx >= (uint64_t) rows->ne[1]) {
+                return false;
+            }
 
-            ggml_tensor src_view = *state;
+            ggml_tensor src_view = rows != nullptr ? *rows : *state;
             ggml_tensor dst_view = *delta;
             src_view.ne[1] = src_view.ne[2] = src_view.ne[3] = 1;
             dst_view.ne[1] = dst_view.ne[2] = dst_view.ne[3] = 1;
             src_view.nb[2] = src_view.nb[3] = src_view.nb[1];
             dst_view.nb[2] = dst_view.nb[3] = dst_view.nb[1];
-            src_view.data = (char *) state->data + (size_t) dst_idx * state->nb[1];
+            src_view.data = rows != nullptr
+                    ? (char *) rows->data + (size_t) src_idx * rows->nb[1]
+                    : (char *) state->data + (size_t) dst_idx * state->nb[1];
             dst_view.data = (char *) delta->data + (size_t) src_idx * delta->nb[1];
             src_view.view_src = nullptr;
             dst_view.view_src = nullptr;
