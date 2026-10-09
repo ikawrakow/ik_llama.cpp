@@ -64,11 +64,11 @@ class IMatrixDatWriter:
 
                 ncall = int(entry.counts[0] / self.chunk_size)
                 np.array([ncall], dtype=np.int32).tofile(f)
-                np.array([len(entry.values)], dtype=np.int32).tofile(f)
+                np.array([entry.values.size], dtype=np.int32).tofile(f)
 
-                (entry.values / np.float32(self.chunk_size)).astype(np.float32).tofile(f)
+                (entry.values.reshape(-1) / np.float32(self.chunk_size)).astype(np.float32).tofile(f)
 
-                logger.debug("  %s: ncall=%d, nval=%d", name, ncall, len(entry.values))
+                logger.debug("  %s: ncall=%d, nval=%d", name, ncall, entry.values.size)
 
             np.array([self.chunk_count], dtype=np.int32).tofile(f)
 
