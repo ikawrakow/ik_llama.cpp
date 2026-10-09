@@ -2495,7 +2495,7 @@ std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:   return "IQ4_XS - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KS:   return "IQ4_KS - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KS_R4:return "IQ4_KS_R4 - 4.25 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ3_KS_R16:return "IQ3KS_R16 - 3.21 bpw (16-row interleaved)";
+        case LLAMA_FTYPE_MOSTLY_IQ3_KS_R16:return "IQ4_KS_R16 - 3.1875 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KS_R16:return "IQ4_KS_R16 - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ5_KS_R4:return "IQ5_KS_R4 - 5.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KSS:  return "IQ4_KSS - 4.0 bpw";
