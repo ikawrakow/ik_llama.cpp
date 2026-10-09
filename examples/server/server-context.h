@@ -88,7 +88,7 @@ struct server_slot {
 
     std::string oaicompat_model;
     std::string stopping_word;
-    stop_type stop;
+    stop_type stop = STOP_TYPE_NONE;
 
     // For context rewind/ token buffer
     size_t n_buffer = 0;
