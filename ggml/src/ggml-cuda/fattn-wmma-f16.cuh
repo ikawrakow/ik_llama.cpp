@@ -5,8 +5,6 @@
 // SPDX-License-Identifier: MIT
 //
 
-// TODO: attention sinks !!!
-
 #include "common.cuh"
 #include "fattn-common.cuh"
 
@@ -15,7 +13,7 @@
 #endif // FP16_MMA_AVAILABLE
 
 // Dk == K head size, Dv = V head size, VKQ_stride == num VKQ rows calculated in parallel:
-template<int Dk, int Dv, int ncols, int nwarps, int VKQ_stride, int parallel_blocks, typename KQ_acc_t, bool use_softcap>
+template<int Dk, int Dv, int ncols, int nwarps, int VKQ_stride, int parallel_blocks, typename KQ_acc_t, bool use_softcap, bool use_sinks>
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 __launch_bounds__(nwarps*WARP_SIZE, 1)
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
@@ -63,6 +61,11 @@ static __global__ void flash_attn_ext_f16(
         NO_DEVICE_CODE;
         return;
     }
+    // ggml_cuda_flash_attn_ext picks this kernel only below Turing, and on Turing only for Dk != Dv.
+    if (use_sinks && (__CUDA_ARCH__ >= CC_AMPERE || (__CUDA_ARCH__ >= CC_TURING && Dk == Dv))) {
+        NO_DEVICE_CODE;
+        return;
+    }
 
     //In this kernel Q, K, V are matrices while i, j, k are matrix indices.
 
@@ -96,7 +99,6 @@ static __global__ void flash_attn_ext_f16(
     const half  * V_h   = (const half  *) (V + nb22*(blockIdx.y / gqa_ratio)); // K and V have same shape
     const half  * maskh = (const half  *)  mask + (nb31/sizeof(half))* ic0;
     const half2 * mask2 = (const half2 *)  mask + (nb31/sizeof(half))*(ic0/2);
-    [[maybe_unused]] const float * sinks_f = sinks ? (const float *)sinks + blockIdx.y : nullptr;
 
     const int stride_Q = nb01 / sizeof(float);
     const int stride_K = nb11 / sizeof(half);
@@ -132,6 +134,19 @@ static __global__ void flash_attn_ext_f16(
 #pragma unroll
     for (int j = 0; j < ncols/nwarps; ++j) {
         KQ_max_h2[j] = make_half2(-HALF_MAX_HALF, -HALF_MAX_HALF);
+    }
+
+    // Seed the online softmax with the sink. Only ip == 0, so the combine counts it once.
+    if (use_sinks && ip == 0) {
+        const float sinkf = ((const float *) sinks)[blockIdx.y];
+#pragma unroll
+        for (int j = 0; j < ncols/nwarps; ++j) {
+            KQ_max_f[j]     = sinkf;
+            KQ_rowsum_f[j]  = 1.0f;
+            KQ_max_h2[j]    = make_half2(sinkf, sinkf);
+            // the epilogue sums both halves
+            KQ_rowsum_h2[j] = make_half2(1.0f, 0.0f);
+        }
     }
 
     __shared__ half VKQ[ncols*Dv_padded]; // Accumulator for final VKQ slice.
@@ -460,6 +475,18 @@ static_assert(get_VKQ_stride( 80, 1, 16) ==  16, "Test failed.");
 static_assert(get_VKQ_stride( 80, 2, 16) ==  16, "Test failed.");
 static_assert(get_VKQ_stride( 80, 4, 16) ==  16, "Test failed.");
 
+template <int Dk, int Dv, int ncols, int nwarps, int VKQ_stride, int parallel_blocks, typename KQ_acc_t>
+static fattn_kernel_t get_flash_attn_ext_f16(const bool use_softcap, const bool use_sinks) {
+    if (use_sinks) {
+        return use_softcap ?
+            flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, true,  true> :
+            flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, false, true>;
+    }
+    return use_softcap ?
+        flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, true,  false> :
+        flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, false, false>;
+}
+
 template <int Dk, int Dv, int cols_per_block, typename KQ_acc_t>
 void ggml_cuda_flash_attn_ext_wmma_f16_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q = dst->src[0];
@@ -472,27 +499,22 @@ void ggml_cuda_flash_attn_ext_wmma_f16_case(ggml_backend_cuda_context & ctx, ggm
 
     float softcap;
     memcpy(&softcap, (const float *) dst->op_params + 2, sizeof(float));
+    const bool use_sinks = dst->src[4] != nullptr;
 
     if (4*blocks_num_pb1 < 2*nsm) {
         constexpr int parallel_blocks = 4;
-        fattn_kernel_t fattn_kernel = softcap == 0.0f ?
-            flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t, false> :
-            flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t, true>;
+        fattn_kernel_t fattn_kernel = get_flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t>(softcap != 0.0f, use_sinks);
         launch_fattn<Dk, Dv, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         return;
     }
     if (2*blocks_num_pb1 < 2*nsm) {
         constexpr int parallel_blocks = 2;
-        fattn_kernel_t fattn_kernel = softcap == 0.0f ?
-            flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t, false> :
-            flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t, true>;
+        fattn_kernel_t fattn_kernel = get_flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t>(softcap != 0.0f, use_sinks);
         launch_fattn<Dk, Dv, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         return;
     }
     constexpr int parallel_blocks = 1;
-    fattn_kernel_t fattn_kernel = softcap == 0.0f ?
-        flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t, false> :
-        flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t, true>;
+    fattn_kernel_t fattn_kernel = get_flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t>(softcap != 0.0f, use_sinks);
     launch_fattn<Dk, Dv, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
 }
 
