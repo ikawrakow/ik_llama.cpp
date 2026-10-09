@@ -1434,6 +1434,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--top-k") {
         CHECK_ARG
         sparams.top_k = std::stoi(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_TOP_K;
         return true;
     }
     if (arg == "-c" || arg == "--ctx-size") {
@@ -1551,27 +1552,32 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         CHECK_ARG
         const auto sampler_names = string_split(argv[i], ";");
         sparams.samplers_sequence = llama_sampling_types_from_names(sampler_names, true);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS;
         return true;
     }
     if (arg == "--sampling-seq") {
         CHECK_ARG
         sparams.samplers_sequence = llama_sampling_types_from_chars(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS;
         return true;
     }
     if (arg == "--top-p") {
         CHECK_ARG
         sparams.top_p = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_TOP_P;
         return true;
     }
     if (arg == "--min-p") {
         CHECK_ARG
         sparams.min_p = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_MIN_P;
         return true;
     }
     if (arg == "--temp") {
         CHECK_ARG
         sparams.temp = std::stof(argv[i]);
         sparams.temp = std::max(sparams.temp, 0.0f);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_TEMP;
         return true;
     }
     if (arg == "--tfs") {
@@ -1588,11 +1594,13 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         CHECK_ARG
         sparams.penalty_last_n = std::stoi(argv[i]);
         sparams.n_prev = std::max(sparams.n_prev, sparams.penalty_last_n);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N;
         return true;
     }
     if (arg == "--repeat-penalty") {
         CHECK_ARG
         sparams.penalty_repeat = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT;
         return true;
     }
     if (arg == "--frequency-penalty") {
@@ -1618,26 +1626,31 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--mirostat") {
         CHECK_ARG
         sparams.mirostat = std::stoi(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT;
         return true;
     }
     if (arg == "--mirostat-lr") {
         CHECK_ARG
         sparams.mirostat_eta = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA;
         return true;
     }
     if (arg == "--mirostat-ent") {
         CHECK_ARG
         sparams.mirostat_tau = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU;
         return true;
     }
     if (arg == "--xtc-probability") {
         CHECK_ARG
         sparams.xtc_probability = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY;
         return true;
     }
     if (arg == "--xtc-threshold") {
         CHECK_ARG
         sparams.xtc_threshold = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD;
         return true;
     }
     if (arg == "--top-n-sigma") {
@@ -4297,6 +4310,62 @@ std::string fs_get_cache_file(const std::string & filename) {
 }
 
 
+// apply "general.sampling.*" GGUF metadata as defaults for sampling params the
+// user did not explicitly set on the command line (same behavior as mainline)
+static void llama_init_sampler_from_model(const llama_model * model, common_params_sampling & sparams) {
+    const uint64_t config = sparams.user_sampling_config;
+
+    auto get_int32 = [&](const char * key, int32_t & dst, uint64_t user_config) {
+        if (config & user_config) {
+            return;
+        }
+        char buf[64] = {0};
+        if (llama_model_meta_val_str(model, key, buf, sizeof(buf)) > 0) {
+            char * end = nullptr;
+            int32_t v = strtol(buf, &end, 10);
+            if (end && end != buf) {
+                dst = v;
+            }
+        }
+    };
+
+    auto get_float = [&](const char * key, float & dst, uint64_t user_config) {
+        if (config & user_config) {
+            return;
+        }
+        char buf[128] = {0};
+        if (llama_model_meta_val_str(model, key, buf, sizeof(buf)) > 0) {
+            char * end = nullptr;
+            float v = strtof(buf, &end);
+            if (end && end != buf) {
+                dst = v;
+            }
+        }
+    };
+
+    if (!(config & COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS)) {
+        char buf[512] = {0};
+        if (llama_model_meta_val_str(model, "general.sampling.sequence", buf, sizeof(buf)) > 0) {
+            const auto sampler_names = string_split(std::string(buf), ";");
+            if (!sampler_names.empty()) {
+                sparams.samplers_sequence = llama_sampling_types_from_names(sampler_names, true);
+            }
+        }
+    }
+
+    get_int32("general.sampling.top_k",            sparams.top_k,           COMMON_PARAMS_SAMPLING_CONFIG_TOP_K);
+    get_float("general.sampling.top_p",            sparams.top_p,           COMMON_PARAMS_SAMPLING_CONFIG_TOP_P);
+    get_float("general.sampling.min_p",            sparams.min_p,           COMMON_PARAMS_SAMPLING_CONFIG_MIN_P);
+    get_float("general.sampling.xtc_probability",  sparams.xtc_probability, COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY);
+    get_float("general.sampling.xtc_threshold",    sparams.xtc_threshold,   COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD);
+    get_float("general.sampling.temp",             sparams.temp,            COMMON_PARAMS_SAMPLING_CONFIG_TEMP);
+    get_int32("general.sampling.penalty_last_n",   sparams.penalty_last_n,  COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N);
+    get_float("general.sampling.penalty_repeat",   sparams.penalty_repeat,  COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT);
+    get_int32("general.sampling.mirostat",         sparams.mirostat,        COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT);
+    get_float("general.sampling.mirostat_tau",     sparams.mirostat_tau,    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU);
+    get_float("general.sampling.mirostat_eta",     sparams.mirostat_eta,    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA);
+}
+
 struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     llama_init_result iparams;
 
@@ -4316,6 +4385,8 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params.model.c_str());
         return iparams;
     }
+
+    llama_init_sampler_from_model(model, params.sparams);
 
     // a predictor-only MTP GGUF has no main blocks, so it cannot be the target model
     if (llama_model_mtp_package(model) == LLAMA_MTP_PACKAGE_COMPANION) {
