@@ -194,6 +194,12 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         // input for next layer
         inpL = cur;
+
+        // Nanbeige: output_norm between passes.
+        if (hparams.needs_loop_final_norm(il)) {
+            inpL = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(inpL, "loop_norm", il);
+        }
     }
     cur = inpL;
 

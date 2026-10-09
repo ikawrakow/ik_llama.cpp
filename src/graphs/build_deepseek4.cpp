@@ -13,6 +13,7 @@
 struct dsv4_mask_view {
     ggml_tensor * mask;
     int64_t n_kv, n_tokens, n_stream;
+    int64_t stream; // >= 0: the slice of a single stream
     ggml_tensor * view;
 };
 
@@ -36,7 +37,7 @@ static ggml_tensor * dsv4_get_mask_view(
 
     // Only a handful of layouts per graph.
     for (const auto & entry : mask_views) {
-        if (entry.mask == mask && entry.n_kv == n_kv && entry.n_tokens == n_tokens && entry.n_stream == n_stream) {
+        if (entry.mask == mask && entry.n_kv == n_kv && entry.n_tokens == n_tokens && entry.n_stream == n_stream && entry.stream < 0) {
             return entry.view;
         }
     }
@@ -53,7 +54,30 @@ static ggml_tensor * dsv4_get_mask_view(
                 base->nb[1], base->nb[1]*n_tokens_stream, base->nb[1]*n_tokens_stream, 0);
     }
     ggml_format_name(view, "%s_view", mask->name);
-    mask_views.push_back({mask, n_kv, n_tokens, n_stream, view});
+    mask_views.push_back({mask, n_kv, n_tokens, n_stream, -1, view});
+    return view;
+}
+
+// Rows of stream s in a mask with n_tokens rows per stream, shared across layers like the views above.
+static ggml_tensor * dsv4_get_mask_stream(
+        ggml_context * ctx,
+        std::vector<dsv4_mask_view> & mask_views,
+        ggml_tensor * mask,
+        int64_t n_tokens,
+        int64_t s) {
+    if (s == 0 && ggml_is_matrix(mask) && mask->ne[1] == n_tokens) {
+        return mask;
+    }
+
+    for (const auto & entry : mask_views) {
+        if (entry.mask == mask && entry.n_tokens == n_tokens && entry.stream == s) {
+            return entry.view;
+        }
+    }
+
+    auto view = ggml_view_2d(ctx, mask, mask->ne[0], n_tokens, mask->nb[1], s*n_tokens*mask->nb[1]);
+    ggml_format_name(view, "%s_s%d", mask->name, (int) s);
+    mask_views.push_back({mask, mask->ne[0], n_tokens, 1, s, view});
     return view;
 }
 
@@ -830,6 +854,7 @@ static ggml_tensor * dsv4_build_lid_top_k_shared(
         ggml_tensor * indexer_q,
         ggml_tensor * indexer_weights,
         ggml_tensor * indexer_mask,
+        std::vector<dsv4_mask_view> & mask_views,
         int n_top_k, const llm_build_cb & cb) {
     const int64_t n_stream = indexer_k->ne[3];
     const int64_t n_tokens = indexer_q->ne[1];
@@ -852,9 +877,7 @@ static ggml_tensor * dsv4_build_lid_top_k_shared(
         ggml_tensor * w = ggml_view_2d(ctx0, indexer_weights,
                 indexer_weights->ne[0], indexer_weights->ne[1], indexer_weights->nb[1],
                 s*indexer_weights->nb[3]);
-        ggml_tensor * mask = ggml_view_2d(ctx0, indexer_mask,
-                indexer_mask->ne[0], n_tokens, indexer_mask->nb[1],
-                s*n_tokens*indexer_mask->nb[1]);
+        ggml_tensor * mask = dsv4_get_mask_stream(ctx0, mask_views, indexer_mask, n_tokens, s);
 
         ggml_tensor * cur = ggml_indexer_topk(ctx0, k, q, w, mask, nullptr,
                 GGML_UNARY_OP_RELU, n_top_k);
@@ -944,7 +967,7 @@ static ggml_tensor * dsv4_build_lid_top_k(
     const uint32_t n_top_k = (uint32_t) std::min<int64_t>(n_lid, hparams.indexer_top_k);
     if (llm.cparams.fused_idx_topk && n_lid > n_top_k) {
         if (ggml_tensor * selected = dsv4_build_lid_top_k_shared(ctx0,
-                    indexer_k, indexer_q, indexer_weights, lid_mask, (int) n_top_k, cb)) {
+                    indexer_k, indexer_q, indexer_weights, lid_mask, mask_views, (int) n_top_k, cb)) {
             if (selected) {
                 ggml_build_forward_expand(gf, selected);
                 llm.cb(selected, "lid_top_k", il);
@@ -2527,7 +2550,7 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
     const uint32_t n_top_k = (uint32_t) std::min<int64_t>(n_lid, hparams.indexer_top_k);
     if (!is_cand_source && llm.cparams.fused_idx_topk && n_lid > n_top_k) {
         if (ggml_tensor * selected = dsv4_build_lid_top_k_shared(ctx0,
-                    indexer_k, indexer_q, indexer_weights, lid_mask, (int) n_top_k, cb)) {
+                    indexer_k, indexer_q, indexer_weights, lid_mask, mask_views, (int) n_top_k, cb)) {
             if (selected) {
                 ggml_build_forward_expand(gf, selected);
                 llm.cb(selected, "lid_top_k", il);

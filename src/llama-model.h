@@ -491,17 +491,18 @@ struct llama_layer {
     struct ggml_tensor * mhc_mlp_beta     = nullptr;
     struct ggml_tensor * mhc_mlp_gamma    = nullptr;
 
-    std::unique_ptr<ggml_tensor> computed_wk_b;
-    std::unique_ptr<ggml_tensor> computed_wk_b_pp;
-    std::unique_ptr<ggml_tensor> computed_wv_b;
-    std::unique_ptr<ggml_tensor> computed_wkv_b;
-    std::unique_ptr<ggml_tensor> computed_param_sink_blk;
-    std::unique_ptr<ggml_tensor> computed_param_sink_lat_t;
+    // shared_ptr so a looped model can alias the layers.
+    std::shared_ptr<ggml_tensor> computed_wk_b;
+    std::shared_ptr<ggml_tensor> computed_wk_b_pp;
+    std::shared_ptr<ggml_tensor> computed_wv_b;
+    std::shared_ptr<ggml_tensor> computed_wkv_b;
+    std::shared_ptr<ggml_tensor> computed_param_sink_blk;
+    std::shared_ptr<ggml_tensor> computed_param_sink_lat_t;
 
     // Per-device replicas of computed wk_b/wv_b (-sm graph). Buffers owned via model.bufs.
-    std::vector<std::unique_ptr<ggml_tensor>> computed_wk_b_replicas;
-    std::vector<std::unique_ptr<ggml_tensor>> computed_wk_b_pp_replicas;
-    std::vector<std::unique_ptr<ggml_tensor>> computed_wv_b_replicas;
+    std::vector<std::shared_ptr<ggml_tensor>> computed_wk_b_replicas;
+    std::vector<std::shared_ptr<ggml_tensor>> computed_wk_b_pp_replicas;
+    std::vector<std::shared_ptr<ggml_tensor>> computed_wv_b_replicas;
 };
 
 struct llama_lora_adapter;

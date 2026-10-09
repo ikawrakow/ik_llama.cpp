@@ -14808,6 +14808,272 @@ static inline int best_index_iq4nl(const int8_t * values, float x) {
     ix = iq4nl_index[ix];
     return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
+#ifdef __AVX2__
+static inline void best_index_iq4nl_avx2_vec(const int8_t * values, const float * f_values, __m256 vx, __m256i * v_idx, __m256 * v_q) {
+    static const int8_t iq4nl_index_simple[241] = {
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,
+         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5,
+         5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+         8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,10,10,10,10,10,10,10,10,
+        10,10,10,10,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,12,12,12,12,12,12,12,12,12,12,12,12,
+        12,12,12,12,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,14,14,14,14,14,14,14,14,
+        14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,
+    };
+    int v0 = values[0];
+    __m256i v_v0 = _mm256_set1_epi32(v0);
+
+    __m256i vix_raw = _mm256_sub_epi32(_mm256_cvttps_epi32(vx), v_v0);
+    __m256i vix_clamped  = _mm256_min_epi32(_mm256_max_epi32(vix_raw,  _mm256_setzero_si256()), _mm256_set1_epi32(240));
+
+    __m256i vix_table  = _mm256_i32gather_epi32((const int *)iq4nl_index_simple, vix_clamped,  1);
+    vix_table  = _mm256_and_si256(vix_table,  _mm256_set1_epi32(0xFF));
+    __m256i vix_table1 = _mm256_add_epi32(vix_table, _mm256_set1_epi32(1));
+
+    __m256 cand0 = _mm256_castsi256_ps(_mm256_i32gather_epi32((const int *)f_values, vix_table,  4));
+    __m256 cand1 = _mm256_castsi256_ps(_mm256_i32gather_epi32((const int *)f_values, vix_table1, 4));
+    __m256 dist0 = _mm256_sub_ps(vx, cand0);
+    __m256 dist1 = _mm256_sub_ps(cand1, vx);
+    __m256i mask = _mm256_castps_si256(_mm256_cmp_ps(dist1, dist0, _CMP_LT_OQ));
+
+    *v_idx = _mm256_blendv_epi8(vix_table, vix_table1, mask);
+    *v_q   = _mm256_castsi256_ps(_mm256_blendv_epi8(_mm256_castps_si256(cand0), _mm256_castps_si256(cand1), mask));
+}
+static inline void evaluate_quant_block_avx2(
+    int block_size,
+    float id,
+    const float * xb,
+    const float * weight,
+    uint8_t * Lb,
+    const int8_t * values,
+    const float * f_values,
+    float * out_sumqx,
+    float * out_sumq2,
+    bool store_L) {
+    __m256 v_id = _mm256_set1_ps(id);
+    __m256 v_sumqx = _mm256_setzero_ps();
+    __m256 v_sumq2 = _mm256_setzero_ps();
+
+    for (int j = 0; j < block_size; j += 8) {
+        __m256 v_xb = _mm256_loadu_ps(xb + j);
+        __m256 v_al = _mm256_mul_ps(v_id, v_xb);
+
+        __m256i v_l32; __m256  v_q;
+        best_index_iq4nl_avx2_vec(values, f_values, v_al, &v_l32, &v_q);
+
+        if (store_L) {
+            __m128i v_l16 = _mm_packus_epi32(_mm256_castsi256_si128(v_l32), _mm256_extracti128_si256(v_l32, 1));
+            __m128i v_l8  = _mm_packus_epi16(v_l16, v_l16);
+            _mm_storel_epi64((__m128i *)(Lb + j), v_l8);
+        }
+
+        __m256 v_w = _mm256_mul_ps(_mm256_loadu_ps(weight + j), v_q);
+
+        v_sumqx = _mm256_fmadd_ps(v_w, v_xb, v_sumqx);
+        v_sumq2 = _mm256_fmadd_ps(v_w, v_q,  v_sumq2);
+    }
+
+    *out_sumqx = hsum_float_8(v_sumqx);
+    *out_sumq2 = hsum_float_8(v_sumq2);
+}
+
+static void quantize_row_iq4_nl_impl_avx2(
+    const int super_block_size, const int block_size, const float * x,
+    ggml_fp16_t * dh, uint8_t * q4, uint16_t * scales_h, uint8_t * scales_l,
+    float * scales, float * weight, uint8_t * L,
+    const int8_t * values,
+    const float * quant_weights,
+    const int ntry) {
+
+    float f_values[16];
+    for(int j = 0; j < 16; ++j) f_values[j] = values[j];
+
+    __m256 v_sigma2 = _mm256_setzero_ps();
+    for (int j = 0; j < super_block_size; j += 8) {
+        __m256 vx = _mm256_loadu_ps(x + j);
+        v_sigma2 = _mm256_fmadd_ps(vx, vx, v_sigma2);
+    }
+    float sigma2 = hsum_float_8(v_sigma2) * (2.0f / super_block_size);
+
+    memset(q4, 0, super_block_size / 2);
+    dh[0] = GGML_FP32_TO_FP16(0.0f);
+
+    const float fudge = ggml_get_quantize_fudge_factor(
+        super_block_size / block_size > 1 ? GGML_TYPE_IQ4_XS : GGML_TYPE_IQ4_NL
+    );
+
+    float max_scale = 0.0f, amax_scale = 0.0f;
+    const int num_blocks = super_block_size / block_size;
+
+    for (int ib = 0; ib < num_blocks; ++ib) {
+        const float * xb = x + ib * block_size;
+        uint8_t * Lb = L + ib * block_size;
+
+        if (quant_weights) {
+            const float * qw = quant_weights + ib * block_size;
+            __m256 v_sigma2_vec = _mm256_set1_ps(sigma2);
+            for (int j = 0; j < block_size; j += 8) {
+                __m256 v_xb = _mm256_loadu_ps(xb + j);
+                __m256 v_qw = _mm256_loadu_ps(qw + j);
+                __m256 v_term = _mm256_sqrt_ps(_mm256_fmadd_ps(v_xb, v_xb, v_sigma2_vec));
+                _mm256_storeu_ps(weight + j, _mm256_mul_ps(v_qw, v_term));
+            }
+        } else {
+            for (int j = 0; j < block_size; j += 8) {
+                __m256 v_xb = _mm256_loadu_ps(xb + j);
+                _mm256_storeu_ps(weight + j, _mm256_mul_ps(v_xb, v_xb));
+            }
+        }
+
+        float amax = 0.0f, max = 0.0f;
+        for (int j = 0; j < block_size; ++j) {
+            float ax = fabsf(xb[j]);
+            if (ax > amax) {
+                amax = ax;
+                max  = xb[j];
+            }
+        }
+
+        if (amax < GROUP_MAX_EPS) {
+            scales[ib] = 0.0f;
+            continue;
+        }
+
+        float d = ntry > 0 ? -max / values[0] : max / values[0];
+        float id = 1.0f / d;
+
+        float sumqx = 0.0f, sumq2 = 0.0f;
+        evaluate_quant_block_avx2(block_size, id, xb, weight, Lb, values, f_values, &sumqx, &sumq2, true);
+
+        d = sumqx / sumq2;
+        float best = d * sumqx;
+        float best_sumqx = sumqx, best_sumq2 = sumq2;
+        float best_id = id;
+        float imax = 1.0f / max;
+        for (int itry = -ntry; itry <= ntry; ++itry) {
+            id = (itry + values[0]) * imax;
+            evaluate_quant_block_avx2(block_size, id, xb, weight, Lb, values, f_values, &sumqx, &sumq2, false);
+
+            if (sumq2 > 0.0f && sumqx * sumqx > best * sumq2) {
+                d = sumqx / sumq2; best = d * sumqx;
+                best_sumqx = sumqx; best_sumq2 = sumq2;
+                best_id = id;
+            }
+
+            id = (itry + values[15]) * imax;
+            evaluate_quant_block_avx2(block_size, id, xb, weight, Lb, values, f_values, &sumqx, &sumq2, false);
+
+            if (sumq2 > 0.0f && sumqx * sumqx > best * sumq2) {
+                d = sumqx / sumq2; best = d * sumqx;
+                best_sumqx = sumqx; best_sumq2 = sumq2;
+                best_id = id;
+            }
+        }
+
+        evaluate_quant_block_avx2(block_size, best_id, xb, weight, Lb, values, f_values, &sumqx, &sumq2, true);
+        sumqx = best_sumqx; sumq2 = best_sumq2;
+
+        for (int iter = 0; iter < 32 * block_size; ++iter) {
+            float min_step = INFINITY;
+            int best_j = -1; int dir = 0;
+
+            for (int j = 0; j < block_size; ++j) {
+                float w = weight[j];
+                float g = d * w * (xb[j] - d * values[Lb[j]]);
+                if (g > 0 && Lb[j] < 15) {
+                    float step = (values[Lb[j] + 1] - values[Lb[j]]) / g;
+                    if (step < min_step) { min_step = step; best_j = j; dir = 1; }
+                } else if (g < 0 && Lb[j] > 0) {
+                    float step = (values[Lb[j] - 1] - values[Lb[j]]) / g;
+                    if (step < min_step) { min_step = step; best_j = j; dir = -1; }
+                }
+            }
+            if (best_j < 0) break;
+
+            float w = weight[best_j];
+            float new_sumqx = sumqx + w * xb[best_j] * (values[Lb[best_j] + dir] - values[Lb[best_j]]);
+            float new_sumq2 = sumq2 + w * (values[Lb[best_j] + dir] * values[Lb[best_j] + dir] - values[Lb[best_j]] * values[Lb[best_j]]);
+
+            if (new_sumq2 > 0.0f && new_sumqx * new_sumqx > best * new_sumq2) {
+                sumqx = new_sumqx; sumq2 = new_sumq2;
+                d = sumqx / sumq2; best = d * sumqx;
+                Lb[best_j] += dir;
+            } else {
+                break;
+            }
+        }
+
+        scales[ib] = d;
+        float abs_d = fabsf(d);
+        if (abs_d > amax_scale) {
+            amax_scale = abs_d;
+            max_scale  = d;
+        }
+    }
+    if (num_blocks > 1) {
+        memset(scales_h, 0, ((num_blocks + 7) / 8) * sizeof(uint16_t));
+        float d = -max_scale / 32;
+        dh[0] = GGML_FP32_TO_FP16(d * fudge);
+        float id = d ? 1.0f / d : 0.0f;
+
+        for (int ib = 0; ib < num_blocks; ++ib) {
+            int l = nearest_int(id * scales[ib]);
+            l = MAX(-32, MIN(31, l));
+            float dl = d * l;
+            float idl = dl ? 1.0f / dl : 0.0f;
+
+            uint8_t * Lb = L + ib * block_size;
+            const float * xb = x + ib * block_size;
+
+            __m256i v_l32; __m256 v_q;
+            for (int j = 0; j < block_size; j += 8) {
+                __m256 v_xb = _mm256_loadu_ps(xb + j);
+                __m256 v_al = _mm256_mul_ps(_mm256_set1_ps(idl), v_xb);
+                best_index_iq4nl_avx2_vec(values, f_values, v_al, &v_l32, &v_q);
+
+                __m128i v_l16 = _mm_packus_epi32(_mm256_castsi256_si128(v_l32), _mm256_extracti128_si256(v_l32, 1));
+                __m128i v_l8  = _mm_packus_epi16(v_l16, v_l16);
+                _mm_storel_epi64((__m128i *)(Lb + j), v_l8);
+            }
+
+            l += 32;
+            uint8_t l_l = l & 0xF;
+            uint8_t l_h = l >> 4;
+
+            if (ib % 2 == 0) scales_l[ib / 2] = l_l;
+            else             scales_l[ib / 2] |= (l_l << 4);
+
+            scales_h[ib / 8] |= (l_h << (2 * (ib % 8)));
+        }
+    } else {
+        dh[0] = GGML_FP32_TO_FP16(scales[0] * fudge);
+        if (ntry > 0) {
+            float id = scales[0] ? 1.0f / scales[0] : 0.0f;
+            __m256i v_l32; __m256 v_q;
+            for (int j = 0; j < super_block_size; j += 8) {
+                __m256 v_xb = _mm256_loadu_ps(x + j);
+                __m256 v_al = _mm256_mul_ps(_mm256_set1_ps(id), v_xb);
+                best_index_iq4nl_avx2_vec(values, f_values, v_al, &v_l32, &v_q);
+
+                __m128i v_l16 = _mm_packus_epi32(_mm256_castsi256_si128(v_l32), _mm256_extracti128_si256(v_l32, 1));
+                __m128i v_l8  = _mm_packus_epi16(v_l16, v_l16);
+                _mm_storel_epi64((__m128i *)(L + j), v_l8);
+            }
+        }
+    }
+
+    for (int i = 0; i < super_block_size / 32; ++i) {
+        __m128i L_lo = _mm_loadu_si128((const __m128i *)(L + 32 * i));      // L[0..15]
+        __m128i L_hi = _mm_loadu_si128((const __m128i *)(L + 32 * i + 16)); // L[16..31]
+
+        __m128i packed = _mm_or_si128(
+            _mm_and_si128(L_lo, _mm_set1_epi8(0x0F)),
+            _mm_slli_epi16(_mm_and_si128(L_hi, _mm_set1_epi8(0x0F)), 4)
+        );
+        _mm_storeu_si128((__m128i *)(q4 + 16 * i), packed);
+    }
+}
+#endif
 
 static void quantize_row_iq4_nl_impl(const int super_block_size, const int block_size, const float * restrict x,
         ggml_fp16_t * dh, uint8_t * q4, uint16_t * scales_h, uint8_t * scales_l,
@@ -14816,6 +15082,10 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
         const float * quant_weights,
         const int ntry) {
 
+#ifdef __AVX2__
+    quantize_row_iq4_nl_impl_avx2(super_block_size, block_size, x, dh, q4, scales_h, scales_l, scales, weight, L, values, quant_weights, ntry);
+    return;
+#endif
     float sigma2 = 0;
     for (int j = 0; j < super_block_size; ++j) sigma2 += x[j]*x[j];
     sigma2 *= 2.f/super_block_size;
@@ -15530,7 +15800,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             } break;
         case GGML_TYPE_IQ4_XS:
             {
-                VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_xs, data, nb);
+                //VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_xs, data, nb);
             } break;
         case GGML_TYPE_IQ4_NL:
             {

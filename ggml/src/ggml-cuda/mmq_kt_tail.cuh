@@ -2,6 +2,82 @@
 
 template <ggml_type type> struct mmq_kt_tail { static constexpr bool value = false; };
 
+template <> struct mmq_kt_tail<GGML_TYPE_IQ2_KT> {
+    static constexpr bool value = true;
+    template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load(
+        const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, const int & nt) {
+
+    constexpr uint32_t ka = 0xCBAC1FED;
+    constexpr uint32_t km = 0x3f3f3f3f;
+
+#ifdef INT8_MMA_AVAILABLE
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + WARP_SIZE*2);
+#else
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_IQ4_XS, mmq_y);
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + txs.qs);
+#endif // INT8_MMA_AVAILABLE
+
+    const int kqsx = threadIdx.x;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
+        int i = i0 + threadIdx.y;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_iq2_kt * bxi = (const block_iq2_kt *)(x + i*stride + sizeof(float)) + kbx0;
+
+        int2 v = {0, 0};
+        int ib32 = kqsx/4;
+        int j    = kqsx%4;
+        if (ib32 < nt) {
+            const auto ql = (const uint16_t *)bxi->ql;
+            uint32_t val = ql[4*ib32+j] + 4096;
+            for (int k = 0; k < 4; ++k) {
+                val *= ka;
+                v.x |= (ggml_cuda_dp4a(val & km, 0x01010101, -126) & 0xff) << 8*k;
+            }
+            for (int k = 0; k < 4; ++k) {
+                val *= ka;
+                v.y |= (ggml_cuda_dp4a(val & km, 0x01010101, -126) & 0xff) << 8*k;
+            }
+        }
+#ifdef INT8_MMA_AVAILABLE
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 8*ib32 + 2*j + 0] = v.x;
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 8*ib32 + 2*j + 1] = v.y;
+#else
+        x_qs[i*(2*WARP_SIZE + 1)     + 8*ib32 + 2*j + 0] = v.x;
+        x_qs[i*(2*WARP_SIZE + 1)     + 8*ib32 + 2*j + 1] = v.y;
+#endif // INT8_MMA_AVAILABLE
+    }
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * 4) {
+        int i = i0 + threadIdx.y * 4 + threadIdx.x / (WARP_SIZE/4);
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const float * dptr = (const float *)(x + i*stride);
+        const float d = dptr[0] * 1.05f;
+        const block_iq2_kt * bxi = (const block_iq2_kt *)(dptr + 1) + kbx0;
+        int ib32 = threadIdx.x % 8;
+        const int ls = ib32 < nt ? iq4k_values[(bxi->scales[ib32%4] >> 4*(ib32/4)) & 0xf] : 0;
+
+#ifdef INT8_MMA_AVAILABLE
+        x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + threadIdx.x % 8] = d * ls;
+#else
+        x_df[i*(WARP_SIZE/4) + i/4   + threadIdx.x % 8] = d * ls;
+#endif // INT8_MMA_AVAILABLE
+    }
+    }
+};
+
 template <> struct mmq_kt_tail<GGML_TYPE_IQ3_KT> {
     static constexpr bool value = true;
     template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load(

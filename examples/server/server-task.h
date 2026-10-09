@@ -25,6 +25,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
     SERVER_TASK_TYPE_RERANK,
+    SERVER_TASK_TYPE_DECISION,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_NEXT_RESPONSE,
@@ -98,6 +99,12 @@ struct server_task {
 
     bool infill = false;
     bool embedding = false;
+
+    // used by SERVER_TASK_TYPE_DECISION
+    struct decision {
+        std::vector<llama_token> labels; // logits of these tokens, at the last prompt token
+    };
+    decision decision;
 
     server_task() = default;
     server_task(server_task_type type) : type(type) {}
@@ -351,6 +358,19 @@ struct server_task_result_embd : server_task_result {
     }
 };
 
+struct server_task_result_decision : server_task_result {
+    std::vector<float> scores; // one raw model output per option
+
+    int32_t n_tokens;
+
+    virtual json to_json() override {
+        return json{
+            {"index",            index},
+            {"scores",           scores},
+            {"tokens_evaluated", n_tokens},
+        };
+    }
+};
 
 // using shared_ptr for polymorphism of server_task_result
 using server_task_result_ptr = std::unique_ptr<server_task_result>;

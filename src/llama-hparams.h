@@ -27,7 +27,11 @@ struct llama_hparams {
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
     uint32_t n_embd_out = 0;
-    uint32_t n_layer;
+    uint32_t n_layer;                   // layers executed by the graph / addressed by the KV cache
+    uint32_t n_layer_all = 0;           // unrolled layer count; 0 => no loops
+    uint32_t n_layer_phys = 0;          // physical layer count for looped models; 0 => not looped
+    uint32_t n_loops = 1;               // number of times the physical layers are repeated
+    bool     skip_loop_final_norm = false; // if true, do not apply output_norm between loops
     int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
     uint32_t n_rot;
     uint32_t n_rot_swa;
@@ -344,6 +348,12 @@ struct llama_hparams {
         return false;
     }
 
+    // looped model: output_norm between passes (not after the last).
+    bool needs_loop_final_norm(int il) const {
+        return !skip_loop_final_norm && n_layer_phys > 0 &&
+               il + 1 < (int) n_layer && (il + 1) % (int) n_layer_phys == 0;
+    }
+
     bool has_kv(uint32_t il) const {
         return n_layer_kv_from_start > 0 ? il < n_layer_kv_from_start : true;
     }
@@ -531,6 +541,10 @@ struct llama_hparams {
     uint32_t rope_n_rot(uint32_t il) const {
         const uint32_t v = rope_dim_per_layer[il];
         return v ? v : swa_layers[il] ? n_rot_swa : n_rot;
+    }
+
+    bool use_mrope() const {
+        return rope_sections[0] > 0 && rope_sections[1] > 0;
     }
 
     static const char * rope_scaling_type_name(llama_rope_scaling_type);

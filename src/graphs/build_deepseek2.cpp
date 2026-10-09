@@ -2,6 +2,7 @@
 #include "../llama-model.h"
 #include "../llama-context.h"
 
+#include <algorithm>
 #include <vector>
 
 // Per-rank attention for DEEPSEEK2 under -sm graph (requires -fa + -mla>=1).
@@ -108,6 +109,14 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
         if (rope_cache) {
             q_rope = ggml_rope_fast(ctx0, q_rope, rope_cache);
             k_rope = ggml_rope_fast(ctx0, k_rope, rope_cache);
+        } else if (hparams.use_mrope()) {
+            // BailingMoe3-VL: mrope sections over the rotary part of Q/K
+            int sections[4];
+            std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+            q_rope = ggml_rope_multi(ctx0, q_rope, inp_pos, nullptr, n_rot, sections, rope_type,
+                    n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+            k_rope = ggml_rope_multi(ctx0, k_rope, inp_pos, nullptr, n_rot, sections, rope_type,
+                    n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor_scaled, beta_fast, beta_slow);
         } else {
             q_rope = ggml_rope_ext(ctx0, q_rope, inp_pos, nullptr, n_rot, rope_type,
                     n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor_scaled, beta_fast, beta_slow);
@@ -868,6 +877,14 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
         if (rope_cache) {
             q_rope = ggml_rope_fast(ctx0, q_rope, rope_cache);
             k_rope = ggml_rope_fast(ctx0, k_rope, rope_cache);
+        } else if (hparams.use_mrope()) {
+            // BailingMoe3-VL: mrope sections over the rotary part of Q/K
+            int sections[4];
+            std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+            q_rope = ggml_rope_multi(ctx0, q_rope, inp_pos, nullptr, n_rot, sections, rope_type,
+                    n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+            k_rope = ggml_rope_multi(ctx0, k_rope, inp_pos, nullptr, n_rot, sections, rope_type,
+                    n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor_scaled, beta_fast, beta_slow);
         } else {
             q_rope = ggml_rope_ext(ctx0, q_rope, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor_scaled, beta_fast, beta_slow);
