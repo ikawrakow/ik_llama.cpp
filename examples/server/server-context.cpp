@@ -2770,11 +2770,17 @@ void server_context::split_multiprompt_task(int id_multi, server_task& multiprom
 
 
 
+// Slot-file checkpoint appendix. Per record: pos_min, pos_max, two legacy llama_pos fields, data_len,
+// data. quillama stores n_tokens in the first legacy field (0 in older files: then pos_max + 1 is
+// used). Returns the bytes written, or 0 when nothing could be written completely.
 static size_t save_checkpoints_to_file(const std::string & filename, const std::list<server_prompt_checkpoint> & checkpoints) {
     if (checkpoints.size() == 0) {
         return 0;
     }
     std::ofstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        return 0;
+    }
     uint32_t magic = LLAMA_STATE_SEQ_MAGIC;
     file.write(reinterpret_cast<const char *>(&magic), sizeof(magic));
     uint32_t version = LLAMA_STATE_SEQ_VERSION;
@@ -2785,66 +2791,91 @@ static size_t save_checkpoints_to_file(const std::string & filename, const std::
     for (const auto & checkpoint : checkpoints) {
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_min), sizeof(checkpoint.pos_min));
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_max), sizeof(checkpoint.pos_max));
-        // Save the legacy fields from old file format
-        llama_pos pos_min_prompt = 0;
-        llama_pos pos_max_prompt = 0;
-        file.write(reinterpret_cast<const char *>(&pos_min_prompt), sizeof(pos_min_prompt));
-        file.write(reinterpret_cast<const char *>(&pos_max_prompt), sizeof(pos_max_prompt));
+        llama_pos n_tokens_field = (llama_pos) std::min<int64_t>(std::max<int64_t>(checkpoint.n_tokens, 0), INT32_MAX);
+        llama_pos legacy_field   = 0;
+        file.write(reinterpret_cast<const char *>(&n_tokens_field), sizeof(n_tokens_field));
+        file.write(reinterpret_cast<const char *>(&legacy_field), sizeof(legacy_field));
         size_t data_len = checkpoint.data.size();
         file.write(reinterpret_cast<const char *>(&data_len), sizeof(data_len));
         if (data_len > 0) {
             file.write(reinterpret_cast<const char *>(checkpoint.data.data()), data_len * sizeof(uint8_t));
         }
     }
+    file.flush();
+    if (!file.good()) {
+        file.close();
+        remove(filename.c_str());
+        return 0;
+    }
     size_t pos = file.tellp();
     file.close();
     return pos;
 }
 
-static size_t load_checkpoints_from_file(const std::string & filename, std::list<server_prompt_checkpoint> & checkpoints) {
-    std::ifstream file(filename, std::ios::binary);
+// Reads a checkpoint appendix. Every size is bounded by the bytes left in the file, so a truncated or
+// corrupt file is rejected (returns 0, no checkpoints) instead of allocating an arbitrary amount of
+// memory or keeping garbage; the slot then falls back to reprocessing the prompt. With max_keep > 0
+// only the newest max_keep checkpoints are kept.
+static size_t load_checkpoints_from_file(const std::string & filename, std::list<server_prompt_checkpoint> & checkpoints, size_t max_keep = 0) {
+    std::ifstream file(filename, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         return 0;
     }
     clear_checkpoints_and_spill(checkpoints);
-    // version checks
-    {
-        uint32_t magic;
-        file.read(reinterpret_cast<char *>(&magic), sizeof(magic));
-        uint32_t version;
-        file.read(reinterpret_cast<char *>(&version), sizeof(version));
-
-        if (magic != LLAMA_STATE_SEQ_MAGIC || version != LLAMA_STATE_SEQ_VERSION) {
-            LLAMA_LOG_ERROR("%s: unknown (magic, version) for checkpoint file: %08x, %08x\n", __func__, magic, version);
+    const std::streamoff file_size = file.tellg();
+    file.seekg(0);
+    auto remaining = [&]() -> uint64_t {
+        const std::streamoff cur = file.tellg();
+        return cur < 0 || cur > file_size ? 0 : (uint64_t) (file_size - cur);
+    };
+    auto read = [&](void * dst, size_t n) {
+        if (remaining() < n) {
+            return false;
+        }
+        file.read(reinterpret_cast<char *>(dst), n);
+        return (bool) file;
+    };
+    uint32_t magic = 0, version = 0;
+    if (!read(&magic, sizeof(magic)) || !read(&version, sizeof(version)) ||
+        magic != LLAMA_STATE_SEQ_MAGIC || version != LLAMA_STATE_SEQ_VERSION) {
+        LLAMA_LOG_ERROR("%s: unknown (magic, version) for checkpoint file: %08x, %08x\n", __func__, magic, version);
+        return 0;
+    }
+    constexpr size_t record_header = 4*sizeof(llama_pos) + sizeof(size_t);
+    size_t count = 0;
+    if (!read(&count, sizeof(count)) || count > remaining() / record_header) {
+        LLAMA_LOG_ERROR("%s: invalid checkpoint count in %s\n", __func__, filename.c_str());
+        return 0;
+    }
+    std::list<server_prompt_checkpoint> loaded;
+    for (size_t i = 0; i < count; i++) {
+        server_prompt_checkpoint checkpoint;
+        llama_pos n_tokens_field = 0, legacy_field = 0;
+        size_t data_len = 0;
+        bool ok = read(&checkpoint.pos_min, sizeof(checkpoint.pos_min)) &&
+                  read(&checkpoint.pos_max, sizeof(checkpoint.pos_max)) &&
+                  read(&n_tokens_field, sizeof(n_tokens_field)) &&
+                  read(&legacy_field, sizeof(legacy_field)) &&
+                  read(&data_len, sizeof(data_len));
+        // a checkpoint always holds a state: an empty blob would roll back without restoring anything
+        ok = ok && data_len > 0 && data_len <= remaining() && checkpoint.pos_min <= checkpoint.pos_max;
+        if (ok) {
+            checkpoint.data.resize(data_len);
+            ok = read(checkpoint.data.data(), data_len);
+        }
+        if (!ok) {
+            LLAMA_LOG_ERROR("%s: truncated or corrupt checkpoint %zu of %zu in %s, ignoring the checkpoints\n", __func__, i, count, filename.c_str());
             return 0;
         }
-    }
-    // load the checkpoints
-    {
-        size_t count;
-        file.read(reinterpret_cast<char *>(&count), sizeof(count));
-
-        for (size_t i = 0; i < count; i++) {
-            server_prompt_checkpoint checkpoint;
-            file.read(reinterpret_cast<char *>(&checkpoint.pos_min), sizeof(checkpoint.pos_min));
-            file.read(reinterpret_cast<char *>(&checkpoint.pos_max), sizeof(checkpoint.pos_max));
-            // Read and discard legacy fields from old file format
-            llama_pos pos_min_prompt = 0;
-            llama_pos pos_max_prompt = 0;
-            file.read(reinterpret_cast<char *>(&pos_min_prompt), sizeof(pos_min_prompt));
-            file.read(reinterpret_cast<char *>(&pos_max_prompt), sizeof(pos_max_prompt));
-
-            size_t data_len;
-            file.read(reinterpret_cast<char *>(&data_len), sizeof(data_len));
-            if (data_len > 0) {
-                checkpoint.data.resize(data_len);
-                file.read(reinterpret_cast<char *>(checkpoint.data.data()), data_len * sizeof(uint8_t));
-            }
-            checkpoints.push_back(checkpoint);
+        checkpoint.n_tokens = n_tokens_field > 0 ? n_tokens_field : (int64_t) checkpoint.pos_max + 1;
+        loaded.push_back(std::move(checkpoint));
+        if (max_keep > 0 && loaded.size() > max_keep) {
+            loaded.pop_front();
         }
     }
     size_t pos = file.tellg();
     file.close();
+    checkpoints = std::move(loaded);
     return pos;
 }
 
@@ -3105,7 +3136,34 @@ void server_context::process_single_task(server_task&& task) {
         std::string filepath = task.data.at("filepath");
         save_server_tokens_to_file(filepath+".tokens.json", slot->cache_tokens);
         create_checkpoint(*slot);
-        size_t saved = save_checkpoints_to_file(filepath + ".checkpoints", slot->server_cached_prompt.checkpoints);
+        size_t saved = 0;
+        if (!slot->server_cached_prompt.checkpoints.empty()) {
+            // spilled checkpoints have no data in memory: read their blob back for the save,
+            // then drop it again (the spill file stays valid)
+            std::vector<server_prompt_checkpoint *> reloaded;
+            bool all_present = true;
+            for (auto & ckpt : slot->server_cached_prompt.checkpoints) {
+                if (ckpt.data.empty() && !ckpt.spill_path.empty()) {
+                    if (load_spilled_checkpoint(ckpt)) {
+                        reloaded.push_back(&ckpt);
+                    }
+                }
+                all_present = all_present && !ckpt.data.empty();
+            }
+            if (all_present) {
+                saved = save_checkpoints_to_file(filepath + ".checkpoints", slot->server_cached_prompt.checkpoints);
+            }
+            for (auto * ckpt : reloaded) {
+                ckpt->data.clear();
+                ckpt->data.shrink_to_fit();
+            }
+            if (saved == 0) {
+                send_error(task, "Unable to write the context checkpoints of the slot save file", ERROR_TYPE_SERVER);
+                break;
+            }
+        } else {
+            remove((filepath + ".checkpoints").c_str()); // no stale checkpoints from an older save
+        }
 
         const size_t nwrite = llama_state_seq_save_file(ctx, filepath.c_str(), slot->id, slot->cache_tokens.data(), token_count);
 
@@ -3154,7 +3212,11 @@ void server_context::process_single_task(server_task&& task) {
             break;
         }
         load_server_tokens_from_file(filepath+".tokens.json", slot->cache_tokens);
-        size_t loaded = load_checkpoints_from_file(filepath + ".checkpoints", slot->server_cached_prompt.checkpoints);
+        size_t loaded = load_checkpoints_from_file(filepath + ".checkpoints", slot->server_cached_prompt.checkpoints,
+                                                   params_base.ctx_checkpoints_n > 0 ? (size_t) params_base.ctx_checkpoints_n : 0);
+        if (loaded > 0) {
+            SLT_INF(*slot, "restored %zu context checkpoints from %s.checkpoints\n", slot->server_cached_prompt.checkpoints.size(), filename.c_str());
+        }
 
         const int64_t t_end = ggml_time_us();
         const double t_restore_ms = (t_end - t_start) / 1000.0;

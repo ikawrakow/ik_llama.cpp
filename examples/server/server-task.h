@@ -376,10 +376,10 @@ struct server_task_result_decision : server_task_result {
 using server_task_result_ptr = std::unique_ptr<server_task_result>;
 
 struct server_prompt_checkpoint {
-    llama_pos pos_min;
-    llama_pos pos_max;
+    llama_pos pos_min = 0;
+    llama_pos pos_max = 0;
 
-    int64_t n_tokens;
+    int64_t n_tokens = 0;
 
     // the checkpoint taken at the end of the prompt; kept while another entry can be evicted instead
     bool prompt_end = false;

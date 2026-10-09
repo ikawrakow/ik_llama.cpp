@@ -976,6 +976,8 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
     std::vector<llama_token> result;
     result.reserve(idxs.size());
 
+    const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx));
+
     size_t i = 0;
     for (; i < draft.size(); i++) {
         const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
@@ -984,7 +986,9 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
 
         result.push_back(id);
 
-        if (draft[i] != id) {
+        // do not accept draft tokens after an EOG: they are not output but would stay in the context
+        // (as upstream llama.cpp #29638); a trailing EOG sampled from the target is still accepted
+        if (draft[i] != id || llama_vocab_is_eog(vocab, id)) {
             break;
         }
     }
@@ -1014,6 +1018,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
     result.reserve(idxs.size());
 
     std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
+    const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx));
     const auto emit = [&](llama_token id) {
         gsmpl->playing_text += common_token_to_piece(ctx, id, true);
         common_sampler_accept(gsmpl, ctx, id, true);
@@ -1047,6 +1052,10 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
         const float q_draft = q_prob(draft[i]);
         if (q_draft > 0.0f && uniform(gsmpl->speculative_rng) * q_draft <= p_draft) {
             emit(draft[i]);
+            if (llama_vocab_is_eog(vocab, draft[i])) {
+                // nothing after an EOG is output: stop here instead of keeping later drafts in the context
+                return result;
+            }
             continue;
         }
 

@@ -267,6 +267,20 @@ whether it helps.
 earlier one processes only the new tokens, also after an unrelated request moved it out of the
 slot into `--cache-ram`. It passes with 1 and 2 slots and with speculative decoding on.
 
+### 15. Slot save/restore checkpoints and speculative EOG fix (October 2026 upstream review)
+
+Upstream llama.cpp #26004 makes slot save/restore keep context checkpoints. ik already saved them,
+but the loader trusted the file. A corrupt or truncated `.checkpoints` file could crash the server
+on `/slots/N?action=restore` (huge allocation) or load garbage. The checkpoints' `n_tokens` was not
+saved and was left uninitialized after a restore, and a stale `.checkpoints` file from an older
+save could be loaded with a new one. Now every size is bounded by the bytes left in the file, a bad
+file is rejected (the slot then reprocesses the prompt), `n_tokens` is stored in the legacy field
+(older files still load), only the newest `--ctx-checkpoints` entries are kept, spilled checkpoints
+are written from disk, and an incomplete write is reported as a failed save.
+
+Speculative decoding: a matching draft token that is EOG no longer lets the draft tokens after it
+be accepted into the context (as upstream #29638).
+
 ### Recommended settings for an AVX2 EPYC VPS (Zen 2/3, no AVX-512)
 
 * `-ctk q8_0 -ctv q8_0`: at long context, decode is bandwidth-bound on the KV cache as well as on
