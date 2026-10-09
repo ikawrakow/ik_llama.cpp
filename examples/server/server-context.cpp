@@ -3715,6 +3715,17 @@ std::vector<llama_token> server_context::grammar_draft(server_slot & slot) {
     if (mctx || common_speculative_needs_checkpoint(model)) {
         return {};
     }
+    // adaptive: a rejected draft row costs about as much as an accepted one saves, and on CPU the
+    // break-even is near 60% acceptance (measured on a Qwen3-30B-A3B-shaped MoE). Once a request has
+    // drafted enough tokens, stop drafting for it when too few were accepted (the model prefers
+    // other tokenizations of the forced text). QUILL_GRAMMAR_DRAFT_MIN_ACCEPT overrides (0 = never stop).
+    static const float min_accept = [] {
+        const char * e = getenv("QUILL_GRAMMAR_DRAFT_MIN_ACCEPT");
+        return e ? (float) atof(e) : 0.6f;
+    }();
+    if (min_accept > 0.0f && slot.n_draft_total >= 16 && slot.n_draft_accepted < min_accept * slot.n_draft_total) {
+        return {};
+    }
     int n_max = std::min(params_base.grammar_draft_n, slot.n_ctx - slot.n_past - 2);
     if (slot.n_remaining > 0) {   // set by has_budget(): request or server n_predict
         n_max = std::min(n_max, slot.n_remaining - 1);
@@ -4996,35 +5007,74 @@ void server_context::update_allowlist_state(server_slot& slot) {
 // allows only a few tokens next (structural JSON: braces, quotes, keys, digits, enum values), compute
 // only those logits (see llama_set_logit_subset). The grammar masks every other token anyway, so the
 // sampled token is unchanged; most of the output matrix is not read.
+// quillama.cpp: when every output row of this batch view belongs to a grammar-constrained slot that
+// allows only a few tokens next, compute the output layer only for the union of those tokens (exact:
+// every other logit would be masked to -inf). Covers single-token decode and the verification rows
+// of a grammar jump-forward draft (row i is checked against the grammar after draft[0..i-1]).
 bool server_context::set_grammar_logit_subset(const llama_batch & batch_view, int32_t offset) {
     if (params_base.grammar_sparse_logits <= 0) {
         return false;
     }
-    int32_t out_idx = -1;
+    int32_t n_out = 0;
     for (int32_t k = 0; k < batch_view.n_tokens; ++k) {
-        if (batch_view.logits[k]) {
-            if (out_idx >= 0) return false;   // more than one output row
-            out_idx = k;
-        }
+        n_out += batch_view.logits[k] ? 1 : 0;
     }
-    if (out_idx < 0) {
+    if (n_out == 0 || n_out > 64) {
         return false;
     }
+    const auto in_view = [&](int32_t idx) {
+        return idx >= offset && idx < offset + batch_view.n_tokens && batch_view.logits[idx - offset];
+    };
+    const size_t max_n = (size_t) params_base.grammar_sparse_logits;
+    thread_local std::vector<llama_token> allowed;
+    allowed.clear();
+    int32_t n_covered = 0;
     for (auto & slot : slots) {
-        if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch != offset + out_idx || !slot.i_batch_dft.empty()) {
+        if (slot.state != SLOT_STATE_PROCESSING) {
             continue;
         }
-        if (!slot.ctx_sampling || slot.n_decoded == 0 && slot.n_past == 0) {
+        if (slot.i_batch_dft.empty()) {
+            if (!in_view(slot.i_batch)) {
+                continue;
+            }
+            if (!slot.ctx_sampling || (slot.n_decoded == 0 && slot.n_past == 0)) {
+                return false;
+            }
+            thread_local std::vector<llama_token> row;
+            if (!common_sampler_grammar_allowed_set(slot.ctx_sampling, ctx, max_n, row)) {
+                return false;
+            }
+            allowed.insert(allowed.end(), row.begin(), row.end());
+            n_covered += 1;
+            continue;
+        }
+        int32_t n_rows = 0;
+        for (const int32_t idx : slot.i_batch_dft) {
+            n_rows += in_view(idx) ? 1 : 0;
+        }
+        if (n_rows == 0) {
+            continue;
+        }
+        // only grammar drafts (another speculative method may need the full distribution), all rows here
+        if (slot.can_speculate() || !slot.draft_proposal_dists.empty() || !slot.ctx_sampling ||
+            n_rows != (int32_t) slot.i_batch_dft.size() || slot.i_batch_dft.size() != slot.drafted.size() + 1) {
             return false;
         }
-        thread_local std::vector<llama_token> allowed;
-        if (!common_sampler_grammar_allowed_set(slot.ctx_sampling, ctx, (size_t) params_base.grammar_sparse_logits, allowed)) {
+        if (!common_sampler_grammar_allowed_union(slot.ctx_sampling, ctx, max_n, slot.drafted, allowed)) {
             return false;
         }
-        llama_set_logit_subset(ctx, allowed.data(), (int32_t) allowed.size());
-        return true;
+        n_covered += n_rows;
     }
-    return false;
+    if (n_covered != n_out) {
+        return false;   // an output row we cannot bound
+    }
+    std::sort(allowed.begin(), allowed.end());
+    allowed.erase(std::unique(allowed.begin(), allowed.end()), allowed.end());
+    if (allowed.empty() || allowed.size() > max_n) {
+        return false;
+    }
+    llama_set_logit_subset(ctx, allowed.data(), (int32_t) allowed.size());
+    return true;
 }
 
 void server_context::process_batch_tokens(int32_t & n_batch) {

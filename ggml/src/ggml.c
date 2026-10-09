@@ -18388,37 +18388,52 @@ static bool quill_sparse_mul_mat(const struct ggml_compute_params * params, stru
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
     if (g_quill_subset.n_ids <= 0 || src0 != g_quill_subset.w || g_quill_subset.broken) return false;
-    if (dst->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1) return false;
-    if (src0->ne[2] != 1 || src0->ne[3] != 1 || dst->nb[0] != sizeof(float)) return false;
+    // one or a few activation rows (decode, or the verification batch of a grammar draft)
+    enum { QUILL_SPARSE_MAX_ROWS = 64 };
+    const int64_t N = src1->ne[1];
+    if (dst->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || N < 1 || N > QUILL_SPARSE_MAX_ROWS || src1->ne[2] != 1 || src1->ne[3] != 1) return false;
+    if (src0->ne[2] != 1 || src0->ne[3] != 1 || dst->nb[0] != sizeof(float) || dst->ne[1] != N) return false;
+    if (src1->nb[0] != sizeof(float)) return false;
 
     const int ith = params->ith, nth = params->nth;
     const enum ggml_type type = src0->type;
     const enum ggml_type vec_dot_type = type_traits[type].vec_dot_type;
     const int64_t K = src0->ne[0], M = src0->ne[1];
     const int64_t R = quill_row_interleave(type);
+    if (R > 16) return false;
     const size_t row_size = ggml_row_size(vec_dot_type, K);
-    float * y = (float *) dst->data;
 
-    // the activation row in the kernels' format, and -inf everywhere
+    // the activation rows in the kernels' format, and -inf everywhere
     const void * x = src1->data;
+    size_t x_stride = src1->nb[1];
     if (src1->type != vec_dot_type) {
-        if (ith == 0) type_traits[vec_dot_type].from_float((const float *) src1->data, params->wdata, K);
+        for (int64_t j = ith; j < N; j += nth) {
+            type_traits[vec_dot_type].from_float((const float *) ((const char *) src1->data + j*src1->nb[1]),
+                                                 (char *) params->wdata + j*row_size, K);
+        }
         x = params->wdata;
+        x_stride = row_size;
     }
-    for (int64_t i = ith; i < M; i += nth) y[i] = -INFINITY;
+    for (int64_t j = 0; j < N; ++j) {
+        float * y = (float *) ((char *) dst->data + j*dst->nb[1]);
+        for (int64_t i = ith; i < M; i += nth) y[i] = -INFINITY;
+    }
     ggml_barrier(params->shared);
 
     // the row groups holding the requested ids, with the same kernels as the full product
-    float tmp[16];
+    float tmp[16*QUILL_SPARSE_MAX_ROWS];
     for (int g = ith; g < g_quill_subset.n_groups; g += nth) {
         const int64_t r0 = g_quill_subset.groups[g]*R;
         if (r0 + R > M) continue;
-        if (!iqk_mul_mat(R, 1, K, type, (const char *) src0->data + r0*src0->nb[1], src0->nb[1],
-                         vec_dot_type, x, row_size, tmp, R, 0, 1)) {
+        if (!iqk_mul_mat(R, N, K, type, (const char *) src0->data + r0*src0->nb[1], src0->nb[1],
+                         vec_dot_type, x, x_stride, tmp, R, 0, 1)) {
             g_quill_subset.broken = true;   // fall back next time; this evaluation is already partial
             continue;
         }
-        for (int64_t r = 0; r < R; ++r) y[r0 + r] = tmp[r];
+        for (int64_t j = 0; j < N; ++j) {
+            float * y = (float *) ((char *) dst->data + j*dst->nb[1]);
+            for (int64_t r = 0; r < R; ++r) y[r0 + r] = tmp[j*R + r];
+        }
     }
     return true;
 #else

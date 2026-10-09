@@ -365,6 +365,11 @@ llama_token_data_array llama_sampling_prepare(
 bool common_sampler_grammar_allowed_set(struct common_sampler * gsmpl, struct llama_context * ctx, size_t max_n,
                                         std::vector<llama_token> & out);
 
+// quillama.cpp: the same for verifying a grammar draft: the union of the allowed sets of all rows
+// (row 0 in the current state, row i after accepting draft[0..i-1]). false if any row needs the full logits.
+bool common_sampler_grammar_allowed_union(struct common_sampler * gsmpl, struct llama_context * ctx, size_t max_n,
+                                          const std::vector<llama_token> & draft, std::vector<llama_token> & out);
+
 std::string common_sampler_grammar_forced_text(struct common_sampler * gsmpl, size_t max_chars);
 std::vector<llama_token> common_sampler_grammar_draft(struct common_sampler * gsmpl, struct llama_context * ctx, int n_max);
 

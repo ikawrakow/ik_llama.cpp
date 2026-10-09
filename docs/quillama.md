@@ -182,14 +182,21 @@ strict schema, the keys, quotes, colons and braces. `--grammar-draft N` (default
 tokenization of the forced text and lets the normal grammar-constrained sampling verify it in one
 batch.
 
-- The output is identical to normal decoding.
-- On CPU, a batch of a few tokens costs about as much as one token, since decode is memory-bound.
+- The output is the same as normal decoding up to floating-point rounding: the drafted rows are
+  evaluated in one small batch, whose kernels round differently from one-token decode.
+- On CPU MoE decode, verifying 4 tokens costs ~1.67× one token, 8 tokens ~2.4×.
 - Used only when no other speculative method is configured and the KV cache can drop a rejected
   tail (not with recurrent/hybrid models).
+- The verification rows use the sparse output layer (section 11), so a draft does not pay for the
+  full 152k-token output layer on every row.
+- **Adaptive:** drafting pays off only when most drafted tokens are accepted; break-even on CPU is
+  near 60%. After 16 drafted tokens, a request whose acceptance is below 60% stops drafting
+  (`QUILL_GRAMMAR_DRAFT_MIN_ACCEPT`, 0 = never stop).
 
 The acceptance rate depends on how strongly the model prefers the canonical tokenization of the
-forced text. A random-weight model accepts only ~28% (it picks among all valid splits at random),
-so the speed-up could not be measured meaningfully here.
+forced text. A random-weight model picks among all valid splits at random and accepts only 30-53%,
+so here the adaptive rule switches drafting off after the warm-up. A trained model prefers one
+tokenization and should keep drafting. Check `timings.draft_n_accepted / draft_n` on your own model.
 
 ### 8. Transparent huge pages that actually work on a VPS
 
@@ -225,8 +232,11 @@ Everything else is masked to -inf anyway, so the result is exact. Greedy outputs
 byte-identical with and without it. The 151936 x 2048 output matrix is ~10% of the per-token
 weight traffic of Qwen3-30B-A3B, and schema-constrained generation on the AVX2 build went from
 **28.1 to 33.4 tokens/s**. The limit `--grammar-sparse-logits N` defaults to 4096 allowed tokens;
-0 disables it. It is skipped when `n_probs` is requested, during speculative drafts, and while a
-lazy grammar waits for its trigger.
+0 disables it. It also covers the verification rows of a grammar draft. The subset is the union of
+the tokens allowed at each row (row i after accepting the first i drafted tokens), still exact: on
+14 schemas at temperature 0, the outputs with and without it are byte-identical. It is skipped when
+`n_probs` is requested, for other speculative methods (`--spec-type`), when an output row belongs
+to a slot without a grammar, and while a lazy grammar waits for its trigger.
 
 ### 12. JSON schema: non-negative numbers
 
@@ -259,9 +269,18 @@ Verifying draft tokens in one batch is cheap on a CPU MoE: on the Qwen3-30B-A3B-
 4 tokens cost 1.67x one token and 8 tokens 2.4x. Drafting therefore pays off as soon as more than
 ~0.7 tokens per step are accepted. The server has n-gram and suffix ("prompt lookup") drafting,
 which suits extraction workloads that copy names from the prompt: `--spec-type suffix` (or
-`ngram-simple`). Speculative decoding currently needs `-np 1`. With grammar drafting off, outputs
-are byte-identical to normal decoding. Check `timings.draft_n_accepted` on your own model to see
-whether it helps.
+`ngram-simple`). Check `timings.draft_n_accepted` on your own model to see whether it helps.
+
+It is **off by default**, and for JSON-schema workloads you should usually leave it off:
+
+- it needs `-np 1` (no parallel slots);
+- it replaces grammar jump-forward drafting (section 7) for every request;
+- its verification rows use the full output layer (no sparse logits, section 11);
+- greedy output is not bit-identical to normal decoding (small-batch rounding, see section 7).
+
+On the synthetic model, JSON-schema generation with `--spec-type suffix` ran at 28.3 t/s against
+≈32 t/s with the defaults. A trained model that copies long spans from the prompt can accept many
+more drafts, so measure before enabling it.
 
 `scripts/quill-prefix-reuse-test.py` checks that a prompt sharing 98% of its prefix with an
 earlier one processes only the new tokens, also after an unrelated request moved it out of the
@@ -283,25 +302,78 @@ be accepted into the context (as upstream #29638).
 
 ### Recommended settings for an AVX2 EPYC VPS (Zen 2/3, no AVX-512)
 
-* `-ctk q8_0 -ctv q8_0`: at long context, decode is bandwidth-bound on the KV cache as well as on
-  the weights. q8_0 halves that traffic, and its quality loss is negligible.
-* `--threads` close to the number of physical cores that actually deliver memory bandwidth. On a
-  12-vCPU VPS, try 6, 8 and 12 with `llama-bench -t 6,8,12`; decode often peaks below the core
-  count. Prompt processing is compute-bound, so use all cores with `--threads-batch 12`.
-* Keep `-fa on` and `-rtr` (default). Leave THP at the kernel default (`madvise`) or `always`.
+* `-ctk q8_0 -ctv q8_0`: half the KV memory of f16 with negligible quality loss, and at least as
+  fast (CPU attention is compute-bound, section 13).
+* Threads: measure with `llama-bench -t 3,4,6,8 -p 512 -n 64` while the server is stopped. On a
+  shared 12-vCPU EPYC VPS, generation was flat from 4 to 6 threads (memory-bound) and prompt
+  processing stopped scaling at 6 (the vCPUs behaved like ~6 physical cores). That VPS used
+  `--threads 4 --threads-batch 6`. More threads than that made generation collapse.
+* Keep `-fa on` and run-time repack (on by default when the model fits). Leave THP at `madvise` or
+  `always`. The repacked weights then live on 2 MiB pages (`AnonHugePages` in
+  `/proc/<pid>/smaps`).
+* Keep RAM headroom. Model + KV + `--cache-ram` must fit with room to spare, or the weights get
+  swapped out and generation drops to a few tokens/s. Use a moderate `--cache-ram` (4096 MiB holds
+  100+ typical prompts), `vm.swappiness=10`, and optionally `--mlock` with an unlimited `memlock`
+  ulimit.
+* Do not add `--spec-type` for JSON-schema workloads (section 14). Grammar drafting and sparse
+  logits are on by default and adapt by themselves.
 
 ## Benchmarks
 
-Machine: cloud VM with 4 vCPUs of an Intel Xeon (Sapphire Rapids class, AMX-BF16/INT8), 15 GB RAM.
-Models: random-weight GGUFs with a real Qwen2 tokenizer (`scripts/quill-synthetic-model.py`;
-Hugging Face was not reachable from the build environment). Speed does not depend on the weight
-values. Both builds use `GGML_NATIVE=ON`, 4 threads, ik_llama.cpp at commit `3d27f5bb` (main, Oct
-2026). The VM is shared, so runs vary by about ±5-10%.
+### Current (October 9, 2026): AVX2 build, the target VPS class
 
-Three configurations: ik_llama.cpp with its defaults; ik_llama.cpp hand-tuned with `-rtr 1 -ub 2048`;
-and quillama.cpp with the settings it picks by itself on this machine (repack on because the model
-fits in RAM; `-ub 2048` because the CPU has AMX). llama-bench does not apply the automatic choices,
-so they are passed explicitly there.
+Machine: cloud VM, 4 vCPUs of an Intel Xeon, 15 GB RAM. All builds are AVX2-only
+(`-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_AVX512=OFF -mtune=znver3`), so they run the same code as
+on an AMD EPYC (Zen 2/3) VPS without AVX-512. The VM has AMX, and quillama turns AMX on at run time
+even in an AVX2 build. These runs therefore set `QUILL_AMX=0` so the prompt numbers match a CPU
+without AMX. Model: a Qwen3-30B-A3B-shaped Q4_K_M MoE (random weights, real Qwen tokenizer, 8 of
+48 layers, so absolute speeds are about 6× the full model's; the ratios carry over). 4 threads,
+`-fa 1 -ctk q8_0 -ctv q8_0`. The numbers are medians of 4 interleaved rounds of `llama-bench -r 3`;
+this VM varies by ±10% from run to run.
+
+Compared: ik_llama.cpp main (`683e4552`, Oct 9) with run-time repack (`-rtr 1`, its best setting
+here; without it ik generates ~29 t/s), quillama.cpp as of the first round of benchmarks
+(`c234f96f`, Oct 6), and quillama.cpp now.
+
+| | ik_llama.cpp `-rtr` | quillama round 1 | **quillama now** | now vs ik | now vs round 1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| generation | 33.7 t/s | 35.2 t/s | **43.5 t/s** | **+29%** | **+24%** |
+| generation at 4k context | 29.9 t/s | 30.0 t/s | **34.3 t/s** | +15% | +14% |
+| prompt, 512 tokens (no AMX) | 252 t/s | 272 t/s | 258 t/s | same | same |
+
+**JSON-schema generation** (server `/completion`, nested schema with enums, bounded strings,
+integers and an array; 4 requests, temperature 0.8, `-np 1`):
+
+| | t/s |
+| --- | ---: |
+| ik_llama.cpp `-rtr` | 14.0 |
+| quillama round 1 | 22.8 |
+| **quillama now** | **≈32** |
+
+What the new generation speed comes from (same build, one feature switched off at a time, mean of 2
+rounds, noisy):
+
+| Switched off | generation | at 8k context |
+| --- | ---: | ---: |
+| nothing (quillama now) | 38.4 t/s | 30.2 t/s |
+| huge pages for the repacked weights (`QUILL_THP=0`) | 34.0 t/s (−11%) | 24.7 t/s (−18%) |
+| AVX2 flash-attention V blocking (`QUILL_FA_VBLOCK=0`) | ≈ same | 27.9 t/s (−8%) |
+| 128-row MoE decode chunks (`QUILL_MOE_MIN_CHUNK=32`) | 37.2 t/s (−3%) | 28.5 t/s (−6%) |
+
+The JSON gain on top of that comes from the grammar mask (round 1), computing the output layer only
+for grammar-allowed tokens (section 11, now also for the verification rows of a grammar draft), and
+adaptive grammar drafting (section 7).
+
+With AMX available (Sapphire Rapids and newer Xeons), quillama's prompt processing is much faster
+still: on this VM, prompt 512 tokens 490-720 t/s vs ik's 240-285 t/s (AVX2 build, AMX on at run
+time). Generation is unaffected by AMX.
+
+### Round 1 (October 6, 2026): native build on an AMX Xeon
+
+Machine: cloud VM with 4 vCPUs of an Intel Xeon (Sapphire Rapids class, AMX-BF16/INT8), 15 GB RAM.
+Both builds `GGML_NATIVE=ON`, 4 threads, ik_llama.cpp at `3d27f5bb`. Random-weight models with a
+real Qwen2 tokenizer. ik with its defaults, ik hand-tuned (`-rtr 1 -ub 2048`), and quillama.cpp
+with the settings it picks itself (repack because the model fits in RAM, `-ub 2048` because of AMX).
 
 **Dense, 1.6B parameters, Q4_K_M** (llama architecture, 16 layers, 2048 hidden, 8192 FFN, 152k vocab)
 
@@ -319,37 +391,26 @@ so they are passed explicitly there.
 | prompt, 4096 tokens | 257 t/s | 267 t/s | **727 t/s** | 2.7× |
 | generation | 25.7 t/s | 34.8 t/s | **32.0 t/s** | same kernels |
 
-Token generation uses ik's own kernels in both cases, so a hand-tuned ik matches quillama there (the
-differences are within this shared VM's run-to-run noise). The generation gain over ik's defaults
-comes from enabling ik's run-time repack automatically (section 5).
+JSON-schema generation (dense model): 10.3 t/s → 21.9 t/s. Upstream llama.cpp on the same machine:
+dense prompt 512 tokens 330 t/s, generation 20.4 t/s; MoE prompt 512 tokens 185 t/s, generation
+25.1 t/s.
 
-**JSON-schema generation** (dense model, server `/completion` with a nested schema): 10.3 t/s →
-21.9 t/s.
-
-For comparison, upstream llama.cpp (Oct 2026) on the same machine: dense prompt 512 tokens 330 t/s,
-generation 20.4 t/s; MoE prompt 512 tokens 185 t/s, generation 25.1 t/s.
-
-How the gains split (prompt numbers at 512 tokens unless noted):
-
-| Change | Prompt (dense / MoE) | Generation |
+| Change (round 1) | Prompt (dense / MoE) | Generation |
 | --- | --- | --- |
 | AMX GEMM + fast dequantization | 2.2× / 1.3-1.5× | n/a |
-| AMX flash attention | grows with context: 2.8× / 2.7× vs tuned ik at 4096 tokens | n/a |
-| `-ub 2048` by default on AMX (no gain for ik's kernels) | +10% / +35-50% | n/a |
-| run-time repack by default (ik's `-rtr`) | unchanged | +25-60% vs ik defaults |
-| THP fallback (`-thp`) | n/a | +2% |
-| grammar mask | n/a | 1.7× for JSON-schema output (2.1× vs ik together with repack) |
+| AMX flash attention | 2.8× / 2.7× vs tuned ik at 4096 tokens | n/a |
+| `-ub 2048` by default on AMX | +10% / +35-50% | n/a |
+| run-time repack by default | unchanged | +25-60% vs ik defaults |
+| THP fallback for mmap (`-thp`) | n/a | +2% |
+| grammar mask | n/a | 1.7× for JSON-schema output |
 
-On an AMD EPYC or another CPU without AMX, the prompt-speed gains do not apply. The repack default,
-grammar speed, JSON fixes and THP do.
-
-Reproduce:
+### Reproduce
 
 ```bash
-python3 scripts/quill-synthetic-model.py --arch llama    --out dense-f16.gguf
-python3 scripts/quill-synthetic-model.py --arch qwen3moe --out moe-f16.gguf
-./build/bin/llama-quantize dense-f16.gguf dense-q4km.gguf Q4_K_M
-./build/bin/llama-bench -m dense-q4km.gguf -t 4 -p 512,2048,4096 -n 64 -rtr 1
+python3 scripts/quill-synthetic-model.py --arch qwen3moe --layers 8 --experts 128 --out q3-f16.gguf  # Qwen3-30B-A3B shape, 8 layers
+./build/bin/llama-quantize q3-f16.gguf q3-q4km.gguf Q4_K_M
+QUILL_AMX=0 ./build/bin/llama-bench -m q3-q4km.gguf -t 4 -fa 1 -ctk q8_0 -ctv q8_0 -rtr 1 -p 512 -n 64
+QUILL_AMX=0 ./build/bin/llama-bench -m q3-q4km.gguf -t 4 -fa 1 -ctk q8_0 -ctv q8_0 -rtr 1 -p 0 -n 0 -gp 4096,32
 ```
 
 ## Ideas taken from Strata and the MoE-cache fork
@@ -381,6 +442,7 @@ keeps hot experts in VRAM. Both are GPU-centric. On a CPU-only server their idea
 | `QUILL_MOE_MIN_CHUNK=N` | minimum rows per expert chunk at decode (default 128) |
 | `QUILL_MOE_CHUNKS=N` | force N chunks per expert |
 | `QUILL_FA_VBLOCK=0` | original AVX2 flash-attention V accumulation |
+| `QUILL_GRAMMAR_DRAFT_MIN_ACCEPT=F` | stop grammar drafting for a request below this acceptance (default 0.6, 0 = never) |
 
 ## Tests
 

@@ -551,6 +551,36 @@ bool common_sampler_grammar_allowed_set(struct common_sampler * gsmpl, struct ll
     return llama_grammar_small_allowed_set(gsmpl->grammar, llama_get_model_vocab(llama_get_model(ctx)), max_n, out);
 }
 
+bool common_sampler_grammar_allowed_union(struct common_sampler * gsmpl, struct llama_context * ctx, size_t max_n,
+                                          const std::vector<llama_token> & draft, std::vector<llama_token> & out) {
+    std::vector<llama_token> row;
+    if (!common_sampler_grammar_allowed_set(gsmpl, ctx, max_n, row)) {
+        return false;
+    }
+    out.insert(out.end(), row.begin(), row.end());
+    if (draft.empty()) {
+        return true;
+    }
+    const llama_vocab * vocab = llama_get_model_vocab(llama_get_model(ctx));
+    llama_grammar * clone = llama_grammar_clone_impl(*gsmpl->grammar);
+    bool ok = true;
+    for (size_t i = 0; i < draft.size() && ok; ++i) {
+        try {
+            llama_grammar_accept_token(clone, ctx, draft[i]);
+        } catch (const std::exception &) {
+            break; // the draft is rejected here: the rows after it are never used
+        }
+        if (clone->stacks.empty()) {
+            break;
+        }
+        ok = llama_grammar_small_allowed_set(clone, vocab, max_n, row);
+        out.insert(out.end(), row.begin(), row.end());
+        ok = ok && out.size() <= 4*max_n;
+    }
+    llama_grammar_free_impl(clone);
+    return ok;
+}
+
 std::string common_sampler_grammar_forced_text(struct common_sampler * gsmpl, size_t max_chars) {
     std::string out;
     if (!gsmpl || !gsmpl->grammar || max_chars == 0) {
