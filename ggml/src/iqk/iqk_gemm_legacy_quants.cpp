@@ -2583,12 +2583,8 @@ void iqk_convert_qX_1_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int 
     }
 }
 
-// ========================================= iq3ks_r16 (204-B packing)
+// ========================================= iq3ks_r16
 //
-// A layout: bands of 16 rows; band = [16 x f32 d] + (n/32) blocks of 204 B
-// (block = 16 rows x 32 columns, see ggml-common.h). Activations:
-// block_q8_0_x4 (4 consecutive Q8_0 blocks = 128 columns).
-
 template <int nrc_y>
 static void mul_mat_iq3ks_r16_q8_0_x4_scalar(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
@@ -2631,11 +2627,6 @@ static void mul_mat_iq3ks_r16_q8_0_x4_scalar(int n, const void * vx, size_t bx, 
 }
 
 #ifdef __AVX2__
-// AVX2 x8-row kernel (Q4_0_R8 style): 8 rows per iteration; the 8 row-vectors
-// (4 column-quads x 2 column-halves) stay live across the y loop; each y
-// accumulates into a per-row float vector, so the horizontal reduction happens
-// once per row at the end. The block scales (5-bit ul + f32 d) are vectorized.
-// NOTE: activation clamp at -127 (the maddubs sign trick wraps at -128).
 template <int nrc_y>
 static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
@@ -2659,8 +2650,8 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
 
     float d8[4*nrc_y];
     for (int ix = 0; ix < nrc_x; ix += 16) {
-        const uint8_t * band = (const uint8_t *)vx + ix*bx;
-        const float   * dptr = (const float *)band;
+        const float * dptr = (const float *)((const char *)vx + ix*bx);
+        auto iq3 = (const block_iq3_ks_r16 *)(dptr + 16);
         for (int half = 0; half < 2; ++half) {
             __m256 acc[nrc_y];
             for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm256_setzero_ps();
@@ -2671,10 +2662,8 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
                 }
                 for (int k = 0; k < 4; ++k) {
                     const int ib = 4*ib4 + k;
-                    const uint8_t * blk = band + 64 + (size_t)ib*204;
-                    uint32_t extra;
-                    std::memcpy(&extra, blk, 4);
-                    const __m128i sc = _mm_loadl_epi64((const __m128i *)(blk + 4));
+                    uint32_t extra = iq3[ib].extra;
+                    const __m128i sc = _mm_loadl_epi64((const __m128i *)iq3[ib].scales);
                     const __m128i nib = half == 0 ? _mm_and_si128(sc, _mm_set1_epi8(0x0f))
                                                   : _mm_and_si128(_mm_srli_epi16(sc, 4), _mm_set1_epi8(0x0f));
                     const __m256i e   = _mm256_set1_epi32((int)extra);
@@ -2686,9 +2675,9 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
                     const __m256 dl = _mm256_mul_ps(_mm256_loadu_ps(dh),
                         _mm256_cvtepi32_ps(_mm256_sub_epi32(ul, sixteen)));
 
-                    const __m256i qA = _mm256_loadu_si256((const __m256i *)(blk + 12 + 32*half));
-                    const __m256i qB = _mm256_loadu_si256((const __m256i *)(blk + 12 + 32*half + 64));
-                    const __m256i hA = _mm256_loadu_si256((const __m256i *)(blk + 140 + 32*half));
+                    const __m256i qA = _mm256_loadu_si256((const __m256i *)(iq3[ib].qs + 32*half));
+                    const __m256i qB = _mm256_loadu_si256((const __m256i *)(iq3[ib].qs + 32*half + 64));
+                    const __m256i hA = _mm256_loadu_si256((const __m256i *)(iq3[ib].qh + 32*half));
                     const __m256i hA4 = _mm256_slli_epi32(hA, 2);
                     const __m256i hB4 = _mm256_slli_epi32(_mm256_srli_epi32(hA, 4), 2);
 
@@ -2722,10 +2711,9 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
             }
             // tail: nbl % 4 != 0 (n % 128 != 0)
             for (int ib = 4*nb4; ib < nbl; ++ib) {
-                const uint8_t * blk = band + 64 + (size_t)ib*204;
-                uint32_t extra;
-                std::memcpy(&extra, blk, 4);
-                const __m128i sc = _mm_loadl_epi64((const __m128i *)(blk + 4));
+                //const uint8_t * blk = band + 64 + (size_t)ib*204;
+                uint32_t extra = iq3[ib].extra;
+                const __m128i sc = _mm_loadl_epi64((const __m128i *)iq3[ib].scales);
                 const __m128i nib = half == 0 ? _mm_and_si128(sc, _mm_set1_epi8(0x0f))
                                               : _mm_and_si128(_mm_srli_epi16(sc, 4), _mm_set1_epi8(0x0f));
                 const __m256i e   = _mm256_set1_epi32((int)extra);
@@ -2737,9 +2725,9 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
                 const __m256 dl = _mm256_mul_ps(_mm256_loadu_ps(dh),
                     _mm256_cvtepi32_ps(_mm256_sub_epi32(ul, sixteen)));
 
-                const __m256i qA = _mm256_loadu_si256((const __m256i *)(blk + 12 + 32*half));
-                const __m256i qB = _mm256_loadu_si256((const __m256i *)(blk + 12 + 32*half + 64));
-                const __m256i hA = _mm256_loadu_si256((const __m256i *)(blk + 140 + 32*half));
+                const __m256i qA = _mm256_loadu_si256((const __m256i *)(iq3[ib].qs + 32*half));
+                const __m256i qB = _mm256_loadu_si256((const __m256i *)(iq3[ib].qs + 32*half + 64));
+                const __m256i hA = _mm256_loadu_si256((const __m256i *)(iq3[ib].qh + 32*half));
                 const __m256i hA4 = _mm256_slli_epi32(hA, 2);
                 const __m256i hB4 = _mm256_slli_epi32(_mm256_srli_epi32(hA, 4), 2);
 
@@ -2778,8 +2766,6 @@ static void mul_mat_iq3ks_r16_q8_0_x4_avx2(int n, const void * vx, size_t bx, co
 }
 #endif
 
-// AVX512 sibling of the x8-row AVX2 kernel above: all 16 rows in one 512-bit
-// vector (one 32-bit lane per row), one 32-column block per iteration.
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_iq3ks_r16_q8_0_x4_avx512(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {

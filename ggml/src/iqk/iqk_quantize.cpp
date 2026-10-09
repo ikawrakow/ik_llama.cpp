@@ -2972,17 +2972,8 @@ void  vec_dot_iq3_ks_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
 //
 
 //
-// ============================================== iq3ks_r16 (204-B packing)
+// ============================================== iq3_ks_r16
 //
-// 16-row interleaved IQ3_KS-class codebook 3-bit type. Block = 16 rows x 32
-// columns = 512 quants in 204 bytes; band = 16 f32 row scales + n/32 blocks.
-// Layout (row r 0..15, column c 0..31):
-//   qs byte = r*4 + (c&3) + (c >= 16 ? 64 : 0), 2-bit pair = (c>>2)&3
-//   qh byte = r*4 + (c&3), high bit of column c = bit (c>>2)
-//   ul = ((scales[r&7] >> 4*(r>>3)) & 0xf) | (((extra >> r) & 1) << 4)
-//   page = (extra >> (16+r)) & 1;  idx = qs2 | (qh << 2)
-//   value = d_row * (ul - 16) * iq3nl_values[page*8 + idx]
-// 4 consecutive columns c=4p..4p+3 of a row: one u32 load + (q>>2p)&0x03030303.
 static void quantize_row_iq3ks_r16_impl(int n_per_row, const float * x, char * band, int krow,
         float * all_scales, float * weight, const float * quant_weights) {
 
