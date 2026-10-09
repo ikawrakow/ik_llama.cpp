@@ -253,6 +253,20 @@ CPU attention is compute-bound, a smaller KV cache does not decode faster (measu
 4% faster than q8_0 at 8k, f16 the same as q8_0). Its CPU grouped-query decode change is
 already in ik's kernel.
 
+### 14. Speculative decoding on CPU, and prompt-prefix reuse
+
+Verifying draft tokens in one batch is cheap on a CPU MoE: on the Qwen3-30B-A3B-shaped model,
+4 tokens cost 1.67x one token and 8 tokens 2.4x. Drafting therefore pays off as soon as more than
+~0.7 tokens per step are accepted. The server has n-gram and suffix ("prompt lookup") drafting,
+which suits extraction workloads that copy names from the prompt: `--spec-type suffix` (or
+`ngram-simple`). Speculative decoding currently needs `-np 1`. With grammar drafting off, outputs
+are byte-identical to normal decoding. Check `timings.draft_n_accepted` on your own model to see
+whether it helps.
+
+`scripts/quill-prefix-reuse-test.py` checks that a prompt sharing 98% of its prefix with an
+earlier one processes only the new tokens, also after an unrelated request moved it out of the
+slot into `--cache-ram`. It passes with 1 and 2 slots and with speculative decoding on.
+
 ### Recommended settings for an AVX2 EPYC VPS (Zen 2/3, no AVX-512)
 
 * `-ctk q8_0 -ctv q8_0`: at long context, decode is bandwidth-bound on the KV cache as well as on
