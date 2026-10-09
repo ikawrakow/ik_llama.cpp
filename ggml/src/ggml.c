@@ -677,6 +677,19 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_Q2_0] = {
+        .type_name                = "q2_0",
+        .blck_size                = QK2_0,
+        .type_size                = sizeof(block_q2_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q2_0,
+        .from_float               = quantize_row_q2_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q2_0_ref,
+        .vec_dot                  = ggml_vec_dot_q2_0_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_Q4_0] = {
         .type_name                = "q4_0",
         .blck_size                = QK4_0,
@@ -13870,6 +13883,7 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_Q1_0_G128_R8:
         case GGML_TYPE_IQ3_K:
@@ -14428,6 +14442,7 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_Q1_0_G128_R8:
         case GGML_TYPE_IQ3_K:
@@ -14612,6 +14627,7 @@ static void ggml_compute_forward_acc(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_Q1_0_G128_R8:
         case GGML_TYPE_IQ3_K:
@@ -19506,6 +19522,7 @@ static void ggml_compute_forward_out_prod(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_Q1_0_G128_R8:
         case GGML_TYPE_IQ3_K:
@@ -19934,6 +19951,7 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_Q1_0_G128_R8:
         case GGML_TYPE_IQ3_K:
@@ -20341,6 +20359,7 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_Q1_0_G128_R8:
         case GGML_TYPE_IQ3_K:
@@ -21114,6 +21133,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q1_0_G128:
         case GGML_TYPE_Q1_0_G128_R8:
         case GGML_TYPE_IQ3_K:
@@ -31905,6 +31925,13 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
                 (int64_t) info->ne[3];
 
             const int64_t blck = ggml_row_blck_size(info->type);
+            if (blck == 0) {
+                fprintf(stderr, "%s: tensor '%s' has unsupported type %d\n",
+                        __func__, info->name.data, (int) info->type);
+                fclose(file);
+                gguf_free(ctx);
+                return NULL;
+            }
             if (info->ne[0] % blck != 0) {
                 fprintf(stderr, "%s: tensor '%s' of type %d (%s) row length (%" PRId64 ") is not a multiple of block size (%" PRId64 ")\n",
                         __func__, info->name.data, (int) info->type, ggml_type_name(info->type), info->ne[0], blck);

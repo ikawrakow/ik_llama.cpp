@@ -670,6 +670,48 @@ static inline __m128i packNibbles( __m256i bytes ) {
 #endif  //__loongarch_asx
 
 // reference implementation for deterministic creation of model files
+void quantize_row_q2_0_ref(const float * restrict x, block_q2_0 * restrict y, int64_t k) {
+    static const int qk = QK2_0;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        // Compute scale as max absolute value in the block
+        float amax = 0.0f;
+        for (int j = 0; j < qk; j++) {
+            const float a = fabsf(x[i*qk + j]);
+            if (a > amax) amax = a;
+        }
+        const float d = amax;
+        const float id = d > 0.0f ? 1.0f / d : 0.0f;
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        for (int j = 0; j < qk / 4; ++j) {
+            y[i].qs[j] = 0;
+        }
+
+        // Encode 2-bit values: round(w/d) clamped to [-1, 2], then add 1
+        // 00 (-1) = -scale, 01 (0) = 0, 10 (+1) = +scale, 11 (+2) = 2*scale
+        for (int j = 0; j < qk; ++j) {
+            const float w = x[i*qk + j];
+            int q = (int)roundf(w * id) + 1;
+            if (q < 0) q = 0;
+            if (q > 3) q = 3;
+            const int byte_index = j / 4;
+            const int bit_offset = (j % 4) * 2;
+            y[i].qs[byte_index] |= ((uint8_t)q << bit_offset);
+        }
+    }
+}
+
+void quantize_row_q2_0(const float * restrict x, void * restrict y, int64_t k) {
+    quantize_row_q2_0_ref(x, (block_q2_0 *)y, k);
+}
+
+// reference implementation for deterministic creation of model files
 void quantize_row_q4_0_ref(const float * restrict x, block_q4_0 * restrict y, int64_t k) {
     static const int qk = QK4_0;
 
@@ -1582,6 +1624,26 @@ void quantize_row_q8_1(const float * restrict x, void * restrict vy, int64_t k) 
     // scalar
     quantize_row_q8_1_ref(x, y, k);
 #endif
+}
+
+void dequantize_row_q2_0(const block_q2_0 * restrict x, float * restrict y, int64_t k) {
+    static const int qk = QK2_0;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        for (int j = 0; j < qk; ++j) {
+            const int byte_index = j / 4;
+            const int bit_offset = (j % 4) * 2;
+            const uint8_t q = (x[i].qs[byte_index] >> bit_offset) & 0x03;
+            // 00=-1, 01=0, 10=+1, 11=+2
+            y[i*qk + j] = ((int)q - 1) * d;
+        }
+    }
 }
 
 void dequantize_row_q4_0(const block_q4_0 * restrict x, float * restrict y, int64_t k) {
@@ -4110,6 +4172,54 @@ static inline __m128i get_scale_shuffle(int i) {
     return __lsx_vld((const __m128i*)k_shuffle + i, 0);
 }
 #endif
+
+void ggml_vec_dot_q2_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
+    const int qk = QK2_0;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_0 * restrict x = vx;
+    const block_q8_0 * restrict y = vy;
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; i++) {
+        const float d0 = GGML_FP16_TO_FP32(x[i].d);
+
+        float sumi = 0.0f;
+
+        // one Q2_0 block (64 weights) maps to two Q8_0 blocks (2 * 32 = 64)
+        for (int k = 0; k < 2; k++) {
+            const block_q8_0 * restrict yb = &y[i * 2 + k];
+            const float d1 = GGML_FP16_TO_FP32(yb->d);
+            int sumi_block = 0;
+
+            const uint8_t * restrict qs = &x[i].qs[k * 8];
+            const int8_t  * restrict qy = yb->qs;
+
+            for (int b = 0; b < 8; ++b) {
+                const uint8_t byte = qs[b];
+                // Extract 4 two-bit values, map {0,1,2,3} -> {-1,0,1,2}
+                sumi_block += ((int)((byte >> 0) & 3) - 1) * qy[b*4 + 0];
+                sumi_block += ((int)((byte >> 2) & 3) - 1) * qy[b*4 + 1];
+                sumi_block += ((int)((byte >> 4) & 3) - 1) * qy[b*4 + 2];
+                sumi_block += ((int)((byte >> 6) & 3) - 1) * qy[b*4 + 3];
+            }
+
+            sumi += d1 * sumi_block;
+        }
+
+        sumf += d0 * sumi;
+    }
+
+    *s = sumf;
+}
 
 void ggml_vec_dot_q4_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
