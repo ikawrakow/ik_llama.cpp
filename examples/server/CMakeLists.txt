@@ -24,6 +24,7 @@ set(TARGET_SRCS
     server-decision.h
     server-context.cpp
     server-context.h
+    server-sampling.h
 )
 set(PUBLIC_ASSETS
     index.html.gz
