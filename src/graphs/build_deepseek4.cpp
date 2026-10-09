@@ -927,7 +927,7 @@ static ggml_tensor * dsv4_build_lid_top_k(
     llm.cb(indexer_q, "lid_q", il);
     indexer_q = ggml_reshape_3d(ctx0, indexer_q, n_embd_indexer_head, n_indexer_head, n_tokens);
 
-    indexer_q = ggml_rope_ext_inplace(ctx0, indexer_q, inp_pos, nullptr, n_embd_indexer_head_rope,
+    indexer_q = ggml_rope_ext(ctx0, indexer_q, inp_pos, nullptr, n_embd_indexer_head_rope,
             llm.rope_type, llm.n_ctx_orig,
             hparams.dsv4_compress_rope_base, llm.freq_scale,
             llm.ext_factor, dsv4_rope_attn_factor(llm.freq_scale, llm.ext_factor), llm.beta_fast, llm.beta_slow);
@@ -1211,7 +1211,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             cb(q, (tag + "_norm").c_str(), il);
         }
         q = ggml_reshape_3d(ctx0, q, n_embd_head, nhead, n_tokens);
-        q = ggml_rope_ext_inplace(ctx0, q, inp_pos, nullptr, n_embd_head_rope, llm.rope_type, n_ctx_orig_l,
+        q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_embd_head_rope, llm.rope_type, n_ctx_orig_l,
                 freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
         q->op_params[15] = 1;
         cb(q, (tag + "_rope").c_str(), il);
@@ -1260,7 +1260,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             ggml_tensor * idx_k = llm.llm_build_lora_mm(lctx, ctx0, layer.indexer_attn_k, pre_rope);
             idx_k = llm.llm_build_norm(ctx0, idx_k, hparams, layer.indexer_k_norm, nullptr, LLM_NORM_RMS, cb, il);
             idx_k = ggml_reshape_3d(ctx0, idx_k, n_idx, 1, n_blk);
-            idx_k = ggml_rope_ext_inplace(ctx0, idx_k, slot_in.state_write_pos, nullptr, n_embd_head_rope, llm.rope_type, llm.n_ctx_orig,
+            idx_k = ggml_rope_ext(ctx0, idx_k, slot_in.state_write_pos, nullptr, n_embd_head_rope, llm.rope_type, llm.n_ctx_orig,
                     hparams.dsv4_compress_rope_base, llm.freq_scale, llm.ext_factor,
                     dsv4_rope_attn_factor(llm.freq_scale, llm.ext_factor), llm.beta_fast, llm.beta_slow);
             idx_k->op_params[15] = 1;
@@ -1524,7 +1524,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
     ggml_build_forward_expand(gf, attn);
 
     attn = ggml_reshape_3d(ctx0, attn, n_embd_head, n_head, n_tokens);
-    attn = ggml_rope_ext_inplace(ctx0, attn, inp_pos, nullptr, n_embd_head_rope, llm.rope_type, n_ctx_orig_l,
+    attn = ggml_rope_ext(ctx0, attn, inp_pos, nullptr, n_embd_head_rope, llm.rope_type, n_ctx_orig_l,
             freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
     attn->op = GGML_OP_ROPE_BACK;
     attn->op_params[15] = 1;
@@ -1904,7 +1904,7 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
             q = ggml_rms_norm(ctx0, q, hparams.f_norm_rms_eps);
         }
         q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
-        q = ggml_rope_ext_inplace(ctx0, q, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+        q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
                 freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
         q->op_params[15] = 1;
         cb(q, "dsv4_dflash_q", il);
@@ -1913,7 +1913,7 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
         kv = llm_build_norm(ctx0, kv, hparams, layer.attn_kv_norm, nullptr, LLM_NORM_RMS, cb, il);
         kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
 
-        kv = ggml_rope_ext_inplace(ctx0, kv, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+        kv = ggml_rope_ext(ctx0, kv, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
                 freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
         kv->op_params[15] = 1;
         kv = ggml_permute(ctx0, kv, 0, 2, 1, 3);
@@ -1952,7 +1952,7 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
         ggml_build_forward_expand(gf, attn);
 
         attn = ggml_reshape_3d(ctx0, attn, n_embd_head, n_head, n_tokens);
-        attn = ggml_rope_ext_inplace(ctx0, attn, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+        attn = ggml_rope_ext(ctx0, attn, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
                 freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
         attn->op = GGML_OP_ROPE_BACK;
         attn->op_params[15] = 1;
@@ -2150,7 +2150,7 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
             cb(q, (tag + "_norm").c_str(), il);
         }
         q = ggml_reshape_3d(ctx0, q, n_embd_head, nhead, n_tokens);
-        q = ggml_rope_ext_inplace(ctx0, q, inp_pos, nullptr, n_embd_head_rope, llm.rope_type, n_ctx_orig_l,
+        q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_embd_head_rope, llm.rope_type, n_ctx_orig_l,
                 freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
         q->op_params[15] = 1;
         cb(q, (tag + "_rope").c_str(), il);
@@ -2421,7 +2421,7 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
     ggml_build_forward_expand(gf, attn);
 
     attn = ggml_reshape_3d(ctx0, attn, n_embd_head, n_head, n_tokens);
-    attn = ggml_rope_ext_inplace(ctx0, attn, inp_pos, nullptr, n_embd_head_rope, llm.rope_type, n_ctx_orig_l,
+    attn = ggml_rope_ext(ctx0, attn, inp_pos, nullptr, n_embd_head_rope, llm.rope_type, n_ctx_orig_l,
             freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
     attn->op = GGML_OP_ROPE_BACK;
     attn->op_params[15] = 1;
@@ -2489,7 +2489,7 @@ static ggml_tensor * dsv4_build_lid_top_k_v41(
     llm.cb(indexer_q, "lid_q", il);
     indexer_q = ggml_reshape_3d(ctx0, indexer_q, n_embd_indexer_head, n_indexer_head, n_tokens);
 
-    indexer_q = ggml_rope_ext_inplace(ctx0, indexer_q, inp_pos, nullptr, n_embd_indexer_head_rope,
+    indexer_q = ggml_rope_ext(ctx0, indexer_q, inp_pos, nullptr, n_embd_indexer_head_rope,
             llm.rope_type, llm.n_ctx_orig,
             hparams.dsv4_compress_rope_base, llm.freq_scale,
             llm.ext_factor, dsv4_rope_attn_factor(llm.freq_scale, llm.ext_factor), llm.beta_fast, llm.beta_slow);
@@ -2631,7 +2631,7 @@ static ggml_tensor * dsv4_build_v41_index_key(
     k = llm.llm_build_norm(ctx0, k, hparams, layer.indexer_k_norm, nullptr, LLM_NORM_RMS, llm.cb, il);
     k = ggml_reshape_3d(ctx0, k, n_embd_ik, 1, n_blocks);
     llm.cb(k, "v41_index_k", il);
-    k = ggml_rope_ext_inplace(ctx0, k, comp_pos, nullptr, n_embd_ik_rope, llm.rope_type, llm.n_ctx_orig,
+    k = ggml_rope_ext(ctx0, k, comp_pos, nullptr, n_embd_ik_rope, llm.rope_type, llm.n_ctx_orig,
             hparams.dsv4_compress_rope_base, llm.freq_scale, llm.ext_factor,
             dsv4_rope_attn_factor(llm.freq_scale, llm.ext_factor), llm.beta_fast, llm.beta_slow);
     k->op_params[15] = 1;
