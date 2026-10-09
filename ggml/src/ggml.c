@@ -5081,7 +5081,7 @@ GGML_CALL size_t ggml_type_size(enum ggml_type type) {
 }
 
 static bool ggml_is_kt_tail_type(enum ggml_type type) {
-    return type == GGML_TYPE_IQ3_KT || type == GGML_TYPE_IQ4_KT;
+    return type == GGML_TYPE_IQ2_KT || type == GGML_TYPE_IQ3_KT || type == GGML_TYPE_IQ4_KT;
 }
 
 GGML_CALL int64_t ggml_row_blck_size(enum ggml_type type) {
@@ -5092,7 +5092,8 @@ GGML_CALL size_t ggml_row_size(enum ggml_type type, int64_t ne) {
     if (ggml_is_kt_tail_type(type)) {
         assert(ne % 32 == 0);
         const int nt = (ne % QK_K)/32;
-        const size_t tail = type == GGML_TYPE_IQ3_KT ? (nt + 1)/2 + 12*nt : 16*nt;
+        const size_t tail = type == GGML_TYPE_IQ2_KT ? nt > 0 ? 4 + 8*nt : 0
+                          : type == GGML_TYPE_IQ3_KT ? (nt + 1)/2 + 12*nt : 16*nt;
         return GGML_PAD(type_traits[type].row_meta_size + ggml_type_size(type)*(ne/QK_K) + tail, 4);
     }
     assert(ne % ggml_blck_size(type) == 0);
