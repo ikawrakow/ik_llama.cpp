@@ -646,6 +646,8 @@ static inline uint64_t model_state_hash(const llama_context & lctx) {
     mix(lctx.dsv4.raw.write_src_idxs.size());
     mix(lctx.dsv4.raw.write_dst_idxs.size());
     mix(lctx.dsv4.raw.read_dst_idxs.size());
+    // graphs of per-step checkpointed batches keep the per-token compressor state rows (llama_dsv4_spec_ckpt_capture_rows)
+    mix(llama_dsv4_per_step_capture_active(lctx) ? 1 : 0);
     //mix(lctx.dsv4.lid_plan.n_kv > lctx.model.hparams.indexer_top_k);
     //for (auto n_vis : lctx.dsv4.hca_plan.n_visible) mix(n_vis > 0);
     return h;
@@ -7709,9 +7711,10 @@ static int llama_decode_internal(
         llama_graph_compute(lctx, gf, n_threads);
 
         if (llm_arch_is_dsv4(lctx.model.arch) &&
-            lctx.cparams.mtp_op_type == MTP_OP_NONE &&
-            lctx.kv_self.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_PER_STEP &&
+            llama_dsv4_per_step_capture_active(lctx) &&
             !llama_dsv4_spec_ckpt_capture_rows(&lctx)) {
+            // the checkpoint cannot be trusted: drop it, so later decodes do not keep capturing into it
+            llama_spec_ckpt_discard(&lctx);
             return GGML_STATUS_FAILED;
         }
 

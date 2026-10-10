@@ -1400,9 +1400,17 @@ static bool dsv4_per_step_capture_group(
         }
         const auto cap_it = ctx.dsv4.capture_rows.find(state);
         ggml_tensor * rows = cap_it != ctx.dsv4.capture_rows.end() ? cap_it->second : nullptr;
+        ggml_backend_t rows_backend = rows != nullptr ? ggml_backend_sched_get_tensor_backend(ctx.sched, rows) : nullptr;
         if (rows != nullptr && (rows->type != state->type || rows->ne[0] != state->ne[0] || rows->data == nullptr ||
-                                ggml_backend_sched_get_tensor_backend(ctx.sched, rows) != backend)) {
+                                rows_backend == nullptr)) {
             rows = nullptr;
+        }
+        // A ring this graph persists into must be captured from the per-token rows: after the persist its slots can
+        // hold a later token's row. Only a ring the graph does not write (e.g. the V4.1 LID rings under
+        // V41_SEPARATE) still holds the saved state, so its ring rows are exact.
+        if (rows == nullptr && ctx.dsv4.persisted_rings.count(state) != 0) {
+            LLAMA_LOG_ERROR("%s: per-token state rows are missing for a ring this graph persists\n", __func__);
+            return false;
         }
 
         for (size_t row = 0; row < plan.state_delta_src_idxs.size(); ++row) {
@@ -1430,11 +1438,15 @@ static bool dsv4_per_step_capture_group(
             dst_view.view_src = nullptr;
             src_view.view_offs = 0;
             dst_view.view_offs = 0;
-            ggml_backend_tensor_copy_async(backend, backend, &src_view, &dst_view);
+            ggml_backend_tensor_copy_async(rows != nullptr ? rows_backend : backend, backend, &src_view, &dst_view);
         }
     }
 
     return true;
+}
+
+bool llama_dsv4_per_step_capture_active(const llama_context & ctx) {
+    return ctx.kv_self.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_PER_STEP && ctx.cparams.mtp_op_type == MTP_OP_NONE;
 }
 
 bool llama_dsv4_spec_ckpt_capture_rows(llama_context * ctx) {
