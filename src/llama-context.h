@@ -7,6 +7,7 @@
 #include "llama-spec-features.h"
 
 struct llama_model;
+class llama_moe_cache;
 
 #include <vector>
 #include <map>
@@ -360,6 +361,7 @@ struct llama_context {
     std::unordered_map<struct llama_lora_adapter *, float> lora_adapters;
 
     std::vector<ggml_backend_t> backends;
+    std::unique_ptr<llama_moe_cache> moe_cache;
 #ifdef GGML_USE_METAL
     ggml_backend_t backend_metal = nullptr;
 #endif
@@ -411,6 +413,9 @@ struct llama_context {
     // memory buffers used to evaluate the model
     std::vector<uint8_t> buf_compute_meta;
     ggml_backend_sched_t sched = nullptr;
+
+    static bool sched_copy_moe_cache(ggml_backend_t backend, const ggml_tensor * src,
+            ggml_tensor * dst, ggml_cgraph * graph, ggml_backend_sched_copy_phase phase, void * user_data);
 
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
