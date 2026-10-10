@@ -1212,6 +1212,24 @@ void server_prompt_cache::update() {
 
             states.pop_front();
         }
+
+        // The loop above cannot help when a *single* state is over the limit,
+        // and one easily is: a state carries up to --ctx-checkpoints checkpoints,
+        // each of which can be a fixed large fraction of the KV cache regardless
+        // of how many tokens it covers. Checkpoints are an optimisation for
+        // partial reuse, not the state itself -- `data` is -- so trim them
+        // oldest-first to get back under the limit.
+        for (auto& state : states) {
+            while (size() > limit_size && !state.checkpoints.empty()) {
+                const auto& front = state.checkpoints.front();
+                LLAMA_LOG_INFO(" - cache size limit reached, dropping a checkpoint (size = %.3f MiB)\n",
+                    front.size() / (1024.0 * 1024.0));
+                if (!front.spill_path.empty()) {
+                    remove(front.spill_path.c_str());
+                }
+                state.checkpoints.pop_front();
+            }
+        }
     }
 
     // average size per token
