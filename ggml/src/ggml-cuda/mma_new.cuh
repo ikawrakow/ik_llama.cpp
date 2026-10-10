@@ -17,7 +17,7 @@
 #include "common.cuh"
 
 
-#if CUDART_VERSION >= 11080
+#if CUDART_VERSION >= 11080 && !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 
 static __device__ __forceinline__ int ggml_cuda_movmatrix(const int x) {
     int ret = 0;
@@ -32,7 +32,7 @@ static __device__ __forceinline__ int ggml_cuda_movmatrix(const int x) {
     return ret;
 }
 
-#else
+#elif !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 
 static __device__ __forceinline__ int ggml_cuda_movmatrix(const int x) {
     // Imagine transposing row-major matrix to column-major matrix.
@@ -54,12 +54,15 @@ static __device__ __forceinline__ int ggml_cuda_movmatrix(const int x) {
 
 #endif // CUDART_VERSION >= 11080
 
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 static __device__ __forceinline__ half2 ggml_cuda_movmatrix(const half2 x) {
     half2 ret;
     *((int *) &ret) = ggml_cuda_movmatrix(*((const int *) &x));
     return ret;
 }
+#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 namespace ggml_cuda_mma {
 
     template <int I_, int J_, typename T>
@@ -138,6 +141,7 @@ namespace ggml_cuda_mma {
         return ret;
     }
 
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
     static __device__ __forceinline__ tile<8, 8, half2> get_transposed(const tile<16, 4, half2> & t) {
         tile<8, 8, half2> ret;
         ret.x[0] = ggml_cuda_movmatrix(t.x[0]);
@@ -145,6 +149,7 @@ namespace ggml_cuda_mma {
 
         return ret;
     }
+#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 
     template <int I, int J, typename T>
     static __device__ __forceinline__ void load_generic(tile<I, J, T> & t, const T * __restrict__ xs0, const int stride) {
@@ -178,8 +183,7 @@ namespace ggml_cuda_mma {
             : "=r"(xi[0]), "=r"(xi[1])
             : "l"(xs));
 #else
-        load_generic(xs0, stride);
-        GGML_UNUSED(t);
+        load_generic(t, xs0, stride);
 #endif // INT8_MMA_AVAILABLE
     }
 
@@ -394,3 +398,4 @@ namespace ggml_cuda_mma {
 #endif // INT8_MMA_AVAILABLE
     }
 }
+#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))

@@ -331,7 +331,11 @@ static __global__ void k_fast_add_2(int64_t ne0, int64_t nelem, const src1_t * x
     if (i >= nelem) {
         return;
     }
+#if defined(__HIP_PLATFORM_AMD__)
+    z[i] = (dst_t)(__bfloat162float((const __hip_bfloat16)x[i]) + __bfloat162float((const __hip_bfloat16)y[i]));
+#else
     z[i] = (dst_t)((float)x[i] + (float)y[i]);
+#endif
 }
 
 template <int block_size, typename data_t>
@@ -341,7 +345,9 @@ static __global__ void k_add_same(int64_t nelem, const data_t * x, const data_t 
         return;
     }
     if constexpr (std::is_same_v<data_t, nv_bfloat16>) {
-#if __CUDA_ARCH__ >= CC_AMPERE
+#if defined(__HIP_PLATFORM_AMD__)
+        z[i] = __float2bfloat16(__bfloat162float(x[i]) + __bfloat162float(y[i]));
+#elif __CUDA_ARCH__ >= CC_AMPERE
         z[i] = x[i] + y[i];
 #else
         z[i] = __float2bfloat16((float)x[i] + (float)y[i]);

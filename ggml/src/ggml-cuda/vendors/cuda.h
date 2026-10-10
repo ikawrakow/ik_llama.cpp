@@ -17,3 +17,7 @@
 #define CUBLAS_COMPUTE_32F CUDA_R_32F
 #define cublasComputeType_t cudaDataType_t
 #endif // CUDART_VERSION < 11020
+
+// ggml_hip_to_float compatibility shim for CUDA builds
+template <typename T>
+__device__ __forceinline__ float ggml_hip_to_float(const T x) { return (float)x; }

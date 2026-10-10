@@ -283,7 +283,7 @@ static __global__ void flash_attn_tile_ext_f16(
             kqsum[j0/nwarps] = kqsum[j0/nwarps]*KQ_max_scale;
             if (threadIdx.x == 0) {
                 // Add the sink term to only the low half; the epilogue sums low+high once per lane.
-                kqsum[j0/nwarps].x += hexp(sink - kqmax[j0/nwarps]);
+                kqsum[j0/nwarps].x = __float2half(__half2float(kqsum[j0/nwarps].x) + __half2float(hexp(sink - kqmax[j0/nwarps])));
             }
 
 #pragma unroll

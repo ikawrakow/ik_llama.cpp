@@ -1,3 +1,4 @@
+#if !defined(GGML_USE_HIPBLAS)
 #include "common.cuh"
 #include "ggml.h"
 #include "solve_tri.cuh"
@@ -914,3 +915,9 @@ void ggml_cuda_op_solve_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
         dst->nb[2] / sizeof(float), dst->nb[3] / sizeof(float),
         ctx.stream());
 }
+
+#else
+#include "solve_tri.cuh"
+#include "ggml-cuda.h"
+void ggml_cuda_op_solve_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) { GGML_UNUSED(ctx); GGML_UNUSED(dst); }
+#endif // !defined(GGML_USE_HIPBLAS)

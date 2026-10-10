@@ -7,7 +7,11 @@ static __device__ __forceinline__ void convert_flt(const src_t * src, dst_t * ds
     if constexpr (std::is_same_v<src_t, dst_t>) {
         *dst = *src;
     } else {
-        *dst = float(*src);
+#if defined(__HIP_PLATFORM_AMD__)
+        *dst = (dst_t)(__bfloat162float(*(const __hip_bfloat16 *)src));
+#else
+        *dst = (dst_t)(float(*src));
+#endif
     }
 }
 
