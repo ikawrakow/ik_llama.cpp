@@ -562,7 +562,11 @@ extern "C" {
         bool dry_run;                        //
         bool partial_requant;                // quantize only missing split files in the split quantized .gguf destination directory
         size_t slab_size;                    // tensors larger than this many bytes of f32 are processed in slabs of up to this size (at least one slice or row group), 0 = never
-        bool cuda_quantize;                  // quantize IQ4_KT and IQ3_KT on the first CUDA device
+        bool cuda_quantize;                  // quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1/IQ4_NL/IQ4_XS on a CUDA device
+        int  cuda_quantize_device;           // CUDA device index used by --cuda-quantize (default 0)
+        int  cuda_quantize_n_devices;        // row-split device count, 0 = off
+        int  cuda_quantize_devices[16];      // row-split ordinals (-dev CUDA0,CUDA1,CUDA2)
+        float cuda_quantize_split[16];       // row-split shares, sum 1 (-ts 3,3,2)
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules
