@@ -633,6 +633,10 @@ struct llama_context {
         comp_plan csa_plan;
         comp_plan hca_plan;
         comp_plan lid_plan;
+        // compressor state ring -> per-token state rows of the current graph (per-step checkpoint capture)
+        std::map<const ggml_tensor *, ggml_tensor *> capture_rows;
+        // compressor state rings the current graph persists into
+        std::set<const ggml_tensor *> persisted_rings;
 
         std::vector<float> csa_mask_data;
         std::vector<float> hca_mask_data;
