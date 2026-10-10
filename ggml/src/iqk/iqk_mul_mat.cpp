@@ -240,8 +240,10 @@ struct MulMat {
 #ifdef __AVX2__
 #ifdef HAVE_FANCY_SIMD
         auto q8_k_type = GGML_TYPE_Q8_K_R16;
+        constexpr int k_min_nrc_y = 16;
 #else
         auto q8_k_type = GGML_TYPE_Q8_K_R8;
+        constexpr int k_min_nrc_y = 32;
 #endif
         switch (type) {
             case GGML_TYPE_IQ2_XXS: return nrc_y >= 32 ? q8_k_type : type;
@@ -252,7 +254,7 @@ struct MulMat {
             case GGML_TYPE_IQ2_S_R4: return nrc_y >= 16 ? q8_k_type : type;
             case GGML_TYPE_IQ3_XXS: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ3_XXS_R4: return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ4_XS : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_XS : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ4_XS_R8: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ3_S  : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ3_S_R4: return nrc_y >= 32 ? q8_k_type : type;
@@ -275,16 +277,16 @@ struct MulMat {
             case GGML_TYPE_IQ3_KS : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ3_K  : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ3_K_R4: return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ4_KS : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_KS : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ4_KS_R4: return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ4_KSS: return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ4_K  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_KSS: return nrc_y >= k_min_nrc_y ? q8_k_type : type;
+            case GGML_TYPE_IQ4_K  : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ4_K_R4: return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ5_KS : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ5_KS : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ5_KS_R4: return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ5_K  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ5_K  : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ5_K_R4: return nrc_y >= 32 ? q8_k_type : type;
-            case GGML_TYPE_IQ6_K  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ6_K  : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_Q4_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
 #ifdef HAVE_FANCY_SIMD
             case GGML_TYPE_Q4_0_R8 : return nrc_y >= 128 ? GGML_TYPE_Q8_0_R8 : type;
