@@ -53,6 +53,7 @@ struct llama_cparams {
     bool scheduler_async;
     int  min_experts;
     float thresh_experts;
+    size_t moe_cache_size = 0;
     bool mtp;
     int  worst_graph_tokens;
     int  dflash_query_capacity = 0; // internal DFlash query capacity override
