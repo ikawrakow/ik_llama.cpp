@@ -16,6 +16,9 @@ void llama_reset_dsv4_state(llama_context * ctx, int32_t seq_id = -1);
 bool llama_dsv4_spec_ckpt_prepare(llama_context * ctx, int mode, int max_tokens);
 bool llama_dsv4_spec_ckpt_save(llama_context * ctx, bool use_gpu);
 bool llama_dsv4_spec_ckpt_capture_rows(llama_context * ctx);
+// true while the current batch runs with a per-step speculative checkpoint (the graph then keeps the per-token
+// compressor state rows the capture reads)
+bool llama_dsv4_per_step_capture_active(const llama_context & ctx);
 enum llama_spec_ckpt_restore_result llama_dsv4_spec_ckpt_restore(llama_context * ctx, bool use_gpu, int accepted_step);
 void llama_dsv4_spec_ckpt_discard(llama_context * ctx);
 ggml_tensor * llama_dsv4_spec_ckpt_delta(llama_context * ctx, ggml_tensor * state_tensor);
