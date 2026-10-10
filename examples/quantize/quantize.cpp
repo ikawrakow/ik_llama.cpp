@@ -214,7 +214,90 @@ static void usage(const char * executable) {
     exit(1);
 }
 
+// quillama.cpp: importance matrices in upstream llama.cpp's GGUF format (llama-imatrix since 2025,
+// e.g. unsloth's imatrix_unsloth.gguf). Per weight "<name>.in_sum2" holds the summed squared
+// activations [n_per_row x n_expert] and "<name>.counts" the number of tokens per expert; the
+// importance is in_sum2/count, 1 for an expert that saw no tokens (as upstream's llama-quantize).
+static bool quill_is_gguf_file(const std::string & fname) {
+    std::ifstream in(fname.c_str(), std::ios::binary);
+    char magic[4] = {0, 0, 0, 0};
+    in.read(magic, 4);
+    return in && memcmp(magic, "GGUF", 4) == 0;
+}
+
+static int load_imatrix_gguf(const std::string & imatrix_file, std::string & imatrix_dataset, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+    struct ggml_context * ctx = nullptr;
+    struct gguf_init_params params = { /*.no_alloc =*/ false, /*.ctx =*/ &ctx };
+    struct gguf_context * gctx = gguf_init_from_file(imatrix_file.c_str(), params);
+    if (!gctx) {
+        printf("%s: failed to read GGUF imatrix %s\n", __func__, imatrix_file.c_str());
+        exit(1);
+    }
+    const int k_datasets = gguf_find_key(gctx, "imatrix.datasets");
+    const int k_chunks   = gguf_find_key(gctx, "imatrix.chunk_count");
+    int chunk_count = k_chunks >= 0 ? (int) gguf_get_val_u32(gctx, k_chunks) : 0;
+    if (k_datasets >= 0) {
+        for (int i = 0; i < gguf_get_arr_n(gctx, k_datasets); ++i) {
+            if (i > 0) imatrix_dataset += ", ";
+            imatrix_dataset += gguf_get_arr_str(gctx, k_datasets, i);
+        }
+    }
+    const std::string sum2_suffix = ".in_sum2", counts_suffix = ".counts";
+    auto has_suffix = [](const std::string & s, const std::string & suf) {
+        return s.size() > suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+    };
+    int n_skipped = 0;
+    for (int i = 0; i < gguf_get_n_tensors(gctx); ++i) {
+        const std::string tname = gguf_get_tensor_name(gctx, i);
+        if (!has_suffix(tname, sum2_suffix)) continue;
+        const std::string name = tname.substr(0, tname.size() - sum2_suffix.size());
+        const struct ggml_tensor * sum2   = ggml_get_tensor(ctx, tname.c_str());
+        const struct ggml_tensor * counts = ggml_get_tensor(ctx, (name + counts_suffix).c_str());
+        if (!sum2 || !counts || sum2->type != GGML_TYPE_F32 || counts->type != GGML_TYPE_F32) {
+            ++n_skipped;
+            continue;
+        }
+        const int64_t nval = ggml_nelements(sum2), ncounts = ggml_nelements(counts);
+        if (ncounts < 1 || nval % ncounts != 0) {
+            ++n_skipped;
+            continue;
+        }
+        const int64_t ne0 = nval / ncounts;
+        const float * src = (const float *) sum2->data;
+        const float * cnt = (const float *) counts->data;
+        auto & e = imatrix_data[name];
+        e.resize(nval);
+        for (int64_t j = 0; j < ncounts; ++j) {
+            const float c = cnt[j];
+            for (int64_t k = 0; k < ne0; ++k) {
+                e[j*ne0 + k] = c > 0.0f ? src[j*ne0 + k] / c : 1.0f;
+            }
+        }
+        if (getenv("LLAMA_TRACE")) {
+            printf("%s: loaded data (size = %6d, n_expert = %4d) for '%s'\n", __func__, int(e.size()), int(ncounts), name.c_str());
+        }
+    }
+    gguf_free(gctx);
+    ggml_free(ctx);
+    if (imatrix_data.empty()) {
+        printf("%s: no importance matrix entries in %s\n", __func__, imatrix_file.c_str());
+        exit(1);
+    }
+    if (n_skipped > 0) {
+        printf("%s: skipped %d malformed entries\n", __func__, n_skipped);
+    }
+    if (!imatrix_dataset.empty()) {
+        printf("%s: imatrix dataset='%s'\n", __func__, imatrix_dataset.c_str());
+    }
+    printf("%s: loaded %d importance matrix entries from %s (GGUF format) computed on %d chunks\n", __func__,
+           int(imatrix_data.size()), imatrix_file.c_str(), chunk_count);
+    return chunk_count;
+}
+
 static int load_imatrix(const std::string & imatrix_file, std::string & imatrix_dataset, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+    if (quill_is_gguf_file(imatrix_file)) {
+        return load_imatrix_gguf(imatrix_file, imatrix_dataset, imatrix_data);
+    }
     std::ifstream in(imatrix_file.c_str(), std::ios::binary);
     if (!in) {
         printf("%s: failed to open %s\n",__func__, imatrix_file.c_str());

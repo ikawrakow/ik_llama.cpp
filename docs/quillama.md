@@ -322,6 +322,30 @@ are written from disk, and an incomplete write is reported as a failed save.
 Speculative decoding: a matching draft token that is EOG no longer lets the draft tokens after it
 be accepted into the context (as upstream #29638).
 
+### 16. Making ik quants (IQ3_K, IQ4_KS, ...) with upstream / unsloth importance matrices
+
+`llama-quantize` reads importance matrices in both formats: ik's classic `.dat` and upstream
+llama.cpp's GGUF format (`llama-imatrix` since 2025; unsloth ships these as `imatrix_unsloth.gguf`).
+It detects the format from the file's magic. For GGUF, each weight's `<name>.in_sum2` is divided by
+its per-expert `<name>.counts`; an expert that saw no tokens gets importance 1, as upstream's
+quantizer does. Tested by converting a `.dat` imatrix of a 128-expert MoE to the GGUF layout with
+a different token count per expert: quantizing to IQ3_K with either file gives byte-identical
+models.
+
+```bash
+huggingface-cli download unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF \
+  --include "*Q8_0*" "imatrix_unsloth*" --local-dir ./qwen3next
+./build/bin/llama-quantize --allow-requantize --imatrix ./qwen3next/imatrix_unsloth.gguf \
+  ./qwen3next/Qwen3-Next-80B-A3B-Instruct-Q8_0.gguf ./Qwen3-Next-80B-A3B-Instruct-IQ3_K.gguf IQ3_K 12
+```
+
+The quantizer streams the source through `mmap` and holds one tensor at a time, so it needs a few
+GB of RAM, not the model size. It does need disk for the source plus the output. Lines like
+`did not find weights for X` name tensors without imatrix data: always the token embedding and
+output, plus any experts the calibration text never routed to. If many attention or recurrent
+tensors are listed, the imatrix uses different tensor names than this build, and those tensors are
+quantized without it.
+
 ### Recommended settings for an AVX2 EPYC VPS (Zen 2/3, no AVX-512)
 
 * `-ctk q8_0 -ctv q8_0`: half the KV memory of f16 with negligible quality loss, and at least as

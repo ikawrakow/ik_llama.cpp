@@ -21,6 +21,8 @@ of RAM and an SSD:
 - **Models larger than RAM** keep `mmap` and stream from SSD: read-ahead of the selected MoE
   experts, and AirLLM-style layer-ahead read-ahead of the dense weights (+11% generation for a
   dense model under a memory cap).
+- **`llama-quantize` reads upstream GGUF importance matrices** (e.g. unsloth's `imatrix_unsloth.gguf`)
+  as well as ik's `.dat`, so ik's IQ*_K types can be made with published calibration data.
 - Server robustness: prompt-prefix reuse checked by a regression test, hardened slot
   save/restore, no draft tokens accepted after end-of-generation. Tests cover all of the above,
   including upstream llama.cpp's grammar / JSON-schema suite.
