@@ -1126,6 +1126,13 @@ static void quill_auto_repack(gpt_params & params) {
     } else {
         // stream MoE experts from SSD: read-ahead of the selected experts plus the router lookahead
         params.prefetch_experts = true;
+        // and the dense weights of the layers ahead (AirLLM-style layer streaming): a read-ahead
+        // window of half the available memory measured best under a memory cap (+19% at ~60%,
+        // losing again near 85% when it evicts pages that are still needed)
+        if (!getenv("QUILL_LAYER_PREFETCH_MB")) {
+            const size_t window_mb = std::max<size_t>(32, avail/2 >> 20);
+            setenv("QUILL_LAYER_PREFETCH_MB", std::to_string(window_mb).c_str(), 0);
+        }
         fprintf(stderr, "quillama: model (%.1f GiB) does not fit comfortably in RAM (%.1f GiB available): keeping mmap, "
                 "no run-time repack, MoE expert prefetch from storage enabled\n",
                 model_bytes/1073741824.0, avail/1073741824.0);

@@ -52,6 +52,14 @@ void ggml_moe_prefetch_cold(const struct ggml_tensor * w);
 // madvise(MADV_WILLNEED) when the engine is off.
 void ggml_moe_prefetch_kernel_hook(const struct ggml_tensor * node, int ith);
 
+// quillama.cpp: AirLLM-style layer-ahead streaming for dense weights. Called by thread 0 before
+// each node of a CPU graph; keeps the mmap-backed weights of the nodes ahead (up to a byte window)
+// hinted with MADV_WILLNEED, so the next layers' attention/FFN pages stream in from storage while
+// the current layer computes. No-op unless the prefetch engine is on (model kept in mmap because it
+// does not fit in RAM). QUILL_LAYER_PREFETCH_MB sets the window (0 = off); the common argument
+// parser sets it to half the available memory, otherwise it defaults to 256.
+void ggml_quill_layer_prefetch(const struct ggml_cgraph * graph, int node_n);
+
 #ifdef __cplusplus
 }
 #endif

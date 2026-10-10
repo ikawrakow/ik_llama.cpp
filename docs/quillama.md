@@ -175,6 +175,28 @@ MoE-cache llama.cpp fork, moved to the SSD → RAM tier:
 On synthetic models it lost to plain read-ahead (2.6 vs 2.9 t/s, even with correlated routing), so
 it stays opt-in until it can be measured on real MoE models.
 
+**Layer-ahead streaming of the dense weights (from AirLLM).** AirLLM runs models far larger than
+memory by loading one layer at a time while the next one is read in. With `mmap`, llama.cpp already
+loads layers on demand, but each layer's attention and dense FFN weights were faulted in page by
+page when the layer reached them. Now, in the same streaming mode, thread 0 walks the graph and
+hints the weights of the upcoming nodes with `MADV_WILLNEED`, up to a byte window ahead of the node
+being computed. The kernel reads them asynchronously while the current layer computes. MoE expert
+tensors keep their selective prefetch, and token-embedding lookups are skipped.
+
+| 1.0 GB dense model, 600 MB memory cap, 4 threads | generation |
+| --- | ---: |
+| off (`QUILL_LAYER_PREFETCH_MB=0`) | 2.73 t/s |
+| window 256 MB | 2.85 t/s (+5%) |
+| window 384 MB | 3.15 t/s (+19%) |
+| window 512 MB (85% of the cap: evicts pages still needed) | 2.66 t/s |
+| **default: half the available memory** | **3.03 t/s (+11%)** |
+
+A worker pool doing `MADV_POPULATE_READ` instead (the engine used for experts) was slower: 1.9-2.1
+t/s, because it competes with the compute threads for the 4 cores. On a MoE model (2.8 GB, 1.6 GB
+cap) the dense lookahead is neutral (13.06 vs 13.04 t/s), and outputs are byte-identical with and
+without it. When the model fits in RAM, as in the recommended setup, none of this runs. The window
+is `QUILL_LAYER_PREFETCH_MB` (set automatically to half the available memory; 0 disables it).
+
 ### 7. Grammar jump-forward drafting
 
 When every parse stack of the grammar agrees on the next character, that text is forced: in a
@@ -413,7 +435,7 @@ QUILL_AMX=0 ./build/bin/llama-bench -m q3-q4km.gguf -t 4 -fa 1 -ctk q8_0 -ctv q8
 QUILL_AMX=0 ./build/bin/llama-bench -m q3-q4km.gguf -t 4 -fa 1 -ctk q8_0 -ctv q8_0 -rtr 1 -p 0 -n 0 -gp 4096,32
 ```
 
-## Ideas taken from Strata and the MoE-cache fork
+## Ideas taken from Strata, the MoE-cache fork and AirLLM
 
 [Strata](https://github.com/Niko1221/Strata) runs a 125B MoE on a gaming PC by tiering the model
 over VRAM, RAM and SSD. The [MoE-cache llama.cpp fork](https://github.com/GenerelSchwerz/llama.cpp)
@@ -426,6 +448,7 @@ keeps hot experts in VRAM. Both are GPU-centric. On a CPU-only server their idea
 | large prefill chunks so streamed experts are reused by many tokens | AMX tiles (3, 4) make large micro-batches compute-efficient; raise `-ub` for MoE |
 | MTP / prompt-lookup speculation | already in ik (`-mtp`, n-gram / suffix-tree drafts); quillama adds grammar-forced drafts (7) |
 | structured output by schema prompting + validation (Strata) | grammar-constrained decoding, which guarantees the schema instead of validating it afterwards (1, 2) |
+| [AirLLM](https://github.com/lyogavin/airllm): load one layer at a time, prefetch the next while computing | `mmap` loads layers on demand; the next layers' dense weights are hinted with `MADV_WILLNEED` while the current one computes (6). AirLLM's per-layer 4/8-bit compression for faster disk loads is what GGUF quantization already is. Its GPU-memory tricks (pinned staging, meta-device modules) have no CPU counterpart. |
 
 ## Environment variables
 
@@ -442,6 +465,7 @@ keeps hot experts in VRAM. Both are GPU-centric. On a CPU-only server their idea
 | `QUILL_MOE_MIN_CHUNK=N` | minimum rows per expert chunk at decode (default 128) |
 | `QUILL_MOE_CHUNKS=N` | force N chunks per expert |
 | `QUILL_FA_VBLOCK=0` | original AVX2 flash-attention V accumulation |
+| `QUILL_LAYER_PREFETCH_MB=N` | layer-ahead read-ahead window when streaming a model larger than RAM (auto: half the available memory, 0 = off) |
 | `QUILL_GRAMMAR_DRAFT_MIN_ACCEPT=F` | stop grammar drafting for a request below this acceptance (default 0.6, 0 = never) |
 
 ## Tests

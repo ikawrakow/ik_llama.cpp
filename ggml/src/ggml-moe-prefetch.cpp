@@ -1,4 +1,5 @@
 #include "ggml-moe-prefetch.h"
+#include "ggml-impl.h"
 
 #if defined(__linux__)
 
@@ -397,6 +398,83 @@ void ggml_moe_prefetch_tensor(const struct ggml_tensor * w) {
     enqueue_ranges(w, ranges, /*urgent =*/ false, /*track_reads =*/ true);
 }
 
+// ---- quillama.cpp: layer-ahead read-ahead of dense weights ----
+namespace {
+struct layer_ahead_state {
+    const ggml_cgraph * graph = nullptr;
+    int                 n_nodes = 0;
+    const ggml_tensor * first = nullptr;
+    uint64_t            epoch = 0;
+    std::vector<int>                 node_of;  // node index of each entry
+    std::vector<const ggml_tensor *> weight;   // mmap-backed dense weight read by that node
+    std::vector<size_t>              cum;      // prefix sums of weight bytes
+    size_t next = 0;                           // first entry not yet enqueued this epoch
+};
+}
+
+static size_t quill_layer_window() {
+    static const size_t w = [] {
+        const char * e = getenv("QUILL_LAYER_PREFETCH_MB");
+        const long mb = e ? atol(e) : 256;
+        return mb > 0 ? (size_t) mb << 20 : (size_t) 0;
+    }();
+    return w;
+}
+
+void ggml_quill_layer_prefetch(const struct ggml_cgraph * graph, int node_n) {
+    const size_t window = quill_layer_window();
+    if (window == 0 || !graph || graph->n_nodes <= 0) return;
+    auto & s = state();
+    {
+        std::lock_guard<std::mutex> plock(s.pool_mtx);
+        if (!s.pool) return;
+    }
+    thread_local layer_ahead_state st;
+    const uint64_t cur_epoch = s.epoch.load(std::memory_order_relaxed);
+    if (st.graph != graph || st.n_nodes != graph->n_nodes || st.first != graph->nodes[0]) {
+        st = layer_ahead_state();
+        st.graph = graph; st.n_nodes = graph->n_nodes; st.first = graph->nodes[0];
+        st.cum.push_back(0);
+        for (int n = 0; n < graph->n_nodes; ++n) {
+            const ggml_tensor * node = graph->nodes[n];
+            const ggml_tensor * ws[2] = { nullptr, nullptr };
+            if (node->op == GGML_OP_MUL_MAT) {
+                ws[0] = node->src[0];
+            } else if (node->op == GGML_OP_FUSED_UP_GATE) {
+                ws[0] = node->src[0]; ws[1] = node->src[1];
+            }
+            for (const ggml_tensor * w : ws) {
+                if (!w || !w->data || w->op != GGML_OP_NONE || !is_mapped(w->data, ggml_nbytes(w))) continue;
+                st.node_of.push_back(n);
+                st.weight.push_back(w);
+                st.cum.push_back(st.cum.back() + ggml_nbytes(w));
+            }
+        }
+    }
+    if (st.weight.empty()) return;
+    if (st.epoch != cur_epoch) {
+        st.epoch = cur_epoch;
+        st.next  = 0;
+    }
+    // the entries at or after the current node, as long as they fit in the window
+    size_t first = st.next;
+    while (first > 0 && st.node_of[first - 1] >= node_n) --first;
+    while (first < st.weight.size() && st.node_of[first] < node_n) ++first;
+    const size_t base = st.cum[first];
+    // MADV_WILLNEED: the kernel reads ahead asynchronously, without taking CPU from the compute
+    // threads (a worker pool doing MADV_POPULATE_READ measured slower on 4 cores)
+    const uintptr_t page_mask = (uintptr_t) sysconf(_SC_PAGESIZE) - 1;
+    while (st.next < st.weight.size() && st.cum[st.next + 1] - base <= window) {
+        // strictly ahead: the current node's weight is already being faulted in by the compute threads
+        if (st.next >= first && st.node_of[st.next] > node_n) {
+            const ggml_tensor * w = st.weight[st.next];
+            const uintptr_t a = (uintptr_t) w->data & ~page_mask;
+            (void) madvise((void *) a, (uintptr_t) w->data + ggml_nbytes(w) - a, MADV_WILLNEED);
+        }
+        ++st.next;
+    }
+}
+
 #ifndef MADV_COLD
 #define MADV_COLD 20
 #endif
@@ -478,5 +556,6 @@ void ggml_moe_prefetch_predicted(const struct ggml_tensor *, const struct ggml_t
 void ggml_moe_prefetch_wait(const struct ggml_tensor *) {}
 void ggml_moe_prefetch_kernel_hook(const struct ggml_tensor *, int) {}
 void ggml_moe_prefetch_cold(const struct ggml_tensor *) {}
+void ggml_quill_layer_prefetch(const struct ggml_cgraph *, int) {}
 
 #endif

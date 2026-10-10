@@ -8,15 +8,22 @@ of RAM and an SSD:
   enforced at all in ik_llama.cpp (upstream llama.cpp does enforce it), and two smaller gaps let
   output escape the schema. Grammar-constrained sampling is also 1.7× faster, with an identical
   token mask.
+- **Faster generation on AVX2 servers** (AMD EPYC, Intel without AVX-512): +29% over a hand-tuned
+  ik_llama.cpp on a Qwen3-30B-A3B-shaped MoE, from run-time repack by default, huge pages for the
+  repacked weights, MoE decode work split and faster AVX2 flash attention at long context.
+- **Faster JSON-schema generation**: about 2.3× ik_llama.cpp. The output layer is computed only for
+  the tokens the grammar allows (exact), and grammar-forced text is drafted and verified in one
+  batch, adaptively.
 - **Prompt processing on Intel AMX** (Sapphire Rapids and newer Xeons, common on cloud VPS): BF16
   tile kernels for dense and MoE matmuls and for flash attention, with 2048-token micro-batches.
   2.1-2.8× faster prompts on a dense model and 1.7-2.7× on a MoE model than a hand-tuned
   ik_llama.cpp in our measurements; the gap grows with the context.
-- **Faster token generation by default**: ik's run-time weight repacking (+25-60% generation over
-  ik's defaults) is switched on automatically when the model fits in RAM.
-- **Models larger than RAM** keep `mmap` and stream MoE experts from SSD with read-ahead.
-- Grammar jump-forward drafting, transparent huge pages that work without reserved hugetlbfs pages,
-  and tests for all of the above (including upstream llama.cpp's grammar / JSON-schema suite).
+- **Models larger than RAM** keep `mmap` and stream from SSD: read-ahead of the selected MoE
+  experts, and AirLLM-style layer-ahead read-ahead of the dense weights (+11% generation for a
+  dense model under a memory cap).
+- Server robustness: prompt-prefix reuse checked by a regression test, hardened slot
+  save/restore, no draft tokens accepted after end-of-generation. Tests cover all of the above,
+  including upstream llama.cpp's grammar / JSON-schema suite.
 
 ```bash
 ./scripts/quill-build-cpu.sh

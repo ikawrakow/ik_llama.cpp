@@ -29879,6 +29879,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         if (ggml_is_noop(node)) continue;
 
+        if (state->ith == 0 && cplan->moe_expert_prefetch) {
+            ggml_quill_layer_prefetch(cgraph, node_n); // quillama: stream the next layers' weights in from storage
+        }
+
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
 #endif
