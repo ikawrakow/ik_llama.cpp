@@ -649,6 +649,7 @@ struct llama_context {
     std::vector<struct ggml_tensor *> inp_engram_gate_ids; // I32 [hc]: 0..hc-1, dequantizes the gate scales via get_rows
     struct ggml_tensor * inp_engram_gate_mask = nullptr; // F32 [n_batch]: 0 at image tokens (engram gate shut), 1 elsewhere
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
+    struct ggml_tensor * inp_embd_ids = nullptr; // I32 [n_batch], mixed batch: i for token i, n_batch + i for row i of embd
     struct ggml_tensor * inp_pos;         // I32 [n_batch]
     struct ggml_tensor * inp_out_ids;     // I32 [n_outputs]
     struct ggml_tensor * inp_KQ_mask;     // F32 [kv_size, n_batch]
@@ -666,6 +667,17 @@ struct llama_context {
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
+
+    // clef decision head, see llama_set_decision_order()
+    std::vector<int32_t> decision_order;               // cleared by llama_decode()
+    const int32_t *      decision_order_cur = nullptr; // the order of the current ubatch, null if none
+    bool                 decision_order_bad = false;   // an order was given but it does not match the current ubatch
+    struct ggml_tensor * inp_decision_pool_q   = nullptr; // F32 [n_tokens, n_questions], mean over the span of each question
+    struct ggml_tensor * inp_decision_pool_o   = nullptr; // F32 [n_tokens, n_options], mean over the span of each option
+    struct ggml_tensor * inp_decision_qtype    = nullptr; // I32 [n_questions]
+    struct ggml_tensor * inp_decision_owner    = nullptr; // I32 [n_options], the question of each option
+    struct ggml_tensor * inp_decision_mask     = nullptr; // F32 [n_options, n_questions], 0 if the option belongs to the question, else -inf
+    struct ggml_tensor * inp_decision_status   = nullptr; // F32 [1], 0, or NaN if the order cannot be used
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k

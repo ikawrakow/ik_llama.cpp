@@ -1197,6 +1197,10 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     auto stream_opt = json_value(data, "stream_options", json::object());
     slot.params.include_usage = json_value(stream_opt, "include_usage", false);
     slot.params.cache_prompt = json_value(data, "cache_prompt", true);
+    if (!task.decision.order.empty()) {
+        // a joint decision head reads the hidden states of the whole prompt, nothing can be reused
+        slot.params.cache_prompt = false;
+    }
     slot.params.n_predict = json_value(data, "n_predict", json_value(data, "max_tokens", json_value(data, "max_completion_tokens", defaults.n_predict)));
     slot.saturate_predict = json_value(data, "saturate_predict", false);
     slot.sparams.top_k = json_value(data, "top_k", default_sparams.top_k);
@@ -4133,6 +4137,16 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         continue;
                     }
 
+                    if (slot.task && !slot.task->decision.order.empty() && (slot.n_prompt_tokens > n_ubatch || slot.n_prompt_tokens >= slot.n_ctx)) {
+                        // a joint decision head needs the whole prompt in one ubatch, it cannot be truncated
+                        slot.state = SLOT_STATE_PROCESSING;
+                        slot.command = SLOT_COMMAND_NONE;
+                        slot.release();
+                        send_error(slot, string_format("the decision prompt (%d tokens) does not fit in the physical batch size (%d) or in the context of the slot (%d), "
+                                    "increase --ubatch-size or --ctx-size", slot.n_prompt_tokens, n_ubatch, slot.n_ctx), ERROR_TYPE_SERVER);
+                        continue;
+                    }
+
                     if (slot.embedding) {
                         // this prompt is too large to process - discard it
                         if (slot.n_prompt_tokens > n_ubatch) {
@@ -4259,6 +4273,12 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
                 }
 
+                // a joint decision head reads the whole batch: its prompt goes in a batch of its own
+                const bool is_joint = slot.task && !slot.task->decision.order.empty();
+                if (is_joint && batch.n_tokens > 0) {
+                    continue;
+                }
+
                 // check that we are in the right batch_type, if not defer the slot
                 bool slot_type = slot.embedding ? 1 : 0;
                 if (batch_type == -1) {
@@ -4307,6 +4327,11 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     { "id_task", slot.id_task },
                     { "p0",      p0 }
                     });
+
+                // a joint decision head reads the images in the same batch as the text
+                if (is_joint && slot.prompt_tokens.has_mtmd && !add_prompt_mixed(slot)) {
+                    continue;
+                }
 
                 // check if we should process the image
                 if (slot.n_past_prompt < slot.n_prompt_tokens
@@ -4379,7 +4404,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     slot.n_past_prompt++;
                     slot.n_past++;
                     slot.image_just_processed = false;
-                    if (params_base.do_checkpoint && slot.n_prompt_tokens - slot.n_past_prompt == params_base.ctx_checkpoints_tolerance) {
+                    if (params_base.do_checkpoint && !is_joint && slot.n_prompt_tokens - slot.n_past_prompt == params_base.ctx_checkpoints_tolerance) {
                         slot.do_checkpoint = true;
                         break;
                     }
@@ -4424,6 +4449,12 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         {"n_tokens", batch.n_tokens},
                         });
                 }
+
+                if (is_joint) {
+                    GGML_ASSERT(slot.n_past_prompt == slot.n_prompt_tokens && batch.n_tokens == slot.n_prompt_tokens);
+                    batch_decision_order = slot.task->decision.order;
+                    break;
+                }
             }
 
             if (batch.n_tokens >= n_batch) {
@@ -4431,6 +4462,66 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
             }
         }
     }
+}
+
+// add the whole prompt to the batch, the images as embeddings next to the text tokens
+// the batch must be empty, returns false on error, the slot is then released
+bool server_context::add_prompt_mixed(server_slot & slot) {
+    GGML_ASSERT(batch.n_tokens == 0);
+    const int64_t n_embd   = llama_model_n_embd(model);
+    const int64_t n_tokens = slot.n_prompt_tokens;
+    const bool is_mrope = mtmd_decode_use_mrope(mctx);
+
+    batch_embd.assign(n_tokens * n_embd, 0.0f);
+    batch_pos.assign(is_mrope ? 4 * n_tokens : 0, 0);
+
+    // positions are the ones of mtmd_helper_decode_image_chunk()
+    const auto add = [&](llama_token tok, llama_pos t, llama_pos y, llama_pos x) {
+        if (is_mrope) {
+            batch_pos[0 * n_tokens + batch.n_tokens] = t;
+            batch_pos[1 * n_tokens + batch.n_tokens] = y;
+            batch_pos[2 * n_tokens + batch.n_tokens] = x;
+        }
+        common_batch_add(batch, tok, t, { slot.id }, false);
+    };
+
+    while (slot.n_past_prompt < slot.n_prompt_tokens) {
+        const llama_token tok = slot.prompt_tokens[slot.n_past_prompt];
+        const llama_pos p = system_tokens.size() + slot.cache_tokens.pos_next();
+        size_t n = 1;
+        if (tok != LLAMA_TOKEN_NULL) {
+            add(tok, p, p, p);
+            slot.cache_tokens.push_back(tok);
+        } else {
+            const auto & chunk = slot.prompt_tokens.find_chunk(slot.n_past_prompt);
+            const mtmd_image_tokens * image = mtmd_input_chunk_get_tokens_image(chunk.get());
+            if (image == nullptr || mtmd_encode_chunk(mctx, chunk.get()) != 0) {
+                LLAMA_LOG_ERROR("failed to encode image\n");
+                common_batch_clear(batch);
+                batch_embd.clear();
+                batch_pos.clear();
+                slot.release();
+                send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
+                return false;
+            }
+            const float * embd = mtmd_get_output_embd(mctx);
+            const size_t nx = mtmd_image_tokens_get_nx(image);
+            n = mtmd_input_chunk_get_n_tokens(chunk.get());
+            for (size_t i = 0; i < n; i++) {
+                std::copy(embd + i * n_embd, embd + (i + 1) * n_embd, batch_embd.begin() + batch.n_tokens * n_embd);
+                if (is_mrope) {
+                    add(LLAMA_TOKEN_NULL, p, p + (llama_pos) (i / nx), p + (llama_pos) (i % nx));
+                } else {
+                    add(LLAMA_TOKEN_NULL, p + (llama_pos) i, 0, 0);
+                }
+            }
+            slot.cache_tokens.push_back(chunk.get());
+        }
+        slot.n_past_prompt += n;
+        slot.n_past += n;
+        slot.n_prompt_tokens_processed += n;
+    }
+    return true;
 }
 
 void server_context::extend_context(const int32_t n_tokens) {
@@ -4914,10 +5005,22 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             batch.logits + i,
             0, 0, 0, // unused
         };
+        if (!batch_embd.empty()) {
+            // a mixed batch is decoded at once
+            GGML_ASSERT(i == 0 && n_tokens == batch.n_tokens);
+            batch_view.embd = batch_embd.data();
+            if (!batch_pos.empty()) {
+                batch_view.pos = batch_pos.data();
+            }
+        }
 
+        if (!batch_decision_order.empty() && i == 0 && n_tokens == batch.n_tokens) {
+            llama_set_decision_order(ctx, batch_decision_order.data(), (int32_t) batch_decision_order.size());
+        }
         const int ret = server_decode(ctx, batch_view);
         if (ret != 0) {
-            if (n_batch == 1 || ret < 0) {
+            // the prompt of a joint decision head cannot be split
+            if (n_batch == 1 || ret < 0 || !batch_decision_order.empty()) {
                 int user_cancel = -3;
                 if (ret == user_cancel) {
                     LLAMA_LOG_INFO("Decode process is cancelled by user.\n");
@@ -5152,6 +5255,9 @@ void server_context::update_slots() {
 
     // start populating the batch for this iteration
     common_batch_clear(batch);
+    batch_decision_order.clear();
+    batch_embd.clear();
+    batch_pos.clear();
 
     for (auto & slot : slots) {
         slot.prompt_batch_i0 = -1;

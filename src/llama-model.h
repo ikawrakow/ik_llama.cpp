@@ -151,6 +151,64 @@ struct llama_layer_nextn {
     struct ggml_tensor * hc_head_up        = nullptr;
 };
 
+// clef decision head: one block of attention with biases (torch.nn.MultiheadAttention)
+struct llama_decision_attn {
+    struct ggml_tensor * wq = nullptr;
+    struct ggml_tensor * bq = nullptr;
+    struct ggml_tensor * wk = nullptr;
+    struct ggml_tensor * bk = nullptr;
+    struct ggml_tensor * wv = nullptr;
+    struct ggml_tensor * bv = nullptr;
+    struct ggml_tensor * wo = nullptr;
+    struct ggml_tensor * bo = nullptr;
+};
+
+// clef decision head block, the routing blocks have no self attention but a norm of the memory
+struct llama_decision_layer {
+    struct ggml_tensor * self_norm       = nullptr;
+    struct ggml_tensor * self_norm_b     = nullptr;
+    struct ggml_tensor * cross_norm      = nullptr;
+    struct ggml_tensor * cross_norm_b    = nullptr;
+    struct ggml_tensor * cross_norm_kv   = nullptr;
+    struct ggml_tensor * cross_norm_kv_b = nullptr;
+    struct ggml_tensor * ffn_norm        = nullptr;
+    struct ggml_tensor * ffn_norm_b      = nullptr;
+    struct ggml_tensor * ffn_up          = nullptr;
+    struct ggml_tensor * ffn_up_b        = nullptr;
+    struct ggml_tensor * ffn_down        = nullptr;
+    struct ggml_tensor * ffn_down_b      = nullptr;
+
+    struct llama_decision_attn self_attn;
+    struct llama_decision_attn cross_attn;
+};
+
+struct llama_decision_head {
+    std::vector<llama_decision_layer> layers; // routing blocks, then joint blocks
+
+    struct ggml_tensor * hidden_norm           = nullptr;
+    struct ggml_tensor * hidden_norm_b         = nullptr;
+    struct ggml_tensor * option_summary_norm   = nullptr;
+    struct ggml_tensor * option_summary_norm_b = nullptr;
+    struct ggml_tensor * field_norm            = nullptr;
+    struct ggml_tensor * field_norm_b          = nullptr;
+    struct ggml_tensor * option_norm           = nullptr;
+    struct ggml_tensor * option_norm_b         = nullptr;
+
+    struct ggml_tensor * proj_memory          = nullptr;
+    struct ggml_tensor * proj_question        = nullptr;
+    struct ggml_tensor * proj_option_question = nullptr;
+    struct ggml_tensor * proj_global          = nullptr;
+    struct ggml_tensor * proj_option_context  = nullptr;
+    struct ggml_tensor * proj_option_lexical  = nullptr;
+
+    struct ggml_tensor * type_embd    = nullptr; // one row per question type
+    struct ggml_tensor * scales       = nullptr; // prior scale, joint scale, residual gate
+    struct ggml_tensor * scorer       = nullptr;
+    struct ggml_tensor * scorer_b     = nullptr;
+    struct ggml_tensor * scorer_out   = nullptr;
+    struct ggml_tensor * scorer_out_b = nullptr;
+};
+
 // TODO: separate into "llama_layer_enc" and "llama_layer_dec"
 struct llama_layer {
     // normalization
@@ -606,6 +664,8 @@ struct llama_model {
 
     std::vector<llama_layer> layers;
 
+    llama_decision_head decision; // clef only
+
     llama_split_mode split_mode;
     int main_gpu;
     int max_gpu = 0; // max. number of GPUs to use per layer for aplit mode "graph"
@@ -668,7 +728,7 @@ struct llama_model {
     size_t max_nodes(int n_tokens) const {
         auto n_tensors = tensors_by_name.size();
         if (split_mode == LLAMA_SPLIT_MODE_GRAPH && !devices.empty()) n_tensors *= devices.size();
-        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5NEXT) {
+        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_CLEF || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5NEXT) {
             return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
         }
         //return std::max<size_t>(1024, 8*n_tensors);

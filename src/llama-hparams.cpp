@@ -914,9 +914,22 @@ void llm_load_hparams(
                 }
             } break;
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_CLEF:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
                 ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
+
+                if (model.arch == LLM_ARCH_CLEF) {
+                    // the decision head, it uses LayerNorm with f_norm_eps
+                    ml.get_key(LLM_KV_DECISION_ROUTING_BLOCK_COUNT, hparams.n_layer_decision_routing);
+                    ml.get_key(LLM_KV_DECISION_BLOCK_COUNT,         hparams.n_layer_decision_joint);
+                    ml.get_key(LLM_KV_DECISION_HEAD_COUNT,          hparams.n_head_decision);
+                    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,      hparams.f_norm_eps);
+                    if (hparams.n_head_decision == 0 || hparams.n_layer_decision_routing > LLAMA_MAX_LAYERS ||
+                        hparams.n_layer_decision_joint > LLAMA_MAX_LAYERS) {
+                        throw std::runtime_error("invalid size of the decision head");
+                    }
+                }
 
                 // NextN/MTP parameters
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);

@@ -12,6 +12,8 @@ struct llama_context;
 struct llama_cparams;
 struct llama_batch;
 struct llama_kv_cache;
+struct llama_decision_attn;
+struct llama_decision_layer;
 
 struct ggml_cgraph;
 struct ggml_tensor;
@@ -41,6 +43,17 @@ struct post_norm_data {
     std::vector<ggml_tensor *> next_input;
     ggml_tensor * norm;
     float         f_rms_eps;
+};
+
+// spans of the prompt read by the clef decision head, [start, end) in ubatch token indices
+struct llama_decision_spans {
+    std::vector<int32_t> q_type;     // 0 = noul, 1 = choice, 2 = score
+    std::vector<int32_t> q_start;
+    std::vector<int32_t> q_end;
+    std::vector<int32_t> o_question; // the question of each option
+    std::vector<int32_t> o_start;
+    std::vector<int32_t> o_end;
+    bool valid = false;
 };
 
 struct llm_build_context {
@@ -671,4 +684,13 @@ llm_expert_gating_func_type   gating_op,
     );
 
     ggml_cgraph * new_graph_custom();
+
+    // clef decision head, see build_clef.cpp
+    struct ggml_tensor * build_clef_head(struct ggml_tensor * hidden);
+    struct ggml_tensor * build_clef_head_norm(struct ggml_tensor * cur, struct ggml_tensor * w, struct ggml_tensor * b);
+    struct ggml_tensor * build_clef_head_attn(struct ggml_tensor * q, struct ggml_tensor * kv, const llama_decision_attn & a);
+    struct ggml_tensor * build_clef_head_ffn(struct ggml_tensor * cur, const llama_decision_layer & layer);
+
+    static void llama_decision_get_spans(const llama_context & lctx, const llama_batch & batch, llama_decision_spans & spans);
+    static void llama_decision_set_inputs(const llama_context & lctx, const llama_batch & batch);
 };

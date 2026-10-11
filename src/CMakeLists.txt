@@ -98,6 +98,7 @@ add_library(llama
             graphs/build_lfm2.cpp
             graphs/build_qwen4exp.cpp
             graphs/build_qwen35.cpp
+            graphs/build_clef.cpp
             graphs/build_phi2.cpp
             graphs/build_phi3.cpp
             graphs/build_plamo.cpp

@@ -35,6 +35,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN3VLMOE,      "qwen3vlmoe"   },
     { LLM_ARCH_QWEN35MOE,       "qwen35moe"    },
     { LLM_ARCH_QWEN35,          "qwen35"       },
+    { LLM_ARCH_CLEF,            "clef"         },
     { LLM_ARCH_QWEN4EXP,        "qwen4exp"     },
     { LLM_ARCH_MELLUM,          "mellum"       },
     { LLM_ARCH_PHI2,            "phi2"         },
@@ -162,6 +163,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT,"%s.attention.value_expert_used_count"  },
 
     { LLM_KV_NEXTN_PREDICT_LAYERS,              "%s.nextn_predict_layers"              },
+    { LLM_KV_DECISION_BLOCK_COUNT,              "%s.decision.block_count"              },
+    { LLM_KV_DECISION_ROUTING_BLOCK_COUNT,      "%s.decision.routing_block_count"      },
+    { LLM_KV_DECISION_HEAD_COUNT,               "%s.decision.head_count"               },
     { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                },
     { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                      },
     { LLM_KV_LOGIT_SCALE,                       "%s.logit_scale"                       },
@@ -372,6 +376,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_QWEN3NEXT:
     case LLM_ARCH_QWEN35MOE:
     case LLM_ARCH_QWEN35:
+    case LLM_ARCH_CLEF:
     case LLM_ARCH_QWEN4EXP:
     case LLM_ARCH_DEEPSEEK4:
     case LLM_ARCH_DEEPSEEK41:
@@ -391,5 +396,5 @@ bool llm_arch_is_dflash_family(const llm_arch & arch) {
 }
 
 bool llm_arch_requires_all_graph_output_rows(const llm_arch & arch) {
-    return arch == LLM_ARCH_DFLASH2;
+    return arch == LLM_ARCH_DFLASH2 || arch == LLM_ARCH_CLEF;
 }

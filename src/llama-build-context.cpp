@@ -104,6 +104,7 @@ void llm_build_context::init() {
     if (clear_lctx_inputs) {
         lctx.inp_tokens      = nullptr;
         lctx.inp_embd        = nullptr;
+        lctx.inp_embd_ids    = nullptr;
         lctx.inp_pos         = nullptr;
         lctx.inp_out_ids     = nullptr;
         lctx.inp_KQ_mask     = nullptr;
@@ -126,6 +127,12 @@ void llm_build_context::init() {
         lctx.inp_kpool_tail      = nullptr;
         lctx.inp_kpool_ape_slots = nullptr;
         lctx.inp_mtp_carry     = nullptr;
+        lctx.inp_decision_pool_q = nullptr;
+        lctx.inp_decision_pool_o = nullptr;
+        lctx.inp_decision_qtype  = nullptr;
+        lctx.inp_decision_owner  = nullptr;
+        lctx.inp_decision_mask   = nullptr;
+        lctx.inp_decision_status = nullptr;
         lctx.inp_qsa.clear();
         lctx.dflash.inputs.target_features = nullptr;
         lctx.dflash.inputs.pos_ctx = nullptr;
@@ -957,6 +964,15 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
         // undo the Hadamard rotation of the embedding table
         if (auto rot = lctx.model.hadamard_rotation(tok_embd); rot != nullptr) {
             inpL = llm_build_hadamard_rotate(ctx, inpL, *rot, true);
+        }
+
+        // mixed batch: take the rows of the embeddings where the token is negative
+        if (batch.embd) {
+            lctx.inp_embd = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, batch.n_tokens);
+            ggml_set_input(lctx.inp_embd);
+            lctx.inp_embd_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, batch.n_tokens);
+            ggml_set_input(lctx.inp_embd_ids);
+            inpL = ggml_get_rows(ctx, ggml_concat(ctx, inpL, lctx.inp_embd, 1), lctx.inp_embd_ids);
         }
     } else {
        lctx.inp_embd = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, batch.n_tokens);
@@ -2915,6 +2931,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
                 result = llm.build_qwen35moe();
             } break;
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_CLEF:
             {
                 result = llm.build_qwen35();
             } break;
@@ -3532,7 +3549,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     auto input_normed = cur;
 
     ggml_tensor *Qcur, *Kcur, *Vcur, *gate = nullptr;
-    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN4EXP) {
+    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_CLEF || model.arch == LLM_ARCH_QWEN4EXP) {
         auto [Q, K, V, G] = llm_build_mul_mat_qkv_gated(gf, cur, model.layers[il].wq, model.layers[il].wk, model.layers[il].wv,
                 model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, il);
         Qcur = Q; Kcur = K; Vcur = V; gate = G;
