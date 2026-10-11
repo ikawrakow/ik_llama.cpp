@@ -1749,7 +1749,8 @@ static bool llama_kv_cache_init(
 // to the first cell of the slot.
 static bool llama_kv_cache_find_slot(
            struct llama_kv_cache & cache,
-        const struct llama_batch & batch) {
+        const struct llama_batch & batch,
+                            bool   pos_2d = false) {
     const uint32_t n_tokens = batch.n_tokens;
 
     if (cache.recurrent) {
@@ -1842,6 +1843,9 @@ static bool llama_kv_cache_find_slot(
     for (uint32_t i = 0; i < n_tokens; i++) {
         cache.cells[cache.head + i].pos = batch.pos[i];
         cache.cells[cache.head + i].tok = batch.token ? batch.token[i] : -1;
+        // M-RoPE: batch.pos is [t; n][h; n][w; n][extra; n]
+        cache.cells[cache.head + i].y = pos_2d ? batch.pos[i +   n_tokens] : 0;
+        cache.cells[cache.head + i].x = pos_2d ? batch.pos[i + 2*n_tokens] : 0;
 
         for (int32_t j = 0; j < batch.n_seq_id[i]; j++) {
             cache.cells[cache.head + i].seq_id.insert(batch.seq_id[i][j]);
@@ -6279,6 +6283,8 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 ? hparams.n_swa_mtp : hparams.n_swa;
         if (cparams.causal_attn && !lctx.is_encoding) {
             const int64_t n_tokens = batch.n_tokens;
+            // M-RoPE: the tokens of an image share pos, they are ordered by their (h, w) position
+            const bool pos_2d = hparams.rope_type == LLAMA_ROPE_TYPE_MROPE || hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE;
 
 
             float * data     = nullptr;
@@ -6386,11 +6392,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
-            auto noalibi_f16 = [&mask_kv_self, &hparams, n_kv, n_swa_eff, data_f16, data_swa_f16] (int j, llama_pos pos, llama_seq_id seq_id, int first, int last) {
+            auto noalibi_f16 = [&mask_kv_self, &hparams, n_kv, n_swa_eff, data_f16, data_swa_f16] (int j, llama_pos pos, llama_pos py, llama_pos px, llama_seq_id seq_id, int first, int last) {
                 ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
                 ggml_half h_zero = ggml_fp32_to_fp16(0.f);
                 for (int i = first; i < last; ++i) {
-                    ggml_half h = !mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].pos > pos ? h_inf : h_zero;
+                    ggml_half h = !mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].is_after(pos, py, px) ? h_inf : h_zero;
                     if (data_f16) data_f16[j*n_kv + i] = h;
                     if (data_swa_f16) {
                         if (h != h_inf) {
@@ -6413,22 +6419,24 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             if (n_kv >= 1024 && n_tokens >= 32) {
                 int n_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
                 int npt = (n_kv + n_thread - 1)/n_thread;
-                auto compute = [&batch, &mask_kv_self, &hparams, &cparams, &noalibi_f16, n_tokens, n_kv, n_swa_eff, npt, data, data_swa, data_f16, data_swa_f16] (int ith) {
+                auto compute = [&batch, &mask_kv_self, &hparams, &cparams, &noalibi_f16, n_tokens, n_kv, n_swa_eff, npt, pos_2d, data, data_swa, data_f16, data_swa_f16] (int ith) {
                     int first = ith * npt;
                     int last  = std::min(int(n_kv), first + npt);
                     if (last <= first) return;
                     for (int j = 0; j < n_tokens; ++j) {
                         const llama_pos    pos    = batch.pos[j];
+                        const llama_pos    py     = pos_2d ? batch.pos[j +   n_tokens] : 0;
+                        const llama_pos    px     = pos_2d ? batch.pos[j + 2*n_tokens] : 0;
                         const llama_seq_id seq_id = batch.seq_id[j][0];
 
                         if (!hparams.use_alibi && cparams.flash_attn) {
-                            noalibi_f16(j, pos, seq_id, first, last);
+                            noalibi_f16(j, pos, py, px, seq_id, first, last);
                             continue;
                         }
 
                         for (int i = first; i < last; ++i) {
                             float f;
-                            if (!mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].pos > pos) {
+                            if (!mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].is_after(pos, py, px)) {
                                 f = -INFINITY;
                             } else {
                                 if (hparams.use_alibi) {
@@ -6500,16 +6508,18 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             for (int h = 0; h < 1; ++h) {
                 for (int j = 0; j < n_tokens; ++j) {
                     const llama_pos    pos    = batch.pos[j];
+                    const llama_pos    py     = pos_2d ? batch.pos[j +   n_tokens] : 0;
+                    const llama_pos    px     = pos_2d ? batch.pos[j + 2*n_tokens] : 0;
                     const llama_seq_id seq_id = batch.seq_id[j][0];
 
                     if (!hparams.use_alibi && cparams.flash_attn) {
-                        noalibi_f16(j, pos, seq_id, 0, n_kv);
+                        noalibi_f16(j, pos, py, px, seq_id, 0, n_kv);
                         continue;
                     }
 
                     for (int i = 0; i < n_kv; ++i) {
                         float f;
-                        if (!mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].pos > pos) {
+                        if (!mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].is_after(pos, py, px)) {
                             f = -INFINITY;
                         } else {
                             if (hparams.use_alibi) {
@@ -7550,7 +7560,7 @@ static int llama_decode_internal(
                 kv_self.head = 0;
             }
 
-            if (!llama_kv_cache_find_slot(kv_self, u_batch)) {
+            if (!llama_kv_cache_find_slot(kv_self, u_batch, rope_params_per_token == 4)) {
                 return 1;
             }
 
