@@ -4353,6 +4353,21 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_metal_buffer_type(void) {
     return &ggml_backend_buffer_type_metal;
 }
 
+// unified memory: report the working set the GPU may use, not free host RAM
+void ggml_backend_metal_get_device_memory(size_t * free, size_t * total) {
+    *free  = 0;
+    *total = 0;
+    if (@available(macOS 10.12, iOS 16.0, *)) {
+        id<MTLDevice> device = ggml_backend_metal_get_device();
+        if (device != nil) {
+            *total = device.recommendedMaxWorkingSetSize;
+            size_t used = device.currentAllocatedSize;
+            *free  = *total > used ? *total - used : 0;
+        }
+        ggml_backend_metal_free_device();
+    }
+}
+
 // buffer from ptr
 
 GGML_CALL ggml_backend_buffer_t ggml_backend_metal_buffer_from_ptr(void * data, size_t size, size_t max_size) {
