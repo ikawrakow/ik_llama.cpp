@@ -1213,21 +1213,20 @@ void server_prompt_cache::update() {
             states.pop_front();
         }
 
-        // The loop above cannot help when a *single* state is over the limit,
-        // and one easily is: a state carries up to --ctx-checkpoints checkpoints,
-        // each of which can be a fixed large fraction of the KV cache regardless
-        // of how many tokens it covers. Checkpoints are an optimisation for
-        // partial reuse, not the state itself -- `data` is -- so trim them
-        // oldest-first to get back under the limit.
+        // Trim checkpoints when the remaining state exceeds the limit. Keep the
+        // prompt-end checkpoint while another checkpoint can be evicted instead.
         for (auto& state : states) {
             while (size() > limit_size && !state.checkpoints.empty()) {
-                const auto& front = state.checkpoints.front();
-                LLAMA_LOG_INFO(" - cache size limit reached, dropping a checkpoint (size = %.3f MiB)\n",
-                    front.size() / (1024.0 * 1024.0));
-                if (!front.spill_path.empty()) {
-                    remove(front.spill_path.c_str());
+                auto it = state.checkpoints.begin();
+                if (it->prompt_end && std::next(it) != state.checkpoints.end()) {
+                    ++it;
                 }
-                state.checkpoints.pop_front();
+                LLAMA_LOG_INFO(" - cache size limit reached, dropping a checkpoint (size = %.3f MiB)\n",
+                    it->size() / (1024.0 * 1024.0));
+                if (!it->spill_path.empty()) {
+                    remove(it->spill_path.c_str());
+                }
+                state.checkpoints.erase(it);
             }
         }
     }
