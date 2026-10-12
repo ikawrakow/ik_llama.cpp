@@ -711,6 +711,13 @@ void quantize_row_q2_0(const float * restrict x, void * restrict y, int64_t k) {
     quantize_row_q2_0_ref(x, (block_q2_0 *)y, k);
 }
 
+size_t quantize_q2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * user_data) {
+    GGML_UNUSED(imatrix);
+    GGML_UNUSED(user_data);
+    quantize_row_q2_0_ref(src, (block_q2_0 *)dst, nrows*n_per_row);
+    return nrows*ggml_row_size(GGML_TYPE_Q2_0, n_per_row);
+}
+
 // reference implementation for deterministic creation of model files
 void quantize_row_q4_0_ref(const float * restrict x, block_q4_0 * restrict y, int64_t k) {
     static const int qk = QK4_0;
@@ -15918,6 +15925,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             } break;
         case GGML_TYPE_MXFP4: break;
         case GGML_TYPE_MXFP4_R8: break;
+        case GGML_TYPE_Q2_0: break;
         case GGML_TYPE_Q6_0: break;
         case GGML_TYPE_IQ2_K: break;
         case GGML_TYPE_IQ2_KS: break;

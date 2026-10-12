@@ -20,7 +20,6 @@ extern "C" {
 
 // Quantization
 void quantize_row_q2_0_ref(const float * GGML_RESTRICT x, block_q2_0 * GGML_RESTRICT y, int64_t k);
-void quantize_row_q2_0    (const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
 void quantize_row_q4_0_ref(const float * GGML_RESTRICT x, block_q4_0 * GGML_RESTRICT y, int64_t k);
 void quantize_row_q4_1_ref(const float * GGML_RESTRICT x, block_q4_1 * GGML_RESTRICT y, int64_t k);
 void quantize_row_q5_0_ref(const float * GGML_RESTRICT x, block_q5_0 * GGML_RESTRICT y, int64_t k);
@@ -47,6 +46,7 @@ void quantize_row_iq1_bn_ref (const float * GGML_RESTRICT x, block_iq1_bn  * GGM
 void quantize_row_iq1_s_ref  (const float * GGML_RESTRICT x, block_iq1_s   * GGML_RESTRICT y, int64_t k);
 void quantize_row_iq1_m_ref  (const float * GGML_RESTRICT x, block_iq1_m   * GGML_RESTRICT y, int64_t k);
 
+void quantize_row_q2_0    (const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
 void quantize_row_q4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_q4_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_q5_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
@@ -130,6 +130,7 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * GGML_RESTRICT s, size_t bs, const
 struct quantize_user_data;
 
 // Quantization utilizing an importance matrix (a.k.a. "Activation aWare Quantization")
+size_t quantize_q2_0   (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * user_data);
 size_t quantize_iq2_xxs(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * user_data);
 size_t quantize_iq2_xs (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * user_data);
 size_t quantize_iq2_s  (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * user_data);
