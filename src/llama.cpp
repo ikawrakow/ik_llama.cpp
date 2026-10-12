@@ -11701,6 +11701,13 @@ struct llama_data_read {
 
             llama_kv_cache_seq_rm(kv_self, dest_seq_id, -1, -1);
 
+            if (cell_count == 0) {
+                // an empty sequence state only clears the destination seq;
+                // the find_slot + cells asserts below index batch.pos[0], which
+                // does not exist for an empty batch
+                return true;
+            }
+
             llama_batch batch = llama_batch_init(cell_count, 0, 1);
             batch.n_tokens = cell_count;
             bool disordered = false;
