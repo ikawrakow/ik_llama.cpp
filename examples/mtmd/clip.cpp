@@ -2409,9 +2409,7 @@ struct clip_graph {
                     // block_1 shape = [1, 144, 2048], ne = [2048, 144, 1]
                 }
                 embeddings = block_1;
-            }
-            else if (ctx->proj_type() == PROJECTOR_TYPE_LDPV2)
-            {
+            } else if (ctx->proj_type() == PROJECTOR_TYPE_LDPV2) {
                 int n_patch = 24;
                 ggml_tensor * mlp_0 = ggml_mul_mat(ctx0, model.mm_model_mlp_0_w, embeddings);
                 mlp_0 = ggml_add(ctx0, mlp_0, model.mm_model_mlp_0_b);
