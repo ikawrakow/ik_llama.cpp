@@ -220,8 +220,7 @@ void common_log_set_timestamps(struct common_log* log, bool timestamps);   // wh
 
 // Utility for synchronizing log configuration state
 //  since std::optional was introduced only in c++17
-enum LogTriState
-{
+enum LogTriState {
     LogTriStateSame,
     LogTriStateFalse,
     LogTriStateTrue

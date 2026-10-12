@@ -313,8 +313,7 @@ struct lora_merge_ctx {
         }
 
         // build graph
-        struct ggml_cgraph * gf;
-        {
+        struct ggml_cgraph * gf; {
             static size_t buf_size = ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
             static std::vector<uint8_t> buf(buf_size);
             struct ggml_init_params params0 = {
