@@ -515,9 +515,7 @@ inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriS
         log_current_target = target;
 
         logfile = target;
-    }
-    else
-    {
+    } else {
         if (log_current_filename != filename)
         {
             if (logfile != nullptr && logfile != stdout && logfile != stderr)
@@ -717,9 +715,7 @@ inline void log_dump_cmdline_impl(int argc, char **argv)
         if (std::string(argv[i]).find(' ') != std::string::npos)
         {
             buf << " \"" << argv[i] <<"\"";
-        }
-        else
-        {
+        } else {
             buf << " " << argv[i];
         }
     }
@@ -748,9 +744,7 @@ inline std::string log_var_to_string_impl(const std::vector<int> & var)
         if (first)
         {
             first = false;
-        }
-        else
-        {
+        } else {
             buf << ", ";
         }
         buf << std::to_string(e);

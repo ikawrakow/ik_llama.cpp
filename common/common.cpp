@@ -4501,9 +4501,7 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         // some models (e.g. T5) don't have a BOS token
         if (bos != -1) {
             tmp.push_back(bos);
-        }
-        else
-        {
+        } else {
             tmp.push_back(eos);
         }
         if (llama_model_has_encoder(model)) {
