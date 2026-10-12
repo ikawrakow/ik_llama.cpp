@@ -1207,6 +1207,8 @@ struct ggml_backend_sched {
 
     ggml_backend_sched_eval_callback callback_eval;
     void * callback_eval_user_data;
+    ggml_backend_sched_copy_callback callback_copy;
+    void * callback_copy_user_data;
 
     char * context_buffer;
     size_t context_buffer_size;
@@ -2044,10 +2046,20 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
     ggml_backend_t split_backend = sched->backends[split_backend_id];
     ggml_backend_t last_input_backend = nullptr;
     bool synced_on_input = false;
-    for (int j = 0; j < split->n_inputs; j++) {
+    const int n_input_passes = sched->callback_copy ? 2 : 1;
+    for (int pass_input = 0; pass_input < n_input_passes*split->n_inputs; ++pass_input) {
+        const bool callback_copy_pass = pass_input >= split->n_inputs;
+        const int j = pass_input % split->n_inputs;
         ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[j]);
         struct ggml_tensor * input = split->inputs[j];
         struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+        const bool callback_handles_copy = !(input->flags & GGML_TENSOR_FLAG_INPUT) && sched->callback_copy &&
+                sched->callback_copy(split_backend, input, input_cpy, &split->graph,
+                        GGML_BACKEND_SCHED_COPY_PHASE_QUERY,
+                        sched->callback_copy_user_data);
+        if (callback_handles_copy != callback_copy_pass) {
+            continue;
+        }
 
         if (input->flags & GGML_TENSOR_FLAG_INPUT) {
             // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
@@ -2070,6 +2082,11 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     ggml_backend_synchronize(split_backend);
                 }
                 needs_sync[split_backend_id] = k_set_sync;
+            }
+
+            if (callback_handles_copy && sched->callback_copy(split_backend, input, input_cpy,
+                    &split->graph, GGML_BACKEND_SCHED_COPY_PHASE_EXECUTE, sched->callback_copy_user_data)) {
+                continue;
             }
 
             ggml_tensor * node = split->graph.nodes[0];
@@ -2820,6 +2837,12 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
 void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data) {
     sched->callback_eval = callback;
     sched->callback_eval_user_data = user_data;
+}
+
+void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched,
+        ggml_backend_sched_copy_callback callback, void * user_data) {
+    sched->callback_copy = callback;
+    sched->callback_copy_user_data = user_data;
 }
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {

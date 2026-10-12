@@ -613,6 +613,7 @@ struct llama_model {
 
     bool mtp; // use mtp if is supported by the Model
     bool swa_compress = false; // value the cache-size fit was computed with
+    bool fit = false;
 
     std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
