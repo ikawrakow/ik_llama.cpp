@@ -327,6 +327,9 @@ struct llama_control_vector {
     struct ggml_tensor * apply_to(struct ggml_context * ctx, struct ggml_tensor * cur, int  il) const {
         ggml_tensor * layer_dir = tensor_for(il);
         if (layer_dir != nullptr) {
+            if (layer_dir->type != cur->type && layer_dir->type == GGML_TYPE_F32) {
+                cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+            }
             cur = ggml_add(ctx, cur, layer_dir);
         }
         return cur;
