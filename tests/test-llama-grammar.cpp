@@ -100,16 +100,13 @@ int main()
         },
     };
 
-    for (auto pair : expected)
-    {
+    for (auto pair : expected) {
         parsed_grammar.symbol_ids[pair.first] = pair.second;
     }
 
-    for (auto rule : expected_rules)
-    {
+    for (auto rule : expected_rules) {
         parsed_grammar.rules.emplace_back();
-        for (auto element : rule)
-        {
+        for (auto element : rule) {
             parsed_grammar.rules.back().push_back(element);
         }
     }
@@ -118,8 +115,7 @@ int main()
     std::vector<const llama_grammar_element *> grammar_rules(parsed_grammar.c_rules());
 
     grammar = llama_grammar_init(grammar_rules.data(), grammar_rules.size(), parsed_grammar.symbol_ids.at("root"));
-    if (grammar == nullptr)
-    {
+    if (grammar == nullptr) {
         throw std::runtime_error("Failed to initialize llama_grammar");
     }
 
@@ -174,17 +170,14 @@ int main()
         }};
 
     auto index = 0;
-    for (auto stack : llama_grammar_get_stacks(grammar))
-    {
+    for (auto stack : llama_grammar_get_stacks(grammar)) {
         // compare stack to expected_stack
-        for (uint32_t i = 0; i < stack.size(); i++)
-        {
+        for (uint32_t i = 0; i < stack.size(); i++) {
             auto element = stack[i];
             auto expected_element = expected_stacks[index][i];
 
             // pretty print error message before asserting
-            if (expected_element.type != element->type || expected_element.value != element->value)
-            {
+            if (expected_element.type != element->type || expected_element.value != element->value) {
                 fprintf(stderr, "index: %d\n", index);
                 fprintf(stderr, "expected_element: %d, %u\n", expected_element.type, expected_element.value);
                 fprintf(stderr, "actual_element: %d, %u\n", element->type, element->value);
@@ -199,8 +192,7 @@ int main()
     std::vector<llama_grammar_candidate> next_candidates;
     next_candidates.resize(23);
 
-    for (size_t i = 0; i < 23; ++i)
-    {
+    for (size_t i = 0; i < 23; ++i) {
         uint32_t *cp = new uint32_t[2]; // dynamically allocate memory for code_point
         cp[0] = 37 + i;
         cp[1] = 0;
@@ -378,17 +370,14 @@ int main()
 
     std::vector<std::vector<llama_grammar_candidate>> all_rejects;
 
-    for (std::size_t count = 0; count < llama_grammar_get_stacks(grammar).size(); ++count)
-    {
+    for (std::size_t count = 0; count < llama_grammar_get_stacks(grammar).size(); ++count) {
         rejects = llama_grammar_reject_candidates_for_stack(llama_grammar_get_rules(grammar), llama_grammar_get_stacks(grammar)[count], next_candidates);
         all_rejects.push_back(rejects);
     }
 
     index = 0;
-    for (auto rej : all_rejects)
-    {
-        for (uint32_t i = 0; i < rej.size(); i++)
-        {
+    for (auto rej : all_rejects) {
+        for (uint32_t i = 0; i < rej.size(); i++) {
             auto element = rej[i];
             auto expected_element = expected_reject[index][i];
             assert(element.index == expected_element.first && *element.code_points == expected_element.second);
@@ -396,8 +385,7 @@ int main()
         index++;
     }
 
-    for (auto &candidate : next_candidates)
-    {
+    for (auto &candidate : next_candidates) {
         delete[] candidate.code_points;
         candidate.code_points = nullptr;
     }

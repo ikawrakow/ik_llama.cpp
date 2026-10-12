@@ -33,8 +33,7 @@ static void norm_f32(const float* x, float* dst, const int ncols, const float ep
         item_ct1.barrier(sycl::access::fence_space::local_space);
         mean_var = 0.f;
         int nreduce = nwarps / WARP_SIZE;
-        for (size_t i = 0; i < nreduce; i += 1)
-        {
+        for (size_t i = 0; i < nreduce; i += 1) {
             mean_var += s_sum[lane_id + i * WARP_SIZE];
         }
         mean_var = warp_reduce_sum(mean_var, item_ct1);
@@ -88,8 +87,7 @@ static void group_norm_f32(const float* x, float* dst, const int group_size, con
         */
         item_ct1.barrier();
         tmp = 0.f;
-        for (size_t i = 0; i < nreduce; i += 1)
-        {
+        for (size_t i = 0; i < nreduce; i += 1) {
             tmp += s_sum[lane_id + i * WARP_SIZE];
         }
         tmp = warp_reduce_sum(tmp, item_ct1);
@@ -123,8 +121,7 @@ static void group_norm_f32(const float* x, float* dst, const int group_size, con
         */
         item_ct1.barrier();
         tmp = 0.f;
-        for (size_t i = 0; i < nreduce; i += 1)
-        {
+        for (size_t i = 0; i < nreduce; i += 1) {
             tmp += s_sum[lane_id + i * WARP_SIZE];
         }
         tmp = warp_reduce_sum(tmp, item_ct1);
@@ -168,8 +165,7 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols, const floa
         item_ct1.barrier(sycl::access::fence_space::local_space);
         int nreduce = nwarps / WARP_SIZE;
         tmp = 0.f;
-        for (size_t i = 0; i < nreduce; i += 1)
-        {
+        for (size_t i = 0; i < nreduce; i += 1) {
             tmp += s_sum[lane_id + i * WARP_SIZE];
         }
         tmp = warp_reduce_sum(tmp, item_ct1);

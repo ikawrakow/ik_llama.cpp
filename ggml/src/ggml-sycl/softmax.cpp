@@ -63,8 +63,7 @@ static void soft_max_f32(const float * x, const float * mask, float * dst, const
         }
         item_ct1.barrier(sycl::access::fence_space::local_space);
         max_val = buf[lane_id];
-        for (size_t i = 1; i < nreduce; i += 1)
-        {
+        for (size_t i = 1; i < nreduce; i += 1) {
             max_val = std::max(max_val, buf[lane_id + i * WARP_SIZE]);
         }
         max_val = warp_reduce_max(max_val, item_ct1);
@@ -100,8 +99,7 @@ static void soft_max_f32(const float * x, const float * mask, float * dst, const
         item_ct1.barrier(sycl::access::fence_space::local_space);
 
         tmp = buf[lane_id];
-        for (size_t i = 1; i < nreduce; i += 1)
-        {
+        for (size_t i = 1; i < nreduce; i += 1) {
             tmp += buf[lane_id + i * WARP_SIZE];
         }
         tmp = warp_reduce_sum(tmp, item_ct1);

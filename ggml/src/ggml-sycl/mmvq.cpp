@@ -953,8 +953,7 @@ void ggml_sycl_op_mul_mat_vec_q(
     // the main device has a larger memory buffer to hold the results from all GPUs
     // nrows_dst == nrows of the matrix that the kernel writes into
     const int64_t nrows_dst = id == ctx.device ? ne00 : row_diff;
-    for (int i = 0; i < src1_ncols; i++)
-    {
+    for (int i = 0; i < src1_ncols; i++) {
         const size_t src1_ddq_i_offset = i * src1_padded_col_size * q8_1_ts / q8_1_bs;
         const char* src1_ddq_i_bs = src1_ddq_i + src1_ddq_i_offset;
         float* dst_dd_i_bs = dst_dd_i + i * dst->ne[0];

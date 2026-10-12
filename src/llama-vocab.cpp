@@ -1161,8 +1161,7 @@ private:
                 node_index ^= xcda_view.get_base(node_index);
                 // if LEAF of the current node is true, it means that its BASE points to the node
                 // containing index of replacement sequence for currently matched input prefix
-                if (is_leaf)
-                {
+                if (is_leaf) {
                     longest_prefix_length = prefix_offset - input_offset + 1;
                     // get index of replacement sequence for currently matched input prefix
                     longest_prefix_offset = xcda_view.get_value(node_index);

@@ -6548,8 +6548,7 @@ bool clip_has_whisper_encoder(const struct clip_ctx * ctx) {
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec) {
     clip_image_f32 clip_img;
     clip_img.buf.resize(h * w * 3);
-    for (int i = 0; i < h*w*3; i++)
-    {
+    for (int i = 0; i < h*w*3; i++) {
         clip_img.buf[i] = img[i];
     }
     clip_img.nx = w;

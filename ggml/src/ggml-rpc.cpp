@@ -1225,8 +1225,7 @@ GGML_CALL int ggml_backend_rpc_reg_devices() {
     //static std::unordered_map<std::string, ggml_backend_buffer_type_t> buft_map;
     int device_count = (int)rpc_server_map.size();
     int i = 0;
-    for (auto& it : rpc_server_map)
-    {     
+    for (auto& it : rpc_server_map) {
         std::string name = it.second->name;
         std::string endpoint = std::string(it.second->endpoint);
         uint32_t device = it.second->device;

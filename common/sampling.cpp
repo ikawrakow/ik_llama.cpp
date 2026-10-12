@@ -151,16 +151,13 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     if (params.adaptive_target >= 0.0f) {
         result->adapt_p_ctx = llama_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
     }
-    for (const auto& cnstr : params.samplers_sequence)
-    {
-        switch (cnstr)
-        {
+    for (const auto& cnstr : params.samplers_sequence) {
+        switch (cnstr) {
             case llama_sampler_type::DRY:
             {
                 std::vector<const char*> c_breakers;
                 c_breakers.reserve(params.dry_sequence_breakers.size());
-                for (const auto& str : params.dry_sequence_breakers)
-                {
+                for (const auto& str : params.dry_sequence_breakers) {
                     c_breakers.push_back(str.c_str());
                 }
                 result->smpl=llama_sampler_init_dry(vocab, params.dry_multiplier, params.dry_base, params.dry_allowed_length, params.dry_penalty_last_n, c_breakers.data(), c_breakers.size());
@@ -397,18 +394,14 @@ std::vector<llama_sampler_type> llama_sampling_types_from_names(const std::vecto
 
     std::vector<llama_sampler_type> sampler_types;
     sampler_types.reserve(names.size());
-    for (const auto & name : names)
-    {
+    for (const auto & name : names) {
         auto sampler_item = sampler_canonical_name_map.find(name);
-        if (sampler_item != sampler_canonical_name_map.end())
-        {
+        if (sampler_item != sampler_canonical_name_map.end()) {
             sampler_types.push_back(sampler_item->second);
         } else {
-            if (allow_alt_names)
-            {
+            if (allow_alt_names) {
                 sampler_item = sampler_alt_name_map.find(name);
-                if (sampler_item != sampler_alt_name_map.end())
-                {
+                if (sampler_item != sampler_alt_name_map.end()) {
                     sampler_types.push_back(sampler_item->second);
                 }
             }

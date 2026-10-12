@@ -58,8 +58,7 @@ void server_log(const char* level, const char* function, int line, const char* m
         }
         std::stringstream ss;
         ss << buf << " |";
-        for (const auto& el : log.items())
-        {
+        for (const auto& el : log.items()) {
             const std::string value = el.value().dump(-1, ' ', false, json::error_handler_t::replace);
             ss << " " << el.key() << "=" << value;
         }

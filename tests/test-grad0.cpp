@@ -583,8 +583,7 @@ int main(int argc, const char ** argv) {
         }
 
         // mean, not yet fully implemented
-        if(0)
-        {
+        if(0) {
             srand(seed);
             const int nargs = 1;
 
@@ -601,8 +600,7 @@ int main(int argc, const char ** argv) {
         }
 
         // argmax
-        if (0)
-        {
+        if (0) {
             srand(seed);
             const int nargs = 1;
 
@@ -732,8 +730,7 @@ int main(int argc, const char ** argv) {
         }
 
         // tanh, not yet fully implemented
-        if(0)
-        {
+        if(0) {
             srand(seed);
             const int nargs = 1;
 
@@ -787,8 +784,7 @@ int main(int argc, const char ** argv) {
         }
 
         // elu, not yet fully implemented
-        if(0)
-        {
+        if(0) {
             srand(seed);
             const int nargs = 1;
 
@@ -822,8 +818,7 @@ int main(int argc, const char ** argv) {
         }
 
         // gelu, not yet fully implemented
-        if(0)
-        {
+        if(0) {
             srand(seed);
             const int nargs = 1;
 
@@ -1267,8 +1262,7 @@ int main(int argc, const char ** argv) {
             int64_t ne2[4];
 
             const int nargs = 1;
-            for (int ndims = 1; ndims <= 4; ++ndims)
-            {
+            for (int ndims = 1; ndims <= 4; ++ndims) {
                 // ggml_permute will set axes of dimensions below n_dims to 1.
                 // to make ggml_permute work correctly on all axes,
                 // the input tensor needs maximal n_dim of 4.
@@ -1301,8 +1295,7 @@ int main(int argc, const char ** argv) {
             int64_t ne2[4];
 
             const int nargs = 1;
-            for (int ndims = 1; ndims <= 4; ++ndims)
-            {
+            for (int ndims = 1; ndims <= 4; ++ndims) {
                 // ggml_transpose will set axes of dimensions below n_dims to 1.
                 // to make ggml_transpose work correctly on all axes,
                 // the input tensor needs maximal n_dim of 4.

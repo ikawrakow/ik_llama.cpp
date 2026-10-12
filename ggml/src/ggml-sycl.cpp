@@ -412,8 +412,7 @@ static void quantize_q8_1(const float * __restrict__ x, void * __restrict__ vy, 
     TC zeros;
     TQ qzeros;
 #pragma unroll
-    for (int i = 0; i < QUANT_BLOCK_TILE; i++)
-    {
+    for (int i = 0; i < QUANT_BLOCK_TILE; i++) {
         zeros[i] = 0.f;
         qzeros[i] = 0;
     }
@@ -421,8 +420,7 @@ static void quantize_q8_1(const float * __restrict__ x, void * __restrict__ vy, 
     float sum = xi[0];
     float amax = sycl::fabs(xi[0]);
 #pragma unroll
-    for (int i = 1; i < QUANT_BLOCK_TILE; i++)
-    {
+    for (int i = 1; i < QUANT_BLOCK_TILE; i++) {
         sum += xi[i];
         amax = sycl::fmax(sycl::fabs(xi[i]), amax);
     }
@@ -431,8 +429,7 @@ static void quantize_q8_1(const float * __restrict__ x, void * __restrict__ vy, 
 
     const float d = amax / 127;
     TQ q = qzeros;
-    if (amax != 0.0f)
-    {
+    if (amax != 0.0f) {
 #pragma unroll
         for (int i = 0; i < QUANT_BLOCK_TILE; i++) {
             q[i] = sycl::round(xi[i] / d);
