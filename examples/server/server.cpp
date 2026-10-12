@@ -621,7 +621,7 @@ int main(int argc, char ** argv) {
             sqlite3_free(errmsg);
             LOG_WARNING("Failed to load extension", {{"err", err}});
         }
-	else {
+        else {
             sqlite_extension_loaded = true;
         }
         sqlite3_enable_load_extension(conn, 0);
@@ -2048,7 +2048,7 @@ int main(int argc, char ** argv) {
     auto db_handler = [db_handle](auto func) {
         return [func, db_handle](const httplib::Request& req, httplib::Response& res) {
             res.set_header("Access-Control-Allow-Origin", "*");
-	    try {
+            try {
                 const json body = !req.body.empty() ? json::parse(req.body) : json::object();
                 func(*db_handle, body, req, res);
             } catch(const std::exception& e) {
@@ -2095,14 +2095,14 @@ int main(int argc, char ** argv) {
 
     const auto handle_load = db_handler([normalize_store_name, get_key_string](auto& db, const json& body, auto&, auto& res) {
         std::string data;
-	const std::string store = normalize_store_name(body["storeName"]);
-	db.db << "SELECT data FROM " + store + " WHERE key = ?" << get_key_string(body["key"]) >> data;
-	if(data.empty()) {
+        const std::string store = normalize_store_name(body["storeName"]);
+        db.db << "SELECT data FROM " + store + " WHERE key = ?" << get_key_string(body["key"]) >> data;
+        if(data.empty()) {
             res.status = 404;
             res.set_content(json{{"ok", false}, {"message", "Key not found"}}.dump(), "application/json");
         } else {
             json response{{"ok", true}};
-	    response["result"] = (store == "names") ? json(data) : json::parse(data);
+            response["result"] = (store == "names") ? json(data) : json::parse(data);
             res.set_content(response.dump(), "application/json");
         }
     });
@@ -2163,7 +2163,7 @@ int main(int argc, char ** argv) {
         if (body["duration"].is_null()) {
             db.db << "select zstd_incremental_maintenance(?, ?)" <<  nullptr << body["db_load"].get<double>() >> data;
         }
-	else {
+        else {
             db.db << "select zstd_incremental_maintenance(?, ?)" << body["duration"].get<double>() << body["db_load"].get<double>() >> data;
         }
         json response{{"ok", true}};
@@ -2294,7 +2294,7 @@ int main(int argc, char ** argv) {
             svr->Post("/zstd_incremental_maintenance", handle_zstd_maintenance);
             svr->Post("/zstd_enable_transparent", handle_zstd_enable);
             svr->Post("/zstd_update_transparent", handle_zstd_config_update);
-	}
+        }
 #endif
     }
 

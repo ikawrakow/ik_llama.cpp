@@ -373,7 +373,7 @@ void llm_load_hparams(
 
                 if (model.type == MODEL_17B_128E) {
                     hparams.use_kq_norm = false;
-                    }
+                }
             } break;
         case LLM_ARCH_DECI:
             {
@@ -381,7 +381,7 @@ void llm_load_hparams(
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_7B; break;
                     case 80: model.type = e_model::MODEL_70B; break;
-	            case 162: model.type = e_model::MODEL_405B; break;
+                    case 162: model.type = e_model::MODEL_405B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
@@ -1737,7 +1737,7 @@ void llm_load_hparams(
 
                 model.type = e_model::MODEL_UNKNOWN;
             } break;
-	    case LLM_ARCH_DOTS1:
+        case LLM_ARCH_DOTS1:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);

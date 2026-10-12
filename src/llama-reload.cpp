@@ -686,7 +686,7 @@ static bool reload_tensor_split_path(
         bool returning_to_original,
         ggml_backend_buffer_t old_buf)
 {
-		(void)curr_type;
+    (void)curr_type;
     const char * name = ggml_get_name(tensor);
 
     if (returning_to_original) {
@@ -751,7 +751,7 @@ static bool reload_tensor_non_split_path(
         bool returning_to_original,
         ggml_backend_buffer_t old_buf)
 {
-		(void)curr_type;
+    (void)curr_type;
 #ifndef NDEBUG
     const char * name = ggml_get_name(tensor);
 #endif
