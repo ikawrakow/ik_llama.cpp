@@ -696,8 +696,7 @@ static std::vector<T> string_split(const std::string & str, char delim) {
 }
 
 template<>
-std::vector<std::string> string_split<std::string>(const std::string& input, char separator)
-{
+std::vector<std::string> string_split<std::string>(const std::string& input, char separator) {
     std::vector<std::string> parts;
     size_t begin_pos = 0;
     size_t separator_pos = input.find(separator);

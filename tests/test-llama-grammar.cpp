@@ -9,8 +9,7 @@
 #include <cassert>
 #include <stdexcept>
 
-int main()
-{
+int main() {
     grammar_parser::parse_state parsed_grammar;
 
     std::vector<std::pair<std::string, uint32_t>> expected = {

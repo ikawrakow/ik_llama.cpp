@@ -454,8 +454,7 @@ private:
     std::thread      thread;
 };
 
-static void rpc_dispatcher_trampoline(rpc_dispatcher * dispatcher)
-{
+static void rpc_dispatcher_trampoline(rpc_dispatcher * dispatcher) {
     dispatcher->work();
 }
 
@@ -1638,8 +1637,7 @@ bool rpc_server::get_cached_file(uint64_t hash, std::vector<uint8_t>& data) {
     return true;
 }
 
-bool rpc_server::set_tensor_hash(const rpc_msg_set_tensor_hash_req& request, rpc_msg_set_tensor_hash_rsp& response)
-{
+bool rpc_server::set_tensor_hash(const rpc_msg_set_tensor_hash_req& request, rpc_msg_set_tensor_hash_rsp& response) {
     std::vector<uint8_t> cached_file;
     if (!get_cached_file(request.hash, cached_file)) {
         response.result = 0;

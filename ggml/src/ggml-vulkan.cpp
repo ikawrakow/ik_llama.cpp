@@ -759,8 +759,7 @@ static vk_op_unary_push_constants vk_op_unary_push_constants_init(const ggml_ten
 // and a shift:
 //
 // n/d = (mulhi(n, mp) + n) >> L;
-static void init_fastdiv_values(uint32_t d, uint32_t &mp, uint32_t &L)
-{
+static void init_fastdiv_values(uint32_t d, uint32_t &mp, uint32_t &L) {
     // compute L = ceil(log2(d));
     L = 0;
     while (L < 32 && (uint32_t{1} << L) < d) {
@@ -6994,8 +6993,7 @@ static bool ggml_vk_op_supports_incontiguous(ggml_op op) {
     }
 }
 
-static uint32_t get_misalign_bytes(ggml_backend_vk_context * ctx, const ggml_tensor * t)
-{
+static uint32_t get_misalign_bytes(ggml_backend_vk_context * ctx, const ggml_tensor * t) {
     return ((vk_tensor_offset(t) + t->view_offs) & (ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1));;
 }
 
