@@ -46,6 +46,9 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
     };
 
     switch (type) {
+        case GGML_TYPE_Q2_0:
+            mul_mat_vec_q2_0_q8_1_cuda(args, stream);
+            break;
         case GGML_TYPE_Q4_0:
             mul_mat_vec_q4_0_q8_1_cuda(args, stream);
             break;

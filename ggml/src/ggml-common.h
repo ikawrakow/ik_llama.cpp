@@ -161,6 +161,9 @@ typedef sycl::half2 ggml_half2;
 #define QI_MXFP4 (QK_MXFP4 / (4 * QR_MXFP4))
 #define QR_MXFP4 2
 
+#define QI2_0 (QK2_0 / 32)
+#define QR2_0 1
+
 #endif // GGML_COMMON_DECL_CUDA || GGML_COMMON_DECL_HIP
 
 #define QK4_0 32
