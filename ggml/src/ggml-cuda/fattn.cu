@@ -31,6 +31,11 @@ static inline bool is_pascal_mla_absorbed_decode(const ggml_tensor * Q, const gg
     return Q->ne[1] <= 8 && K->ne[0] == 576 && V->ne[0] == 512;
 }
 
+// Pascal has no other kernel for head size 512 (the Gemma-4 global layers), in prefill or decode.
+static inline bool is_pascal_hs512(const int cc, const ggml_tensor * K, const ggml_tensor * V) {
+    return cc >= CC_PASCAL && cc < CC_VOLTA && K->ne[0] == 512 && V->ne[0] == 512;
+}
+
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV  = dst;
     const ggml_tensor * Q    = dst->src[0];
@@ -77,6 +82,11 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         } else {
             ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
         }
+        return;
+    }
+
+    if (is_pascal_hs512(cc, K, V)) {
+        ggml_cuda_flash_attn_ext_tile_new(ctx, dst);
         return;
     }
 
@@ -191,6 +201,10 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
     if (cc >= CC_OFFSET_AMD) {
         return precision == GGML_PREC_DEFAULT ? ggml_cuda_fattn_vec_f16_is_supported(ctx, dst)
                                               : ggml_cuda_fattn_vec_f32_is_supported(ctx, dst);
+    }
+
+    if (is_pascal_hs512(cc, K, V)) {
+        return ggml_cuda_fattn_tile_new_is_supported(ctx, dst);
     }
 
     if (!fast_fp16_available(cc)) {
