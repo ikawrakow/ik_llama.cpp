@@ -2880,6 +2880,70 @@ static void mul_mat_iq3ks_r16_q8_0_x4(int n, const void * vx, size_t bx, const D
 #endif
 }
 
+template <int nrc_y>
+static void mul_mat_q2_0_q8_2_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    Q8<nrc_y, block_q8_2_x4> q8(info);
+    const int nb = n/64;
+
+    const __m256i mask   = _mm256_set1_epi8(0x3);
+    const __m256i m1     = _mm256_set1_epi16(1);
+
+    __m256i qx[4];
+
+    float d8[8*nrc_y];
+
+    __m256 acc[nrc_y] = {};
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        auto q2 = (const block_q2_0 *)((const char *)vx + ix*bx);
+        for (int ib = 0; ib < nb/2; ++ib) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib].d));
+            }
+            float dx1 = GGML_FP16_TO_FP32(q2[2*ib+0].d);
+            float dx2 = GGML_FP16_TO_FP32(q2[2*ib+1].d);
+            auto aux  = _mm_setr_ps(dx1, dx1, dx2, dx2);
+            auto vd   = _mm256_set_m128(aux, aux);
+            auto bits1 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+0].qs+0)));
+            auto bits2 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+0].qs+8)));
+            qx[0] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits1, _mm256_slli_epi32(bits1, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits1, 12), _mm256_slli_epi32(bits1, 18))), mask);
+            qx[1] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits2, _mm256_slli_epi32(bits2, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits2, 12), _mm256_slli_epi32(bits2, 18))), mask);
+            bits1 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+1].qs+0)));
+            bits2 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+1].qs+8)));
+            qx[2] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits1, _mm256_slli_epi32(bits1, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits1, 12), _mm256_slli_epi32(bits1, 18))), mask);
+            qx[3] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits2, _mm256_slli_epi32(bits2, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits2, 12), _mm256_slli_epi32(bits2, 18))), mask);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto yd = _mm_loadu_ps(d8 + 8*iy);
+                auto ys = _mm_loadu_ps(d8 + 8*iy + 4);
+                auto d  = _mm256_mul_ps(vd, _mm256_set_m128(yd, yd));
+                auto s  = _mm256_mul_ps(vd, _mm256_set_m128(ys, ys));
+                auto p0 = _mm256_maddubs_epi16(qx[0], _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + 0));
+                auto p1 = _mm256_maddubs_epi16(qx[1], _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + 1));
+                auto p2 = _mm256_maddubs_epi16(qx[2], _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + 2));
+                auto p3 = _mm256_maddubs_epi16(qx[3], _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + 3));
+                // 0,0, 1,1, 0,0, 1,1, 0,0, 1,1, 0,0, 1,1
+                auto p01 = _mm256_add_epi16(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1));
+                // 2,2, 3,3, 2,2, 3,3, 2,2, 3,3, 2,2, 3,3
+                auto p23 = _mm256_add_epi16(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3));
+                // 0,0, 1,1, 2,2, 3,3, 0,0, 1,1, 2,2, 3,3
+                auto pal = _mm256_add_epi16(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23));
+                // 0, 1, 2, 3, 0, 1, 2, 3
+                auto sum = _mm256_madd_epi16(m1, pal);
+                acc[iy]  = _mm256_fmadd_ps(d, _mm256_cvtepi32_ps(sum), acc[iy]);
+                acc[iy]  = _mm256_fmadd_ps(s, _mm256_set1_ps(-0.5f), acc[iy]);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, hsum_float_8(acc[iy]));
+            acc[iy] = _mm256_setzero_ps();
+        }
+    }
+}
+
 template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
     if constexpr (std::is_same_v<Dequantizer, Q4_0_Unpacker> || std::is_same_v<Dequantizer, Q5_0_Unpacker>) {
         IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_0_q8_0_T, Dequantizer, funcs)
@@ -2934,6 +2998,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
     func16 = nullptr;
 
     switch (typeA) {
+        case GGML_TYPE_Q2_0:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q2_0_q8_2_x4, kernels);
+            break;
         case GGML_TYPE_Q4_0:
             set_functions<Q4_0_1_Unpacker>(kernels);
             break;
