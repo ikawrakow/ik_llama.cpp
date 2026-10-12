@@ -120,9 +120,9 @@ Example of use with very effective RAM + VRAM split scheme for Zen4 AMD CPU with
 `> llama-cli -m ../Qwen3-30B-A3B-Thinking-2507-IQ4_XS.gguf -ot blk.[1-9][0-9].ffn=CPU -fa on  -ctk q8_0 -ctv q4_0 -ngl 99 --threads 16 --ctx-size 64000 --prompt "Tell me 'Good morning' in  3 difference languages." -mla 3 -amb 512 -b 64 -ub 64`
 During execution, this command will load almost all non-attention (i.e., "fat" ffn tensors which are less sensitive to slow RAM speed) tensors, starting from 10th, to RAM while keeping the rest in VRAM and answer your prompt and report RAM and VRAM usage at 27 t/s (token generation speed):
 ```
-Tensor blk.10.ffn_norm.weight buffer type overriden to CPU
+Tensor blk.10.ffn_norm.weight buffer type overridden to CPU
 ...
-Tensor blk.47.ffn_down_exps.weight buffer type overriden to CPU
+Tensor blk.47.ffn_down_exps.weight buffer type overridden to CPU
 ...
 llm_load_tensors:        CPU buffer size = 12026.22 MiB
 llm_load_tensors:        CPU buffer size =   166.92 MiB

@@ -3571,9 +3571,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --no-context-shift",     "disable context-shift." });
     options.push_back({ "*",           "--context-shift (auto|on|off|0|1)", "set context-shift (default: %s)", params.ctx_shift ? "on" : "off" });
     options.push_back({ "backend" });
-    options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
-    options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
-    options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters (--cpu-affinity pins the draft to E-cores on Intel hybrid CPUs, -cr LIST picks CPUs)" });
+    options.push_back({ "*",           "       --rpc SERVERS",          "comma-separated list of RPC servers" });
+    options.push_back({ "*",           "-cuda, --cuda-params",          "comma-separated list of cuda parameters" });
+    options.push_back({ "*",           "-draft, --draft-params",        "comma-separated list of draft model parameters (--cpu-affinity pins the draft to E-cores on Intel hybrid CPUs, -cr LIST picks CPUs)" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
