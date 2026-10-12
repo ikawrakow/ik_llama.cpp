@@ -2891,6 +2891,7 @@ static void mul_mat_q2_0_q8_2_x4(int n, const void * vx, size_t bx, const DataIn
     __m256i qx[4];
 
     float d8[8*nrc_y];
+    //float extra[nrc_y];
 
     __m256 acc[nrc_y] = {};
 
@@ -2937,8 +2938,34 @@ static void mul_mat_q2_0_q8_2_x4(int n, const void * vx, size_t bx, const DataIn
                 acc[iy]  = _mm256_fmadd_ps(s, _mm256_set1_ps(-0.5f), acc[iy]);
             }
         }
+        for (int ib = 2*(nb/2); ib < nb; ++ib) {
+            float dx = GGML_FP16_TO_FP32(q2[ib].d);
+            auto bits1 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+0].qs+0)));
+            auto bits2 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+0].qs+8)));
+            qx[0] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits1, _mm256_slli_epi32(bits1, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits1, 12), _mm256_slli_epi32(bits1, 18))), mask);
+            qx[1] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits2, _mm256_slli_epi32(bits2, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits2, 12), _mm256_slli_epi32(bits2, 18))), mask);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto yb = (const block_q8_2 *)(q8.y[iy] + nb/2);
+                auto p0 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(qx[0], _mm256_loadu_si256((const __m256i *)yb[2*ib+0].qs)));
+                auto p1 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(qx[1], _mm256_loadu_si256((const __m256i *)yb[2*ib+1].qs)));
+                auto d1 = dx * GGML_BF16_TO_FP32(ggml_bf16_t{yb[2*ib+0].d});
+                auto d2 = dx * GGML_BF16_TO_FP32(ggml_bf16_t{yb[2*ib+1].d});
+                auto dxd1 = _mm256_set1_ps(d1);
+                auto dxd2 = _mm256_set1_ps(d2);
+                acc[iy] = _mm256_fmadd_ps(dxd1, _mm256_cvtepi32_ps(p0), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(dxd2, _mm256_cvtepi32_ps(p1), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(dxd1, _mm256_set1_ps(-0.125f * *(const int16_t *)&yb[2*ib+0].s), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(dxd2, _mm256_set1_ps(-0.125f * *(const int16_t *)&yb[2*ib+1].s), acc[iy]);
+                //extra[iy] = d1 * *(const int16_t *)&yb[2*ib+0].s + d2 * *(const int16_t *)&yb[2*ib+1].s;
+            }
+
+        }
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, hsum_float_8(acc[iy]));
+            float sum = hsum_float_8(acc[iy]);
+            //if (2*(nb/2) < nb) sum -= extra[iy];
+            info.store(ix, iy, sum);
             acc[iy] = _mm256_setzero_ps();
         }
     }
