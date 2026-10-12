@@ -94,7 +94,7 @@ ggml_cgraph * llm_build_context::build_phi3() {
 
         // FF
         // special-case: the up and gate tensors are merged into a single tensor
-        // TOOD: support into llm_build_ffn
+        // TODO: support into llm_build_ffn
         {
             cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
                     model.layers[il].ffn_up,   NULL, NULL,

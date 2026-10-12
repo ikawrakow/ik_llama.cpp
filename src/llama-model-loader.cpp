@@ -1196,7 +1196,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     }
 }
 
-// Returns false if cancelled by progress_callback
+// Returns false if canceled by progress_callback
 bool llama_model_loader::load_all_data(
             struct ggml_context * ctx,
             [[maybe_unused]] llama_model * model,
@@ -1241,7 +1241,7 @@ bool llama_model_loader::load_all_data(
             }
         }
 
-        // If the cuda backend is active create pinned memory buffers and events for synchronisation.
+        // If the cuda backend is active create pinned memory buffers and events for synchronization.
         if (cuda_backend) {
             for (size_t idx = 0; idx < (size_t)n_workers; ++idx) {
                 host_buffers.emplace_back(ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), buffer_size));

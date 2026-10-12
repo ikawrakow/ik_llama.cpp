@@ -1855,7 +1855,7 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
     const int trunk_flags = mtp_only
         ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
 
-    // The wide residual is normalised and collapsed by a hyper-connection mix rather
+    // The wide residual is normalized and collapsed by a hyper-connection mix rather
     // than by an output_norm, so this architecture carries none.
     const int out_mixer_flags = mtp_only ? llama_model_loader::TENSOR_NOT_REQUIRED : 0;
     model.hc_head_norm = create_tensor(ctx_output, tn(LLM_TENSOR_HC_HEAD_NORM, "weight"), {hc_dim}, out_mixer_flags);

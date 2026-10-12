@@ -19,7 +19,7 @@ static ggml_tensor * qwen4exp_grouped_rms(
     return ggml_mul(ctx0, t, w);
 }
 
-// the low-rank down/up pair is a gate over the normalised streams, not a mixing matrix
+// the low-rank down/up pair is a gate over the normalized streams, not a mixing matrix
 static ggml_tensor * qwen4exp_hc_mix(
         llm_build_context & bctx,
         ggml_context      * ctx0,
@@ -72,7 +72,7 @@ static ggml_tensor * qwen4exp_hc_mix(
     return mixed;
 }
 
-// the factor of two centres the weights on one, so an untrained injection is a plain
+// the factor of two centers the weights on one, so an untrained injection is a plain
 // residual add
 static ggml_tensor * qwen4exp_hc_combine(
         ggml_context        * ctx0,

@@ -1899,7 +1899,7 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
     const uint32_t dst_row = cache.sink_rows;
 
     auto copy_bytes = [&](ggml_tensor * tensor, size_t src_offset, size_t dst_offset, size_t nbytes) {
-        // The nbytes % sizeof(float) condition is just lazyness. It should be true for any cache type.
+        // The nbytes % sizeof(float) condition is just laziness. It should be true for any cache type.
         if (!tensor->view_src && dst_offset < src_offset && nbytes % sizeof(float) == 0) {
             auto max_bytes = sizeof(float)*((src_offset - dst_offset)/sizeof(float));
             int nstep = max_bytes > 0 ? (nbytes + max_bytes - 1)/max_bytes : 0;
@@ -4520,7 +4520,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     return std::make_pair(std::move(result), max_compute);
 }
 
-// Returns false if cancelled by progress_callback
+// Returns false if canceled by progress_callback
 static bool llm_load_tensors(
         llama_model_loader & ml,
         llama_model & model,
@@ -5252,7 +5252,7 @@ static bool llm_load_tensors(
             const auto & mapping = ml.mappings[mi];
             const auto * begin = (const uint8_t *) mapping->addr();
             if (size > 0 && base >= begin && base + size <= begin + mapping->size()) {
-                // Only genuinely deferred ranges count; dense neighbours share the span.
+                // Only genuinely deferred ranges count; dense neighbors share the span.
                 return defer_ple_mmap ? ml.ple_deferred_bytes_in((int) mi, base - begin, base - begin + size) / 1024.0 / 1024.0 : 0.0;
             }
         }
@@ -7982,7 +7982,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
     auto tim1 = ggml_time_us();
 #endif
-    // Keep scheduler alive in case someone dont run graph reuse so
+    // Keep scheduler alive in case someone doesn't run graph reuse so
     // speculative checkpoint restoration can be completed
     const bool speculative_checkpoint_active =
         lctx.kv_self.ckpt.selected_spec_mode != LLAMA_SPEC_CKPT_NONE;
@@ -9104,7 +9104,7 @@ struct llama_model * llama_model_load_from_file(
         if (status == -1) {
             LLAMA_LOG_ERROR("%s: failed to load model\n", __func__);
         } else if (status == -2) {
-            LLAMA_LOG_INFO("%s: cancelled model load\n", __func__);
+            LLAMA_LOG_INFO("%s: canceled model load\n", __func__);
         }
         delete model;
         return nullptr;
@@ -12604,7 +12604,7 @@ struct llama_data_write_buffer : llama_data_write {
         }
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
         if (model.is_mla_model()) {
-            // For MLA models, the cache is replacated on all GPUs when using split mode graph, so it is
+            // For MLA models, the cache is replicated on all GPUs when using split mode graph, so it is
             // enough to get the data from the 1st device that has a copy
             auto extra = (const ggml_split_tensor_t *)tensor->extra;
             for (int id = 0; id < extra->n_device; ++id) {

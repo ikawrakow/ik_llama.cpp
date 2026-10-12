@@ -139,7 +139,7 @@ struct llama_kv_cache {
     std::vector<struct ggml_tensor *> kr_l;
 
     // Pooled block keys for Qwen sparse attention: [indexer_head_size, kv_size/compress_ratio],
-    // already normalised and rotated. Empty unless the model scores blocks.
+    // already normalized and rotated. Empty unless the model scores blocks.
     std::vector<struct ggml_tensor *> kp_l;
 
     // When true, the delta_net graph builder will enable per-step SSM state saves
@@ -215,7 +215,7 @@ struct llama_kv_cache {
         int fixed_spec_mode = LLAMA_SPEC_CKPT_NONE;
         int32_t fixed_max_tokens = 0;
 
-        // Serialised sequence state for CPU mode
+        // Serialized sequence state for CPU mode
         std::vector<uint8_t> cpu_state_data;
 
         // Private DSV4 state snapshot used by GPU/CPU fallback modes.

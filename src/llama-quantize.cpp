@@ -1794,7 +1794,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                                 int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
 
                         // this can happen when quantizing an old mixtral model with split tensors with a new incompatible imatrix
-                        // this is a significant error and it may be good idea to abort the process if this happens,
+                        // this is a significant error and it may be a good idea to abort the process if this happens,
                         // since many people will miss the error and not realize that most of the model is being quantized without an imatrix
                         // tok_embd should be ignored in this case, since it always causes this warning
                         if (name != tn(LLM_TENSOR_TOKEN_EMBD, "weight")) {
