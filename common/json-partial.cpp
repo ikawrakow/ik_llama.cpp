@@ -20,8 +20,7 @@ struct common_json_stack_element {
 bool common_json_parse(
     const std::string & input,
     const std::string & healing_marker,
-    common_json & out)
-{
+    common_json & out) {
     std::string::const_iterator it = input.begin();
     const auto end = input.end();
     return common_json_parse(it, end, healing_marker, out);
@@ -31,8 +30,7 @@ bool common_json_parse(
     std::string::const_iterator & it,
     const std::string::const_iterator & end,
     const std::string & healing_marker,
-    common_json & out)
-{
+    common_json & out) {
     // // https://json.nlohmann.me/features/parsing/sax_interface/
     struct json_error_locator : public nlohmann::json_sax<json> {
         std::size_t position;

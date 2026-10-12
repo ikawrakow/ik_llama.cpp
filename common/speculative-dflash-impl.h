@@ -140,8 +140,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
         , ctx_dft(ctx_dft)
-        , cross_ctx(std::max(1, cross_ctx))
-    {
+        , cross_ctx(std::max(1, cross_ctx)) {
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
         const llama_model * model_dft = llama_get_model(ctx_dft);
 

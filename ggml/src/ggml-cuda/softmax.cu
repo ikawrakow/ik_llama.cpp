@@ -400,8 +400,7 @@ static __global__ void soft_max_f32(
 
 template<int... Ns, typename T>
 static void launch_soft_max_kernels(const float * x, const T * mask, const float * sinks, float * dst,
-                             const soft_max_params & p, cudaStream_t stream, dim3 block_dims, dim3 block_nums, size_t nbytes_shared)
-{
+                             const soft_max_params & p, cudaStream_t stream, dim3 block_dims, dim3 block_nums, size_t nbytes_shared) {
     const int id       = ggml_cuda_get_device();
     const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
 

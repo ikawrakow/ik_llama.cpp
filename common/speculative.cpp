@@ -293,8 +293,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
         , ctx_mtp(ctx_mtp)
-        , constant_draft_positions(constant_draft_positions)
-    {
+        , constant_draft_positions(constant_draft_positions) {
         struct common_params_sampling sparams;
         sparams.samplers_sequence = {
             llama_sampler_type::DIST,
@@ -414,8 +413,7 @@ struct common_speculative_state_draft : public common_speculative_state {
             const std::vector<std::pair<std::string, std::string>> & replacements)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
-        , ctx_dft(ctx_dft)
-    {
+        , ctx_dft(ctx_dft) {
         batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
         smpl = nullptr;
         {
@@ -902,8 +900,7 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
         : common_speculative_state(type)
         , n_draft(n_draft)
         , save_dynamic(save_dynamic)
-        , save_static(save_static)
-    {
+        , save_static(save_static) {
         if (!path_static.empty()) {
             try {
                 ngram_cache_static = common_ngram_cache_load(path_static);
@@ -994,8 +991,7 @@ struct common_speculative_state_suffix : public common_speculative_state {
             const llama_model * model)
         : common_speculative_state(type)
         , tree(max_depth)
-        , corpus_tree(max_depth)
-    {
+        , corpus_tree(max_depth) {
         if (!corpus_path.empty()) {
             std::function<std::vector<llama_token>(const std::string &)> tokenize_fn;
             if (model) {

@@ -641,8 +641,7 @@ private:
         const std::vector<std::pair<std::string, json>> & properties,
         const std::unordered_set<std::string> & required,
         const std::string & name,
-        const json & additional_properties)
-    {
+        const json & additional_properties) {
         std::vector<std::string> required_props;
         std::vector<std::string> optional_props;
         std::unordered_map<std::string, std::string> prop_kv_rule_names;
@@ -753,8 +752,7 @@ public:
     common_schema_converter(
         const std::function<json(const std::string &)> & fetch_json,
         bool dotall)
-          : _fetch_json(fetch_json), _dotall(dotall)
-    {
+          : _fetch_json(fetch_json), _dotall(dotall) {
         _rules["space"] = SPACE_RULE;
     }
 
