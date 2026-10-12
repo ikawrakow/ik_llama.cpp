@@ -304,12 +304,10 @@ struct DequantizerQ6K final : public BaseDequantizer<block_q6_K> {
 
 struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
     DequantizerIQ4XS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_512()) {}
-    template <typename Q8>
-    inline void new_block(int i, const Q8& q8, __m256 * accd, __m512i * scales) {
+    inline void new_block(int i, __m512i * scales) {
         d = GGML_FP16_TO_FP32(x[i].d);
         prepare(x[i].qs);
         auto scales128 = siq4.make_scales(*(const uint32_t *)x[i].scales_l, x[i].scales_h);
-        s8k.accum_mins(scales128, q8, i, -128.f*d, accd);
         auto scales256 = MM256_SET1_M128I(scales128);
         auto all_scales = _mm512_inserti32x8(_mm512_castsi256_si512(scales256), scales256, 1);
         scales[0] = _mm512_shuffle_epi8(all_scales, shuffles[0]);
@@ -331,7 +329,6 @@ struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
     }
 
     Q4Bits bits;
-    Scales8KBase s8k;
     ScaleIQ4XS siq4;
     const __m512i values;
     const __m512i permute1 = _mm512_set_epi64(11, 10, 3, 2,  9,  8, 1, 0);
@@ -442,28 +439,35 @@ static void mul_mat_iqX_k_q8_K_AVX512(int n, const void * vx, size_t bx, const D
 
     Dequantizer deq(vx, bx);
 
-    __m256  accm[nrc_y];
     __m512  accd[nrc_y];
     __m512i scales[4];
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = _mm512_setzero_ps();
-        for (int iy = 0; iy < nrc_y; ++iy) accm[iy] = _mm256_setzero_ps();
 
         deq.new_row(ix);
 
         for (int i = 0; i < nb; ++i) {
 
-            deq.new_block(i, q8, accm, scales);
+            deq.new_block(i, scales);
 
+            __mmask64 signs[4];
+            for (int k = 0; k < 4; ++k) {
+                auto v = _mm512_xor_si512(deq.bits.values[k], _mm512_set1_epi8(-128));
+                deq.bits.values[k] = _mm512_abs_epi8(v);
+                signs[k] = _mm512_movepi8_mask(v);
+            }
+
+#pragma GCC unroll 8
             for (int iy = 0; iy < nrc_y; ++iy) {
-                const __m512i p1 = _mm512_maddubs_epi16(deq.bits.values[0], q8.load_quants64(iy, i, 0));
-                const __m512i p2 = _mm512_maddubs_epi16(deq.bits.values[1], q8.load_quants64(iy, i, 1));
-                const __m512i p3 = _mm512_maddubs_epi16(deq.bits.values[2], q8.load_quants64(iy, i, 2));
-                const __m512i p4 = _mm512_maddubs_epi16(deq.bits.values[3], q8.load_quants64(iy, i, 3));
+                __m512i p[4];
+                for (int k = 0; k < 4; ++k) {
+                    auto y = q8.load_quants64(iy, i, k);
+                    p[k] = _mm512_maddubs_epi16(deq.bits.values[k], _mm512_mask_sub_epi8(y, signs[k], _mm512_setzero_si512(), y));
+                }
                 auto sumi = _mm512_dpwssd_epi32(_mm512_dpwssd_epi32(_mm512_dpwssd_epi32(_mm512_dpwssd_epi32(_mm512_setzero_si512(),
-                                    p1, scales[0]), p2, scales[1]), p3, scales[2]), p4, scales[3]);
+                                    p[0], scales[0]), p[1], scales[1]), p[2], scales[2]), p[3], scales[3]);
                 accd[iy] = _mm512_fmadd_ps(_mm512_set1_ps(deq.d*q8.scale(iy, i)), _mm512_cvtepi32_ps(sumi), accd[iy]);
             }
 
@@ -471,7 +475,7 @@ static void mul_mat_iqX_k_q8_K_AVX512(int n, const void * vx, size_t bx, const D
 
         for (int iy = 0; iy < nrc_y; ++iy) {
             auto sum256 = _mm256_add_ps(_mm512_castps512_ps256(accd[iy]), _mm512_extractf32x8_ps(accd[iy], 1));
-            info.store(ix, iy, hsum_float_8(_mm256_add_ps(accm[iy], sum256)));
+            info.store(ix, iy, hsum_float_8(sum256));
         }
 
     }
