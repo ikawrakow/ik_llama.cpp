@@ -26,7 +26,7 @@ See:
 
 These implementations search the token history for patterns and use matching sequences as draft candidates.
 They require no additional model but rely on patterns that have already appeared in the generated text.
-An example to use this approach can be the rewriting of source code by a LLM.
+An example to use this approach can be the rewriting of source code by an LLM.
 
 #### n-gram Map (`ngram-simple`)
 

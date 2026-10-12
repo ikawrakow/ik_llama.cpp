@@ -304,7 +304,7 @@ source /opt/intel/oneapi/setvars.sh
 
 2. List devices information
 
-Similar to the native `sycl-ls`, available SYCL devices can be queried as follow:
+Similar to the native `sycl-ls`, available SYCL devices can be queried as follows:
 
 ```sh
 ./build/bin/llama-ls-sycl-device
@@ -377,7 +377,7 @@ ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m models/llama-2-7b.Q4_0.gguf -p "Bui
 
 *Notes:*
 
-- Upon execution, verify the selected device(s) ID(s) in the output log, which can for instance be displayed as follow:
+- Upon execution, verify the selected device(s) ID(s) in the output log, which can for instance be displayed as follows:
 
 ```sh
 detect 1 SYCL GPUs: [0] with top Max compute units:512
@@ -506,7 +506,7 @@ On the oneAPI command line window, run the following and step into the llama.cpp
 
 2. List devices information
 
-Similar to the native `sycl-ls`, available SYCL devices can be queried as follow:
+Similar to the native `sycl-ls`, available SYCL devices can be queried as follows:
 
 ```
 build\bin\llama-ls-sycl-device.exe
@@ -573,7 +573,7 @@ build\bin\llama-cli.exe -m models\llama-2-7b.Q4_0.gguf -p "Building a website ca
 
 Note:
 
-- Upon execution, verify the selected device(s) ID(s) in the output log, which can for instance be displayed as follow:
+- Upon execution, verify the selected device(s) ID(s) in the output log, which can for instance be displayed as follows:
 
 ```sh
 detect 1 SYCL GPUs: [0] with top Max compute units:512

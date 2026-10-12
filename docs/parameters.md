@@ -84,7 +84,7 @@ Some often used terms.
 | `-ub, --ubatch-size N` | Physical maximum batch size | 512 | Safe to leave default. Similar to `--batch-size N` |
 | `--keep N` | Number of tokens to keep from the initial prompt | 0 | -1 = all |
 | `--chunks N` | Max number of chunks to process | -1 (all) |  |
-| `-dr, --dry-run` | Skip loading tensors in the files | - | Skips loading files, yet still report OOM error and print memory usage correctly, which is helpful for manually tuning of very large models. |
+| `-dr, --dry-run` | Skip loading tensors in the files | - | Skips loading files, yet still reports OOM error and print memory usage correctly, which is helpful for manually tuning of very large models. |
 | `--minilog` | Print important information | - | For `llama-server`, log request message for completions/response/anthropic and response. The prompt in the json format and the text response are saved in the log file and printed to the console. [PR 1477](https://github.com/ikawrakow/ik_llama.cpp/pull/1477) |
 | `-fa, --flash-attn` | Enables Flash Attention | on | auto / on / off Improves t/s and reduces memory usage. |
 | `--no-fa, --no-flash-attn` | Disable Flash Attention |  | Alternative parameter to turn off FA. See `--flash-attn` |
@@ -156,9 +156,9 @@ Notes:
 
 ## Cache Prompt to Host Memory
 
-When user starts a new conversation, the old conversation's kv cache will be saved in ram and can be retrieved later. This greatly reduces prompt processing time when switching between conversations and can have as many conversation as your ram is allowed.
+When the user starts a new conversation, the old conversation's KV cache will be saved in RAM and can be retrieved later. This greatly reduces prompt processing time when switching between conversations and can have as many conversations as your RAM allows.
 
-Note: When the available memory is very limited, turn this option off (`-cram 0`) to avoid memory swaping.
+Note: When the available memory is very limited, turn this option off (`-cram 0`) to avoid memory swapping.
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
@@ -206,11 +206,11 @@ Incorrect prompt template or it's format may break the model output.
 
 KV cache improves speed and efficiency especially at long context by reusing [past calculations](https://huggingface.co/blog/not-lain/kv-caching).
 
-SWA keeps a sliding window of the prompt when prompt is longer than the context size and shift the kv cache accordingly to avoid reprocessing the whole prompt.
+SWA keeps a sliding window of the prompt when prompt is longer than the context size and shifts the KV cache accordingly to avoid reprocessing the whole prompt.
 
 The context (a.k.a. KV cache) is stored on the device where the associated attention tensors are.
 
-MLA models already have the cache compressed, it doesn't really makes sense to compress it with the available parameters.
+MLA models already have the cache compressed, it doesn't really make sense to compress it with the available parameters.
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
@@ -320,11 +320,11 @@ llama_new_context_with_model: KV self size  =   59.50 MiB, K (q8_0):   29.75 MiB
 - Using `--k-cache-hadamard` on quants lower than `Q6_0` may give better results. Additionally, `ik_llama.cpp` provides `--v-cache-hadamard` for the V-cache. Example: `--cache-type-k q6_0 --k-cache-hadamard --cache-type-v q6_0 --v-cache-hadamard`
 - `Q4_0` achieves low perplexity even without Hadamard.
 
-3. Offload less to the GPU. Try to find a mix of parameters that better suits your system that default.
+3. Offload less to the GPU. Try to find a mix of parameters that better suits your system than default.
 
-- Try `--fit`. `ik_llama.cpp` automatically determine which tensors to offload to the GPUs based on the available VRAM.
+- Try `--fit`. `ik_llama.cpp` automatically determines which tensors to offload to the GPUs based on the available VRAM.
 
-- Use `--no-kv-offload` to keep KV cache on CPU. This is provided for flexibility, and practically not desired as reduces the prompt processing speed.
+- Use `--no-kv-offload` to keep KV cache on CPU. This is provided for flexibility, and practically not desired as it reduces the prompt processing speed.
 
 - Identify tensors, how many layers (also shape and more metadata) by opening the GGUF model file on the Web browser [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf) then scroll down to the Tensors table. For the split models, look to each file part.
 
