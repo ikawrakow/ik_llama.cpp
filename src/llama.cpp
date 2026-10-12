@@ -450,6 +450,8 @@ static size_t llama_get_device_count(const llama_model & model, int initial_coun
     count = ggml_backend_vk_get_device_count();
 #elif defined(GGML_USE_CANN)
     return ggml_backend_cann_get_device_count();
+#elif defined(GGML_USE_METAL)
+    count = 1;
 #endif
 #if defined(GGML_USE_RPC)
     count += model.rpc_servers.size();
@@ -553,6 +555,11 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     size_t total;
     size_t free;
     ggml_backend_cann_get_device_memory(device, &free, &total);
+    return free;
+#elif defined(GGML_USE_METAL)
+    size_t total;
+    size_t free;
+    ggml_backend_metal_get_device_memory(&free, &total);
     return free;
 #else
     // CPU-only build: report free host RAM instead of the 1-byte placeholder.
