@@ -3479,14 +3479,15 @@ int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch
     LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens for seq_id %d from pos %d...\n",
             is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens, seq_id, (int)start_pos);
 
-    // We never need all logits. We only need the logits of the last token so we can sample
-    // the next draft token. In the MTP_OP_WARMUP case we do not need logits at all, but just
-    // in case we also get the logits of the last token.
+    // Warmup only updates MTP state and does not need logits.
+    // Accepted-token updates need only the final logit for the next draft.
     llama_batch mtp_batch = batch;
     for (int i = 0; i < mtp_batch.n_tokens; ++i) {
         mtp_batch.logits[i] = false;
     }
-    mtp_batch.logits[mtp_batch.n_tokens-1] = true;
+    if (!is_prompt_warmup) {
+        mtp_batch.logits[mtp_batch.n_tokens-1] = true;
+    }
     if (is_prompt_warmup) {
         llama_set_mtp_n_heads(ctx, mtp_heads);
         llama_set_mtp_step_idx(ctx, 0);

@@ -7674,34 +7674,36 @@ static int llama_decode_internal(
             }
         }
 
-        if (lctx.n_outputs == 0) {
-            // no output
-            res = nullptr;
-        }
-        else {
-            const bool has_mtp = llama_context_has_mtp_outputs(lctx);
-            if (cparams.embeddings || has_mtp) {
-                if (has_mtp) {
-                    for (int i = gf->n_nodes - 1; i >= 0; --i) {
-                        if (strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
-                            embd = gf->nodes[i];
-                            break;
-                        }
-                    }
-                }
-                if (!embd) {
-                    for (int i = gf->n_nodes - 1; i >= 0; --i) {
-                        if (strcmp(gf->nodes[i]->name, "result_embd_pooled") == 0) {
-                            embd = gf->nodes[i];
-                            break;
-                        }
-                        if (strcmp(gf->nodes[i]->name, "result_norm") == 0) {
-                            embd = gf->nodes[i];
-                            break;
-                        }
+        const bool needs_all_target_hidden = has_mtp && cparams.mtp_op_type == MTP_OP_NONE;
+        const bool needs_embd = (lctx.n_outputs > 0 && (cparams.embeddings || has_mtp)) ||
+                needs_all_target_hidden;
+        if (needs_embd) {
+            if (has_mtp) {
+                for (int i = gf->n_nodes - 1; i >= 0; --i) {
+                    if (strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
+                        embd = gf->nodes[i];
+                        break;
                     }
                 }
             }
+            if (!embd) {
+                for (int i = gf->n_nodes - 1; i >= 0; --i) {
+                    if (strcmp(gf->nodes[i]->name, "result_embd_pooled") == 0) {
+                        embd = gf->nodes[i];
+                        break;
+                    }
+                    if (strcmp(gf->nodes[i]->name, "result_norm") == 0) {
+                        embd = gf->nodes[i];
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (lctx.n_outputs == 0) {
+            // Logit and hidden-state outputs are independent, embd may still be populated.
+            res = nullptr;
+        } else {
             if (cparams.embeddings && lctx.model.hparams.nextn_predict_layers == 0 && !has_mtp) {
                 res = nullptr; // do not extract logits for embedding case
             } else {
