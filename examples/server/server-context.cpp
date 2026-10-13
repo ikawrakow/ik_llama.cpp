@@ -1363,7 +1363,8 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.sparams.dry_penalty_last_n = llama_n_ctx(ctx);
 
     }
-    if (slot.sparams.dry_base < 1.0f) {
+    if (slot.sparams.dry_base < 1.0f)
+    {
         slot.sparams.dry_base = default_sparams.dry_base;
     }
 
@@ -1941,7 +1942,8 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     }
 
     {
-        try {
+        try
+        {
             if (slot.ctx_sampling != nullptr) {
                 common_sampler_free(slot.ctx_sampling);
             }
@@ -4225,7 +4227,8 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                 slot.n_past_prompt = 0;
                             }
 
-                            if ((slot.n_past + size_threshold < slot.cache_tokens.size())) {
+                            if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
+                            {
                                 int32_t back = 4;
                                 if (prefix.second >= back && prefix.first >= back) {
                                     print_tokens(slot.prompt_tokens, slot.cache_tokens, prefix.second - back, prefix.first - back, 30);
@@ -4274,7 +4277,8 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                 // keep only the common part
                 // remove the non-common part from the cache
-                if (slot.n_past < 0) {
+                if (slot.n_past < 0)
+                {
                     slot.n_past = 0;
                 }
                 slot.cache_tokens.keep_first(slot.n_past);

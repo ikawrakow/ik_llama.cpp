@@ -80,13 +80,15 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
         assert(parsed_grammar.symbol_ids.size() == expected.size());
     }
 
-    for (auto it = parsed_grammar.symbol_ids.begin(); it != parsed_grammar.symbol_ids.end(); ++it) {
+    for (auto it = parsed_grammar.symbol_ids.begin(); it != parsed_grammar.symbol_ids.end(); ++it)
+    {
         std::string key = it->first;
         uint32_t value = it->second;
         std::pair<std::string, uint32_t> expected_pair = expected[index];
 
         // pretty print error message before asserting
-        if (expected_pair.first != key || expected_pair.second != value) {
+        if (expected_pair.first != key || expected_pair.second != value)
+        {
             fprintf(stderr, "index: %u\n", index);
             fprintf(stderr, "expected_pair: %s, %u\n", expected_pair.first.c_str(), expected_pair.second);
             fprintf(stderr, "actual_pair: %s, %u\n", key.c_str(), value);
@@ -101,14 +103,17 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
     }
 
     index = 0;
-    for (auto rule : parsed_grammar.rules) {
+    for (auto rule : parsed_grammar.rules)
+    {
         // compare rule to expected rule
-        for (uint32_t i = 0; i < rule.size(); i++) {
+        for (uint32_t i = 0; i < rule.size(); i++)
+        {
             llama_grammar_element element = rule[i];
             llama_grammar_element expected_element = expected_rules[index];
 
             // pretty print error message before asserting
-            if (expected_element.type != element.type || expected_element.value != element.value) {
+            if (expected_element.type != element.type || expected_element.value != element.value)
+            {
                 fprintf(stderr, "index: %u\n", index);
                 fprintf(stderr, "expected_element: %s, %u\n", type_str(expected_element.type), expected_element.value);
                 fprintf(stderr, "actual_element: %s, %u\n", type_str(element.type), element.value);

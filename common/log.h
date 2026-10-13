@@ -231,7 +231,8 @@ enum LogTriState
 inline std::string log_get_pid()
 {
    static std::string pid;
-   if (pid.empty()) {
+   if (pid.empty())
+   {
        // std::this_thread::get_id() is the most portable way of obtaining a "process id"
        //  it's not the same as "pid" but is unique enough to solve multiple instances
        //  trying to write to the same log.
@@ -254,14 +255,16 @@ inline std::string log_filename_generator_impl(LogTriState multilog, const std::
 {
     static bool _multilog = false;
 
-    if (multilog != LogTriStateSame) {
+    if (multilog != LogTriStateSame)
+    {
         _multilog = multilog == LogTriStateTrue;
     }
 
     std::stringstream buf;
 
     buf << log_file_basename;
-    if (_multilog) {
+    if (_multilog)
+    {
         buf << ".";
         buf << log_get_pid();
     }
@@ -463,39 +466,48 @@ inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriS
     static FILE *log_current_target{target};
     static FILE *logfile = nullptr;
 
-    if (change) {
-        if (append != LogTriStateSame) {
+    if (change)
+    {
+        if (append != LogTriStateSame)
+        {
             _append = append == LogTriStateTrue;
             return logfile;
         }
 
-        if (disable == LogTriStateTrue) {
+        if (disable == LogTriStateTrue)
+        {
             // Disable primary target
             _disabled = true;
         }
         // If previously disabled, only enable, and keep previous target
-        else if (disable == LogTriStateFalse) {
+        else if (disable == LogTriStateFalse)
+        {
             _disabled = false;
         }
         // Otherwise, process the arguments
-        else if (log_current_filename != filename || log_current_target != target) {
+        else if (log_current_filename != filename || log_current_target != target)
+        {
             _initialized = false;
         }
     }
 
-    if (_disabled) {
+    if (_disabled)
+    {
         // Log is disabled
         return nullptr;
     }
 
-    if (_initialized) {
+    if (_initialized)
+    {
         // with fallback in case something went wrong
         return logfile ? logfile : stderr;
     }
 
     // do the (re)initialization
-    if (target != nullptr) {
-        if (logfile != nullptr && logfile != stdout && logfile != stderr) {
+    if (target != nullptr)
+    {
+        if (logfile != nullptr && logfile != stdout && logfile != stderr)
+        {
             fclose(logfile);
         }
 
@@ -504,8 +516,10 @@ inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriS
 
         logfile = target;
     } else {
-        if (log_current_filename != filename) {
-            if (logfile != nullptr && logfile != stdout && logfile != stderr) {
+        if (log_current_filename != filename)
+        {
+            if (logfile != nullptr && logfile != stdout && logfile != stderr)
+            {
                 fclose(logfile);
             }
         }
@@ -513,7 +527,8 @@ inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriS
         logfile = fopen(filename.c_str(), _append ? "a" : "w");
     }
 
-    if (!logfile) {
+    if (!logfile)
+    {
         //  Verify whether the file was opened, otherwise fallback to stderr
         logfile = stderr;
 
@@ -624,27 +639,32 @@ inline void log_test()
 
 inline bool log_param_single_parse(const std::string & param)
 {
-    if ( param == "--log-test") {
+    if ( param == "--log-test")
+    {
         log_test();
         return true;
     }
 
-    if ( param == "--log-disable") {
+    if ( param == "--log-disable")
+    {
         log_disable();
         return true;
     }
 
-    if ( param == "--log-enable") {
+    if ( param == "--log-enable")
+    {
         log_enable();
         return true;
     }
 
-    if (param == "--log-new") {
+    if (param == "--log-new")
+    {
         log_multilog(true);
         return true;
     }
 
-    if (param == "--log-append") {
+    if (param == "--log-append")
+    {
         log_append(true);
         return true;
     }
@@ -654,8 +674,10 @@ inline bool log_param_single_parse(const std::string & param)
 
 inline bool log_param_pair_parse(bool check_but_dont_parse, const std::string & param, const std::string & next = std::string())
 {
-    if ( param == "--log-file") {
-        if (!check_but_dont_parse) {
+    if ( param == "--log-file")
+    {
+        if (!check_but_dont_parse)
+        {
             log_set_target(log_filename_generator(next.empty() ? "unnamed" : next, "log"));
         }
 
@@ -688,8 +710,10 @@ inline void log_print_usage()
 inline void log_dump_cmdline_impl(int argc, char **argv)
 {
     std::stringstream buf;
-    for (int i = 0; i < argc; ++i) {
-        if (std::string(argv[i]).find(' ') != std::string::npos) {
+    for (int i = 0; i < argc; ++i)
+    {
+        if (std::string(argv[i]).find(' ') != std::string::npos)
+        {
             buf << " \"" << argv[i] <<"\"";
         } else {
             buf << " " << argv[i];
@@ -715,8 +739,10 @@ inline std::string log_var_to_string_impl(const std::vector<int> & var)
     std::stringstream buf;
     buf << "[ ";
     bool first = true;
-    for (auto e : var) {
-        if (first) {
+    for (auto e : var)
+    {
+        if (first)
+        {
             first = false;
         } else {
             buf << ", ";
@@ -735,7 +761,8 @@ inline std::string LOG_TOKENS_TOSTR_PRETTY(const C & ctx, const T & tokens)
     buf << "[ ";
 
     bool first = true;
-    for (const auto & token : tokens) {
+    for (const auto & token : tokens)
+    {
         if (!first) {
             buf << ", ";
         } else {
@@ -767,7 +794,8 @@ inline std::string LOG_BATCH_TOSTR_PRETTY(const C & ctx, const B & batch)
     buf << "[ ";
 
     bool first = true;
-    for (int i = 0; i < batch.n_tokens; ++i) {
+    for (int i = 0; i < batch.n_tokens; ++i)
+    {
         if (!first) {
             buf << ", ";
         } else {
