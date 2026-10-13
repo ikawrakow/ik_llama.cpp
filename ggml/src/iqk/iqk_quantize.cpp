@@ -2005,14 +2005,12 @@ inline int best_index_iq3nl(const int8_t * values, float x) {
     ix = iq3nl_index[ix];
     return ix < 8 ? ix : x - values[ix-8] < values[ix-7] - x ? ix-8 : ix-7;
 }
-#ifdef __AVX2__
 static const int8_t k_simple_index_iq3nl[128] = {
     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,
     1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,
     4,4,4,4,4,4,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,6,6,6,6,6,
     6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
 };
-#endif
 
 void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const float * quant_weights, float * all_scales) {
     constexpr int kBlockSize = 32;
@@ -3323,21 +3321,21 @@ inline int best_index_iq4nl(const int8_t * values, float x) {
     ix = iq4nl_index[ix];
     return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
+static const int8_t k_simple_index_iq4nl[256] = {
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,
+     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5,
+     5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+     8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,10,10,10,10,10,10,10,10,
+    10,10,10,10,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,12,12,12,12,12,12,12,12,12,12,12,12,
+    12,12,12,12,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,14,14,14,14,14,14,14,14,
+    14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,
+};
 #ifdef __AVX2__
 template <int block_size>
 inline void best_index_iq4k(float id, const int8_t * values, const float * f_values,
         const __m256 * vx, /*__m256i * vidx,*/ __m256 * vq) {
     static_assert(block_size == 32 || block_size == 16);
-    static const int8_t k_simple_index[256] = {
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,
-         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5,
-         5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-         8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,10,10,10,10,10,10,10,10,
-        10,10,10,10,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,12,12,12,12,12,12,12,12,12,12,12,12,
-        12,12,12,12,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,14,14,14,14,14,14,14,14,
-        14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,
-    };
 
     auto vid = _mm256_set1_ps(id);
     auto flip = _mm256_set1_ps(-0.0f);
@@ -3349,8 +3347,8 @@ inline void best_index_iq4k(float id, const int8_t * values, const float * f_val
         auto vidx_m = _mm256_sub_epi32(_mm256_cvttps_epi32(vxi_m), val0);
         vidx_p = _mm256_min_epi32(_mm256_max_epi32(vidx_p, _mm256_setzero_si256()), _mm256_set1_epi32(240));
         vidx_m = _mm256_min_epi32(_mm256_max_epi32(vidx_m, _mm256_setzero_si256()), _mm256_set1_epi32(240));
-        auto tab_p0 = _mm256_i32gather_epi32((const int32_t *)k_simple_index, vidx_p, 1);
-        auto tab_m0 = _mm256_i32gather_epi32((const int32_t *)k_simple_index, vidx_m, 1);
+        auto tab_p0 = _mm256_i32gather_epi32((const int32_t *)k_simple_index_iq4nl, vidx_p, 1);
+        auto tab_m0 = _mm256_i32gather_epi32((const int32_t *)k_simple_index_iq4nl, vidx_m, 1);
         tab_p0 = _mm256_and_si256(tab_p0, _mm256_set1_epi32(0xff));
         tab_m0 = _mm256_and_si256(tab_m0, _mm256_set1_epi32(0xff));
         auto tab_p1 = _mm256_add_epi32(tab_p0, _mm256_set1_epi32(1));
@@ -3746,7 +3744,6 @@ inline int best_index_iq5nl(const int8_t * values, float x) {
     ix = iq5nl_index[ix];
     return ix < 32 ? ix : x - values[ix-32] < values[ix-31] - x ? ix-32 : ix-31;
 }
-#ifdef __AVX2__
 static const int8_t k_simple_index_iq5nl[256] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2,
     2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6,
@@ -3757,7 +3754,6 @@ static const int8_t k_simple_index_iq5nl[256] = {
     25,25,26,26,26,26,26,26,26,26,26,27,27,27,27,27,27,27,27,27,27,28,28,28,28,28,28,28,28,28,28,29,
     29,29,29,29,29,29,29,29,29,29,29,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,
 };
-#endif
 
 void quantize_row_iq5_k_impl(const float * x, void * vy, int n_per_row, const float * quant_weights,
         [[maybe_unused]] const quantize_user_data * user_data) {
@@ -6443,7 +6439,7 @@ void quantize_row_iq4_ks_r4(const float * x, void * y, int64_t k) {
     quantize_iq4_ks_r4(x, y, 4, k/4, nullptr, nullptr);
 }
 
-static void repack_iq4_ks(int nrows, int n_per_row, const block_iq4_ks * x, block_iq4_ks_r4 * y, [[maybe_unused]] bool online) {
+void repack_iq4_ks(int nrows, int n_per_row, const block_iq4_ks * x, block_iq4_ks_r4 * y, [[maybe_unused]] bool online) {
     GGML_ASSERT(nrows%4 == 0);
     GGML_ASSERT(n_per_row%QK_K == 0);
     auto row_size = ggml_row_size(GGML_TYPE_IQ4_KS, n_per_row);
@@ -6545,7 +6541,7 @@ void quantize_row_iq4_ks_r16(const float * x, void * y, int64_t k) {
     quantize_iq4_ks_r16(x, y, 16, k/16, nullptr, nullptr);
 }
 
-static void repack_iq4_ks_r16(int nrows, int n_per_row, const block_iq4_ks * x, block_iq4_ks_r16 * y, [[maybe_unused]] bool online, int n_per_row_stored) {
+void repack_iq4_ks_r16(int nrows, int n_per_row, const block_iq4_ks * x, block_iq4_ks_r16 * y, [[maybe_unused]] bool online, int n_per_row_stored) {
     GGML_ASSERT(nrows%16 == 0);
     GGML_ASSERT(n_per_row%QK_K == 0);
     GGML_ASSERT(n_per_row_stored <= n_per_row);
@@ -7646,7 +7642,7 @@ void quantize_row_iq5_ks_r4(const float * x, void * y, int64_t k) {
     quantize_iq5_ks_r4(x, y, 4, k/4, nullptr, nullptr);
 }
 
-static void repack_iq5_ks(int nrows, int n_per_row, const block_iq5_ks * x, block_iq5_ks_r4 * y, [[maybe_unused]] bool online) {
+void repack_iq5_ks(int nrows, int n_per_row, const block_iq5_ks * x, block_iq5_ks_r4 * y, [[maybe_unused]] bool online) {
     GGML_ASSERT(nrows%4 == 0);
     GGML_ASSERT(n_per_row%QK_K == 0);
     auto row_size = ggml_row_size(GGML_TYPE_IQ5_KS, n_per_row);
@@ -11235,6 +11231,20 @@ int iqk_kt_codebook(int type, int bank, const int ** offsets, const int ** point
     };
     if (type == GGML_TYPE_IQ4_KT) return flatten(iq4kt_quantizer(bank == 1), flat[bank]);
     if (type == GGML_TYPE_IQ3_KT) return flatten(iq3kt_quantizer(), flat[2]);
+    return 0;
+}
+
+int iqk_ks_index(int type, const int8_t ** index) {
+    if (type == GGML_TYPE_IQ4_KS) { *index = iq4nl_index; return 241; }
+    if (type == GGML_TYPE_IQ3_KS) { *index = iq3nl_index; return 111; }
+    if (type == GGML_TYPE_IQ5_KS) { *index = iq5nl_index; return 247; }
+    return 0;
+}
+
+int iqk_ks_simple_index(int type, const int8_t ** index) {
+    if (type == GGML_TYPE_IQ4_KS) { *index = k_simple_index_iq4nl; return 256; }
+    if (type == GGML_TYPE_IQ3_KS) { *index = k_simple_index_iq3nl; return 128; }
+    if (type == GGML_TYPE_IQ5_KS) { *index = k_simple_index_iq5nl; return 256; }
     return 0;
 }
 
