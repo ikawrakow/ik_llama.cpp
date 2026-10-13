@@ -130,7 +130,8 @@ static void verify_failure(const char *grammar_bytes) {
     assert(result.rules.empty() && "should have failed");
 }
 
-int main() {
+int main()
+{
     verify_failure(R"""(
         root ::= "a"{,}"
     )""");

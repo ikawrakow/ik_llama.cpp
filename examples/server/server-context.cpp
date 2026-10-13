@@ -3561,7 +3561,8 @@ void server_context::context_shift_prompt(llama_context* ctx, server_slot& slot,
     slot.n_prompt_tokens = slot.prompt_tokens.size();
 }
 
-void server_context::release_slots() {
+void server_context::release_slots()
+{
     for (auto& slot : slots) {
         if (slot.command == SLOT_COMMAND_RELEASE) {
             slot.state = SLOT_STATE_IDLE;

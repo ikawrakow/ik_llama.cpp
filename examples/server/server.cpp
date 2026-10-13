@@ -98,7 +98,8 @@ static inline std::string stop_type_to_str(stop_type type) {
 }
 
 
-inline std::string get_model_name(std::string path) {
+inline std::string get_model_name(std::string path)
+{
     std::string filename = path.substr(path.find_last_of("/\\") + 1);
     return filename;
 };
