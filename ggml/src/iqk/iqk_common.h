@@ -543,8 +543,7 @@ static void mul_mat_iqX_k_q8_K_AVX512_dpbusd(int n, const void * vx, size_t bx, 
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            auto sum256 = _mm256_add_ps(_mm512_castps512_ps256(accd[iy]), _mm512_extractf32x8_ps(accd[iy], 1));
-            info.store(ix, iy, hsum_float_8(sum256));
+            info.store(ix, iy, _mm512_reduce_add_ps(accd[iy]));
             accd[iy] = _mm512_setzero_ps();
         }
 
