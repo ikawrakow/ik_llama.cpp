@@ -531,11 +531,12 @@ static void mul_mat_iqX_k_q8_K_AVX512_dpbusd(int n, const void * vx, size_t bx, 
                     p[k+0] = _mm512_dpbusd_epi32(_mm512_setzero_si512(), deq.bits.values[k+0], y1);
                     p[k+1] = _mm512_dpbusd_epi32(_mm512_setzero_si512(), deq.bits.values[k+1], y2);
                 }
+                auto bsums = dpbusd_permute_epi16(q8.load_bsums(iy, i));
                 auto d48 = _mm512_mul_ps(d4, _mm512_set1_ps(q8.scale(iy, i)));
                 auto p01 = _mm512_add_epi32(_mm512_unpacklo_epi32(p[0], p[1]), _mm512_unpackhi_epi32(p[0], p[1]));
                 auto p23 = _mm512_add_epi32(_mm512_unpacklo_epi32(p[2], p[3]), _mm512_unpackhi_epi32(p[2], p[3]));
                 auto sum = _mm512_add_epi32(_mm512_unpacklo_epi64(p01, p23), _mm512_unpackhi_epi64(p01, p23));
-                sum = _mm512_add_epi32(sum, _mm512_madd_epi16(mins, dpbusd_permute_epi16(q8.load_bsums(iy, i))));
+                sum = _mm512_dpwssd_epi32(sum, mins, bsums);
                 accd[iy] = _mm512_fmadd_ps(d48, _mm512_cvtepi32_ps(sum), accd[iy]);
             }
 
