@@ -3770,7 +3770,8 @@ void server_context::add_sampled_tokens() {
 static bool verify_restored_checkpoint(
     const server_prompt_checkpoint & ckpt,
     server_slot & slot,
-    const char * label) {
+    const char * label)
+{
     const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
     if (check_pos != ckpt.pos_max) {
         SLT_ERR(slot, "%srestore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted\n",

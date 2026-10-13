@@ -639,7 +639,8 @@ json oaicompat_chat_params_parse(const json& body) {
 json oaicompat_chat_params_parse(
     json& body, /* openai api json semantics */
     const server_chat_params& opt,
-    std::vector<raw_buffer>& out_files) {
+    std::vector<raw_buffer>& out_files)
+{
     json llama_params;
 
     llama_params["__oaicompat"] = true;
