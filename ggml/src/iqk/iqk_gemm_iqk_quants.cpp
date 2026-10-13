@@ -1331,7 +1331,7 @@ struct DequantizerIQ5KS final : public BaseDequantizer<block_iq5_ks, true> {
         auto scales128 = _mm_cvtepu8_epi16(_mm_loadl_epi64((const __m128i *)x[i].scales));
         auto shifts = _mm_and_si128(_mm_cmpeq_epi16(_mm_and_si128(scales128, m1), m1), m2);
         scales128 = _mm_add_epi16(_mm_and_si128(scales128, mask), m127);
-        auto scales_s = _mm_mullo_epi16(scales128, _mm_add_epi16(m128, shifts));
+        auto scales_s = _mm_mullo_epi16(scales128, shifts);
         s8k.accum_mins(scales_s, q8, i, d, accd);
         return MM256_SET1_M128I(scales128);
     }
@@ -1346,12 +1346,8 @@ struct DequantizerIQ5KS final : public BaseDequantizer<block_iq5_ks, true> {
         }
     }
     static void load_values(__m256i * values) {
-        static const uint8_t kvalues_iq5nl[32] = {
-            2,  14,  25,  36,  45,  54,  63,  71,  78,  85,  92,  98, 104, 110, 116, 122, 127,
-            133, 139, 145, 151, 157, 164, 171, 179, 187, 196, 205, 215, 225, 237, 249,
-        };
-        auto values128_1 = _mm_loadu_si128((const __m128i *)kvalues_iq5nl + 0);
-        auto values128_2 = _mm_loadu_si128((const __m128i *)kvalues_iq5nl + 1);
+        auto values128_1 = _mm_loadu_si128((const __m128i *)iq5nl_values+ 0);
+        auto values128_2 = _mm_loadu_si128((const __m128i *)iq5nl_values+ 1);
         values[0] = MM256_SET1_M128I(values128_1);
         values[1] = MM256_SET1_M128I(values128_2);
     }
@@ -1568,7 +1564,7 @@ static void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
                 set_scales_8(all_scales, j, scales);
 
                 if constexpr (std::is_same_v<Dequantizer, DequantizerIQ4KS> || std::is_same_v<Dequantizer, DequantizerIQ3KS> ||
-                              std::is_same_v<Dequantizer, DequantizerIQ4KSS>) {
+                              std::is_same_v<Dequantizer, DequantizerIQ4KSS>|| std::is_same_v<Dequantizer, DequantizerIQ5KS>) {
                     multiply_add_avx2(deq.bits, scales, j, i, q8, sumi);
                 } else {
                     multiply_add(deq.bits, scales, j, i, q8, sumi);
