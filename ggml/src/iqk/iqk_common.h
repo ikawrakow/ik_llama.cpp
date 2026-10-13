@@ -491,6 +491,65 @@ struct Q4Bits {
     const BlockPermuter perm;
 };
 
+inline __m512i dpbusd_permd() {
+    return _mm512_setr_epi32(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+}
+inline __m512 dpbusd_scales(float d, __m256i scales16) {
+    auto vd = _mm512_mul_ps(_mm512_set1_ps(d), _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(scales16)));
+    return _mm512_permutex2var_ps(vd, dpbusd_permd(), vd);
+}
+inline __m512i dpbusd_permute_epi16(__m256i v) {
+    return _mm512_maskz_permutexvar_epi16(0x55555555, dpbusd_permd(), _mm512_castsi256_si512(v));
+}
+
+template <typename Dequantizer, int nrc_y>
+static void mul_mat_iqX_k_q8_K_AVX512_dpbusd(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+
+    Q8<nrc_y> q8(info);
+
+    Dequantizer deq(vx, bx);
+
+    __m512  accd[nrc_y] = {};
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+
+        deq.new_row(ix);
+
+        for (int i = 0; i < nb; ++i) {
+
+            __m512i mins;
+            auto d4 = deq.new_block(i, mins);
+
+            __m512i p[4];
+#pragma GCC unroll 8
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                for (int k = 0; k < 4; k += 2) {
+                    auto y1 = q8.load_quants64(iy, i, k+0);
+                    auto y2 = q8.load_quants64(iy, i, k+1);
+                    p[k+0] = _mm512_dpbusd_epi32(_mm512_setzero_si512(), deq.bits.values[k+0], y1);
+                    p[k+1] = _mm512_dpbusd_epi32(_mm512_setzero_si512(), deq.bits.values[k+1], y2);
+                }
+                auto bsums = dpbusd_permute_epi16(q8.load_bsums(iy, i));
+                auto d48 = _mm512_mul_ps(d4, _mm512_set1_ps(q8.scale(iy, i)));
+                auto p01 = _mm512_add_epi32(_mm512_unpacklo_epi32(p[0], p[1]), _mm512_unpackhi_epi32(p[0], p[1]));
+                auto p23 = _mm512_add_epi32(_mm512_unpacklo_epi32(p[2], p[3]), _mm512_unpackhi_epi32(p[2], p[3]));
+                auto sum = _mm512_add_epi32(_mm512_unpacklo_epi64(p01, p23), _mm512_unpackhi_epi64(p01, p23));
+                sum = _mm512_dpwssd_epi32(sum, mins, bsums);
+                accd[iy] = _mm512_fmadd_ps(d48, _mm512_cvtepi32_ps(sum), accd[iy]);
+            }
+
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, _mm512_reduce_add_ps(accd[iy]));
+            accd[iy] = _mm512_setzero_ps();
+        }
+
+    }
+}
+
 struct Q2Bits {
     inline void prepare(const uint8_t * q2) {
 
