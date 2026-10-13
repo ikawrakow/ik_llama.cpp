@@ -2499,7 +2499,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         node_on_host = true;
                     }
                 }
-                if (node_on_host) {
+                // ids computed inside this split are stale before it runs
+                bool ids_final = false;
+                for (int j = 0; node_ids && j < splits[i].n_inputs; ++j) {
+                    if (node_ids == tensor_copy(splits[i].inputs[j], splits[i].backend_id, sched->cur_copy)) {
+                        ids_final = true;
+                        break;
+                    }
+                }
+                if (node_on_host && ids_final) {
                     info.nodes.push_back(node);
                 }
             }
