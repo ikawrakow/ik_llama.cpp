@@ -2880,6 +2880,97 @@ static void mul_mat_iq3ks_r16_q8_0_x4(int n, const void * vx, size_t bx, const D
 #endif
 }
 
+template <int nrc_y>
+static void mul_mat_q2_0_q8_2_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    Q8<nrc_y, block_q8_2_x4> q8(info);
+    const int nb = n/64;
+
+    const __m256i mask   = _mm256_set1_epi8(0x3);
+    const __m256i m1     = _mm256_set1_epi16(1);
+
+    __m256i qx[4];
+
+    float d8[8*nrc_y];
+    //float extra[nrc_y];
+
+    __m256 acc[nrc_y] = {};
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        auto q2 = (const block_q2_0 *)((const char *)vx + ix*bx);
+        for (int ib = 0; ib < nb/2; ++ib) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib].d));
+            }
+            float dx1 = GGML_FP16_TO_FP32(q2[2*ib+0].d);
+            float dx2 = GGML_FP16_TO_FP32(q2[2*ib+1].d);
+            auto aux  = _mm_setr_ps(dx1, dx1, dx2, dx2);
+            auto vd   = _mm256_set_m128(aux, aux);
+            auto bits1 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+0].qs+0)));
+            auto bits2 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+0].qs+8)));
+            qx[0] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits1, _mm256_slli_epi32(bits1, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits1, 12), _mm256_slli_epi32(bits1, 18))), mask);
+            qx[1] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits2, _mm256_slli_epi32(bits2, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits2, 12), _mm256_slli_epi32(bits2, 18))), mask);
+            bits1 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+1].qs+0)));
+            bits2 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+1].qs+8)));
+            qx[2] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits1, _mm256_slli_epi32(bits1, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits1, 12), _mm256_slli_epi32(bits1, 18))), mask);
+            qx[3] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits2, _mm256_slli_epi32(bits2, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits2, 12), _mm256_slli_epi32(bits2, 18))), mask);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto yd = _mm_loadu_ps(d8 + 8*iy);
+                auto ys = _mm_loadu_ps(d8 + 8*iy + 4);
+                auto d  = _mm256_mul_ps(vd, _mm256_set_m128(yd, yd));
+                auto s  = _mm256_mul_ps(vd, _mm256_set_m128(ys, ys));
+                auto p0 = _mm256_maddubs_epi16(qx[0], _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + 0));
+                auto p1 = _mm256_maddubs_epi16(qx[1], _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + 1));
+                auto p2 = _mm256_maddubs_epi16(qx[2], _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + 2));
+                auto p3 = _mm256_maddubs_epi16(qx[3], _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + 3));
+                // 0,0, 1,1, 0,0, 1,1, 0,0, 1,1, 0,0, 1,1
+                auto p01 = _mm256_add_epi16(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1));
+                // 2,2, 3,3, 2,2, 3,3, 2,2, 3,3, 2,2, 3,3
+                auto p23 = _mm256_add_epi16(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3));
+                // 0,0, 1,1, 2,2, 3,3, 0,0, 1,1, 2,2, 3,3
+                auto pal = _mm256_add_epi16(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23));
+                // 0, 1, 2, 3, 0, 1, 2, 3
+                auto sum = _mm256_madd_epi16(m1, pal);
+                acc[iy]  = _mm256_fmadd_ps(d, _mm256_cvtepi32_ps(sum), acc[iy]);
+                acc[iy]  = _mm256_fmadd_ps(s, _mm256_set1_ps(-0.5f), acc[iy]);
+            }
+        }
+        for (int ib = 2*(nb/2); ib < nb; ++ib) {
+            float dx = GGML_FP16_TO_FP32(q2[ib].d);
+            auto bits1 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+0].qs+0)));
+            auto bits2 = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(q2[2*ib+0].qs+8)));
+            qx[0] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits1, _mm256_slli_epi32(bits1, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits1, 12), _mm256_slli_epi32(bits1, 18))), mask);
+            qx[1] = _mm256_and_si256(_mm256_or_si256(_mm256_or_si256(bits2, _mm256_slli_epi32(bits2, 6)),
+                                     _mm256_or_si256(_mm256_slli_epi32(bits2, 12), _mm256_slli_epi32(bits2, 18))), mask);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto yb = (const block_q8_2 *)(q8.y[iy] + nb/2);
+                auto p0 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(qx[0], _mm256_loadu_si256((const __m256i *)yb[2*ib+0].qs)));
+                auto p1 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(qx[1], _mm256_loadu_si256((const __m256i *)yb[2*ib+1].qs)));
+                auto d1 = dx * GGML_BF16_TO_FP32(ggml_bf16_t{yb[2*ib+0].d});
+                auto d2 = dx * GGML_BF16_TO_FP32(ggml_bf16_t{yb[2*ib+1].d});
+                auto dxd1 = _mm256_set1_ps(d1);
+                auto dxd2 = _mm256_set1_ps(d2);
+                acc[iy] = _mm256_fmadd_ps(dxd1, _mm256_cvtepi32_ps(p0), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(dxd2, _mm256_cvtepi32_ps(p1), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(dxd1, _mm256_set1_ps(-0.125f * *(const int16_t *)&yb[2*ib+0].s), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(dxd2, _mm256_set1_ps(-0.125f * *(const int16_t *)&yb[2*ib+1].s), acc[iy]);
+                //extra[iy] = d1 * *(const int16_t *)&yb[2*ib+0].s + d2 * *(const int16_t *)&yb[2*ib+1].s;
+            }
+
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            float sum = hsum_float_8(acc[iy]);
+            //if (2*(nb/2) < nb) sum -= extra[iy];
+            info.store(ix, iy, sum);
+            acc[iy] = _mm256_setzero_ps();
+        }
+    }
+}
+
 template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
     if constexpr (std::is_same_v<Dequantizer, Q4_0_Unpacker> || std::is_same_v<Dequantizer, Q5_0_Unpacker>) {
         IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_0_q8_0_T, Dequantizer, funcs)
@@ -2934,6 +3025,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
     func16 = nullptr;
 
     switch (typeA) {
+        case GGML_TYPE_Q2_0:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q2_0_q8_2_x4, kernels);
+            break;
         case GGML_TYPE_Q4_0:
             set_functions<Q4_0_1_Unpacker>(kernels);
             break;
@@ -4311,6 +4405,103 @@ void iqk_convert_qX_1_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int 
     }
 }
 
+template <int nrc_y>
+static void mul_mat_q2_0_q8_0_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+    const int nb = n/64;
+
+    const int8_t k_shifts[16] = {0, -2, -4, -6, 0, -2, -4, -6, 0, -2, -4, -6, 0, -2, -4, -6};
+    const uint8_t k_shuff[64] = {0,0,0,0, 1,1,1,1, 2,2,2,2, 3,3,3,3, 4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7,
+                                 8,8,8,8, 9,9,9,9, 10,10,10,10, 11,11,11,11, 12,12,12,12, 13,13,13,13, 14,14,14,14, 15,15,15,15};
+    const auto mask   = vdupq_n_u8(0x3);
+    const auto one    = vdupq_n_s8(1);
+    const auto shifts = vld1q_s8(k_shifts);
+    const auto shuff  = vld1q_u8_x4(k_shuff);
+
+    int8x16_t qx[8];
+
+    float32x4_t acc[nrc_y] = {};
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        auto q2 = (const block_q2_0 *)((const char *)vx + ix*bx);
+        for (int ib = 0; ib < nb/2; ++ib) {
+            float dx1 = GGML_FP16_TO_FP32(q2[2*ib+0].d);
+            float dx2 = GGML_FP16_TO_FP32(q2[2*ib+1].d);
+            float32x4_t dx = {dx1, dx1, dx2, dx2};
+
+            auto bits = vld1q_u8(q2[2*ib+0].qs);
+            qx[0] = vqtbl1q_u8(bits, shuff.val[0]);
+            qx[1] = vqtbl1q_u8(bits, shuff.val[1]);
+            qx[2] = vqtbl1q_u8(bits, shuff.val[2]);
+            qx[3] = vqtbl1q_u8(bits, shuff.val[3]);
+
+            bits = vld1q_u8(q2[2*ib+1].qs);
+            qx[4] = vqtbl1q_u8(bits, shuff.val[0]);
+            qx[5] = vqtbl1q_u8(bits, shuff.val[1]);
+            qx[6] = vqtbl1q_u8(bits, shuff.val[2]);
+            qx[7] = vqtbl1q_u8(bits, shuff.val[3]);
+
+            for (int k = 0; k < 8; ++k) qx[k] = vsubq_s8(vandq_u8(vshlq_u8(qx[k], shifts), mask), one);
+
+            //auto bits1 = vmovl_u8(vld1_u8(q2[2*ib+0].qs+0));
+            //auto bits2 = vmovl_u8(vld1_u8(q2[2*ib+0].qs+8));
+            //qx[0] = vmovl_u16(vget_low_u16(bits1));
+            //qx[1] = vmovl_u16(vget_high_u16(bits1));
+            //qx[2] = vmovl_u16(vget_low_u16(bits2));
+            //qx[3] = vmovl_u16(vget_high_u16(bits2));
+
+            //bits1 = vmovl_u8(vld1_u8(q2[2*ib+1].qs+0));
+            //bits2 = vmovl_u8(vld1_u8(q2[2*ib+1].qs+8));
+            //qx[4] = vmovl_u16(vget_low_u16(bits1));
+            //qx[5] = vmovl_u16(vget_high_u16(bits1));
+            //qx[6] = vmovl_u16(vget_low_u16(bits2));
+            //qx[7] = vmovl_u16(vget_high_u16(bits2));
+            //for (int k = 0; k < 8; ++k) qx[k] = vsubq_s8(vandq_u8(vshlq_u8(qx[k], shifts), mask), one);
+
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                //auto sum = sum_4_blocks(qx, q8.y[iy][ib].qs);
+                auto y0 = vld1q_s8_x2(q8.y[iy][ib].qs +  0);
+                auto p0 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[0], y0.val[0]), qx[1], y0.val[1]);
+                auto y1 = vld1q_s8_x2(q8.y[iy][ib].qs + 32);
+                auto p1 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[2], y1.val[0]), qx[3], y1.val[1]);
+                auto y2 = vld1q_s8_x2(q8.y[iy][ib].qs + 64);
+                auto p2 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[4], y2.val[0]), qx[5], y2.val[1]);
+                auto y3 = vld1q_s8_x2(q8.y[iy][ib].qs + 96);
+                auto p3 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[6], y3.val[0]), qx[7], y3.val[1]);
+                auto p01 = vpaddq_s32(p0, p1); // 0,0, 1,1
+                auto p23 = vpaddq_s32(p2, p3); // 2,2, 3,3
+                auto sum = vpaddq_s32(p01, p23); // 0,1,2,3
+                acc[iy]  = vfmaq_f32(acc[iy], vmulq_f32(dx, vcvt_f32_f16(vld1_f16((const float16_t *)q8.y[iy][ib].d))), vcvtq_f32_s32(sum));
+            }
+        }
+        for (int ib = 2*(nb/2); ib < nb; ++ib) {
+            float dx = GGML_FP16_TO_FP32(q2[ib].d);
+            auto bits = vld1q_u8(q2[ib].qs);
+            qx[0] = vqtbl1q_u8(bits, shuff.val[0]);
+            qx[1] = vqtbl1q_u8(bits, shuff.val[1]);
+            qx[2] = vqtbl1q_u8(bits, shuff.val[2]);
+            qx[3] = vqtbl1q_u8(bits, shuff.val[3]);
+            for (int k = 0; k < 4; ++k) qx[k] = vsubq_s8(vandq_u8(vshlq_u8(qx[k], shifts), mask), one);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto yb = (const block_q8_0 *)(q8.y[iy] + nb/2);
+                auto y0 = vld1q_s8_x2(yb[2*ib+0].qs);
+                auto p0 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[0], y0.val[0]), qx[1], y0.val[1]);
+                auto y1 = vld1q_s8_x2(yb[2*ib+1].qs);
+                auto p1 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[2], y1.val[0]), qx[3], y1.val[1]);
+                auto d1 = dx*GGML_FP16_TO_FP32(yb[2*ib+0].d);
+                auto d2 = dx*GGML_FP16_TO_FP32(yb[2*ib+1].d);
+                auto p01 = vpaddq_s32(p0, p1); // 0, 0, 1, 1
+                acc[iy]  = vfmaq_f32(acc[iy], float32x4_t{d1, d1, d2, d2}, vcvtq_f32_s32(p01));
+            }
+
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, vaddvq_f32(acc[iy]));
+            acc[iy] = vdupq_n_f32(0.0f);
+        }
+    }
+}
+
 }
 
 bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
@@ -4339,6 +4530,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
     func16 = nullptr;
 
     switch (typeA) {
+        case GGML_TYPE_Q2_0:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q2_0_q8_0_x4, kernels);
+            break;
         case GGML_TYPE_Q4_0:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_0_q8_0, DequantizerQ40, kernels);
             break;
