@@ -412,8 +412,8 @@ const SETTING_SECTIONS = (
           const importDB = async (e: React.ChangeEvent<HTMLInputElement>) => {
             console.log(e);
             if (!e.target.files) {
-              toast.error('Target.files cant be null');
-              throw new Error('e.target.files cant be null');
+              toast.error('Target.files cannot be null');
+              throw new Error('e.target.files cannot be null');
             }
             if (e.target.files.length != 1)
             {

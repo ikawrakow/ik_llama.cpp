@@ -403,9 +403,7 @@ std::vector<llama_sampler_type> llama_sampling_types_from_names(const std::vecto
         if (sampler_item != sampler_canonical_name_map.end())
         {
             sampler_types.push_back(sampler_item->second);
-        }
-        else
-        {
+        } else {
             if (allow_alt_names)
             {
                 sampler_item = sampler_alt_name_map.find(name);

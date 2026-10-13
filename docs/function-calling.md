@@ -365,7 +365,7 @@ curl http://localhost:8080/v1/chat/completions -d '{
 curl http://localhost:8080/v1/chat/completions -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
-        {"role": "system", "content": "You are a chatbot that uses tools/functions. Dont overthink things."},
+        {"role": "system", "content": "You are a chatbot that uses tools/functions. Do not overthink things."},
         {"role": "user", "content": "What is the weather in Istanbul?"}
     ],
     "tools": [{

@@ -228,7 +228,7 @@ struct llama_hparams {
     std::array<uint64_t, LLAMA_MAX_PLE_HEADS> ple_head_offsets      = {};
     std::array<uint64_t, LLAMA_MAX_PLE_HEADS> ple_head_vocab_sizes  = {};
 
-	// qwen3vl deepstack
+    // qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 
     // gemma4 per-layer embedding

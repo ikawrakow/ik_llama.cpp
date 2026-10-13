@@ -55,7 +55,7 @@ cmake -DCMAKE_BUILD_TYPE=Debug -DLLAMA_CUDA=1 -DLLAMA_FATAL_WARNINGS=ON ..
 make -j
 ```
 
-#### Step 3: Find all tests available that matches REGEX
+#### Step 3: Find all tests available that match REGEX
 
 The output of this command will give you the command & arguments needed to run GDB.
 

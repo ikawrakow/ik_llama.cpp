@@ -33,7 +33,7 @@ general:
          --verbosity N            set specific verbosity level (default: 0)
          --verbose-prompt         print a verbose prompt before generation (default: false)
          --no-display-prompt      don't print prompt at generation (default: false)
-  -co,   --color                  colorise output to distinguish prompt and user input from generations (default: false)
+  -co,   --color                  colorize output to distinguish prompt and user input from generations (default: false)
   -s,    --seed SEED              RNG seed (default: -1, use random seed for < 0)
   -t,    --threads N              number of threads to use during generation (default: 8)
   -tb,   --threads-batch N        number of threads to use during batch and prompt processing (default: same as --threads)

@@ -1855,7 +1855,7 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
     const int trunk_flags = mtp_only
         ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
 
-    // The wide residual is normalised and collapsed by a hyper-connection mix rather
+    // The wide residual is normalized and collapsed by a hyper-connection mix rather
     // than by an output_norm, so this architecture carries none.
     const int out_mixer_flags = mtp_only ? llama_model_loader::TENSOR_NOT_REQUIRED : 0;
     model.hc_head_norm = create_tensor(ctx_output, tn(LLM_TENSOR_HC_HEAD_NORM, "weight"), {hc_dim}, out_mixer_flags);
@@ -2370,16 +2370,16 @@ bool create_tensors_helper::create_mimo2_tensors(const LLM_TN & tn) {
             layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i), { n_embd, n_embd_k_gqa }, flags);
             layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_v_gqa }, flags);
         }
-	else {
+        else {
             if (!is_mtp_layer) {
                 unmerge_qkv(tn, i, 0);
             }
-	    else {
+            else {
                 layer.wqkv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, (n_embd_head_k * n_head) + n_embd_k_gqa + n_embd_v_gqa}, flags);
             }
         }
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_v * n_head, n_embd }, flags);
-	
+
 
         auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
         layer.ffn_norm = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, flags);
