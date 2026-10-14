@@ -2421,9 +2421,7 @@ std::tuple<float, float, bool> find_best_scale_avx2(int nval, const int8_t * val
     float id = 1/d;
     bool is_shifted = false;
     float best = 0;
-    if (!evaluate_block_avx2<block_size, nmap>(id, values, f_values, k_simple_index, vx, vw, d, best)) {
-        GGML_ABORT("Fatal error");
-    }
+    (void)evaluate_block_avx2<block_size, nmap>(id, values, f_values, k_simple_index, vx, vw, d, best);
     for (int itry = -ntry; itry <= ntry; ++itry) {
         id = (step*itry + values[0])/max;
         if (evaluate_block_avx2<block_size, nmap>(id, values, f_values, k_simple_index, vx, vw, d, best)) {
@@ -3456,9 +3454,7 @@ static void quantize_row_iq4_k_impl_bs16(const float * x,
         __m256 vx[block_size/8], vw[block_size/8];
         for (int j = 0; j < block_size/8; ++j) vx[j] = _mm256_loadu_ps(xb + 8*j);
         for (int j = 0; j < block_size/8; ++j) vw[j] = _mm256_loadu_ps(weight + 8*j);
-        if (!evaluate_block_iq4k<block_size>(id, values, f_values, vx, vw, d, best)) {
-            GGML_ABORT("Fatal error");
-        }
+        (void)evaluate_block_iq4k<block_size>(id, values, f_values, vx, vw, d, best);
 #else
         float sumqx_p = 0, sumq2_p = 0;
         float sumqx_m = 0, sumq2_m = 0;
@@ -4998,9 +4994,7 @@ static void quantize_row_iq4_k_impl_bs32(int n_per_row, const float * x, char * 
             __m256 vx[block_size/8], vw[block_size/8];
             for (int j = 0; j < block_size/8; ++j) vx[j] = _mm256_loadu_ps(xb + 8*j);
             for (int j = 0; j < block_size/8; ++j) vw[j] = _mm256_loadu_ps(weight + 8*j);
-            if (!evaluate_block_iq4k<block_size>(id, values, f_values, vx, vw, d, best)) {
-                GGML_ABORT("Fatal error");
-            }
+            (void)evaluate_block_iq4k<block_size>(id, values, f_values, vx, vw, d, best);
 #else
             float sumqx_p = 0, sumq2_p = 0;
             float sumqx_m = 0, sumq2_m = 0;
