@@ -8,6 +8,7 @@
 #include "common.h"
 #include "llama.h"
 
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -159,7 +160,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device] [-ts/--tensor-split] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -168,7 +169,9 @@ static void usage(const char * executable) {
     printf("  --ignore-imatrix-rules: ignore importance matrix rules when quantizing\n");
     printf("  --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
-    printf("  --cuda-quantize: quantize IQ4_KT and IQ3_KT tensors on the first CUDA device; other types use the CPU\n");
+    printf("  --cuda-quantize: quantize IQ4_KT/IQ3_KT + Q8_0/Q6_0/Q5_0/Q4_0/Q5_1/Q4_1/IQ4_NL/IQ4_XS tensors on a CUDA device; other types use the CPU (symmetric Q4_0 --symmetric-q40 always uses the CPU)\n");
+    printf("  -dev DEVICES, --device DEVICES: CUDA device(s) for --cuda-quantize (default CUDA0; 2+ devices = row-split, e.g. -dev CUDA0,CUDA1)\n");
+    printf("  -ts SPLIT, --tensor-split SPLIT: row-split shares for 2+ GPUs (e.g. -ts 3,3,2; equal when absent; requires -dev/--device with 2+ CUDA devices)\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");
@@ -351,6 +354,42 @@ static bool parse_custom_quants(const std::string& arg, std::vector<CustomQ>& cu
     return true;
 }
 
+// Parse a common-style CUDA list (CUDA0,CUDA1, bare index ok) into ordinals.
+static bool parse_cuda_device_list(const std::string & arg, std::vector<int> & devs) {
+    std::vector<int> out;
+    for (const auto & item : string_split<std::string>(arg, ',')) {
+        size_t beg = item.find_first_not_of(" \t");
+        size_t end = item.find_last_not_of(" \t");
+        if (beg == std::string::npos) {
+            return false;
+        }
+        std::string first = item.substr(beg, end - beg + 1);
+        std::string digits = first;
+        if (first.size() > 4 && (first.compare(0, 4, "CUDA") == 0 || first.compare(0, 4, "cuda") == 0)) {
+            digits = first.substr(4);
+        }
+        if (digits.empty()) {
+            return false;
+        }
+        for (char c : digits) {
+            if (!isdigit((unsigned char) c)) {
+                return false;
+            }
+        }
+        try {
+            out.push_back(std::stoi(digits));
+        }
+        catch (const std::exception &) {
+            return false;
+        }
+    }
+    if (out.empty()) {
+        return false;
+    }
+    devs = std::move(out);
+    return true;
+}
+
 static bool parse_fudge_factors(const std::string & arg, std::unordered_map<ggml_type, float> & factors) {
     for (const auto & item : string_split<std::string>(arg, ',')) {
         auto pos = item.find('=');
@@ -398,7 +437,11 @@ int main(int argc, char ** argv) {
 
     bool hide_imatrix = false;
 
-    for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
+    std::vector<int> cuda_devs;
+    std::vector<float> cuda_ts;
+    bool have_cuda_ts = false;
+
+    for (; arg_idx < argc && (strncmp(argv[arg_idx], "--", 2) == 0 || strcmp(argv[arg_idx], "-dev") == 0 || strcmp(argv[arg_idx], "-ts") == 0); arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
             params.quantize_output_tensor = false;
         } else if (strcmp(argv[arg_idx], "--ignore-imatrix-rules") == 0) {
@@ -419,6 +462,42 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--cuda-quantize") == 0) {
             params.cuda_quantize = true;
+        } else if (strcmp(argv[arg_idx], "--device") == 0 || strcmp(argv[arg_idx], "-dev") == 0) {
+            if (arg_idx < argc-1) {
+                std::vector<int> devs;
+                if (!parse_cuda_device_list(argv[++arg_idx], devs)) {
+                    fprintf(stderr, "%s: invalid CUDA device '%s' (expected CUDA<N> list, e.g. CUDA0,CUDA1, or bare index)\n", __func__, argv[arg_idx]);
+                    return 1;
+                }
+                cuda_devs = std::move(devs);
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--tensor-split") == 0 || strcmp(argv[arg_idx], "-ts") == 0) {
+            if (arg_idx < argc-1) {
+                std::vector<float> ts;
+                for (const auto & item : string_split<std::string>(argv[++arg_idx], ',')) {
+                    try {
+                        const float v = std::stof(item);
+                        if (!std::isfinite(v) || v <= 0.0f) {
+                            throw std::runtime_error("non-positive");
+                        }
+                        ts.push_back(v);
+                    }
+                    catch (const std::exception &) {
+                        fprintf(stderr, "%s: invalid tensor-split entry '%s' in '%s' (expected positive numbers, e.g. -ts 3,3,2)\n", __func__, item.c_str(), argv[arg_idx]);
+                        return 1;
+                    }
+                }
+                if (ts.empty()) {
+                    fprintf(stderr, "%s: empty tensor-split list '%s'\n", __func__, argv[arg_idx]);
+                    return 1;
+                }
+                cuda_ts = std::move(ts);
+                have_cuda_ts = true;
+            } else {
+                usage(argv[0]);
+            }
         } else if (strcmp(argv[arg_idx], "--symmetric-q40") == 0) {
             user_data.symmetric_q4_0 = true;
         } else if (strcmp(argv[arg_idx], "--slow-iq2ks") == 0) {
@@ -552,6 +631,34 @@ int main(int argc, char ** argv) {
             params.partial_requant = true;
         } else {
             usage(argv[0]);
+        }
+    }
+
+    // 1 device = mono, otherwise N-way shares (equal when -ts is absent).
+    if (!cuda_devs.empty() || have_cuda_ts) {
+        if (cuda_devs.empty()) {
+            fprintf(stderr, "%s: -ts/--tensor-split needs -dev/--device with at least 2 CUDA devices\n", __func__);
+            return 1;
+        }
+        if (have_cuda_ts && cuda_ts.size() != cuda_devs.size()) {
+            fprintf(stderr, "%s: tensor-split entries (%zu) must match device count (%zu)\n", __func__, cuda_ts.size(), cuda_devs.size());
+            return 1;
+        }
+        if (cuda_devs.size() > 16) {
+            fprintf(stderr, "%s: at most 16 CUDA devices supported, got %zu\n", __func__, cuda_devs.size());
+            return 1;
+        }
+        params.cuda_quantize_device = cuda_devs[0];
+        if (cuda_devs.size() > 1) {
+            params.cuda_quantize_n_devices = static_cast<int>(cuda_devs.size());
+            float total = 0.0f;
+            for (size_t i = 0; i < cuda_devs.size(); ++i) {
+                total += have_cuda_ts ? cuda_ts[i] : 1.0f;
+            }
+            for (size_t i = 0; i < cuda_devs.size(); ++i) {
+                params.cuda_quantize_devices[i] = cuda_devs[i];
+                params.cuda_quantize_split[i] = (have_cuda_ts ? cuda_ts[i] : 1.0f)/total;
+            }
         }
     }
 
