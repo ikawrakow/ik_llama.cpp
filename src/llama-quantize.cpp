@@ -999,10 +999,10 @@ static llama_ftype repacked_ftype(llama_ftype ftype) {
 }
 
 #ifdef GGML_USE_CUDA
-// Row-split shard: mono kernels, per-shard CPU fallback.
+// Row-split shard: mono kernels, threaded CPU fallback on miss.
 static size_t quantize_cuda_shard_rows(ggml_type new_type, const float * f32_data, char * new_data,
         const float * imatrix, int device, int64_t nrows, int64_t n_per_row, int64_t nslice,
-        int64_t r0, int64_t nr, size_t row_size, const llama_model_quantize_params * params) {
+        int64_t r0, int64_t nr, size_t row_size, int nthread, const llama_model_quantize_params * params) {
     size_t bytes = 0;
     for (int64_t s = 0; s < nslice; ++s) {
         const float * src_s = f32_data + (s*nrows + r0)*n_per_row;
@@ -1010,7 +1010,14 @@ static size_t quantize_cuda_shard_rows(ggml_type new_type, const float * f32_dat
         const float * im_s  = imatrix ? imatrix + s*n_per_row : nullptr;
         size_t nb = ggml_cuda_quantize(device, new_type, src_s, dst_s, nr, n_per_row, 1, im_s);
         if (nb != (size_t)nr*row_size) {
-            nb = ggml_quantize_chunk(new_type, src_s, dst_s, 0, nr, n_per_row, im_s, params->user_data);
+            // Same chunk floor as do_quantize below.
+            static const int64_t min_chunk_size = 32 * 512;
+            const int64_t chunk_size = (n_per_row >= min_chunk_size
+                                     ? n_per_row : n_per_row * ((min_chunk_size + n_per_row - 1)/n_per_row))
+                                     * interleaved_properties(new_type).second;
+            std::vector<std::thread> fallback_workers;
+            nb = llama_tensor_quantize_internal(new_type, src_s, dst_s, chunk_size,
+                    nr, n_per_row, im_s, params->user_data, fallback_workers, nthread);
         }
         bytes += nb;
     }
@@ -1059,7 +1066,7 @@ static void split_rows_by_weight(int64_t nrows, const float * weights, int n_dev
 // Row-split over n_dev GPUs, one thread per shard.
 static size_t do_quantize_cuda_quantize_split(const ggml_tensor * tensor, ggml_type new_type,
         const float * f32_data, char * new_data, const float * imatrix,
-        const int * devices, const float * weights, int n_dev,
+        const int * devices, const float * weights, int n_dev, int nthread,
         const llama_model_quantize_params * params) {
     if (n_dev <= 0 || n_dev > 16) {
         return 0;
@@ -1075,6 +1082,8 @@ static size_t do_quantize_cuda_quantize_split(const ggml_tensor * tensor, ggml_t
     for (int i = 0; i < n_dev; ++i) {
         offs[i + 1] = offs[i] + rows[i];
     }
+    // Fallback threads share the budget across shards.
+    const int shard_nthread = nthread > 1 ? std::max(1, nthread / n_dev) : 1;
 
     std::vector<size_t>             bytes(n_dev, 0);
     std::vector<std::exception_ptr> eptrs(n_dev);
@@ -1082,7 +1091,7 @@ static size_t do_quantize_cuda_quantize_split(const ggml_tensor * tensor, ggml_t
     auto run_shard = [&](int idx) {
         try {
             bytes[idx] = quantize_cuda_shard_rows(new_type, f32_data, new_data, imatrix,
-                    devices[idx], nrows, n_per_row, nslice, offs[idx], rows[idx], row_size, params);
+                    devices[idx], nrows, n_per_row, nslice, offs[idx], rows[idx], row_size, shard_nthread, params);
         }
         catch (...) {
             eptrs[idx] = std::current_exception();
@@ -1119,9 +1128,10 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
             static_cast<const quantize_user_data *>(params->user_data)->symmetric_q4_0;
         if (!symmetric_q4_0 && tensor->ne[3] <= 1) {
             if (params->cuda_quantize_n_devices > 0) {
-                // 2+ devices: row-split, same hashes as mono.
+                // 2+ devices: row-split, same hashes as mono. A shard whose CUDA
+                // call misses falls back on its share of the thread budget below.
                 new_size = do_quantize_cuda_quantize_split(tensor, new_type, f32_data, new_data, imatrix,
-                        params->cuda_quantize_devices, params->cuda_quantize_split, params->cuda_quantize_n_devices, params);
+                        params->cuda_quantize_devices, params->cuda_quantize_split, params->cuda_quantize_n_devices, nthread, params);
             } else {
                 new_size = ggml_cuda_quantize(params->cuda_quantize_device, new_type, f32_data, new_data, tensor->ne[1], tensor->ne[0], tensor->ne[2], imatrix);
             }
