@@ -281,6 +281,7 @@ Contributions in form of pull requests, issue submissions (bug reports, feature 
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
+- [Pascal and Volta GPUs](docs/pascal-volta.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 
 #### Seminal papers and background on the models
