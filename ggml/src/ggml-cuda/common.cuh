@@ -200,6 +200,10 @@ constexpr int ggml_cuda_highest_compiled_arch(const int arch) {
     return ggml_cuda_highest_compiled_arch_impl(arch, 0, __CUDA_ARCH_LIST__);
 }
 #else
+static constexpr bool ggml_cuda_has_arch(const int) {
+    return true;
+}
+
 static int ggml_cuda_highest_compiled_arch(const int arch) {
     return arch;
 }
