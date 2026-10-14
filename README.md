@@ -10,7 +10,7 @@ This repository started as a fork of [llama.cpp](https://github.com/ggerganov/ll
 >If you are running hybrid CPU/GPU inference for MoE models with all or some experts left on the CPU, **do not use -rtr** unless you know what you are doing. The `-rtr` option causes all tensors left in RAM to be repacked to row-interleaved format while loading the model. As not all quantization types have a CUDA implementation, this will result in matrix multiplications with these tensors to be **always done on the CPU**, even when it would have been much better to offload the computation to the GPU, typically resulting in lower prompt processing speed. Most notably, k-quants (`K2_K, Q3_K, Q4_K, Q5_K, Q6_K`) do not have CUDA row-interleaved implementation.
 
 >[!NOTE]
->The only fully functional and performant compute backends are CPU (`AVX2` or better, `ARM_NEON` or better) and CUDA (Turing or newer). 
+>The only fully functional and performant compute backends are CPU (`AVX2` or better, `ARM_NEON` or better) and CUDA (Turing or newer, but there has been recent progress on bringing Pascal and Volta up to speed, see [here](docs/pascal-volta.md) for more details) 
 >Please do not enter issues related to ROCm, Vulkan, Metal, old Nvidia GPUs, `AVX` CPUs, etc. They will not get resolved unless you roll up your sleeves and help bring your favorite backend up to speed. With the current regular contributors this project simply does not have the bandwidth to work on all backends available in `llama.cpp`.
  
 >[!IMPORTANT]
@@ -281,6 +281,7 @@ Contributions in form of pull requests, issue submissions (bug reports, feature 
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
+- [Pascal and Volta GPUs](docs/pascal-volta.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 
 #### Seminal papers and background on the models
