@@ -169,7 +169,7 @@ static void usage(const char * executable) {
     printf("  --ignore-imatrix-rules: ignore importance matrix rules when quantizing\n");
     printf("  --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
-    printf("  --cuda-quantize: quantize IQ4_KT, IQ3_KT, IQ3_KS, IQ4_KS, IQ4_KS_R4, IQ4_KS_R16, IQ5_KS, and IQ5_KS_R4 tensors on a CUDA device; other types use the CPU\n");
+    printf("  --cuda-quantize: quantize IQ4_KT, IQ3_KT, IQ2_KT, IQ1_KT, IQ3_KS, IQ4_KS, IQ4_KS_R4, IQ4_KS_R16, IQ5_KS, and IQ5_KS_R4 tensors on a CUDA device; other types use the CPU\n");
     printf("  -dev DEVICES, --device DEVICES: CUDA device(s) for --cuda-quantize (default CUDA0; 2+ devices = row-split, e.g. -dev CUDA0,CUDA1)\n");
     printf("  -ts SPLIT, --tensor-split SPLIT: row-split shares for 2+ GPUs (e.g. -ts 3,3,2; equal when absent; requires -dev/--device with 2+ CUDA devices)\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");

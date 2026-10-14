@@ -8,7 +8,7 @@
 
 #if !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
 
-// same result as IQ4_KT/IQ3_KT quantization on the CPU; the _rn intrinsics mirror each rounding and FMA of the GCC -O3 build
+// same result as IQ4_KT/IQ3_KT/IQ2_KT/IQ1_KT quantization on the CPU; the _rn intrinsics mirror each rounding and FMA of the GCC -O3 build
 
 constexpr int   kKtBlock  = 32;
 constexpr float kKtWeight = 1e-4f;
@@ -113,6 +113,7 @@ static __device__ int kt_find_best_match_g4(const kt_bank & b, float d, float x,
     return result;
 }
 
+template <bool kAbs>
 static __device__ int kt_find_best_match_g8(const kt_bank & b, float d, float x, float w, int * error) {
     if (d == 0.f) {
         return 0;
@@ -142,7 +143,8 @@ static __device__ int kt_find_best_match_g8(const kt_bank & b, float d, float x,
             float t[8];
             for (int k = 0; k < 8; ++k) {
                 v *= 0xCBAC1FED;
-                const float dk = __fsub_rn(float(abs(ggml_cuda_dp4a(v & 0x3f3f3f3f, 0x01010101, -126))), xg[k]);
+                const int vk = ggml_cuda_dp4a(v & 0x3f3f3f3f, 0x01010101, -126);
+                const float dk = __fsub_rn(float(kAbs ? abs(vk) : vk), xg[k]);
                 t[k] = __fmul_rn(wg[k], __fmul_rn(dk, dk));
             }
             // hsum_float_8x8 order; ties: score, p%8, p/8
@@ -387,7 +389,7 @@ static __global__ void k_iq3kt_first_pass(const float * __restrict__ x, const fl
     const float scale_0 = fmaxf(84.f, __fdiv_rn(__fmul_rn(123.f, amax), amax_row));
     float best = 0.f, scale = 0.f, qbest = 0.f;
     for (int itry = -3; itry <= 3; ++itry) {
-        const int idx = kt_find_best_match_g8(b, __fdiv_rn(amax, __fadd_rn(scale_0, 8.f*itry)), xv, wv, error);
+        const int idx = kt_find_best_match_g8<true>(b, __fdiv_rn(amax, __fadd_rn(scale_0, 8.f*itry)), xv, wv, error);
         const float q = b.values[8*idx + (lane & 7)];
         const float2 r = kt_find_best_scale(xv, wv, q);
         if (r.y > best) { best = r.y; scale = r.x; qbest = q; }
@@ -503,7 +505,7 @@ static __global__ void k_iq3kt_final_pass(const float * __restrict__ x, const fl
         const float xv = x[e];
         if (xv < 0.f) signs |= 1u << ib;
         const int ls = (p >> (8*(ib%4) + 4*(ib/4))) & 0xf;
-        const int idx = kt_find_best_match_g8(b, __fmul_rn(d, float(ls)), fabsf(xv), w[e], error);
+        const int idx = kt_find_best_match_g8<true>(b, __fmul_rn(d, float(ls)), fabsf(xv), w[e], error);
         qout[e] = __fmul_rn(b.values[8*idx + (lane & 7)], float(ls));
         if ((lane & 7) == 0) sidx[wid][4*ib + lane/8] = idx;
     }
@@ -517,6 +519,193 @@ static __global__ void k_iq3kt_final_pass(const float * __restrict__ x, const fl
         yb[lane] = uint32_t(gi[2*(lane - 1)]) | (uint32_t(gi[2*(lane - 1) + 1]) << 16);
     } else if (lane < kWords) {
         yb[lane] = qh;
+    }
+}
+
+template <ggml_type type>
+static __global__ void k_iq2kt_first_pass(const float * __restrict__ x, const float * __restrict__ w, const float * __restrict__ sb_amax,
+        float * __restrict__ scales, int * __restrict__ idx, float * __restrict__ qtmp, int * __restrict__ error, int np,
+        const kt_bank b) {
+    const int64_t ib = (blockIdx.x*int64_t(blockDim.x) + threadIdx.x)/WARP_SIZE;
+    const int lane = threadIdx.x % WARP_SIZE;
+    const float xv = x[ib*kKtBlock + lane];
+    const float wv = w[ib*kKtBlock + lane];
+    const float amax = warp_reduce_max(fabsf(xv));
+    float scale = 0.f;
+    int best = 0;
+    float q = b.values[lane & 7];
+    if (amax >= 1e-16f) {
+        const int nb = np/QK_K;
+        const float amax_row = kt_row_amax(sb_amax + ib/(np/kKtBlock)*nb, nb);
+        float scale_0 = fmaxf(90.f, __fdiv_rn(__fmul_rn(124.f, amax), amax_row));
+        float score = 0.f;
+        for (int itry = 0; itry < (type == GGML_TYPE_IQ1_KT ? 2 : 1); ++itry) {
+            if (itry) {
+                scale_0 = __fsub_rn(scale_0, 8.f);
+            }
+            const float d = __fdiv_rn(amax, scale_0);
+            const int ip = kt_find_best_match_g8<false>(b, d, xv, wv, error);
+            const float qp = b.values[8*ip + (lane & 7)];
+            const float2 rp = kt_find_best_scale(xv, wv, qp);
+            const int im = kt_find_best_match_g8<false>(b, -d, xv, wv, error);
+            const float qm = b.values[8*im + (lane & 7)];
+            const float2 rm = kt_find_best_scale(xv, wv, qm);
+            if (itry && !(rp.y > score || rm.y > score)) {
+                continue;
+            }
+            const bool plus = rp.y > rm.y;
+            scale = plus ? rp.x : rm.x;
+            score = plus ? rp.y : rm.y;
+            best  = plus ? ip : im;
+            q     = plus ? qp : qm;
+        }
+    }
+    if (lane == 0) {
+        scales[ib] = scale;
+    }
+    if ((lane & 7) == 0) {
+        idx[ib*(kKtBlock/8) + lane/8] = best;
+    }
+    qtmp[ib*kKtBlock + lane] = q;
+}
+
+static __global__ void k_iq2kt_row_try(const float * __restrict__ x, const float * __restrict__ w, const float * __restrict__ scales,
+        const float * __restrict__ qtmp, const int8_t * __restrict__ index, float2 * __restrict__ sums, int64_t nrows, int np) {
+    const int64_t i = blockIdx.x*int64_t(blockDim.x) + threadIdx.x;
+    if (i >= nrows*kKtTries) {
+        return;
+    }
+    const int64_t row = i/kKtTries;
+    const int itry = int(i % kKtTries) - kKtTries/2;
+    const int nb32 = np/kKtBlock;
+    const float max_scale = kt_max_scale(scales + row*nb32, nb32);
+    float sumqx = 0.f, sumq2 = 0.f;
+    if (max_scale != 0.f) {
+        const float id = __fdiv_rn(float(itry + iq4k_values[0]), max_scale);
+        for (int ib = 0; ib < nb32; ++ib) {
+            const float dl = iq4k_values[ks_best_index<GGML_TYPE_IQ4_KS>(iq4k_values, index, __fmul_rn(id, scales[row*nb32 + ib]))];
+            const int64_t j0 = row*np + ib*kKtBlock;
+            for (int j = 0; j < kKtBlock; ++j) {
+                const float q = __fmul_rn(dl, qtmp[j0 + j]);
+                sumqx = __fmaf_rn(__fmul_rn(w[j0 + j], x[j0 + j]), q, sumqx);
+                sumq2 = __fmaf_rn(__fmul_rn(w[j0 + j], q), q, sumq2);
+            }
+        }
+    }
+    sums[i] = make_float2(sumqx, sumq2);
+}
+
+static __global__ void k_iq2kt_row_scale(const float * __restrict__ scales, const float2 * __restrict__ sums, const int8_t * __restrict__ index,
+        float * __restrict__ row_d, uint32_t * __restrict__ packed, char * __restrict__ y, int64_t nrows, int np, size_t row_bytes, float fudge) {
+    const int64_t row = blockIdx.x*int64_t(blockDim.x) + threadIdx.x;
+    if (row >= nrows) {
+        return;
+    }
+    const int nb = np/QK_K;
+    const int nb32 = np/kKtBlock;
+    const float * rs = scales + row*nb32;
+    const float max_scale = kt_max_scale(rs, nb32);
+    float * dptr = (float *)(y + row*row_bytes);
+    if (max_scale == 0.f) {
+        for (int ibl = 0; ibl < nb; ++ibl) packed[row*nb + ibl] = 0;
+        *dptr = 0.f;
+        row_d[row] = 0.f;
+        return;
+    }
+    float d = __fdiv_rn(max_scale, float(iq4k_values[0])), best = 0.f;
+    for (int t = 0; t < kKtTries; ++t) {
+        const float2 s = sums[row*kKtTries + t];
+        if (s.y > 0.f && __fmul_rn(s.x, s.x) > __fmul_rn(best, s.y)) {
+            d = __fdiv_rn(s.x, s.y);
+            best = __fmul_rn(d, s.x);
+        }
+    }
+    const float id = d != 0.f ? __fdiv_rn(1.f, d) : 0.f;
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        uint32_t p = 0;
+        for (int ib = 0; ib < 4; ++ib) {
+            const int ls1 = ks_best_index<GGML_TYPE_IQ4_KS>(iq4k_values, index, __fmul_rn(id, rs[8*ibl + ib]));
+            const int ls2 = ks_best_index<GGML_TYPE_IQ4_KS>(iq4k_values, index, __fmul_rn(id, rs[8*ibl + ib + 4]));
+            p |= uint32_t(ls1 | (ls2 << 4)) << 8*ib;
+        }
+        packed[row*nb + ibl] = p;
+    }
+    *dptr = __fmul_rn(d, fudge);
+    row_d[row] = d;
+}
+
+template <ggml_type type>
+static __global__ void k_iq2kt_final_pass(const float * __restrict__ x, const float * __restrict__ w, const int * __restrict__ idx,
+        const float * qtmp, const uint32_t * __restrict__ packed, const float * __restrict__ row_d, float * qout,
+        char * __restrict__ y, int * __restrict__ error, int64_t nsuper, int np, size_t row_bytes, const kt_bank b) {
+    __shared__ int sidx[kKtWarps][QK_K/8];
+    const int64_t isb = (blockIdx.x*int64_t(blockDim.x) + threadIdx.x)/WARP_SIZE;
+    if (isb >= nsuper) {
+        return;
+    }
+    const int lane = threadIdx.x % WARP_SIZE;
+    const int wid = threadIdx.x / WARP_SIZE;
+    const int nb = np/QK_K;
+    const int64_t row = isb/nb;
+    const int ibl = isb % nb;
+    const float d = row_d[row];
+    const uint32_t p = packed[isb];
+    for (int ib = 0; ib < QK_K/kKtBlock; ++ib) {
+        const int64_t e = isb*QK_K + ib*kKtBlock + lane;
+        int iout = 0;
+        float qo = 0.f;
+        if (d != 0.f) {
+            const int ls = iq4k_values[(p >> (8*(ib%4) + 4*(ib/4))) & 0xf];
+            const float dl = __fmul_rn(d, float(ls));
+            const float xv = x[e], wv = w[e];
+            const int inew = kt_find_best_match_g8<false>(b, dl, xv, wv, error);
+            const float q1 = qtmp[e];
+            const float q2 = b.values[8*inew + (lane & 7)];
+            const float diff1 = __fmaf_rn(-dl, q1, xv);
+            const float diff2 = __fmaf_rn(-dl, q2, xv);
+            const float t1 = __fmul_rn(wv, diff1), t2 = __fmul_rn(wv, diff2);
+            float mse1 = 0.f, mse2 = 0.f;
+            for (int k = 0; k < kKtBlock; ++k) {
+                mse1 = __fmaf_rn(__shfl_sync(0xffffffff, t1, k), __shfl_sync(0xffffffff, diff1, k), mse1);
+                mse2 = __fmaf_rn(__shfl_sync(0xffffffff, t2, k), __shfl_sync(0xffffffff, diff2, k), mse2);
+            }
+            const bool prev = mse1 < mse2;
+            iout = prev ? idx[(isb*(QK_K/kKtBlock) + ib)*(kKtBlock/8) + lane/8] : inew;
+            qo = __fmul_rn(prev ? q1 : q2, float(ls));
+        }
+        qout[e] = qo;
+        if ((lane & 7) == 0) sidx[wid][4*ib + lane/8] = iout;
+    }
+    __syncwarp();
+    const int * gi = sidx[wid];
+    uint32_t * yb = (uint32_t *)(y + row*row_bytes + sizeof(float));
+    if (type == GGML_TYPE_IQ2_KT) {
+        yb += ibl*(sizeof(block_iq2_kt)/4);
+        if (lane == 0) {
+            yb[0] = p;
+        } else if (lane <= 16) {
+            yb[lane] = uint32_t(gi[2*(lane - 1)]) | (uint32_t(gi[2*(lane - 1) + 1]) << 16);
+        }
+    } else {
+        yb += ibl*(sizeof(block_iq1_kt)/4);
+        uint32_t word = 0;
+        for (int k = 0; k < 4; ++k) {
+            uint32_t v = 0;
+            if (lane < 2) {
+                const int ib = 4*lane + k;
+                v = (p >> (8*(ib%4) + 4*(ib/4))) & 0xf;
+                for (int j = 0; j < 4; ++j) v |= uint32_t(gi[4*ib + j] >> 12) << (4 + j);
+            } else if (lane < 10) {
+                v = gi[4*(lane - 2) + k] & 0xff;
+            } else if (lane < 14) {
+                const int m = 4*(lane - 10) + k;
+                v = ((gi[m] >> 8) & 0xf) | (((gi[m + 16] >> 8) & 0xf) << 4);
+            }
+            word |= v << 8*k;
+        }
+        if (lane < 14) {
+            yb[lane] = word;
+        }
     }
 }
 
@@ -542,14 +731,14 @@ static __global__ void k_kt_refit(const float * __restrict__ x, const float * __
 
 static kt_codebook kt_get_codebook(int device, ggml_type type) {
     static std::mutex mutex;
-    static kt_codebook books[GGML_CUDA_MAX_DEVICES][2];
-    static bool ready[GGML_CUDA_MAX_DEVICES][2] = {};
-    const int it = type == GGML_TYPE_IQ3_KT;
+    static kt_codebook books[GGML_CUDA_MAX_DEVICES][4];
+    static bool ready[GGML_CUDA_MAX_DEVICES][4] = {};
+    const int it = type == GGML_TYPE_IQ4_KT ? 0 : type == GGML_TYPE_IQ3_KT ? 1 : type == GGML_TYPE_IQ2_KT ? 2 : 3;
     std::lock_guard<std::mutex> lock(mutex);
     if (!ready[device][it]) {
         const int nbank = it ? 1 : 2;
         const int group_size = it ? 8 : 4;
-        const int num_val = it ? 1 << 16 : 1 << 15;
+        const int num_val = it == 0 ? 1 << 15 : it == 3 ? 1 << 13 : 1 << 16;
         for (int ib = 0; ib < nbank; ++ib) {
             const int * offsets, * points;
             const float * values, * mid;
@@ -574,7 +763,7 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
         const float * imatrix) {
     const bool ks = type == GGML_TYPE_IQ3_KS || type == GGML_TYPE_IQ4_KS || type == GGML_TYPE_IQ5_KS || type == GGML_TYPE_IQ4_KS_R4 ||
         type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ5_KS_R4;
-    if (type != GGML_TYPE_IQ4_KT && type != GGML_TYPE_IQ3_KT && !ks) {
+    if (type != GGML_TYPE_IQ4_KT && type != GGML_TYPE_IQ3_KT && type != GGML_TYPE_IQ2_KT && type != GGML_TYPE_IQ1_KT && !ks) {
         return 0;
     }
 #if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
@@ -595,6 +784,7 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     return 0;
 #else
     const bool iq3 = type == GGML_TYPE_IQ3_KT;
+    const bool iq21 = type == GGML_TYPE_IQ2_KT || type == GGML_TYPE_IQ1_KT;
     ggml_cuda_set_device(device);
     if (ks) {
         return ggml_cuda_quantize_ks(device, type, src, dst, nrows, n_per_row, nslice, imatrix);
@@ -609,22 +799,25 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     const size_t out_row = ggml_row_size(type, n_per_row);
     const float fudge = ggml_get_quantize_fudge_factor(type);
     const int64_t total_rows = nrows*nslice;
+    const bool replicate = iq21 && nt;
+    const int8_t * d_index = iq21 ? ggml_cuda_ks_index(device, GGML_TYPE_IQ4_KS, false) : nullptr;
 
-    const size_t per_row = 3*size_t(np)*sizeof(float) + nb32*(sizeof(float) + 1) + nb*(sizeof(float) + sizeof(uint32_t)) + sizeof(float) +
-        kKtTries*sizeof(float2) + row_bytes;
+    const size_t per_row = 3*size_t(np)*sizeof(float) + nb32*(sizeof(float) + 1 + 4*sizeof(int)) + nb*(sizeof(float) + sizeof(uint32_t)) +
+        sizeof(float) + kKtTries*sizeof(float2) + row_bytes;
     const int64_t chunk = ggml_cuda_quantize_chunk(total_rows, per_row);
 
     float * d_x, * d_w, * d_q, * d_scales, * d_sb_amax, * d_row_d, * d_imatrix = nullptr;
     float2 * d_sums;
     uint32_t * d_packed;
     uint8_t * d_banks;
-    int * d_error;
+    int * d_idx, * d_error;
     char * d_y;
     CUDA_CHECK(cudaMalloc(&d_x, chunk*np*sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_w, chunk*np*sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_q, chunk*np*sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_scales, chunk*nb32*sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_banks, chunk*nb32));
+    CUDA_CHECK(cudaMalloc(&d_idx, chunk*nb32*4*sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_sb_amax, chunk*nb*sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_packed, chunk*nb*sizeof(uint32_t)));
     CUDA_CHECK(cudaMalloc(&d_row_d, chunk*sizeof(float)));
@@ -634,7 +827,13 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     CUDA_CHECK(cudaMemset(d_error, 0, sizeof(int)));
     if (imatrix) {
         std::vector<float> padded(nslice*np, 0.f);
-        for (int64_t is = 0; is < nslice; ++is) std::memcpy(padded.data() + is*np, imatrix + is*n_per_row, n_per_row*sizeof(float));
+        for (int64_t is = 0; is < nslice; ++is) {
+            if (replicate) {
+                iqk_kt_pad_row(imatrix + is*n_per_row, padded.data() + is*np, n_per_row);
+            } else {
+                std::memcpy(padded.data() + is*np, imatrix + is*n_per_row, n_per_row*sizeof(float));
+            }
+        }
         d_imatrix = ggml_cuda_quantize_upload(padded.data(), padded.size());
     }
 
@@ -642,9 +841,15 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     std::vector<char> ypad(nt ? chunk*row_bytes : 0);
     for (int64_t r0 = 0; r0 < total_rows; r0 += chunk) {
         const int64_t nr = std::min(chunk, total_rows - r0);
-        // rows with a tail are padded with zeros to np; iqk_kt_finish_row repacks the last block into the tail format
+        // rows with a tail are padded to np (IQ2_KT and IQ1_KT: copies, others: zeros); iqk_kt_finish_row repacks the last block into the tail format
         if (nt) {
-            for (int64_t r = 0; r < nr; ++r) std::memcpy(xpad.data() + r*np, src + (r0 + r)*n_per_row, n_per_row*sizeof(float));
+            for (int64_t r = 0; r < nr; ++r) {
+                if (replicate) {
+                    iqk_kt_pad_row(src + (r0 + r)*n_per_row, xpad.data() + r*np, n_per_row);
+                } else {
+                    std::memcpy(xpad.data() + r*np, src + (r0 + r)*n_per_row, n_per_row*sizeof(float));
+                }
+            }
             CUDA_CHECK(cudaMemcpy(d_x, xpad.data(), nr*np*sizeof(float), cudaMemcpyHostToDevice));
         } else {
             CUDA_CHECK(cudaMemcpy(d_x, src + r0*n_per_row, nr*np*sizeof(float), cudaMemcpyHostToDevice));
@@ -653,8 +858,26 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
         const int64_t nblocks = nr*nb32;
         const int warp_grid_blocks = (nblocks + kKtWarps - 1)/kKtWarps;
         const int warp_grid_super = (nsuper + kKtWarps - 1)/kKtWarps;
-        k_kt_weights<<<(nsuper + 127)/128, 128>>>(d_x, d_imatrix, d_w, d_sb_amax, nsuper, n_per_row, np, r0, nrows);
-        if (iq3) {
+        k_kt_weights<<<(nsuper + 127)/128, 128>>>(d_x, d_imatrix, d_w, d_sb_amax, nsuper, replicate ? np : n_per_row, np, r0, nrows);
+        if (iq21) {
+            if (type == GGML_TYPE_IQ2_KT) {
+                k_iq2kt_first_pass<GGML_TYPE_IQ2_KT><<<warp_grid_blocks, kKtWarps*WARP_SIZE>>>(d_x, d_w, d_sb_amax, d_scales, d_idx, d_q, d_error,
+                        np, cb.bank[0]);
+            } else {
+                k_iq2kt_first_pass<GGML_TYPE_IQ1_KT><<<warp_grid_blocks, kKtWarps*WARP_SIZE>>>(d_x, d_w, d_sb_amax, d_scales, d_idx, d_q, d_error,
+                        np, cb.bank[0]);
+            }
+            k_iq2kt_row_try<<<(nr*kKtTries + 127)/128, 128>>>(d_x, d_w, d_scales, d_q, d_index, d_sums, nr, np);
+            k_iq2kt_row_scale<<<(nr + 127)/128, 128>>>(d_scales, d_sums, d_index, d_row_d, d_packed, d_y, nr, np, row_bytes, fudge);
+            if (type == GGML_TYPE_IQ2_KT) {
+                k_iq2kt_final_pass<GGML_TYPE_IQ2_KT><<<warp_grid_super, kKtWarps*WARP_SIZE>>>(d_x, d_w, d_idx, d_q, d_packed, d_row_d, d_q, d_y,
+                        d_error, nsuper, np, row_bytes, cb.bank[0]);
+            } else {
+                k_iq2kt_final_pass<GGML_TYPE_IQ1_KT><<<warp_grid_super, kKtWarps*WARP_SIZE>>>(d_x, d_w, d_idx, d_q, d_packed, d_row_d, d_q, d_y,
+                        d_error, nsuper, np, row_bytes, cb.bank[0]);
+            }
+            k_kt_refit<false><<<(nr + 127)/128, 128>>>(d_x, d_w, d_q, d_row_d, d_y, nr, np, row_bytes, fudge);
+        } else if (iq3) {
             k_iq3kt_first_pass<<<warp_grid_blocks, kKtWarps*WARP_SIZE>>>(d_x, d_w, d_sb_amax, d_scales, d_q, d_error, nblocks, np, cb.bank[0]);
             k_iq3kt_row_try<<<(nr*kKtTries + 127)/128, 128>>>(d_x, d_w, d_scales, d_q, d_sums, nr, np);
             k_iq3kt_row_scale<<<(nr + 127)/128, 128>>>(d_scales, d_sb_amax, d_sums, d_row_d, d_packed, d_y, nr, np, row_bytes, fudge);
@@ -691,6 +914,7 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     CUDA_CHECK(cudaFree(d_q));
     CUDA_CHECK(cudaFree(d_scales));
     CUDA_CHECK(cudaFree(d_banks));
+    CUDA_CHECK(cudaFree(d_idx));
     CUDA_CHECK(cudaFree(d_sb_amax));
     CUDA_CHECK(cudaFree(d_packed));
     CUDA_CHECK(cudaFree(d_row_d));

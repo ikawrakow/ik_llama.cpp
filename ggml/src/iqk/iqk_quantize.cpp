@@ -10037,7 +10037,7 @@ void iqk_kt_can_quantize([[maybe_unused]] ggml_type type) {
     if (type == GGML_TYPE_IQ1_KT || type == GGML_TYPE_IQ2_KT || type == GGML_TYPE_IQ3_KT || type == GGML_TYPE_IQ4_KT) {
         fprintf(stderr, "\n==========================================================================================\n");
         fprintf(stderr, "Trellis quantization is not supported on CPUs without AVX2 or AVX512 -> aborting\n");
-        fprintf(stderr, "\nFor IQ3_KT and IQ4_KT quantization can be done with the CUDA backend by adding\n");
+        fprintf(stderr, "\nFor IQ1_KT, IQ2_KT, IQ3_KT and IQ4_KT quantization can be done with the CUDA backend by adding\n");
         fprintf(stderr, "    --cuda-quantize\n");
         fprintf(stderr, "to the command line\n");
         fprintf(stderr, "==========================================================================================\n\n\n");
@@ -11277,7 +11277,7 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
 int iqk_kt_codebook(int type, int bank, const int ** offsets, const int ** points, const float ** values, const float ** mid) {
     struct Flat { std::vector<int> offsets, points; };
     static std::mutex mutex;
-    static Flat flat[3];
+    static Flat flat[5];
     std::lock_guard<std::mutex> lock(mutex);
     auto flatten = [offsets, points, values, mid] (const auto& q, Flat& f) {
         if (f.offsets.empty()) {
@@ -11295,6 +11295,8 @@ int iqk_kt_codebook(int type, int bank, const int ** offsets, const int ** point
     };
     if (type == GGML_TYPE_IQ4_KT) return flatten(iq4kt_quantizer(bank == 1), flat[bank]);
     if (type == GGML_TYPE_IQ3_KT) return flatten(iq3kt_quantizer(), flat[2]);
+    if (type == GGML_TYPE_IQ2_KT) return flatten(iq2kt_quantizer(), flat[3]);
+    if (type == GGML_TYPE_IQ1_KT) return flatten(iq1kt_quantizer(), flat[4]);
     return 0;
 }
 

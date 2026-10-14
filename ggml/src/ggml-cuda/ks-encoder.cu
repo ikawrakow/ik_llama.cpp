@@ -11,33 +11,9 @@
 constexpr int kKsBlock   = 32;
 constexpr int kKsThreads = 128;
 
-template <ggml_type type> struct ks_traits {
-    static constexpr int nval    = type == GGML_TYPE_IQ5_KS ?  32 : type == GGML_TYPE_IQ4_KS ?  16 :   8;
-    static constexpr int nindex  = type == GGML_TYPE_IQ5_KS ? 247 : type == GGML_TYPE_IQ4_KS ? 241 : 111;
-    static constexpr int ntry    = type == GGML_TYPE_IQ4_KS ?   7 :   5;
-    static constexpr int nmap    = type == GGML_TYPE_IQ3_KS ? 127 : 240;
-    static constexpr int nsimple = type == GGML_TYPE_IQ3_KS ? 128 : 256;
-};
-
-// (int)x as cvttss2si computes it: INT_MIN for NaN and for values outside the int range
-static __device__ __forceinline__ int ks_trunc(float x) {
-    return x >= -2147483648.f && x < 2147483648.f ? __float2int_rz(x) : INT_MIN;
-}
-
 static __device__ __forceinline__ int ks_nearest_int(float v) {
     // the x86 default NaN gives 0 here; CUDA arithmetic returns a NaN with other bits
     return isnan(v) ? 0 : (__float_as_int(v) & 0x007fffff) - 0x00400000;
-}
-
-template <ggml_type type>
-static __device__ __forceinline__ int ks_best_index(const int8_t * values, const int8_t * index, float x) {
-    constexpr int nval = ks_traits<type>::nval;
-    int ix = ks_trunc(x) - values[0];
-    if (ix < 0 || ix >= ks_traits<type>::nindex) {
-        return ix < 0 ? 0 : nval - 1;
-    }
-    ix = index[ix];
-    return ix < nval ? ix : __fsub_rn(x, values[ix - nval]) < __fsub_rn(values[ix - nval + 1], x) ? ix - nval : ix - nval + 1;
 }
 
 template <ggml_type type>
@@ -309,7 +285,7 @@ static __global__ void k_iq3ks_finish(const float * __restrict__ x, const float 
     if (sumq2 > 0) *dptr = __float2half_rn(__fdiv_rn(__fmul_rn(fudge, sumqx), sumq2));
 }
 
-static const int8_t * ks_get_index(int device, ggml_type type, bool simple) {
+const int8_t * ggml_cuda_ks_index(int device, ggml_type type, bool simple) {
     static std::mutex mutex;
     static int8_t * tables[GGML_CUDA_MAX_DEVICES][6] = {};
     const int it = (type == GGML_TYPE_IQ4_KS ? 0 : type == GGML_TYPE_IQ3_KS ? 1 : 2) + 3*simple;
@@ -340,8 +316,8 @@ size_t ggml_cuda_quantize_ks(int device, ggml_type type, const float * src, void
         }
         return size;
     }
-    const int8_t * d_index = ks_get_index(device, type, false);
-    const int8_t * d_simple = ks_get_index(device, type, true);
+    const int8_t * d_index = ggml_cuda_ks_index(device, type, false);
+    const int8_t * d_simple = ggml_cuda_ks_index(device, type, true);
     const int nb32 = n_per_row/kKsBlock;
     const size_t row_size = ggml_row_size(type, n_per_row);
     const float fudge = ggml_get_quantize_fudge_factor(type);
