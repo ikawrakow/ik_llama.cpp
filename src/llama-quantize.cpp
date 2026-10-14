@@ -266,8 +266,10 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
     }
     if (convert_incompatible_tensor) {
         switch (new_type) {
+            case GGML_TYPE_IQ1_S:
+            case GGML_TYPE_IQ1_M: new_type = GGML_TYPE_IQ1_KT; break;
             case GGML_TYPE_IQ2_XXS:
-            case GGML_TYPE_IQ2_XXS_R4:
+            case GGML_TYPE_IQ2_XXS_R4: new_type = GGML_TYPE_IQ2_KT; break;
             case GGML_TYPE_IQ2_XS:
             case GGML_TYPE_IQ2_XS_R4:
             case GGML_TYPE_IQ2_KS:
@@ -275,9 +277,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ2_S_R4:
             case GGML_TYPE_IQ3_XXS:
             case GGML_TYPE_IQ3_XXS_R4:
-            case GGML_TYPE_IQ1_S:
             case GGML_TYPE_IQ1_S_R4:
-            case GGML_TYPE_IQ1_M:
             case GGML_TYPE_IQ1_M_R4:
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q2_K_R4:
