@@ -3108,7 +3108,7 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
 
 } // namespace
 
-bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
+bool iqk_set_kernels_kquants([[maybe_unused]] int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
 
     auto etypeA = ggml_type(typeA);
     if ((etypeA == GGML_TYPE_Q8_K_R16 || etypeA == GGML_TYPE_Q8_K_R8) && ggml_type(typeB) == GGML_TYPE_Q8_K32) typeB = GGML_TYPE_Q8_K;
@@ -3122,7 +3122,8 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
                          //: etypeA == GGML_TYPE_Q4_K  || etypeA == GGML_TYPE_Q5_K ? GGML_TYPE_Q8_2_X4
                          : GGML_TYPE_Q8_K;
 
-    if (ne00%QK_K != 0 || ggml_type(typeB) != expected_type_B) {
+    //if (ne00%QK_K != 0 || ggml_type(typeB) != expected_type_B) {
+    if (ggml_type(typeB) != expected_type_B) {
         return false;
     }
 

@@ -2013,13 +2013,10 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
 template <int nrc_y>
 static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x % 16 == 0);
-    //Q8<nrc_y, block_q8_2_x4> q8(info);
     Q8<nrc_y> q8(info);
     int nb = n / QK8_0;
     auto table = load_iq4nl_values_512();
     auto m4 = _mm512_set1_epi8(0xf);
-    //static const int16_t k_shuff[32] = {0,0, 1,1, 2,2, 3,3, 4,4, 5,5, 6,6, 7,7, 8,8, 9,9, 10,10, 11,11, 12,12, 13,13, 14,14, 15,15};
-    //auto shuff = _mm512_loadu_si512(k_shuff);
     __m512i qx[8];
     auto prepare_block = [&] (const block_iq4_ks_r16 & b, __m512i & iscales, __m512i & imins) {
         auto sas = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)b.scales));
@@ -2056,41 +2053,48 @@ static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const Dat
                 sumi[iy] = _mm512_setzero_si512();
             }
         }
+        if (int nb0 = 8*(nb/8); nb0 < nb) {
+            int nbtail = nb - nb0;
+            float d8[8*nrc_y];
+            __m512i iscales, imins;
+            for (int ib4 = 0; ib4 < nbtail/4; ++ib4) {
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto yb = (const block_q8_2_x4 *)(q8.y[iy] + nb/8);
+                    _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)yb[ib4].d));
+                }
+                for (int k = 0; k < 4; ++k) {
+                    prepare_block(iq4[nb0+4*ib4+k], iscales, imins);
+                    auto scales = _mm512_mul_ps(d4, _mm512_cvtepi32_ps(iscales));
+                    auto mins   = _mm512_mul_ps(scales, _mm512_cvtepi32_ps(imins));
+                    _Pragma("GCC unroll 8")
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto yb = (const block_q8_2_x4 *)(q8.y[iy] + nb/8);
+                        auto sumi = qx_r8_q8_dot_product(qx, yb[ib4].qs+32*k);
+                        auto dy = _mm512_set1_ps(d8[8*iy+k]);
+                        acc[iy] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[iy]);
+                        acc[iy] = _mm512_fmadd_ps(mins, _mm512_set1_ps(2.0f*d8[8*iy+k+4]), acc[iy]);
+                    }
+                }
+            }
+            for (int ib = 4*(nbtail/4); ib < nbtail; ++ib) {
+                prepare_block(iq4[nb0+ib], iscales, imins);
+                auto scales = _mm512_mul_ps(d4, _mm512_cvtepi32_ps(iscales));
+                auto mins   = _mm512_mul_ps(scales, _mm512_cvtepi32_ps(imins));
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto qy = (const block_q8_2 *)(q8.y[iy] + nb/8);
+                    auto sumi = qx_r8_q8_dot_product(qx, qy[ib].qs);
+                    auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                    auto dy = _mm512_set1_ps(d8);
+                    acc[iy] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[iy]);
+                    acc[iy] = _mm512_fmadd_ps(mins, _mm512_set1_ps(2.0f*m8), acc[iy]);
+                    //acc[iy] = _mm512_fmadd_ps(mins, _mm512_set1_ps(m8), acc[iy]);
+                }
+            }
+        }
         for (int iy = 0; iy < nrc_y; ++iy) {
             info.store(ix, iy, acc[iy]);
             acc[iy] = _mm512_setzero_ps();
         }
-        //for (int ib4 = 0; ib4 < nb/4; ++ib4) {
-        //    for (int iy = 0; iy < nrc_y; ++iy) {
-        //        _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
-        //    }
-        //    for (int k = 0; k < 4; ++k) {
-        //        prepare_block(iq4[4*ib4+k], d4, scales, mins);
-        //        _Pragma("GCC unroll 8")
-        //        for (int iy = 0; iy < nrc_y; ++iy) {
-        //            auto sumi = qx_r8_q8_dot_product(qx, q8.y[iy][ib4].qs+32*k);
-        //            auto dy = _mm512_set1_ps(d8[8*iy+k]);
-        //            acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-        //            acc[2*iy+1] = _mm512_fmadd_ps(mins, _mm512_set1_ps(d8[8*iy+k+4]), acc[2*iy+1]);
-        //        }
-        //    }
-        //}
-        //for (int ib = 4*(nb/4); ib < nb; ++ib) {
-        //    prepare_block(iq4[ib], d4, scales, mins);
-        //    for (int iy = 0; iy < nrc_y; ++iy) {
-        //        auto qy = (const block_q8_2 *)q8.y[iy];
-        //        auto sumi = qx_r8_q8_dot_product(qx, qy[ib].qs);
-        //        auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
-        //        auto dy = _mm512_set1_ps(d8);
-        //        acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-        //        acc[2*iy+1] = _mm512_fmadd_ps(mins, _mm512_set1_ps(m8), acc[2*iy+1]);
-        //    }
-        //}
-        //for (int iy = 0; iy < nrc_y; ++iy) {
-        //    auto sum512 = _mm512_add_ps(acc[2*iy+1], acc[2*iy+0]);
-        //    info.store(ix, iy, sum512);
-        //    acc[2*iy+0] = acc[2*iy+1] = _mm512_setzero_ps();
-        //}
     }
 }
 void iqk_convert_iq4_ks_r16_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
