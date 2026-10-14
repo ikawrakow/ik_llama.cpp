@@ -5121,15 +5121,15 @@ static bool ggml_is_kt_tail_type(enum ggml_type type) {
 }
 
 GGML_CALL int64_t ggml_row_blck_size(enum ggml_type type) {
-    return ggml_is_kt_tail_type(type) || type == GGML_TYPE_Q8_K ? 32 : type_traits[type].blck_size;
+    return ggml_is_kt_tail_type(type) || type == GGML_TYPE_Q8_K || type == GGML_TYPE_Q8_K_R16 ? 32 : type_traits[type].blck_size;
 }
 
 GGML_CALL size_t ggml_row_size(enum ggml_type type, int64_t ne) {
-    assert(ne % 32 == 0);
-    if (type == GGML_TYPE_Q8_K) {
+    if (type == GGML_TYPE_Q8_K || type == GGML_TYPE_Q8_K_R16) {
         int nb256 = ne / QK_K;
         int nbtail = (ne - QK_K*nb256)/32;
-        return nb256*sizeof(block_q8_K) + nbtail*sizeof(block_q8_2);
+        size_t tail_size = type == GGML_TYPE_Q8_K ? nbtail*sizeof(block_q8_2) : sizeof(float) + 32*nbtail;
+        return nb256*sizeof(block_q8_K) + tail_size;
     }
     if (type == GGML_TYPE_IQ3_KS_R16) {
         // 16-row bands: 16 f32 row scales + (ne/32) blocks of 204 B, padded so
