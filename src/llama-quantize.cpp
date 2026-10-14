@@ -1018,29 +1018,48 @@ static size_t quantize_cuda_shard_rows(ggml_type new_type, const float * f32_dat
 }
 
 // Largest remainder: integer rows closest to the shares, ties to lower index.
-static void split_rows_by_weight(int64_t nrows, const float * weights, int n_dev, int64_t * rows) {
+// Rows are apportioned in multiples of group (the row-interleave factor from
+// interleaved_properties, 1 for plain types) so every shard satisfies the
+// nrows%group==0 asserts of the repacked quantizers (e.g. R4 needs %4, R16 %16).
+static void split_rows_by_weight(int64_t nrows, const float * weights, int n_dev, int64_t * rows, int64_t group) {
+    if (group < 1) {
+        group = 1;
+    }
+    if (nrows % group != 0) {
+        // Not even mono-safe: keep mono behavior (single shard on device 0).
+        rows[0] = nrows;
+        for (int i = 1; i < n_dev; ++i) {
+            rows[i] = 0;
+        }
+        return;
+    }
+    const int64_t ngroups = nrows / group;
     double total = 0.0;
     for (int i = 0; i < n_dev; ++i) {
         total += (double) weights[i];
     }
     std::vector<double> frac(n_dev, 0.0);
+    std::vector<int64_t> groups(n_dev, 0);
     int64_t assigned = 0;
     for (int i = 0; i < n_dev; ++i) {
-        const double exact = total > 0.0 ? (double) nrows*(double) weights[i]/total : 0.0;
+        const double exact = total > 0.0 ? (double) ngroups*(double) weights[i]/total : 0.0;
         const int64_t base = (int64_t) exact; // exact >= 0, truncation == floor
-        rows[i] = base;
+        groups[i] = base;
         frac[i] = exact - (double) base;
         assigned += base;
     }
-    for (int64_t left = nrows - assigned; left > 0; --left) {
+    for (int64_t left = ngroups - assigned; left > 0; --left) {
         int best = 0;
         for (int i = 1; i < n_dev; ++i) {
             if (frac[i] > frac[best]) {
                 best = i;
             }
         }
-        rows[best] += 1;
+        groups[best] += 1;
         frac[best] = -1.0;
+    }
+    for (int i = 0; i < n_dev; ++i) {
+        rows[i] = groups[i]*group;
     }
 }
 
@@ -1058,7 +1077,7 @@ static size_t do_quantize_cuda_quantize_split(const ggml_tensor * tensor, ggml_t
     const size_t  row_size  = ggml_row_size(new_type, n_per_row);
 
     std::vector<int64_t> rows(n_dev, 0);
-    split_rows_by_weight(nrows, weights, n_dev, rows.data());
+    split_rows_by_weight(nrows, weights, n_dev, rows.data(), interleaved_properties(new_type).second);
 
     std::vector<size_t>             bytes(n_dev, 0);
     std::vector<std::exception_ptr> eptrs(n_dev);
