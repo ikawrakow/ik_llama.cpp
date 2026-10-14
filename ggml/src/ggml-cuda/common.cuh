@@ -811,6 +811,7 @@ struct ggml_cuda_device_info {
         bool    vmm;                // virtual memory support
         size_t  vmm_granularity;    // granularity of virtual memory
         size_t  total_vram;
+        bool    integrated;
     };
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
