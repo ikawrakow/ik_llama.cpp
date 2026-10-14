@@ -2421,9 +2421,7 @@ std::tuple<float, float, bool> find_best_scale_avx2(int nval, const int8_t * val
     float id = 1/d;
     bool is_shifted = false;
     float best = 0;
-    if (!evaluate_block_avx2<block_size, nmap>(id, values, f_values, k_simple_index, vx, vw, d, best)) {
-        GGML_ABORT("Fatal error");
-    }
+    (void)evaluate_block_avx2<block_size, nmap>(id, values, f_values, k_simple_index, vx, vw, d, best);
     for (int itry = -ntry; itry <= ntry; ++itry) {
         id = (step*itry + values[0])/max;
         if (evaluate_block_avx2<block_size, nmap>(id, values, f_values, k_simple_index, vx, vw, d, best)) {
