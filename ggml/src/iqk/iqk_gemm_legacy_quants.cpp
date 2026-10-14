@@ -2103,26 +2103,17 @@ void iqk_convert_iq4_ks_r16_q8_k_r8(int n, const void * vx, size_t bx, void * vy
     block_q8_k_r * y = (block_q8_k_r *)vy;
 
     auto table =  _mm512_broadcast_i32x4(_mm_loadu_si128((const __m128i *)iq4k_values));
-    //table = _mm512_xor_si512(table, _mm512_set1_epi8(-128));
-    auto vxor = _mm_set1_epi8(-128);
+    auto vxor  = _mm_set1_epi8(-128);
 
     auto m1 = _mm256_set1_epi16(1);
     auto m4 = _mm512_set1_epi8(0xf);
-
-    //auto shuff1 = _mm512_setr_epi32(0x00000000, 0x00000000, 0x00010001, 0x00010001, 0x00020002, 0x00020002, 0x00030003, 0x00030003,
-    //                                0x00040004, 0x00040004, 0x00050005, 0x00050005, 0x00060006, 0x00060006, 0x00070007, 0x00070007);
-    //auto shuff2 = _mm512_add_epi16(_mm512_set1_epi16(8), shuff1);
 
     static const int k_shuff[64] = {0,0,0,0,  1,1,1,1,  2,2,2,2,  3,3,3,3,  4,4,4,4,  5,5,5,5,  6,6,6,6,  7,7,7,7,  8,8,8,8,  9,9,9,9,
                                     10,10,10,10, 11,11,11,11, 12,12,12,12, 13,13,13,13, 14,14,14,14, 15,15,15,15};
     __m512i s_shuffs[4];
     for (int i = 0; i < 4; ++i) s_shuffs[i] = _mm512_loadu_si512(k_shuff + 16*i);
 
-    //__m512i scales[2];
     __m512  fscales[4];
-
-    //int16_t quants[QK_K*k_nr];
-    //int16_t aux[64];
 
     auto rescale_and_store = [&fscales, &vxor] (__m512i v, int8_t * qs) {
         auto v_0 = _mm512_mul_ps(fscales[0], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm512_castsi512_si128(v))));
@@ -2137,18 +2128,6 @@ void iqk_convert_iq4_ks_r16_q8_k_r8(int n, const void * vx, size_t bx, void * vy
         _mm_storeu_si128((__m128i *)(qs + 16), _mm_xor_si128(_mm512_cvtsepi32_epi8(i1), vxor));
         _mm_storeu_si128((__m128i *)(qs + 32), _mm_xor_si128(_mm512_cvtsepi32_epi8(i2), vxor));
         _mm_storeu_si128((__m128i *)(qs + 48), _mm_xor_si128(_mm512_cvtsepi32_epi8(i3), vxor));
-        //auto v_0 = _mm512_mul_ps(fscales[0], _mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm512_castsi512_si128(v))));
-        //auto v_1 = _mm512_mul_ps(fscales[1], _mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm512_extracti32x4_epi32(v, 1))));
-        //auto v_2 = _mm512_mul_ps(fscales[2], _mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm512_extracti32x4_epi32(v, 2))));
-        //auto v_3 = _mm512_mul_ps(fscales[3], _mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm512_extracti32x4_epi32(v, 3))));
-        //auto i0  = _mm512_cvt_roundps_epi32(v_0, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-        //auto i1  = _mm512_cvt_roundps_epi32(v_1, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-        //auto i2  = _mm512_cvt_roundps_epi32(v_2, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-        //auto i3  = _mm512_cvt_roundps_epi32(v_3, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-        //_mm_storeu_si128((__m128i *)(qs +  0), _mm512_cvtepi32_epi8(i0));
-        //_mm_storeu_si128((__m128i *)(qs + 16), _mm512_cvtepi32_epi8(i1));
-        //_mm_storeu_si128((__m128i *)(qs + 32), _mm512_cvtepi32_epi8(i2));
-        //_mm_storeu_si128((__m128i *)(qs + 48), _mm512_cvtepi32_epi8(i3));
     };
     for (int ix = 0; ix < nrc_x; ix += k_nr) {
         auto dptr = (const float *)((const char *)vx + ix*bx);
@@ -2167,8 +2146,6 @@ void iqk_convert_iq4_ks_r16_q8_k_r8(int n, const void * vx, size_t bx, void * vy
             auto fmax = _mm512_set1_ps(max);
             _mm512_storeu_ps(y[ibl].d, _mm512_mul_ps(fmax, d4));
             auto fs0 = _mm512_div_ps(_mm512_set1_ps(1.0f), fmax);
-            //auto fs = _mm512_div_ps(_mm512_cvtepi32_ps(qmax32), fmax);
-            //for (int i = 0; i < 4; ++i) fscales[i] = _mm512_permutexvar_ps(s_shuffs[i], fs);
             for (int k = 0; k < QK_K/32; ++k) {
                 int ib = 8*ibl + k;
                 auto sas = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)iq4[ib].scales));
@@ -2185,105 +2162,9 @@ void iqk_convert_iq4_ks_r16_q8_k_r8(int n, const void * vx, size_t bx, void * vy
                     v2 = _mm512_add_epi8(v2, shift);
                     rescale_and_store(v1, y[ibl].qs + 512*k + 64*j);
                     rescale_and_store(v2, y[ibl].qs + 512*k + 64*j + 256);
-                    //auto v_0 = _mm512_mul_ps(fscales[0], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm512_castsi512_si128(v1))));
-                    //auto v_1 = _mm512_mul_ps(fscales[1], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm512_extracti32x4_epi32(v1, 1))));
-                    //auto v_2 = _mm512_mul_ps(fscales[2], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm512_extracti32x4_epi32(v1, 2))));
-                    //auto v_3 = _mm512_mul_ps(fscales[3], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm512_extracti32x4_epi32(v1, 3))));
-                    //auto i0  = _mm512_cvt_roundps_epi32(v_0, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-                    //auto i1  = _mm512_cvt_roundps_epi32(v_1, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-                    //auto i2  = _mm512_cvt_roundps_epi32(v_2, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-                    //auto i3  = _mm512_cvt_roundps_epi32(v_3, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-                    //_mm_storeu_si128((__m128i *)(y[ibl].qs + 512*k + 64*j +  0), _mm_xor_si128(_mm512_cvtsepi32_epi8(i0), _mm_set1_epi8(-128)));
-                    //_mm_storeu_si128((__m128i *)(y[ibl].qs + 512*k + 64*j + 16), _mm_xor_si128(_mm512_cvtsepi32_epi8(i1), _mm_set1_epi8(-128)));
-                    //_mm_storeu_si128((__m128i *)(y[ibl].qs + 512*k + 64*j + 32), _mm_xor_si128(_mm512_cvtsepi32_epi8(i2), _mm_set1_epi8(-128)));
-                    //_mm_storeu_si128((__m128i *)(y[ibl].qs + 512*k + 64*j + 48), _mm_xor_si128(_mm512_cvtsepi32_epi8(i3), _mm_set1_epi8(-128)));
-                    //v_0 = _mm512_mul_ps(fscales[0], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm512_castsi512_si128(v2))));
-                    //v_1 = _mm512_mul_ps(fscales[1], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm512_extracti32x4_epi32(v2, 1))));
-                    //v_2 = _mm512_mul_ps(fscales[2], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm512_extracti32x4_epi32(v2, 2))));
-                    //v_3 = _mm512_mul_ps(fscales[3], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm512_extracti32x4_epi32(v2, 3))));
-                    //i0  = _mm512_cvt_roundps_epi32(v_0, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-                    //i1  = _mm512_cvt_roundps_epi32(v_1, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-                    //i2  = _mm512_cvt_roundps_epi32(v_2, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-                    //i3  = _mm512_cvt_roundps_epi32(v_3, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-                    //_mm_storeu_si128((__m128i *)(y[ibl].qs + 512*k + 64*j + 256), _mm_xor_si128(_mm512_cvtsepi32_epi8(i0), _mm_set1_epi8(-128)));
-                    //_mm_storeu_si128((__m128i *)(y[ibl].qs + 512*k + 64*j + 272), _mm_xor_si128(_mm512_cvtsepi32_epi8(i1), _mm_set1_epi8(-128)));
-                    //_mm_storeu_si128((__m128i *)(y[ibl].qs + 512*k + 64*j + 288), _mm_xor_si128(_mm512_cvtsepi32_epi8(i2), _mm_set1_epi8(-128)));
-                    //_mm_storeu_si128((__m128i *)(y[ibl].qs + 512*k + 64*j + 304), _mm_xor_si128(_mm512_cvtsepi32_epi8(i3), _mm_set1_epi8(-128)));
                 }
             }
 
-            //auto qmax1 = _mm512_setzero_si512();
-            //auto qmax2 = _mm512_setzero_si512();
-            //for (int k = 0; k < QK_K/32; ++k) {
-            //    int ib = 8*ibl + k;
-            //    auto sas = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)iq4[ib].scales));
-            //    auto mask = _mm256_cmpeq_epi16_mask(_mm256_and_si256(sas, m1), m1);
-            //    auto shift = _mm512_mask_blend_epi32(mask, _mm512_setzero_si512(), _mm512_set1_epi32(0x04040404));
-            //    auto all_scales = _mm512_castsi256_si512(_mm256_sub_epi16(_mm256_and_si256(sas, _mm256_set1_epi16(254)), _mm256_set1_epi16(127)));
-            //    scales[0] = _mm512_permutexvar_epi16(shuff1, all_scales);
-            //    scales[1] = _mm512_permutexvar_epi16(shuff2, all_scales);
-            //    for (int j = 0; j < 4; ++j) {
-            //        auto bits = _mm512_loadu_si512(iq4[ib].qs + 64*j);
-            //        auto v1 = _mm512_shuffle_epi8(table, _mm512_and_si512(bits, m4));
-            //        auto v2 = _mm512_shuffle_epi8(table, _mm512_and_si512(_mm512_srli_epi16(bits, 4), m4));
-            //        v1 = _mm512_add_epi8(v1, shift);
-            //        v2 = _mm512_add_epi8(v2, shift);
-            //        auto v1l = _mm512_mullo_epi16(scales[0], _mm512_cvtepi8_epi16(_mm512_castsi512_si256(v1)));       // rows 0...7
-            //        auto v1h = _mm512_mullo_epi16(scales[1], _mm512_cvtepi8_epi16(_mm512_extracti32x8_epi32(v1, 1))); // rows 8...15
-            //        auto v2l = _mm512_mullo_epi16(scales[0], _mm512_cvtepi8_epi16(_mm512_castsi512_si256(v2)));       // rows 0...7
-            //        auto v2h = _mm512_mullo_epi16(scales[1], _mm512_cvtepi8_epi16(_mm512_extracti32x8_epi32(v2, 1))); // rows 8...15
-            //        qmax1 = _mm512_max_epi16(qmax1, _mm512_abs_epi16(v1l));
-            //        qmax2 = _mm512_max_epi16(qmax2, _mm512_abs_epi16(v1h));
-            //        qmax1 = _mm512_max_epi16(qmax1, _mm512_abs_epi16(v2l));
-            //        qmax2 = _mm512_max_epi16(qmax2, _mm512_abs_epi16(v2h));
-            //        //_mm512_storeu_si512(quants + 512*k + 128*j +  0, v1l);
-            //        //_mm512_storeu_si512(quants + 512*k + 128*j + 32, v1h);
-            //        //_mm512_storeu_si512(quants + 512*k + 128*j + 64, v2l);
-            //        //_mm512_storeu_si512(quants + 512*k + 128*j + 96, v2h);
-            //        _mm512_storeu_si512(quants + 512*k + 64*j +   0, v1l);
-            //        _mm512_storeu_si512(quants + 512*k + 64*j +  32, v1h);
-            //        _mm512_storeu_si512(quants + 512*k + 64*j + 256, v2l);
-            //        _mm512_storeu_si512(quants + 512*k + 64*j + 288, v2h);
-            //    }
-            //}
-            //_mm512_storeu_si512(aux +  0, qmax1);
-            //_mm512_storeu_si512(aux + 32, qmax2);
-            //int16_t max_val = 0;
-            //for (int is = 0; is < 16; ++is) {
-            //    auto max1 = std::max(aux[4*is+0], aux[4*is+1]);
-            //    auto max2 = std::max(aux[4*is+2], aux[4*is+3]);
-            //    aux[is] = std::max(max1, max2);
-            //    max_val = std::max(max_val, aux[is]);
-            //}
-            //auto dn = _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(_mm256_loadu_si256((const __m256i *)aux)));
-            //dn = _mm512_mul_ps(dn, _mm512_set1_ps(1.f/127));
-            //auto small = _mm512_cmp_ps_mask(dn, _mm512_set1_ps(1.f), _CMP_LT_OQ);
-            //dn = _mm512_mask_blend_ps(small, dn, _mm512_set1_ps(1.f));
-            //_mm512_storeu_ps(y[ibl].d, _mm512_mul_ps(d4, dn));
-            //auto fscale = _mm512_div_ps(_mm512_set1_ps(1.f), dn);
-            ////max_val = std::max<int16_t>(max_val, 1);
-            ////auto scale = _mm512_set1_ps(127.f/max_val);
-            ////auto fscale = _mm512_mul_ps(scale, _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(_mm256_loadu_si256((const __m256i *)aux))));
-            //for (int i = 0; i < 4; ++i) fscales[i] = _mm512_permutexvar_ps(s_shuffs[i], fscale);
-            ////scale = _mm512_mul_ps(scale, d4);
-            ////_mm512_storeu_ps(y[ib].d, scale);
-            ////_mm512_storeu_ps(y[ib].d, d4);
-            //for (int iq = 0; iq < 4096; iq += 64) {
-            //    auto q1 = _mm512_loadu_si512(quants + iq);
-            //    auto q2 = _mm512_loadu_si512(quants + iq + 32);
-            //    auto fq0 = _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(_mm512_castsi512_si256(q1)));
-            //    auto fq1 = _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(_mm512_extracti32x8_epi32(q1, 1)));
-            //    auto fq2 = _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(_mm512_castsi512_si256(q2)));
-            //    auto fq3 = _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(_mm512_extracti32x8_epi32(q2, 1)));
-            //    auto iq0 = _mm512_cvt_roundps_epi32(_mm512_mul_ps(fscales[0], fq0), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-            //    auto iq1 = _mm512_cvt_roundps_epi32(_mm512_mul_ps(fscales[1], fq1), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-            //    auto iq2 = _mm512_cvt_roundps_epi32(_mm512_mul_ps(fscales[2], fq2), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-            //    auto iq3 = _mm512_cvt_roundps_epi32(_mm512_mul_ps(fscales[3], fq3), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-            //    _mm_storeu_si128((__m128i *)(y[ibl].qs + iq +  0), _mm512_cvtsepi32_epi8(iq0));
-            //    _mm_storeu_si128((__m128i *)(y[ibl].qs + iq + 16), _mm512_cvtsepi32_epi8(iq1));
-            //    _mm_storeu_si128((__m128i *)(y[ibl].qs + iq + 32), _mm512_cvtsepi32_epi8(iq2));
-            //    _mm_storeu_si128((__m128i *)(y[ibl].qs + iq + 48), _mm512_cvtsepi32_epi8(iq3));
-            //}
         }
         y += nb;
     }
