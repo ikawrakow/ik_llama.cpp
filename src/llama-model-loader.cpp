@@ -1279,7 +1279,7 @@ bool llama_model_loader::load_all_data(
             // and on integrated GPUs the upload from the mapping is slow.
 #if defined(_WIN32)
             const bool stream_from_file = cur->buffer != nullptr && !ggml_backend_buffer_is_host(cur->buffer);
-            std::unique_lock<std::mutex> lock(load_mutex);
+            std::lock_guard<std::mutex> lock(load_mutex);
 #else
             const bool stream_from_file = cur->buffer != nullptr &&
                 std::find(integrated_bufts.begin(), integrated_bufts.end(), ggml_backend_buffer_get_type(cur->buffer)) != integrated_bufts.end();
