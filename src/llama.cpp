@@ -13712,6 +13712,10 @@ void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn) {
     ctx->cparams.causal_attn = causal_attn;
 }
 
+void llama_set_warmup(struct llama_context * ctx, bool warmup) {
+    ctx->cparams.warmup = warmup;
+}
+
 struct llama_batch llama_batch_get_one(
              llama_token * tokens,
                  int32_t   n_tokens,

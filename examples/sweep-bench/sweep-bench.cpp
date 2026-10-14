@@ -217,10 +217,12 @@ int main(int argc, char ** argv) {
     if (params.warmup) {
         common_batch_add(batch, bos, 0, { 0 }, false);
 
+        llama_set_warmup(ctx, true);
         if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
             LOG_TEE("%s: llama_decode() failed\n", __func__);
             return 1;
         }
+        llama_set_warmup(ctx, false);
     }
     if (params.batch_warmup) {
         // clean up KV cache after generation
