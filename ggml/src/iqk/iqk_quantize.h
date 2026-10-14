@@ -378,6 +378,7 @@ bool iqk_validate_tensor(const struct ggml_tensor * src);
 
 int  iqk_kt_codebook(int type, int bank, const int ** offsets, const int ** points, const float ** values, const float ** mid);
 void iqk_kt_finish_row(int type, const void * ypad, void * qrow, int64_t n_per_row);
+void iqk_kt_pad_row(const float * src, float * dst, int64_t n_per_row);
 int  iqk_ks_index(int type, const int8_t ** index);
 int  iqk_ks_simple_index(int type, const int8_t ** index);
 

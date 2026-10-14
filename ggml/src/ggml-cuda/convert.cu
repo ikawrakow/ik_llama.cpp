@@ -389,6 +389,15 @@ float __device__ __forceinline__ trellis_next(uint32_t& val) {
 }
 
 template<typename dst_t>
+static __device__ __forceinline__ void dequantize_group_iq1t(float scale, int ib, const uint8_t * sh, const uint8_t * ql, const uint8_t * qh, dst_t * y) {
+    uint32_t idx = (ql[ib] | ((qh[ib%16] << (8 - 4*(ib/16))) & 0xf00) | ((sh[ib/4] << (8 - (ib%4))) & 0x1000)) + 4096;
+    const float dl = scale * iq4k_values[sh[ib/4] & 0xf];
+    for (int j = 0; j < 8; ++j) {
+        y[j] = dl * trellis_next_int(idx);
+    }
+}
+
+template<typename dst_t>
 static __global__ void dequantize_block_iq1_kt(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
 
     int64_t ii  = blockIdx.x;
@@ -401,10 +410,30 @@ static __global__ void dequantize_block_iq1_kt(const void * __restrict__ vx, dst
     const int64_t tid = threadIdx.x;
     const int64_t ib = tid; // 0...31
     dst_t * y = yy + ii*QK_K + 8*ib;
-    uint32_t idx = (x[i].ql[ib] | ((x[i].qh[ib%16] << (8 - 4*(ib/16))) & 0xf00) | ((x[i].sh[ib/4] << (8 - (ib%4))) & 0x1000)) + 4096;
-    const float dl = scale * iq4k_values[x[i].sh[ib/4] & 0xf];
-    for (int j = 0; j < 8; ++j) {
-        y[j] = dl * trellis_next_int(idx);
+    dequantize_group_iq1t(scale, ib, x[i].sh, x[i].ql, x[i].qh, y);
+}
+
+template<typename dst_t>
+static __global__ void dequantize_block_iq1_kt_with_tail(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
+
+    int64_t ii  = blockIdx.x;
+    int64_t bpr = (n_per_row + QK_K - 1)/QK_K;
+    int64_t row = ii / bpr;
+    const char * cx = (const char *)vx + row * row_size;
+    float scale = *(const float *)cx;
+    const block_iq1_kt * x = (const block_iq1_kt *)(cx + sizeof(float));
+    const int64_t i = ii % bpr;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t ib = tid; // 0...31
+    dst_t * y = yy + row*n_per_row + i*QK_K + 8*ib;
+    if (i < n_per_row/QK_K) {
+        dequantize_group_iq1t(scale, ib, x[i].sh, x[i].ql, x[i].qh, y);
+    } else {
+        int nt = (n_per_row % QK_K)/32;
+        if (ib/4 < nt) {
+            dequantize_group_iq1t(scale, ib, x[i].sh, x[i].ql, x[i].ql + 4*nt, y);
+        }
     }
 }
 
@@ -1745,8 +1774,14 @@ static void dequantize_row_iq2_xxs_cuda(const void * vx, dst_t * y, const int64_
 template<typename dst_t>
 static void dequantize_row_iq1_kt_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
     const int64_t k = nrows * n_per_row;
-    const int nb = k / QK_K;
-    dequantize_block_iq1_kt<<<nb, 32, 0, stream>>>(vx, y, n_per_row, ggml_row_size(GGML_TYPE_IQ1_KT, n_per_row));
+    auto row_size = ggml_row_size(GGML_TYPE_IQ1_KT, n_per_row);
+    if (n_per_row % QK_K == 0) {
+        const int nb = k / QK_K;
+        dequantize_block_iq1_kt<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+    } else {
+        const int nb = nrows * ((n_per_row + QK_K - 1)/QK_K);
+        dequantize_block_iq1_kt_with_tail<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+    }
 }
 
 template<typename dst_t>
