@@ -343,10 +343,10 @@ template <ggml_type type, int nwarps>
 static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
 
     GGML_ASSERT(args.ncols_x % ggml_blck_size(type) == 0);
+    constexpr int k_max_cols = ggml_cuda_has_arch(CC_PASCAL) ? MMVQ_MAX_NCOLS_PASCAL : MMVQ_MAX_BATCH_SIZE;
+    GGML_ASSERT(args.ncols_y <= k_max_cols);
 
     int id = ggml_cuda_get_device();
-
-    GGML_ASSERT(args.ncols_y <= std::min(ggml_cuda_mmvq_max_batch_size(ggml_cuda_info().devices[id].cc), MMVQ_MAX_NCOLS_PASCAL));
 
     int64_t rows_per_cuda_block = ggml_cuda_info().devices[id].cc < CC_RDNA2 ?
         args.ncols_y < 4 ? 1 : 2 : 1;
