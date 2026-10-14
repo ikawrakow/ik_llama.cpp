@@ -1443,7 +1443,24 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         inpL = cur;
     }
 
-    cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+    if (lctx.cparams.mtp) {
+        ggml_tensor * mtp_hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm,
+                nullptr, LLM_NORM_RMS, cb, -1);
+        cb(mtp_hidden, "result_norm", -1);
+        ggml_set_output(mtp_hidden);
+
+        if (n_outputs == 0) {
+            ggml_build_forward_expand(gf, mtp_hidden);
+            return gf;
+        }
+
+        if (n_outputs != n_tokens) {
+            mtp_hidden = ggml_get_rows(ctx0, mtp_hidden, build_inp_out_ids());
+        }
+        cur = build_output(lctx, ctx0, mtp_hidden, model.output, cb);
+    } else {
+        cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+    }
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
@@ -1464,6 +1481,8 @@ struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
 #endif
 
     const int il = hparams.n_layer - 1;
+    const bool emit_logits = lctx.cparams.mtp_op_type == MTP_OP_DRAFT_GEN ||
+                             lctx.cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
 
     const uint32_t n_embd_head_k_mtp   = hparams.n_embd_head_k(il);
 
@@ -1536,6 +1555,10 @@ struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
     cur = ggml_add(ctx0, cur, ffn_inp);
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "mtp_ffn_out_resid", il);
+
+    if (!emit_logits) {
+        return cur;
+    }
 
     // Output head
     if (mtp_layer.nextn.shared_head_norm == nullptr) {

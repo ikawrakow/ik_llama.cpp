@@ -381,6 +381,9 @@ static ggml_tensor * build_glm5next_mla_attention(
 ggml_cgraph * llm_build_context::build_glm5next_mtp() {
     ggml_cgraph * gf = new_graph_custom();
 
+    const bool emit_logits = cparams.mtp_op_type == MTP_OP_DRAFT_GEN ||
+            cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
+
     GGML_ASSERT(hparams.nextn_predict_layers == 1);
 
     const int il = hparams.n_layer - hparams.nextn_predict_layers;
@@ -485,9 +488,15 @@ ggml_cgraph * llm_build_context::build_glm5next_mtp() {
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "mtp_ffn_out_resid", il);
 
+    if (!emit_logits) {
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
+
     ggml_tensor * head_norm = mtp_layer.nextn.shared_head_norm
         ? mtp_layer.nextn.shared_head_norm : model.output_norm;
     GGML_ASSERT(head_norm != nullptr);
+
     cur = llm_build_norm(ctx0, cur, hparams, head_norm,
             nullptr, LLM_NORM_RMS, cb, il);
     cb(cur, "result_norm", -1);
@@ -514,7 +523,7 @@ ggml_cgraph * llm_build_context::build_glm5next() {
 
     auto inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
     auto KQ_mask = build_inp_KQ_mask();
-    auto inp_out_ids = build_inp_out_ids();
+    auto inp_out_ids = (!lctx.cparams.mtp || n_outputs > 0) ? build_inp_out_ids() : nullptr;
 
     // KDA recurrent state slot routing
     lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
@@ -674,6 +683,9 @@ ggml_cgraph * llm_build_context::build_glm5next() {
             cb(inpL, "result_mtp_embd", -1);
             ggml_set_output(inpL);
             ggml_build_forward_expand(gf, inpL);
+            if (n_outputs == 0) {
+                return gf;
+            }
         }
     }
 
