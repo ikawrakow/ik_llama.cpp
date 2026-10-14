@@ -5586,6 +5586,9 @@ GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, si
 }
 
 GGML_CALL bool ggml_backend_cuda_is_integrated(int device) {
+    if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
+        return false;
+    }
     return ggml_cuda_info().devices[device].integrated;
 }
 
