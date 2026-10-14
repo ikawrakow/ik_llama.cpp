@@ -999,7 +999,7 @@ static llama_ftype repacked_ftype(llama_ftype ftype) {
 }
 
 #ifdef GGML_USE_CUDA
-// One row-split shard: same kernels as mono (identical bytes), CPU fallback per miss.
+// Row-split shard: mono kernels, per-shard CPU fallback.
 static size_t quantize_cuda_shard_rows(ggml_type new_type, const float * f32_data, char * new_data,
         const float * imatrix, int device, int64_t nrows, int64_t n_per_row, int64_t nslice,
         int64_t r0, int64_t nr, size_t row_size, const llama_model_quantize_params * params) {
@@ -1017,17 +1017,14 @@ static size_t quantize_cuda_shard_rows(ggml_type new_type, const float * f32_dat
     return bytes;
 }
 
-// Largest remainder: integer rows closest to the shares, ties to lower index.
-// Rows are apportioned in multiples of group (the row-interleave factor from
-// interleaved_properties, 1 for plain types) so every shard satisfies the
-// nrows%group==0 asserts of the repacked quantizers (e.g. R4 needs %4, R16 %16).
+// Largest remainder on group counts (ties to lower index), so every shard is a
+// multiple of group and satisfies the nrows%group==0 asserts of repacked quants.
 static void split_rows_by_weight(int64_t nrows, const float * weights, int n_dev, int64_t * rows, int64_t group) {
     if (group < 1) {
         group = 1;
     }
     if (nrows % group != 0) {
-        // Not even mono-safe: keep mono behavior (single shard on device 0).
-        rows[0] = nrows;
+        rows[0] = nrows; // not mono-safe: single shard, same as mono
         for (int i = 1; i < n_dev; ++i) {
             rows[i] = 0;
         }
@@ -1039,12 +1036,11 @@ static void split_rows_by_weight(int64_t nrows, const float * weights, int n_dev
         total += (double) weights[i];
     }
     std::vector<double> frac(n_dev, 0.0);
-    std::vector<int64_t> groups(n_dev, 0);
     int64_t assigned = 0;
     for (int i = 0; i < n_dev; ++i) {
         const double exact = total > 0.0 ? (double) ngroups*(double) weights[i]/total : 0.0;
-        const int64_t base = (int64_t) exact; // exact >= 0, truncation == floor
-        groups[i] = base;
+        const int64_t base = (int64_t) exact;
+        rows[i] = base*group;
         frac[i] = exact - (double) base;
         assigned += base;
     }
@@ -1055,15 +1051,12 @@ static void split_rows_by_weight(int64_t nrows, const float * weights, int n_dev
                 best = i;
             }
         }
-        groups[best] += 1;
+        rows[best] += group;
         frac[best] = -1.0;
-    }
-    for (int i = 0; i < n_dev; ++i) {
-        rows[i] = groups[i]*group;
     }
 }
 
-// Row-split over n_dev GPUs (-dev CUDA0,CUDA1,CUDA2 -ts 3,3,2), one thread per shard.
+// Row-split over n_dev GPUs, one thread per shard.
 static size_t do_quantize_cuda_quantize_split(const ggml_tensor * tensor, ggml_type new_type,
         const float * f32_data, char * new_data, const float * imatrix,
         const int * devices, const float * weights, int n_dev,
@@ -1078,18 +1071,18 @@ static size_t do_quantize_cuda_quantize_split(const ggml_tensor * tensor, ggml_t
 
     std::vector<int64_t> rows(n_dev, 0);
     split_rows_by_weight(nrows, weights, n_dev, rows.data(), interleaved_properties(new_type).second);
+    std::vector<int64_t> offs(n_dev + 1, 0);
+    for (int i = 0; i < n_dev; ++i) {
+        offs[i + 1] = offs[i] + rows[i];
+    }
 
     std::vector<size_t>             bytes(n_dev, 0);
     std::vector<std::exception_ptr> eptrs(n_dev);
 
     auto run_shard = [&](int idx) {
         try {
-            int64_t r0 = 0;
-            for (int i = 0; i < idx; ++i) {
-                r0 += rows[i];
-            }
             bytes[idx] = quantize_cuda_shard_rows(new_type, f32_data, new_data, imatrix,
-                    devices[idx], nrows, n_per_row, nslice, r0, rows[idx], row_size, params);
+                    devices[idx], nrows, n_per_row, nslice, offs[idx], rows[idx], row_size, params);
         }
         catch (...) {
             eptrs[idx] = std::current_exception();
@@ -1111,11 +1104,7 @@ static size_t do_quantize_cuda_quantize_split(const ggml_tensor * tensor, ggml_t
             std::rethrow_exception(eptrs[i]);
         }
     }
-    size_t total = 0;
-    for (int i = 0; i < n_dev; ++i) {
-        total += bytes[i];
-    }
-    return total;
+    return std::accumulate(bytes.begin(), bytes.end(), size_t(0));
 }
 #endif
 
