@@ -1394,7 +1394,11 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq4_ks_r16_ref,
         .vec_dot                  = vec_dot_iq4_ks_r16_q8_0,
 #if defined __AVX2__
+#ifdef HAVE_FANCY_SIMD
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+#else
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#endif
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -5120,18 +5124,25 @@ static bool ggml_is_kt_tail_type(enum ggml_type type) {
 }
 
 GGML_CALL int64_t ggml_row_blck_size(enum ggml_type type) {
-    return ggml_is_kt_tail_type(type) ? 32 : type_traits[type].blck_size;
+    return ggml_is_kt_tail_type(type) || type == GGML_TYPE_Q8_K || type == GGML_TYPE_Q8_K_R16 ? 32 : type_traits[type].blck_size;
 }
 
 GGML_CALL size_t ggml_row_size(enum ggml_type type, int64_t ne) {
+    if (type == GGML_TYPE_Q8_K || type == GGML_TYPE_Q8_K_R16) {
+        int nb256 = ne / QK_K;
+        int nbtail = (ne - QK_K*nb256)/32;
+        if (type == GGML_TYPE_Q8_K) {
+            return nb256*sizeof(block_q8_K) + nbtail*(2*sizeof(float) + 2*sizeof(int16_t) + 32);
+        } else {
+            return nb256*(sizeof(block_q8_k_r16)/16) + (nbtail == 0 ? 0 : sizeof(float) + 32*nbtail);
+        }
+    }
     if (type == GGML_TYPE_IQ3_KS_R16) {
         // 16-row bands: 16 f32 row scales + (ne/32) blocks of 204 B, padded so
         // that a band is a whole number of bytes per row (16*row_size == band).
-        assert(ne % 32 == 0);
         return GGML_PAD(64 + (ne/32)*sizeof(block_iq3_ks_r16), 16)/16;
     }
     if (ggml_is_kt_tail_type(type)) {
-        assert(ne % 32 == 0);
         const int nt = (ne % QK_K)/32;
         const size_t tail = type == GGML_TYPE_IQ1_KT ? nt > 0 ? 8 + 4*nt + MIN(4*nt, 16) : 0
                           : type == GGML_TYPE_IQ2_KT ? nt > 0 ? 4 + 8*nt : 0

@@ -1849,7 +1849,7 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
 }
 
 #ifdef HAVE_FANCY_SIMD
-template <int nrc_y>
+template <bool has_tail, int nrc_y>
 static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
@@ -1883,6 +1883,33 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
                 acc[iy] = _mm512_fmadd_ps(m4,  _mm512_set1_ps(q8.y[iy][ibl].sum), acc[iy]);
                 isum[iy] = isum2[iy] = _mm512_setzero_si512();
             }
+        }
+        if constexpr (has_tail) {
+        if (int nleft = n - nbl*QK_K; nleft > 0) {
+            int nbtail = nleft/32;
+            auto d4 = _mm512_loadu_ps(iq16[nbl].d);
+            _Pragma("GCC unroll 2")
+            for (int ib = 0; ib < 2*nbtail; ++ib) {
+                qx[0] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+0);
+                qx[1] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+1);
+                qx[2] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+2);
+                qx[3] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+3);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    const int8_t * yb = q8.y[iy][nbl].qs + 16*ib;
+                    isum [iy] = _mm512_dpbusd_epi32(isum [iy], qx[0], _mm512_set1_epi32(*(const int32_t *)(yb +  0)));
+                    isum2[iy] = _mm512_dpbusd_epi32(isum2[iy], qx[1], _mm512_set1_epi32(*(const int32_t *)(yb +  4)));
+                    isum [iy] = _mm512_dpbusd_epi32(isum [iy], qx[2], _mm512_set1_epi32(*(const int32_t *)(yb +  8)));
+                    isum2[iy] = _mm512_dpbusd_epi32(isum2[iy], qx[3], _mm512_set1_epi32(*(const int32_t *)(yb + 12)));
+                }
+            }
+            auto m4 = _mm512_mul_ps(d4, _mm512_set1_ps(-128.f));
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto d4y = _mm512_mul_ps(d4, _mm512_set1_ps(q8.scale(iy, nbl)));
+                acc[iy] = _mm512_fmadd_ps(d4y, _mm512_cvtepi32_ps(_mm512_add_epi32(isum[iy], isum2[iy])), acc[iy]);
+                acc[iy] = _mm512_fmadd_ps(m4,  _mm512_set1_ps(q8.y[iy][nbl].sum), acc[iy]);
+                isum[iy] = isum2[iy] = _mm512_setzero_si512();
+            }
+        }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
             info.store(ix, iy, acc[iy]);
@@ -3051,7 +3078,7 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
 
 } // namespace
 
-bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
+bool iqk_set_kernels_kquants([[maybe_unused]] int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
 
     auto etypeA = ggml_type(typeA);
     if ((etypeA == GGML_TYPE_Q8_K_R16 || etypeA == GGML_TYPE_Q8_K_R8) && ggml_type(typeB) == GGML_TYPE_Q8_K32) typeB = GGML_TYPE_Q8_K;
@@ -3065,7 +3092,8 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
                          //: etypeA == GGML_TYPE_Q4_K  || etypeA == GGML_TYPE_Q5_K ? GGML_TYPE_Q8_2_X4
                          : GGML_TYPE_Q8_K;
 
-    if (ne00%QK_K != 0 || ggml_type(typeB) != expected_type_B) {
+    //if (ne00%QK_K != 0 || ggml_type(typeB) != expected_type_B) {
+    if (ggml_type(typeB) != expected_type_B) {
         return false;
     }
 
@@ -3120,7 +3148,11 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
             break;
 #ifdef HAVE_FANCY_SIMD
         case GGML_TYPE_Q8_K_R16:
-            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_k_r16_q8_k, kernels)
+            if (ne00 % QK_K == 0) {
+                IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, false, kernels)
+            } else {
+                IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, true, kernels)
+            }
             break;
 #endif
         case GGML_TYPE_Q8_KV:
