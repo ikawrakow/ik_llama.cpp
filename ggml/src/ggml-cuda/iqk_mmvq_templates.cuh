@@ -5,6 +5,7 @@
 //
 
 #pragma once
+#include "mmvq.cuh"
 #include "iqk_mmvq.cuh"
 #include "iqk_cuda_common.h"
 #include "mmvq-args.h"
@@ -350,7 +351,8 @@ static void iqk_mul_mat_vec_q_cuda(const mmvq_args & args, cudaStream_t stream) 
     } else {
         GGML_ASSERT(args.ncols_x % ggml_blck_size(type) == 0);
     }
-    //GGML_ASSERT(ncols_y <= MMVQ_MAX_BATCH_SIZE);
+    constexpr int k_max_cols = ggml_cuda_has_arch(CC_PASCAL) ? MMVQ_MAX_NCOLS_PASCAL : MMVQ_MAX_BATCH_SIZE;
+    GGML_ASSERT(args.ncols_y <= k_max_cols);
 
     int id = ggml_cuda_get_device();
 
