@@ -1063,12 +1063,8 @@ static void mul_mat_iq2_xxs_r4_q8_k_1(int n, const void * vx, size_t bx, const D
             auto isum23 = _mm512_setzero_si512();
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto qs = iq2[ibl].qs + 16*ib;
-                auto w0 = _mm256_set_epi64x(grid[qs[ 3]], grid[qs[ 2]], grid[qs[ 1]], grid[qs[ 0]]);
-                auto w1 = _mm256_set_epi64x(grid[qs[ 7]], grid[qs[ 6]], grid[qs[ 5]], grid[qs[ 4]]);
-                auto w2 = _mm256_set_epi64x(grid[qs[11]], grid[qs[10]], grid[qs[ 9]], grid[qs[ 8]]);
-                auto w3 = _mm256_set_epi64x(grid[qs[15]], grid[qs[14]], grid[qs[13]], grid[qs[12]]);
-                auto w01 = _mm512_inserti64x4(_mm512_castsi256_si512(w0), w1, 1);
-                auto w23 = _mm512_inserti64x4(_mm512_castsi256_si512(w2), w3, 1);
+                auto w01 = _mm512_i64gather_epi64(_mm512_cvtepu8_epi64(_mm_loadl_epi64((const __m128i *)(qs + 0))), (const long long *)grid, 8);
+                auto w23 = _mm512_i64gather_epi64(_mm512_cvtepu8_epi64(_mm_loadl_epi64((const __m128i *)(qs + 8))), (const long long *)grid, 8);
                 auto y   = _mm512_broadcast_i64x4(_mm256_loadu_si256((const __m256i *)q8.y[0][ibl].qs + ib));
                 auto y01 = _mm512_mask_sub_epi8(y, the_signs.val[2*ib+0], zero, y);
                 auto y23 = _mm512_mask_sub_epi8(y, the_signs.val[2*ib+1], zero, y);
@@ -1227,12 +1223,8 @@ static void mul_mat_iq2_xs_r4_q8_k_1(int n, const void * vx, size_t bx, const Da
             auto isum23 = _mm512_setzero_si512();
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto idx = the_idx.val + 16*ib;
-                auto w0 = _mm256_set_epi64x(grid[idx[ 3]], grid[idx[ 2]], grid[idx[ 1]], grid[idx[ 0]]);
-                auto w1 = _mm256_set_epi64x(grid[idx[ 7]], grid[idx[ 6]], grid[idx[ 5]], grid[idx[ 4]]);
-                auto w2 = _mm256_set_epi64x(grid[idx[11]], grid[idx[10]], grid[idx[ 9]], grid[idx[ 8]]);
-                auto w3 = _mm256_set_epi64x(grid[idx[15]], grid[idx[14]], grid[idx[13]], grid[idx[12]]);
-                auto w01 = _mm512_inserti64x4(_mm512_castsi256_si512(w0), w1, 1);
-                auto w23 = _mm512_inserti64x4(_mm512_castsi256_si512(w2), w3, 1);
+                auto w01 = _mm512_i64gather_epi64(_mm512_cvtepu16_epi64(_mm_loadu_si128((const __m128i *)idx + 0)), (const long long *)grid, 8);
+                auto w23 = _mm512_i64gather_epi64(_mm512_cvtepu16_epi64(_mm_loadu_si128((const __m128i *)idx + 1)), (const long long *)grid, 8);
                 auto y   = _mm512_broadcast_i64x4(_mm256_loadu_si256((const __m256i *)q8.y[0][ibl].qs + ib));
                 auto y01 = _mm512_mask_sub_epi8(y, the_signs.val[2*ib+0], zero, y);
                 auto y23 = _mm512_mask_sub_epi8(y, the_signs.val[2*ib+1], zero, y);
@@ -1549,10 +1541,8 @@ static void mul_mat_iq2_s_r4_q8_k_1(int n, const void * vx, size_t bx, const Dat
     Q8<1, block_q8_K> q8(info);
     int nbl = n / QK_K;
     const auto zero    = _mm512_setzero_si512();
-#ifdef GGML_USE_I32GATHER
     const auto qh_rot01 = _mm512_setr_epi64( 8,  6,  4,  2,  0, 62, 60, 58);
     const auto qh_rot23 = _mm512_setr_epi64(56, 54, 52, 50, 48, 46, 44, 42);
-#endif
     const auto shuf01  = iq2_r4_scale_shuffle01();
     const auto shuf23  = iq2_r4_scale_shuffle23();
     const auto fold    = _mm512_setr_epi32(0, 8, 16, 24, 4, 12, 20, 28, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -1567,35 +1557,18 @@ static void mul_mat_iq2_s_r4_q8_k_1(int n, const void * vx, size_t bx, const Dat
             auto d4 = _mm256_set_m128(dl, dl);
             _mm512_store_si512(&the_scales.vec, iq2_r4_decode_scales(iq2[ibl].scales));
             auto sg64 = (const uint64_t *)iq2[ibl].signs;
-#ifdef GGML_USE_I32GATHER
             auto qh32 = (const uint32_t *)iq2[ibl].qh;
-#endif
             auto isum01 = _mm512_setzero_si512();
             auto isum23 = _mm512_setzero_si512();
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto ql = iq2[ibl].qs + 16*ib;
-#ifdef GGML_USE_I32GATHER
                 auto qh  = _mm512_set1_epi32(qh32[ib]);
                 auto i01 = _mm512_ternarylogic_epi64(_mm512_rolv_epi64(qh, qh_rot01), _mm512_set1_epi64(0x300),
                                                      _mm512_cvtepu8_epi64(_mm_loadl_epi64((const __m128i *)(ql + 0))), 0xea);
                 auto i23 = _mm512_ternarylogic_epi64(_mm512_rolv_epi64(qh, qh_rot23), _mm512_set1_epi64(0x300),
                                                      _mm512_cvtepu8_epi64(_mm_loadl_epi64((const __m128i *)(ql + 8))), 0xea);
-                // The commented out 512-bit gathers below are faster on Intel but slower on Zen 4
-                auto w01 = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_i64gather_epi64((const long long *)grid, _mm512_castsi512_si256(i01), 8)),
-                                              _mm256_i64gather_epi64((const long long *)grid, _mm512_extracti64x4_epi64(i01, 1), 8), 1);
-                auto w23 = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_i64gather_epi64((const long long *)grid, _mm512_castsi512_si256(i23), 8)),
-                                              _mm256_i64gather_epi64((const long long *)grid, _mm512_extracti64x4_epi64(i23, 1), 8), 1);
-                //auto w01 = _mm512_i64gather_epi64(i01, (const long long *)grid, 8);
-                //auto w23 = _mm512_i64gather_epi64(i23, (const long long *)grid, 8);
-#else
-                auto qh = iq2[ibl].qh + 4*ib;
-                auto w0 = _mm256_set_epi64x(grid[ql[ 3] | ((qh[0] << 2) & 0x300)], grid[ql[ 2] | ((qh[0] << 4) & 0x300)], grid[ql[ 1] | ((qh[0] << 6) & 0x300)], grid[ql[ 0] | ((qh[0] << 8) & 0x300)]);
-                auto w1 = _mm256_set_epi64x(grid[ql[ 7] | ((qh[1] << 2) & 0x300)], grid[ql[ 6] | ((qh[1] << 4) & 0x300)], grid[ql[ 5] | ((qh[1] << 6) & 0x300)], grid[ql[ 4] | ((qh[1] << 8) & 0x300)]);
-                auto w2 = _mm256_set_epi64x(grid[ql[11] | ((qh[2] << 2) & 0x300)], grid[ql[10] | ((qh[2] << 4) & 0x300)], grid[ql[ 9] | ((qh[2] << 6) & 0x300)], grid[ql[ 8] | ((qh[2] << 8) & 0x300)]);
-                auto w3 = _mm256_set_epi64x(grid[ql[15] | ((qh[3] << 2) & 0x300)], grid[ql[14] | ((qh[3] << 4) & 0x300)], grid[ql[13] | ((qh[3] << 6) & 0x300)], grid[ql[12] | ((qh[3] << 8) & 0x300)]);
-                auto w01 = _mm512_inserti64x4(_mm512_castsi256_si512(w0), w1, 1);
-                auto w23 = _mm512_inserti64x4(_mm512_castsi256_si512(w2), w3, 1);
-#endif
+                auto w01 = _mm512_i64gather_epi64(i01, (const long long *)grid, 8);
+                auto w23 = _mm512_i64gather_epi64(i23, (const long long *)grid, 8);
                 auto y   = _mm512_broadcast_i64x4(_mm256_loadu_si256((const __m256i *)q8.y[0][ibl].qs + ib));
                 auto y01 = _mm512_mask_sub_epi8(y, sg64[2*ib+0], zero, y);
                 auto y23 = _mm512_mask_sub_epi8(y, sg64[2*ib+1], zero, y);
@@ -2092,6 +2065,7 @@ static void mul_mat_iq3_s_r4_q8_k_1(int n, const void * vx, size_t bx, const Dat
         auto iq3 = (const block_iq3_s_r4 *)((const char *)vx + (ix+0)*bx);
         auto acc = _mm256_setzero_ps();
         for (int ibl = 0; ibl < nbl; ++ibl) {
+            prefetch_r4_block_ahead(iq3 + ibl);
             auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq3[ibl].d));
             auto d4 = _mm256_set_m128(dl, dl);
             auto scale_bits = _mm_loadu_si128((const __m128i *)iq3[ibl].scales);
