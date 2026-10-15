@@ -7,16 +7,15 @@
 #if !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
 
 // same result as IQ3_KS/IQ4_KS/IQ5_KS quantization on the CPU; the _rn intrinsics mirror each rounding and FMA of the GCC -O3 -march=native build
-namespace {
 
 constexpr int kKsBlock   = 32;
 constexpr int kKsThreads = 128;
 
 template <ggml_type type> struct ks_traits {
-    static constexpr int nval   = type == GGML_TYPE_IQ5_KS ? 32 : type == GGML_TYPE_IQ4_KS ? 16 : 8;
-    static constexpr int nindex = type == GGML_TYPE_IQ5_KS ? 247 : type == GGML_TYPE_IQ4_KS ? 241 : 111;
-    static constexpr int ntry   = type == GGML_TYPE_IQ4_KS ? 7 : 5;
-    static constexpr int nmap   = type == GGML_TYPE_IQ3_KS ? 127 : 240;
+    static constexpr int nval    = type == GGML_TYPE_IQ5_KS ?  32 : type == GGML_TYPE_IQ4_KS ?  16 :   8;
+    static constexpr int nindex  = type == GGML_TYPE_IQ5_KS ? 247 : type == GGML_TYPE_IQ4_KS ? 241 : 111;
+    static constexpr int ntry    = type == GGML_TYPE_IQ4_KS ?   7 :   5;
+    static constexpr int nmap    = type == GGML_TYPE_IQ3_KS ? 127 : 240;
     static constexpr int nsimple = type == GGML_TYPE_IQ3_KS ? 128 : 256;
 };
 
@@ -321,8 +320,6 @@ static const int8_t * ks_get_index(int device, ggml_type type, bool simple) {
         tables[device][it] = ggml_cuda_quantize_upload(index, n);
     }
     return tables[device][it];
-}
-
 }
 
 size_t ggml_cuda_quantize_ks(int device, ggml_type type, const float * src, void * dst, int64_t nrows, int64_t n_per_row, int64_t nslice,
