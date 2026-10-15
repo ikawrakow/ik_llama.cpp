@@ -1,4 +1,5 @@
 #include "common.cuh"
+#include "ks-encoder.cuh"
 #include "../iqk/iqk_quantize.h"
 
 #include <cstring>
@@ -542,14 +543,6 @@ static __global__ void k_kt_refit(const float * __restrict__ x, const float * __
     }
 }
 
-template <typename T>
-static T * kt_upload(const T * src, size_t n) {
-    T * dst;
-    CUDA_CHECK(cudaMalloc(&dst, n*sizeof(T)));
-    CUDA_CHECK(cudaMemcpy(dst, src, n*sizeof(T), cudaMemcpyHostToDevice));
-    return dst;
-}
-
 static kt_codebook kt_get_codebook(int device, ggml_type type) {
     static std::mutex mutex;
     static kt_codebook books[GGML_CUDA_MAX_DEVICES][2];
@@ -566,9 +559,9 @@ static kt_codebook kt_get_codebook(int device, ggml_type type) {
             const int nc = iqk_kt_codebook(type, ib, &offsets, &points, &values, &mid);
             const std::vector<uint16_t> points16(points, points + offsets[nc]);
             kt_bank & b = books[device][it].bank[ib];
-            b.offsets = kt_upload(offsets, nc + 1);
-            b.points = kt_upload(points16.data(), points16.size());
-            b.values = kt_upload(values, size_t(group_size)*num_val);
+            b.offsets = ggml_cuda_quantize_upload(offsets, nc + 1);
+            b.points = ggml_cuda_quantize_upload(points16.data(), points16.size());
+            b.values = ggml_cuda_quantize_upload(values, size_t(group_size)*num_val);
             std::memcpy(b.mid, mid, sizeof(b.mid));
             b.offset = ib ? 4096 + 32768 : 4096;
             b.num_val = num_val;
@@ -582,7 +575,9 @@ static kt_codebook kt_get_codebook(int device, ggml_type type) {
 
 GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float * src, void * dst, int64_t nrows, int64_t n_per_row, int64_t nslice,
         const float * imatrix) {
-    if (type != GGML_TYPE_IQ4_KT && type != GGML_TYPE_IQ3_KT) {
+    const bool ks = type == GGML_TYPE_IQ3_KS || type == GGML_TYPE_IQ4_KS || type == GGML_TYPE_IQ5_KS || type == GGML_TYPE_IQ4_KS_R4 ||
+        type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ5_KS_R4;
+    if (type != GGML_TYPE_IQ4_KT && type != GGML_TYPE_IQ3_KT && !ks) {
         return 0;
     }
 #if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
@@ -593,7 +588,7 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     if (!available) {
         static bool warned = false;
         if (!warned) {
-            fprintf(stderr, "%s: device %d cannot run the KT encoder, KT tensors use the CPU encoder\n", __func__, device);
+            fprintf(stderr, "%s: device %d cannot run the CUDA encoder, tensors use the CPU encoder\n", __func__, device);
             warned = true;
         }
         return 0;
@@ -604,6 +599,9 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
 #else
     const bool iq3 = type == GGML_TYPE_IQ3_KT;
     ggml_cuda_set_device(device);
+    if (ks) {
+        return ggml_cuda_quantize_ks(device, type, src, dst, nrows, n_per_row, nslice, imatrix);
+    }
     const kt_codebook cb = kt_get_codebook(device, type);
 
     const int np = GGML_PAD(n_per_row, QK_K);
@@ -615,11 +613,9 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     const float fudge = ggml_get_quantize_fudge_factor(type);
     const int64_t total_rows = nrows*nslice;
 
-    size_t free_mem, total_mem;
-    CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
     const size_t per_row = 3*size_t(np)*sizeof(float) + nb32*(sizeof(float) + 1) + nb*(sizeof(float) + sizeof(uint32_t)) + sizeof(float) +
         kKtTries*sizeof(float2) + row_bytes;
-    const int64_t chunk = std::max<int64_t>(1, std::min<int64_t>(total_rows, std::min<size_t>(free_mem/2, size_t(1) << 30)/per_row));
+    const int64_t chunk = ggml_cuda_quantize_chunk(total_rows, per_row);
 
     float * d_x, * d_w, * d_q, * d_scales, * d_sb_amax, * d_row_d, * d_imatrix = nullptr;
     float2 * d_sums;
@@ -642,7 +638,7 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     if (imatrix) {
         std::vector<float> padded(nslice*np, 0.f);
         for (int64_t is = 0; is < nslice; ++is) std::memcpy(padded.data() + is*np, imatrix + is*n_per_row, n_per_row*sizeof(float));
-        d_imatrix = kt_upload(padded.data(), padded.size());
+        d_imatrix = ggml_cuda_quantize_upload(padded.data(), padded.size());
     }
 
     std::vector<float> xpad(nt ? chunk*np : 0, 0.f);
