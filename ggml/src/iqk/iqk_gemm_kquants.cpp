@@ -1906,7 +1906,7 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
 }
 
 #ifdef HAVE_FANCY_SIMD
-template <int nrc_y>
+template <bool has_tail, int nrc_y>
 static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
@@ -1941,9 +1941,11 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
                 isum[iy] = isum2[iy] = _mm512_setzero_si512();
             }
         }
+        if constexpr (has_tail) {
         if (int nleft = n - nbl*QK_K; nleft > 0) {
             int nbtail = nleft/32;
             auto d4 = _mm512_loadu_ps(iq16[nbl].d);
+            _Pragma("GCC unroll 2")
             for (int ib = 0; ib < 2*nbtail; ++ib) {
                 qx[0] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+0);
                 qx[1] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+1);
@@ -1964,6 +1966,7 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
                 acc[iy] = _mm512_fmadd_ps(m4,  _mm512_set1_ps(q8.y[iy][nbl].sum), acc[iy]);
                 isum[iy] = isum2[iy] = _mm512_setzero_si512();
             }
+        }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
             info.store(ix, iy, acc[iy]);
@@ -3202,7 +3205,11 @@ bool iqk_set_kernels_kquants([[maybe_unused]] int ne00, int typeA, int typeB, st
             break;
 #ifdef HAVE_FANCY_SIMD
         case GGML_TYPE_Q8_K_R16:
-            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_k_r16_q8_k, kernels)
+            if (ne00 % QK_K == 0) {
+                IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, false, kernels)
+            } else {
+                IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_q8_k_r16_q8_k, true, kernels)
+            }
             break;
 #endif
         case GGML_TYPE_Q8_KV:
