@@ -3212,7 +3212,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             break;
         case GGML_TYPE_IQ4_KS_R16:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq4_ks_r16_q8_2, kernels)
+#ifdef HAVE_FANCY_SIMD
             expected_typeB = GGML_TYPE_Q8_K;
+#endif
             break;
         default:
             return false;
