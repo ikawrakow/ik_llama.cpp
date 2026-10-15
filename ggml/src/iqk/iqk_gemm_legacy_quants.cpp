@@ -3107,7 +3107,9 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q5_0_R4  : iqk_convert_q5_0_r4_q80_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_0_R4  : iqk_convert_q6_0_r4_q80_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_MXFP4 : iqk_convert_qX_q80_r8<block_mxfp4, MXFP40_Dequantizer>(n, vx, bx, vy, nrc_x); break;
+#ifdef HAVE_FANCY_SIMD
         case GGML_TYPE_IQ4_KS_R16: iqk_convert_iq4_ks_r16_q8_k_r8(n, vx, bx, vy, nrc_x); break;
+#endif
         default: return false;
     }
     return true;
