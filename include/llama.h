@@ -894,6 +894,9 @@ extern "C" {
     // Save the current recurrent state as a speculative checkpoint.
     LLAMA_API bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id);
 
+    // Save the current recurrent state as a rewind checkpoint
+    LLAMA_API bool llama_rewind_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id, int max_tokens);
+
     // Restore the recurrent state after speculative decode.
     LLAMA_API bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_seq_id seq_id,
                                             llama_pos n_past, int accepted_step);

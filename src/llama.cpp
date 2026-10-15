@@ -10842,6 +10842,15 @@ bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id) {
     }
 }
 
+bool llama_rewind_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id, int max_tokens) {
+    llama_spec_ckpt_init(ctx, LLAMA_SPEC_CKPT_GPU_FALLBACK, max_tokens);
+    auto success = llama_spec_ckpt_save(ctx, seq_id);
+    if (!success) {
+        llama_spec_ckpt_discard(ctx);
+    }
+    return success;
+}
+
 enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
         struct llama_context * ctx, llama_seq_id seq_id,
         llama_pos n_past, int accepted_step) {

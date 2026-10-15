@@ -1893,10 +1893,15 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
          llama_kv_cache_is_compacted(slot.ctx));
 
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
-        params_base.can_ban_phrases = false;
-        if (slot.n_buffer != 0) {
-            LLAMA_LOG_WARN("banned strings is not supported by recurrent model, it will be disabled.\n");
+        if (slot.n_buffer != 0 && params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
+            params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
+            params_base.speculative.stages.clear();
+            params_base.has_mtp = false;
+            llama_spec_ckpt_discard(slot.ctx);
+            LLAMA_LOG_WARN("banned strings cannot be used together with speculative decoding with recurrent model, speculative decoding will be disabled.\n");
         }
+    }
+    if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
             LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
@@ -4810,8 +4815,16 @@ void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.cache_tokens.keep_first(n_keep_cache);
     slot.n_past = slot.cache_tokens.n_tokens();
 
-    // Remove from KV cache
-    llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
+    if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+        auto n_past = slot.cache_tokens.pos_next(slot.n_past);
+        auto result = llama_spec_ckpt_restore(slot.ctx, slot.id, n_past, 0); // restore recurrent layers
+        if (!result) {
+            LLAMA_LOG_ERROR("--- Restoring checkpoint for string ban failed. \n");
+        }
+    } else {
+        // Remove from KV cache
+        llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
+    }
 
     // Truncate buffer
     slot.token_buffer.resize(n_keep_buffer);
@@ -4841,7 +4854,10 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     }
 
     bool allow_rewind = true;
-
+    if (slot.n_decoded==1 && llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+        // take a snapshat before generation
+        llama_rewind_ckpt_save(slot.ctx, slot.id, slot.n_buffer);
+    }
     if (ban_pos >= 0) {
         if (slot.rewind_count_max == -1) {
             // Automatic / Heuristic logic
@@ -4878,6 +4894,9 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
         else {
             // send 1 token from the front (FIFO)
             send_token_results(slot.token_buffer, slot, 1);
+        }
+        if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+            llama_rewind_ckpt_save(slot.ctx, slot.id, slot.n_buffer);
         }
     }
     else {
