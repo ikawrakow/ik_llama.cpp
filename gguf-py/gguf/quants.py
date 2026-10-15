@@ -12,6 +12,7 @@ import numpy as np
 
 
 _KT_TAIL_BYTES = {
+    GGMLQuantizationType.IQ1_KT: lambda nt: 8 * ((nt + 7) // 8) + 4 * nt + min(4 * nt, 16),
     GGMLQuantizationType.IQ2_KT: lambda nt: 4 * ((nt + 7) // 8) + 8 * nt,
     GGMLQuantizationType.IQ3_KT: lambda nt: (nt + 1) // 2 + 12 * nt,
     GGMLQuantizationType.IQ4_KT: lambda nt: 16 * nt,
