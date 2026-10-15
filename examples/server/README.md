@@ -804,7 +804,7 @@ This endpoint works by converting Responses requests into Chat Completions reque
 
 Answers typed questions about a `state` with a decision model (for example: lev, openjev). The model type is read from `<arch>.decision.type` in the model file.
 
-Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not supported. Image input is not supported.
+Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not supported. Image input is supported for clef, see below.
 
 *Options:*
 
@@ -819,9 +819,22 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
   - `score`: An array of 2 to 10 level descriptions, lowest level first.
   - `noul`: Optional. An object with the descriptions of `true` and `false`.
 
-The questions of a request are answered independently, an answer does not depend on the other questions, except for nimble, whose prompt lists all the questions.
+The questions of a request are answered independently, an answer does not depend on the other questions, except for nimble, whose prompt lists all the questions, and clef, which reads all the questions in one prompt and decides them jointly.
 
-The number of options of a `choice` question is limited by the model, for example: 52 for openjev.
+The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for clef.
+
+For clef, the whole prompt is evaluated in one batch, images included: it must fit in `--ubatch-size` and in the context of a slot. The prompt cache is not used for clef requests.
+
+The clef decision head (`dec.blk.*` and `decision.*` tensors) is quantized like the rest of the model. The importance matrix does not cover it, so with a type that requires one (for example `IQ2_KT`), or to keep the head at a higher precision, set its type with `llama-quantize --custom-q '^dec\.=q8_0,^decision\.=q8_0' ...`.
+
+*Image input:*
+
+Image input needs a model that supports it (clef) and its multimodal projector, see `--mmproj`. Images can be given in two ways, and both can be used in the same request:
+
+- The `files` field, or its alias `images`: an array of data URLs (`data:image/...;base64,...`).
+- A `state` made of chat messages, either an array of messages or an object with a `messages` array. An `image_url` part in the `content` of a message is taken as an image, in the same format as chat completions. Only data URLs are accepted.
+
+All the images are placed before the state in the prompt, the ones from `files` and `images` first. The image parts are removed from the state. At most 8 images are accepted.
 
 *Response:*
 

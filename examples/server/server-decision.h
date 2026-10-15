@@ -17,6 +17,7 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_OPENJEV, // logits of one label token per option, read at the last prompt token
     COMMON_DECISION_TYPE_LEV,     // same as openjev, noul is read from a rating scale
     COMMON_DECISION_TYPE_NIMBLE,  // same as openjev, the prompt lists all the questions of the request
+    COMMON_DECISION_TYPE_CLEF,    // all questions in one prompt decided jointly, option i is scored at logits[i] of the last token
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
@@ -47,9 +48,19 @@ struct server_decision_context {
     // throw std::invalid_argument on bad input
     std::vector<server_decision_question> parse_questions(const json & body) const;
 
-    // number of images in the request, throw std::invalid_argument on bad input
-    // images come from "images" and from the image_url parts of a state made of chat messages
-    size_t count_images(const json & body) const;
+    // returns the state without its images, the images are added to files, throw std::invalid_argument on bad input
+    // images come from "files", "images" and the image_url parts of a state made of chat messages
+    json parse_state(const json & body, std::vector<raw_buffer> & files) const;
+
+    // true if the prompt of the model has a place for images
+    bool can_use_images() const {
+        return type == COMMON_DECISION_TYPE_CLEF;
+    }
+
+    // true if all the questions of a request go in one prompt, see fill_task_joint()
+    bool is_joint() const {
+        return type == COMMON_DECISION_TYPE_CLEF;
+    }
 
     // number of prompts that are evaluated to answer this question, each one shows the options in a different order
     size_t n_variants(const server_decision_question & question) const;
@@ -62,6 +73,15 @@ struct server_decision_context {
             size_t variant,
             server_task & task) const;
 
+    // set the prompt of all the questions, the result has the scores of all their options, in order
+    // mctx is only used if there are files
+    void fill_task_joint(
+            const json & state,
+            const std::vector<server_decision_question> & questions,
+            const std::vector<raw_buffer> & files,
+            mtmd_context * mctx,
+            server_task & task) const;
+
     // scores: the raw model outputs of each variant
     json format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores) const;
 
@@ -72,6 +92,7 @@ private:
     std::map<std::string, float> temperatures; // "<type>" or "<type>.<n_options bucket>"
     size_t n_options_max   = 0;
     bool   noul_true_first = false; // noul options are [true, false] instead of [false, true]
+    bool   choice_sorted   = false; // choice options are in the order of their keys
 
     // OPENJEV, LEV, NIMBLE
     std::vector<llama_token> labels;

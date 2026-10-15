@@ -103,6 +103,9 @@ struct server_task {
     // used by SERVER_TASK_TYPE_DECISION
     struct decision {
         std::vector<llama_token> labels; // logits of these tokens, at the last prompt token
+
+        // for a joint head (clef): one value per prompt token, see llama_set_decision_order()
+        std::vector<int32_t> order;
     };
     decision decision;
 

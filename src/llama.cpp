@@ -701,6 +701,7 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
 
 bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fingerprint, uint64_t model_state_hash) {
     if (!cparams.graph_reuse) return false;
+    if (model.arch == LLM_ARCH_CLEF) return false; // the shapes of the decision head depend on the prompt
     if (qsa_pooled_stale) return false; // the rebuild needs a graph with the full pooling window
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
@@ -4363,7 +4364,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
                 (name == "fc.weight" || name == "enc.output_norm.weight")) ||
                 name.rfind("dflash_aux_hidden_norm.", 0) == 0 ||
                 name == "markov_w1.weight" || name == "markov_w2.weight" ||
-                name == "conf_proj.weight" || name == "conf_proj.bias") {
+                name == "conf_proj.weight" || name == "conf_proj.bias" ||
+                (model.arch == LLM_ARCH_CLEF && (name.rfind("dec.blk.", 0) == 0 || name.rfind("decision.", 0) == 0 ||
+                 name == "token_types.weight"))) {
             output_misc_size += size;
             continue;
         }
@@ -6129,7 +6132,16 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 #endif
         const int64_t n_tokens = batch.n_tokens;
 
-        ggml_backend_tensor_set(lctx.inp_tokens, batch.token, 0, n_tokens*ggml_element_size(lctx.inp_tokens));
+        if (batch.embd) {
+            // mixed batch: a negative token is a row of embd
+            std::vector<llama_token> tokens(batch.token, batch.token + n_tokens);
+            for (auto & t : tokens) {
+                t = std::max(t, 0);
+            }
+            ggml_backend_tensor_set(lctx.inp_tokens, tokens.data(), 0, n_tokens*ggml_element_size(lctx.inp_tokens));
+        } else {
+            ggml_backend_tensor_set(lctx.inp_tokens, batch.token, 0, n_tokens*ggml_element_size(lctx.inp_tokens));
+        }
 
         if (!lctx.inp_engram_rows.empty()) {
             const auto & hp = lctx.model.hparams;
@@ -6171,6 +6183,14 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         const int64_t n_tokens = batch.n_tokens;
 
         ggml_backend_tensor_set(lctx.inp_embd, batch.embd, 0, n_tokens*n_embd*ggml_element_size(lctx.inp_embd));
+
+        if (lctx.inp_embd_ids) {
+            std::vector<int32_t> ids(n_tokens);
+            for (int64_t i = 0; i < n_tokens; ++i) {
+                ids[i] = batch.token[i] < 0 ? n_tokens + i : i;
+            }
+            ggml_backend_tensor_set(lctx.inp_embd_ids, ids.data(), 0, n_tokens*sizeof(int32_t));
+        }
 
         if (lctx.inp_engram_gate_mask) {
             std::vector<float> m(n_tokens, 0.0f);
@@ -6601,6 +6621,23 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
             }
+
+            // clef: the tokens of an image share a position, they see each other in batch order
+            // the cells of this ubatch start at kv_self.head
+            if (lctx.model.arch == LLM_ARCH_CLEF && batch.embd && (data || data_f16)) {
+                GGML_ASSERT(&mask_kv_self == &kv_self && kv_self.head + n_tokens <= n_kv);
+                for (int j = 0; j < n_tokens; ++j) {
+                    for (int k = j + 1; k < n_tokens && batch.pos[k] == batch.pos[j]; ++k) {
+                        const int64_t i = kv_self.head + k;
+                        if (data) {
+                            data[j*n_kv + i] = -INFINITY;
+                        }
+                        if (data_f16) {
+                            data_f16[j*n_kv + i] = ggml_fp32_to_fp16(-INFINITY);
+                        }
+                    }
+                }
+            }
 #if IK_PRINT_TIMING == 2
             auto tim2 = ggml_time_us();
             printf("set_inputs(mask1): %d us\n", int(tim2-tim1));
@@ -6976,6 +7013,10 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
+    if (lctx.inp_decision_pool_q) {
+        llm_build_context::llama_decision_set_inputs(lctx, batch);
+    }
+
     if (lctx.inp_s_seq_qnext) {
         const int64_t n_tokens = batch.n_tokens;
 
@@ -7342,7 +7383,8 @@ static int llama_decode_internal(
 
     llama_begin_dflash_capture_batch(&lctx, (int32_t) n_tokens_all);
 
-    GGML_ASSERT((!batch_all.token && batch_all.embd) || (batch_all.token && !batch_all.embd)); // NOLINT
+    // token and embd can both be set: a mixed batch
+    GGML_ASSERT(batch_all.token || batch_all.embd); // NOLINT
 
     GGML_ASSERT(n_tokens_all <= cparams.n_batch);
 
@@ -7468,7 +7510,7 @@ static int llama_decode_internal(
         // Repack the rope buffer for the ubatch depending on whether the model uses mrope.
         // * standard rope:  (flat array)                         [t; n]
         // * mrope (token):  (section-major array of rope fields) [t; n][t; n][t; n][0;     n]
-        // * mrope (embd):   (section-major array of rope fields) [t; n][h; n][w; n][extra; n]
+        // * mrope (embd, mixed): (section-major array of rope fields) [t; n][h; n][w; n][extra; n]
         const uint8_t rope_params_per_token = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
             hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
 
@@ -7481,7 +7523,7 @@ static int llama_decode_internal(
             pos.resize((size_t) n_tokens * rope_params_per_token);
             u_batch_pos = pos.data();
             for (uint32_t i = 0; i < n_tokens; ++i) {
-                if (batch_all.token) {
+                if (!batch_all.embd) {
                     pos[               i] = batch_all.pos[cur_token + i]; // t
                     pos[    n_tokens + i] = batch_all.pos[cur_token + i]; // t
                     pos[2 * n_tokens + i] = batch_all.pos[cur_token + i]; // t
@@ -7611,6 +7653,17 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
+        // the decision order is given for the whole batch, the head can use it only if this ubatch is the whole batch
+        lctx.decision_order_cur = nullptr;
+        lctx.decision_order_bad = false;
+        if (!lctx.decision_order.empty()) {
+            if (cur_token == 0 && n_tokens == n_tokens_all && lctx.decision_order.size() == n_tokens_all) {
+                lctx.decision_order_cur = lctx.decision_order.data();
+            } else {
+                lctx.decision_order_bad = true;
+            }
+        }
+
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
         const uint64_t seq_fingerprint = llama_ubatch_seq_fingerprint(u_batch, lctx.model.arch);
@@ -10241,6 +10294,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_CLEF:
         case LLM_ARCH_QWEN4EXP:
             return LLAMA_ROPE_TYPE_IMROPE;
 
@@ -13188,6 +13242,14 @@ void llama_set_abort_callback(struct llama_context * ctx, bool (*abort_callback)
     ctx->abort_callback_data = abort_callback_data;
 }
 
+void llama_set_decision_order(struct llama_context * ctx, const int32_t * order, int32_t n_tokens) {
+    if (order == nullptr || n_tokens <= 0) {
+        ctx->decision_order.clear();
+        return;
+    }
+    ctx->decision_order.assign(order, order + n_tokens);
+}
+
 void llama_set_embeddings(struct llama_context * ctx, bool embeddings) {
     ctx->cparams.embeddings = embeddings;
 }
@@ -13266,6 +13328,9 @@ int32_t llama_decode(
         struct llama_context * ctx,
           struct llama_batch   batch) {
     const int ret = llama_decode_internal(*ctx, batch);
+    ctx->decision_order.clear();
+    ctx->decision_order_cur = nullptr;
+    ctx->decision_order_bad = false;
     if (ret < 0) {
         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
     }

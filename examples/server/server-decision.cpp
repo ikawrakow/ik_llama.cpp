@@ -26,6 +26,7 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_OPENJEV, "openjev" },
     { COMMON_DECISION_TYPE_LEV,     "lev"     },
     { COMMON_DECISION_TYPE_NIMBLE,  "nimble"  },
+    { COMMON_DECISION_TYPE_CLEF,    "clef"    },
 };
 
 static common_decision_type common_decision_type_from_string(const std::string & str) {
@@ -120,6 +121,11 @@ void server_decision_context::init(const llama_model * model) {
             }
         }
         n_options_max = labels.size();
+    } else if (model_type == COMMON_DECISION_TYPE_CLEF) {
+        // the scores are written at the start of the logits, see llama_set_decision_order()
+        n_options_max   = 255;
+        noul_true_first = true;
+        choice_sorted   = true;
     } else {
         throw std::runtime_error("unsupported decision model type: " + type_name);
     }
@@ -167,6 +173,10 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
             for (const auto & [key, description] : criteria.items()) {
                 question.options.push_back({key, description});
             }
+            if (choice_sorted) {
+                std::sort(question.options.begin(), question.options.end(),
+                        [](const server_decision_option & a, const server_decision_option & b) { return a.key < b.key; });
+            }
         } else if (type_name == "score") {
             question.type = SERVER_DECISION_QUESTION_SCORE;
             if (!criteria.is_array() || criteria.size() < 2 || criteria.size() > 10) {
@@ -205,24 +215,32 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
 
 static const size_t DECISION_MAX_IMAGES = 8;
 
-static void decision_count_image(const json & url, size_t & n_images) {
-    if (!url.is_string() || !string_starts_with(url.get<std::string>(), "data:image/")) {
+static void decision_load_image(const json & url, std::vector<raw_buffer> & files) {
+    const std::string str = url.is_string() ? url.get<std::string>() : std::string();
+    const size_t comma = str.find(',');
+    if (!string_starts_with(str, "data:image/") || comma == std::string::npos || !string_ends_with(str.substr(0, comma), ";base64")) {
         throw std::invalid_argument("images must be data URLs (data:image/...;base64,...)");
     }
-    if (n_images >= DECISION_MAX_IMAGES) {
+    if (files.size() >= DECISION_MAX_IMAGES) {
         throw std::invalid_argument(string_format("too many images, the maximum is %zu", DECISION_MAX_IMAGES));
     }
-    n_images++;
+    files.push_back(base64_decode(str.substr(comma + 1)));
 }
 
-size_t server_decision_context::count_images(const json & body) const {
-    size_t n_images = 0;
-    if (body.contains("images") && !body.at("images").is_null()) {
-        if (!body.at("images").is_array()) {
-            throw std::invalid_argument("\"images\" must be an array");
+json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files) const {
+    if (body.contains("videos") && !body.at("videos").is_null() && !body.at("videos").empty()) {
+        throw std::invalid_argument("\"videos\" is not supported");
+    }
+    // "images" is an alias of "files"
+    for (const char * key : {"files", "images"}) {
+        if (!body.contains(key) || body.at(key).is_null()) {
+            continue;
         }
-        for (const auto & url : body.at("images")) {
-            decision_count_image(url, n_images);
+        if (!body.at(key).is_array()) {
+            throw std::invalid_argument(string_format("\"%s\" must be an array", key));
+        }
+        for (const auto & url : body.at(key)) {
+            decision_load_image(url, files);
         }
     }
 
@@ -230,22 +248,36 @@ size_t server_decision_context::count_images(const json & body) const {
     const bool is_wrapped = state.is_object() && state.contains("messages");
     const json & messages = is_wrapped ? state.at("messages") : state;
     if (!messages.is_array()) {
-        return n_images;
+        return state;
     }
 
-    // chat messages: the image parts of the content
+    // chat messages: take the image parts out of the content
+    json messages_out = json::array();
     for (const auto & msg : messages) {
         if (!msg.is_object() || !msg.contains("content") || !msg.at("content").is_array()) {
+            messages_out.push_back(msg);
             continue;
         }
+        json content = json::array();
         for (const auto & part : msg.at("content")) {
             if (part.is_object() && json_value(part, "type", std::string()) == "image_url" && part.contains("image_url")) {
                 const json & image_url = part.at("image_url");
-                decision_count_image(image_url.is_object() && image_url.contains("url") ? image_url.at("url") : image_url, n_images);
+                decision_load_image(image_url.is_object() && image_url.contains("url") ? image_url.at("url") : image_url, files);
+            } else {
+                content.push_back(part);
             }
         }
+        json msg_out = msg;
+        msg_out["content"] = content;
+        messages_out.push_back(msg_out);
     }
-    return n_images;
+
+    if (!is_wrapped) {
+        return messages_out;
+    }
+    json state_out = state;
+    state_out["messages"] = messages_out;
+    return state_out;
 }
 
 //
@@ -365,6 +397,157 @@ void server_decision_context::fill_task(
 }
 
 //
+// joint prompt (clef)
+//
+
+// given to the template: text between the pieces of the prompt, and at the start of the span of a question or of an option
+static const std::string CLEF_MARKER        = "<<clef:";
+static const std::string CLEF_SEP           = "<<clef:sep>>";
+static const std::string CLEF_MARK_QUESTION = "<<clef:question>>";
+static const std::string CLEF_MARK_OPTION   = "<<clef:option>>";
+
+// replace a text in all the strings of a JSON value, keys included
+static json decision_replace_text(const json & val, const std::string & from, const std::string & to) {
+    if (val.is_string()) {
+        std::string str = val.get<std::string>();
+        string_replace_all(str, from, to);
+        return str;
+    }
+    if (val.is_array()) {
+        json out = json::array();
+        for (const auto & item : val) {
+            out.push_back(decision_replace_text(item, from, to));
+        }
+        return out;
+    }
+    if (val.is_object()) {
+        json out = json::object();
+        for (const auto & [key, item] : val.items()) {
+            std::string k = key;
+            string_replace_all(k, from, to);
+            out[k] = decision_replace_text(item, from, to);
+        }
+        return out;
+    }
+    return val;
+}
+
+void server_decision_context::fill_task_joint(
+        const json & state,
+        const std::vector<server_decision_question> & questions,
+        const std::vector<raw_buffer> & files,
+        mtmd_context * mctx,
+        server_task & task) const {
+    json inp_questions = json::array();
+    for (const auto & question : questions) {
+        json options = json::array();
+        for (const auto & opt : question.options) {
+            options.push_back(json{
+                {"key",         opt.key},
+                {"description", opt.description},
+            });
+        }
+        inp_questions.push_back(json{
+            {"id",           question.id},
+            {"type",         decision_question_type_name(question.type)},
+            {"instructions", question.instructions},
+            {"options",      options},
+        });
+    }
+
+    // the template is given raw JSON values with sorted keys, and no marker in the input
+    json inp = json{
+        {"state",     state},
+        {"questions", inp_questions},
+    };
+    inp = decision_replace_text(decision_sort_keys(inp), CLEF_MARKER, "<<clef ");
+
+    // the template puts one media marker per image
+    json images = json::array();
+    if (!files.empty()) {
+        inp = decision_replace_text(inp, mtmd_default_marker(), " ");
+        for (size_t i = 0; i < files.size(); i++) {
+            images.push_back(mtmd_default_marker());
+        }
+    }
+    inp["images"]        = images;
+    inp["sep"]           = CLEF_SEP;
+    inp["mark_question"] = CLEF_MARK_QUESTION;
+    inp["mark_option"]   = CLEF_MARK_OPTION;
+
+    jinja::context ctx(tmpl->source());
+    jinja::global_from_json(ctx, inp, false);
+    jinja::runtime runtime(ctx);
+    const jinja::value results = runtime.execute(tmpl->prog);
+    const std::string prompt   = jinja::runtime::gather_string_parts(results)->as_string().str();
+
+    const std::runtime_error invalid("unexpected layout of the decision prompt");
+
+    // the model was trained with the pieces tokenized one by one
+    const std::vector<std::string> pieces = string_split(prompt, CLEF_SEP);
+    size_t i_piece = 0;
+
+    task.tokens = server_tokens(llama_tokens(), false);
+    if (!files.empty()) {
+        // the text before the images is tokenized with them, a vision token separates the pieces anyway
+        std::string head;
+        while (i_piece < pieces.size() && head.find(mtmd_default_marker()) == std::string::npos) {
+            head += pieces[i_piece++];
+        }
+        if (head.find(mtmd_default_marker()) == std::string::npos || head.find(CLEF_MARKER) != std::string::npos) {
+            throw invalid;
+        }
+        task.tokens = process_mtmd_prompt(mctx, head, files);
+        task.decision.order.resize(task.tokens.size(), LLAMA_DECISION_ORDER_NONE);
+    }
+
+    size_t i_question = 0;
+    size_t n_scores   = 0;
+    for (; i_piece < pieces.size(); i_piece++) {
+        std::string piece = pieces[i_piece];
+        int32_t order = LLAMA_DECISION_ORDER_NONE;
+        if (string_starts_with(piece, CLEF_MARK_QUESTION)) {
+            piece = piece.substr(CLEF_MARK_QUESTION.size());
+            if (i_question >= questions.size()) {
+                throw invalid;
+            }
+            switch (questions[i_question++].type) {
+                case SERVER_DECISION_QUESTION_NOUL:   order = LLAMA_DECISION_ORDER_QUESTION_NOUL;   break;
+                case SERVER_DECISION_QUESTION_CHOICE: order = LLAMA_DECISION_ORDER_QUESTION_CHOICE; break;
+                case SERVER_DECISION_QUESTION_SCORE:  order = LLAMA_DECISION_ORDER_QUESTION_SCORE;  break;
+            }
+        } else if (string_starts_with(piece, CLEF_MARK_OPTION)) {
+            piece = piece.substr(CLEF_MARK_OPTION.size());
+            order = LLAMA_DECISION_ORDER_OPTION;
+            n_scores++;
+        }
+
+        const llama_tokens piece_tokens = common_tokenize(vocab, piece, false, true);
+        if (order != LLAMA_DECISION_ORDER_NONE && piece_tokens.empty()) {
+            throw std::invalid_argument("the instructions and the options of a question must not be empty");
+        }
+        for (const llama_token token : piece_tokens) {
+            task.tokens.push_back(token);
+        }
+        task.decision.order.resize(task.tokens.size(), order);
+    }
+
+    size_t n_options = 0;
+    for (const auto & question : questions) {
+        n_options += question.options.size();
+    }
+    if (i_question != questions.size() || n_scores != n_options) {
+        throw invalid;
+    }
+
+    // the score of option i is at logits[i] of the last token
+    task.decision.labels.clear();
+    for (size_t i = 0; i < n_scores; i++) {
+        task.decision.labels.push_back((llama_token) i);
+    }
+}
+
+//
 // answer
 //
 
@@ -430,6 +613,12 @@ json server_decision_context::format_answer(const server_decision_question & que
         const auto & s = scores[v];
         if (s.size() != n) {
             throw std::runtime_error("decision result does not match the number of options");
+        }
+        // a joint head returns NaN if it could not use the decision order
+        for (size_t i = 0; i < n; i++) {
+            if (std::isnan(s[i])) {
+                throw std::runtime_error("the model could not evaluate the decision");
+            }
         }
         const float score_max = *std::max_element(s.begin(), s.end());
         std::vector<double> p(n);

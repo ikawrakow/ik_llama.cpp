@@ -96,7 +96,9 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         delta_net delta(lctx, batch);
 
         ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-        ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
+        // the clef decision head reads the hidden states of all the tokens
+        const bool is_clef = model.arch == LLM_ARCH_CLEF;
+        ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp && !is_clef) ? build_inp_out_ids() : nullptr;
         ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
@@ -130,7 +132,13 @@ ggml_cgraph * llm_build_context::build_qwen35() {
             inpL = cur;
         }
 
-        cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+        if (is_clef) {
+            cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+            cb(cur, "result_norm", -1);
+            cur = build_clef_head(cur);
+        } else {
+            cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+        }
         cb(cur, "result_output", -1);
     }
 

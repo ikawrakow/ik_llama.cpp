@@ -248,6 +248,9 @@ struct server_context {
     gpt_params params_base;
 
     llama_batch batch = {};
+    std::vector<int32_t> batch_decision_order; // the decision order of the batch, if it holds the prompt of a joint decision head
+    std::vector<float>     batch_embd; // mixed batch: one row per token, used where the token is LLAMA_TOKEN_NULL
+    std::vector<llama_pos> batch_pos;  // mixed batch with M-RoPE: 4 positions per token, section-major
 
     bool clean_kv_cache = true;
     bool add_bos_token = true;
@@ -372,6 +375,8 @@ struct server_context {
     void add_sampled_tokens();
 
     void batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type);
+
+    bool add_prompt_mixed(server_slot & slot);
 
     void process_batch_tokens(int32_t & n_batch);
 

@@ -323,6 +323,9 @@ extern "C" {
     // - seq_id : the sequence to which the respective token belongs
     // - logits : if zero, the logits (and/or the embeddings) for the respective token will not be output
     //
+    // If both token and embd are set (a mixed batch), embd has n_tokens rows and a negative token
+    // takes the row of embd at the same index. With M-RoPE, pos then has 4 values per token, as for embd.
+    //
     typedef struct llama_batch {
         int32_t n_tokens;
 
@@ -1132,6 +1135,23 @@ extern "C" {
     LLAMA_API int32_t llama_decode(
             struct llama_context * ctx,
               struct llama_batch   batch);
+
+    // Marks the tokens that a joint decision head (clef) reads, one value per token of the batch, the default is 0
+    // A run of tokens with the same value is one span, spans must be separated by tokens with value 0
+    // An option belongs to the last question before it
+    enum llama_decision_order {
+        LLAMA_DECISION_ORDER_NONE            = 0, // not read by the head
+        LLAMA_DECISION_ORDER_QUESTION_NOUL   = 1, // text of a question
+        LLAMA_DECISION_ORDER_QUESTION_CHOICE = 2,
+        LLAMA_DECISION_ORDER_QUESTION_SCORE  = 3,
+        LLAMA_DECISION_ORDER_OPTION          = 4, // text of an option
+    };
+
+    // Applies to the next llama_decode() call only, the batch must hold the whole prompt of one sequence
+    // and fit in one ubatch. The logits of each output are then the scores of the options, in order:
+    // logits[i] is the score of option i. The scores are NaN if the order cannot be used.
+    // order == NULL clears it.
+    LLAMA_API void llama_set_decision_order(struct llama_context * ctx, const int32_t * order, int32_t n_tokens);
 
     // Set the number of threads used for decoding
     // n_threads is the number of threads used for generation (single token)

@@ -94,6 +94,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     bool create_qwen35moe_tensors(const LLM_TN & tn);
 
     bool create_qwen35_tensors(const LLM_TN & tn);
+    bool create_clef_tensors(const LLM_TN & tn);
 
     bool create_phi2_tensors(const LLM_TN & tn);
 
@@ -2331,6 +2332,90 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
             }
         }
     }
+
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_clef_tensors(const LLM_TN & tn) {
+    const bool use_mmap_buffer = create_qwen35_tensors(tn);
+
+    const auto & hparams = model.hparams;
+    const int64_t n_embd = hparams.n_embd;
+    auto & head = model.decision;
+
+    // the widths of the head are given by its tensors
+    ggml_tensor * meta_memory = ml.get_tensor_meta(tn(LLM_TENSOR_DECISION_PROJ_MEMORY, "weight").c_str());
+    ggml_tensor * meta_ffn    = ml.get_tensor_meta(tn(LLM_TENSOR_DEC_FFN_UP, "weight", 0).c_str());
+    if (meta_memory == nullptr || meta_ffn == nullptr) {
+        throw std::runtime_error("the decision head is missing");
+    }
+    const int64_t n_embd_h = meta_memory->ne[1];
+    const int64_t n_ff_h   = meta_ffn->ne[1];
+    if (n_embd_h % hparams.n_head_decision != 0) {
+        throw std::runtime_error("invalid width of the decision head");
+    }
+
+    ggml_context * ctx = ctx_output;
+
+    auto create_attn = [&](llama_decision_attn & a, llm_tensor q, llm_tensor k, llm_tensor v, llm_tensor o, int il) {
+        a.wq = create_tensor(ctx, tn(q, "weight", il), {n_embd_h, n_embd_h});
+        a.bq = create_tensor(ctx, tn(q, "bias",   il), {n_embd_h});
+        a.wk = create_tensor(ctx, tn(k, "weight", il), {n_embd_h, n_embd_h});
+        a.bk = create_tensor(ctx, tn(k, "bias",   il), {n_embd_h});
+        a.wv = create_tensor(ctx, tn(v, "weight", il), {n_embd_h, n_embd_h});
+        a.bv = create_tensor(ctx, tn(v, "bias",   il), {n_embd_h});
+        a.wo = create_tensor(ctx, tn(o, "weight", il), {n_embd_h, n_embd_h});
+        a.bo = create_tensor(ctx, tn(o, "bias",   il), {n_embd_h});
+    };
+
+    const int n_head_layers = hparams.n_layer_decision_routing + hparams.n_layer_decision_joint;
+    head.layers.resize(n_head_layers);
+    for (int il = 0; il < n_head_layers; ++il) {
+        auto & layer = head.layers[il];
+
+        if (il < (int) hparams.n_layer_decision_routing) {
+            layer.cross_norm_kv   = create_tensor(ctx, tn(LLM_TENSOR_DEC_CROSS_ATTN_NORM_KV, "weight", il), {n_embd_h});
+            layer.cross_norm_kv_b = create_tensor(ctx, tn(LLM_TENSOR_DEC_CROSS_ATTN_NORM_KV, "bias",   il), {n_embd_h});
+        } else {
+            layer.self_norm   = create_tensor(ctx, tn(LLM_TENSOR_DEC_ATTN_NORM, "weight", il), {n_embd_h});
+            layer.self_norm_b = create_tensor(ctx, tn(LLM_TENSOR_DEC_ATTN_NORM, "bias",   il), {n_embd_h});
+            create_attn(layer.self_attn, LLM_TENSOR_DEC_ATTN_Q, LLM_TENSOR_DEC_ATTN_K, LLM_TENSOR_DEC_ATTN_V, LLM_TENSOR_DEC_ATTN_OUT, il);
+        }
+
+        layer.cross_norm   = create_tensor(ctx, tn(LLM_TENSOR_DEC_CROSS_ATTN_NORM, "weight", il), {n_embd_h});
+        layer.cross_norm_b = create_tensor(ctx, tn(LLM_TENSOR_DEC_CROSS_ATTN_NORM, "bias",   il), {n_embd_h});
+        create_attn(layer.cross_attn, LLM_TENSOR_DEC_CROSS_ATTN_Q, LLM_TENSOR_DEC_CROSS_ATTN_K, LLM_TENSOR_DEC_CROSS_ATTN_V, LLM_TENSOR_DEC_CROSS_ATTN_OUT, il);
+
+        layer.ffn_norm   = create_tensor(ctx, tn(LLM_TENSOR_DEC_FFN_NORM, "weight", il), {n_embd_h});
+        layer.ffn_norm_b = create_tensor(ctx, tn(LLM_TENSOR_DEC_FFN_NORM, "bias",   il), {n_embd_h});
+        layer.ffn_up     = create_tensor(ctx, tn(LLM_TENSOR_DEC_FFN_UP,   "weight", il), {n_embd_h, n_ff_h});
+        layer.ffn_up_b   = create_tensor(ctx, tn(LLM_TENSOR_DEC_FFN_UP,   "bias",   il), {n_ff_h});
+        layer.ffn_down   = create_tensor(ctx, tn(LLM_TENSOR_DEC_FFN_DOWN, "weight", il), {n_ff_h, n_embd_h});
+        layer.ffn_down_b = create_tensor(ctx, tn(LLM_TENSOR_DEC_FFN_DOWN, "bias",   il), {n_embd_h});
+    }
+
+    head.hidden_norm           = create_tensor(ctx, tn(LLM_TENSOR_DECISION_HIDDEN_NORM,         "weight"), {n_embd});
+    head.hidden_norm_b         = create_tensor(ctx, tn(LLM_TENSOR_DECISION_HIDDEN_NORM,         "bias"),   {n_embd});
+    head.option_summary_norm   = create_tensor(ctx, tn(LLM_TENSOR_DECISION_OPTION_SUMMARY_NORM, "weight"), {n_embd_h});
+    head.option_summary_norm_b = create_tensor(ctx, tn(LLM_TENSOR_DECISION_OPTION_SUMMARY_NORM, "bias"),   {n_embd_h});
+    head.field_norm            = create_tensor(ctx, tn(LLM_TENSOR_DECISION_FIELD_NORM,          "weight"), {n_embd_h});
+    head.field_norm_b          = create_tensor(ctx, tn(LLM_TENSOR_DECISION_FIELD_NORM,          "bias"),   {n_embd_h});
+    head.option_norm           = create_tensor(ctx, tn(LLM_TENSOR_DECISION_OPTION_NORM,         "weight"), {n_embd_h});
+    head.option_norm_b         = create_tensor(ctx, tn(LLM_TENSOR_DECISION_OPTION_NORM,         "bias"),   {n_embd_h});
+
+    head.proj_memory          = create_tensor(ctx, tn(LLM_TENSOR_DECISION_PROJ_MEMORY,          "weight"), {n_embd, n_embd_h});
+    head.proj_question        = create_tensor(ctx, tn(LLM_TENSOR_DECISION_PROJ_QUESTION,        "weight"), {n_embd, n_embd_h});
+    head.proj_option_question = create_tensor(ctx, tn(LLM_TENSOR_DECISION_PROJ_OPTION_QUESTION, "weight"), {n_embd, n_embd_h});
+    head.proj_global          = create_tensor(ctx, tn(LLM_TENSOR_DECISION_PROJ_GLOBAL,          "weight"), {n_embd, n_embd_h});
+    head.proj_option_context  = create_tensor(ctx, tn(LLM_TENSOR_DECISION_PROJ_OPTION_CONTEXT,  "weight"), {n_embd, n_embd_h});
+    head.proj_option_lexical  = create_tensor(ctx, tn(LLM_TENSOR_DECISION_PROJ_OPTION_LEXICAL,  "weight"), {n_embd, n_embd_h});
+
+    head.type_embd    = create_tensor(ctx, tn(LLM_TENSOR_TOKEN_TYPES,         "weight"), {n_embd_h, 3});
+    head.scales       = create_tensor(ctx, tn(LLM_TENSOR_DECISION_SCALES),               {3});
+    head.scorer       = create_tensor(ctx, tn(LLM_TENSOR_DECISION_SCORER,     "weight"), {4*n_embd_h, n_embd_h});
+    head.scorer_b     = create_tensor(ctx, tn(LLM_TENSOR_DECISION_SCORER,     "bias"),   {n_embd_h});
+    head.scorer_out   = create_tensor(ctx, tn(LLM_TENSOR_DECISION_SCORER_OUT, "weight"), {n_embd_h, 1});
+    head.scorer_out_b = create_tensor(ctx, tn(LLM_TENSOR_DECISION_SCORER_OUT, "bias"),   {1});
 
     return use_mmap_buffer;
 }
@@ -5938,6 +6023,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_qwen35moe_tensors(tn); break;
         case LLM_ARCH_QWEN35:
             use_mmap_buffer = create_qwen35_tensors(tn); break;
+        case LLM_ARCH_CLEF:
+            use_mmap_buffer = create_clef_tensors(tn); break;
         case LLM_ARCH_PHI2:
             use_mmap_buffer = create_phi2_tensors(tn); break;
         case LLM_ARCH_PHI3:

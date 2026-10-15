@@ -1631,31 +1631,48 @@ int main(int argc, char ** argv) {
 
         const json body = json::parse(req.body);
         std::vector<server_decision_question> questions;
-        size_t n_images = 0;
+        std::vector<raw_buffer> files;
+        json state;
         try {
             questions = decision.parse_questions(body);
-            n_images  = decision.count_images(body);
+            state     = decision.parse_state(body, files);
         } catch (const std::invalid_argument & e) {
             res_err(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
             return;
         }
-        if (n_images > 0) {
-            res_err(res, format_error_response("This server does not support image input for decisions", ERROR_TYPE_NOT_SUPPORTED));
+        if (!files.empty() && (!decision.can_use_images() || ctx_server.mctx == nullptr)) {
+            res_err(res, format_error_response(decision.can_use_images() ? "Image input needs a multimodal projector, see --mmproj" :
+                        "This model does not support image input for decisions", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
-        const json & state = body.at("state");
 
-        // one task per variant of each question
+        // one task per variant of each question, or one task for all the questions
         server_response_reader rd(ctx_server);
         {
             std::vector<server_task> tasks;
-            for (const auto & question : questions) {
-                for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
-                    server_task task = server_task(SERVER_TASK_TYPE_DECISION);
-                    task.id = ctx_server.queue_tasks.get_new_id();
-                    task.index = tasks.size();
-                    decision.fill_task(state, questions, question, variant, task);
-                    tasks.push_back(std::move(task));
+            if (decision.is_joint()) {
+                server_task task = server_task(SERVER_TASK_TYPE_DECISION);
+                task.id = ctx_server.queue_tasks.get_new_id();
+                task.index = 0;
+                try {
+                    decision.fill_task_joint(state, questions, files, ctx_server.mctx, task);
+                } catch (const std::invalid_argument & e) {
+                    res_err(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+                    return;
+                } catch (const std::runtime_error & e) {
+                    res_err(res, format_error_response(e.what(), ERROR_TYPE_SERVER));
+                    return;
+                }
+                tasks.push_back(std::move(task));
+            } else {
+                for (const auto & question : questions) {
+                    for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
+                        server_task task = server_task(SERVER_TASK_TYPE_DECISION);
+                        task.id = ctx_server.queue_tasks.get_new_id();
+                        task.index = tasks.size();
+                        decision.fill_task(state, questions, question, variant, task);
+                        tasks.push_back(std::move(task));
+                    }
                 }
             }
             rd.post_tasks(std::move(tasks));
@@ -1675,15 +1692,30 @@ int main(int argc, char ** argv) {
         json answers = json::object();
         int32_t n_tokens = 0;
         size_t i_result = 0;
-        for (const auto & question : questions) {
-            std::vector<std::vector<float>> scores;
-            for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
-                auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[i_result++].get());
-                GGML_ASSERT(result != nullptr);
-                scores.push_back(result->scores);
-                n_tokens += result->n_tokens;
+        size_t i_score = 0;
+        try {
+            for (const auto & question : questions) {
+                std::vector<std::vector<float>> scores;
+                if (decision.is_joint()) {
+                    // one result with the scores of all the questions, in order
+                    auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[0].get());
+                    GGML_ASSERT(result != nullptr && i_score + question.options.size() <= result->scores.size());
+                    scores.emplace_back(result->scores.begin() + i_score, result->scores.begin() + i_score + question.options.size());
+                    i_score += question.options.size();
+                    n_tokens = result->n_tokens;
+                } else {
+                    for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
+                        auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[i_result++].get());
+                        GGML_ASSERT(result != nullptr);
+                        scores.push_back(result->scores);
+                        n_tokens += result->n_tokens;
+                    }
+                }
+                answers[question.id] = decision.format_answer(question, scores);
             }
-            answers[question.id] = decision.format_answer(question, scores);
+        } catch (const std::runtime_error & e) {
+            res_err(res, format_error_response(e.what(), ERROR_TYPE_SERVER));
+            return;
         }
 
         res_ok(res, json{
