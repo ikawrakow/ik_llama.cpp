@@ -74,7 +74,7 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         } else if (lctx.cparams.mtp) {
             auto hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
             cb(hidden, "result_norm", -1);
-            if (inp_out_ids) {
+            if (inp_out_ids && hidden->ne[1] > n_outputs) {
                 inpL = ggml_get_rows(ctx0, hidden, inp_out_ids);
             } else {
                 inpL = hidden;
@@ -159,7 +159,7 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         } else if (lctx.cparams.mtp) {
             auto hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
             cb(hidden, "result_norm", -1);
-            if (inp_out_ids) {
+            if (inp_out_ids && hidden->ne[1] > n_outputs) {
                 inpL = ggml_get_rows(ctx0, hidden, inp_out_ids);
             } else {
                 inpL = hidden;
@@ -214,6 +214,10 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
             KQ_mask, nullptr, nullptr,
             kq_scale, 0.0f, 0, il, true, false, true, false, true, nullptr);
 
+    if (!emit_logits) {
+        return cur;
+    }
+
     if (inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
@@ -234,10 +238,6 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
 
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
-
-    if (!emit_logits) {
-        return cur;
-    }
 
     cb(cur, "result_norm", -1);
 
@@ -286,6 +286,10 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
             KQ_mask, nullptr, nullptr,
             kq_scale, 0.0f, 0, il, true, false, true, false, true, nullptr);
 
+    if (!emit_logits) {
+        return cur;
+    }
+
     // Dense FFN — optional (9B and 4B don't have FFN in MTP layer)
     if (mtp_layer.ffn_gate != nullptr) {
         cur = llm_build_ffn(ctx0, lctx, mtp_layer.ffn_norm, cur,
@@ -298,10 +302,6 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
 
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
-
-    if (!emit_logits) {
-        return cur;
-    }
 
     cur = build_output(lctx, ctx0, cur, model.output_mtp, mtp_layer.nextn.shared_head_norm, cb);
     cb(cur, "result_output", -1);

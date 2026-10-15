@@ -1454,7 +1454,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             return gf;
         }
 
-        if (n_outputs != n_tokens) {
+        if (mtp_hidden->ne[1] > n_outputs) {
             mtp_hidden = ggml_get_rows(ctx0, mtp_hidden, build_inp_out_ids());
         }
         cur = build_output(lctx, ctx0, mtp_hidden, model.output, cb);
@@ -1512,6 +1512,10 @@ struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
                                                   kq_scale, attn_factor_scaled,
                                                   use_f32_attn_precision, false, false);
 
+    if (!emit_logits) {
+        return cur;
+    }
+
     // Residual + FFN
     ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
     cb(ffn_inp, "mtp_ffn_inp", il);
@@ -1555,10 +1559,6 @@ struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
     cur = ggml_add(ctx0, cur, ffn_inp);
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "mtp_ffn_out_resid", il);
-
-    if (!emit_logits) {
-        return cur;
-    }
 
     // Output head
     if (mtp_layer.nextn.shared_head_norm == nullptr) {
