@@ -4417,8 +4417,8 @@ void iqk_quantize_row_q8_K_T(const float * x, void * vy, int64_t k) {
         const float maxScalar = hmax_f32_8(maxAbs);
         const float d = maxScalar / 127.f;
         y[i].d = d;
-        const float id = ( maxScalar != 0.0f ) ? 127.f / maxScalar : 0.0f;
-        const __m256 mul = _mm256_set1_ps( id );
+        const float id = (maxScalar != 0.0f) ? 127.f / maxScalar : 0.0f;
+        const __m256 mul = _mm256_set1_ps(id);
         int8_t * q8 = y[i].qs;
         int block_sum_i32 = 0;
         for (int ib = 0; ib < QK_K/32; ++ib) {
@@ -4443,26 +4443,31 @@ void iqk_quantize_row_q8_K_T(const float * x, void * vy, int64_t k) {
         //    bs[0] = sum;
         //}
     }
-    if (nbtail == 0) return;
-    auto yb = (block_q8_2 *)(y + nb);
-    for (int ib = 0; ib < nbtail; ++ib) {
-        auto xb = x + QK_K*nb + 32*ib;
-        auto maxAbs = _mm256_setzero_ps();
-        for (int k = 0; k < 4; ++k) maxAbs = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, _mm256_loadu_ps(xb + 8*k)));
-        float maxScalar = hmax_f32_8(maxAbs);
-        float d = maxScalar / 127.f;
-        float id = (maxScalar != 0.0f) ? 127.f / maxScalar : 0.0f;
-        int16_t s1, s2;
-        if (nbtail >= 4 && ib < 4*(nbtail/4)) {
-            auto yb4 = (block_q8_2_x4 *)yb;
-            yb4[ib/4].d[ib%4] = GGML_FP32_TO_BF16(d).bits;
-            quantize_block_32(_mm256_set1_ps(id), xb, yb4[ib/4].qs + 32*(ib%4), s1, s2);
-            *(int16_t *)&yb4[ib/4].d[ib%4 + 4] = s1 + s2;
-        } else {
-            yb[ib].d = GGML_FP32_TO_BF16(d).bits;
-            quantize_block_32(_mm256_set1_ps(id), xb, yb[ib].qs, s1, s2);
-            *(int16_t *)&yb[ib].s = s1 + s2;
+    if (nbtail > 0) {
+        const float * xb = x + nb*QK_K;
+        __m256 maxAbs = _mm256_setzero_ps();
+        const float * xx = xb;
+        for (int ib = 0; ib < nbtail; ++ib) {
+            const __m256 v = _mm256_loadu_ps(xx); xx += 8;
+            maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps(signBit, v));
         }
+        const float maxScalar = hmax_f32_8(maxAbs);
+        const float d = maxScalar / 127.f;
+        y[nb].d = d;
+        const float id = (maxScalar != 0.0f) ? 127.f / maxScalar : 0.0f;
+        const __m256 mul = _mm256_set1_ps(id);
+        int8_t * q8 = y[nb].qs;
+        auto bsums = (int16_t *)(y[nb].qs + 32*nbtail);
+        int block_sum_i32 = 0;
+        for (int ib = 0; ib < nbtail; ++ib) {
+            int16_t s1, s2;
+            quantize_block_32(mul, xb + 32*ib, q8, s1, s2);
+            bsums[2*ib+0] = s1;
+            bsums[2*ib+1] = s2;
+            block_sum_i32 += s1 + s2;
+            q8 += 32;
+        }
+        y[nb].sum = d*block_sum_i32;
     }
 #else
     for (int i = 0; i < nb; i++) {

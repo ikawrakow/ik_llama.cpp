@@ -1941,38 +1941,28 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
                 isum[iy] = isum2[iy] = _mm512_setzero_si512();
             }
         }
-        if (int nleft = n - nbl*QK_K; nleft > 0 && false) {
+        if (int nleft = n - nbl*QK_K; nleft > 0) {
             int nbtail = nleft/32;
             auto d4 = _mm512_loadu_ps(iq16[nbl].d);
-            auto m4 = _mm512_mul_ps(d4, _mm512_set1_ps(-128.f));
-            __m512i qxt[8];
-            for (int ib = 0; ib < nbtail; ++ib) {
-                qxt[0] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+8*ib+0);
-                qxt[1] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+8*ib+1);
-                qxt[2] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+8*ib+2);
-                qxt[3] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+8*ib+3);
-                qxt[4] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+8*ib+4);
-                qxt[5] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+8*ib+5);
-                qxt[6] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+8*ib+6);
-                qxt[7] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+8*ib+7);
+            for (int ib = 0; ib < 2*nbtail; ++ib) {
+                qx[0] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+0);
+                qx[1] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+1);
+                qx[2] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+2);
+                qx[3] = _mm512_loadu_si512((const __m512i *)iq16[nbl].qs+4*ib+3);
                 for (int iy = 0; iy < nrc_y; ++iy) {
-                    auto qy = (const block_q8_2 *)(q8.y[iy] + nbl);
-                    const int8_t * yb = qy[ib].qs;
-                    auto s1 = _mm512_setzero_si512();
-                    auto s2 = _mm512_setzero_si512();
-                    s1 = _mm512_dpbusd_epi32(s1, qxt[0], _mm512_set1_epi32(*(const int32_t *)(yb +  0)));
-                    s2 = _mm512_dpbusd_epi32(s2, qxt[1], _mm512_set1_epi32(*(const int32_t *)(yb +  4)));
-                    s1 = _mm512_dpbusd_epi32(s1, qxt[2], _mm512_set1_epi32(*(const int32_t *)(yb +  8)));
-                    s2 = _mm512_dpbusd_epi32(s2, qxt[3], _mm512_set1_epi32(*(const int32_t *)(yb + 12)));
-                    s1 = _mm512_dpbusd_epi32(s1, qxt[4], _mm512_set1_epi32(*(const int32_t *)(yb + 16)));
-                    s2 = _mm512_dpbusd_epi32(s2, qxt[5], _mm512_set1_epi32(*(const int32_t *)(yb + 20)));
-                    s1 = _mm512_dpbusd_epi32(s1, qxt[6], _mm512_set1_epi32(*(const int32_t *)(yb + 24)));
-                    s2 = _mm512_dpbusd_epi32(s2, qxt[7], _mm512_set1_epi32(*(const int32_t *)(yb + 28)));
-                    float d8 = GGML_BF16_TO_FP32(ggml_bf16_t{qy[ib].d});
-                    float m8 = d8 * *(const int16_t *)&qy[ib].s;
-                    acc[iy] = _mm512_fmadd_ps(_mm512_mul_ps(d4, _mm512_set1_ps(d8)), _mm512_cvtepi32_ps(_mm512_add_epi32(s1, s2)), acc[iy]);
-                    acc[iy] = _mm512_fmadd_ps(m4, _mm512_set1_ps(m8), acc[iy]);
+                    const int8_t * yb = q8.y[iy][nbl].qs + 16*ib;
+                    isum [iy] = _mm512_dpbusd_epi32(isum [iy], qx[0], _mm512_set1_epi32(*(const int32_t *)(yb +  0)));
+                    isum2[iy] = _mm512_dpbusd_epi32(isum2[iy], qx[1], _mm512_set1_epi32(*(const int32_t *)(yb +  4)));
+                    isum [iy] = _mm512_dpbusd_epi32(isum [iy], qx[2], _mm512_set1_epi32(*(const int32_t *)(yb +  8)));
+                    isum2[iy] = _mm512_dpbusd_epi32(isum2[iy], qx[3], _mm512_set1_epi32(*(const int32_t *)(yb + 12)));
                 }
+            }
+            auto m4 = _mm512_mul_ps(d4, _mm512_set1_ps(-128.f));
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto d4y = _mm512_mul_ps(d4, _mm512_set1_ps(q8.scale(iy, nbl)));
+                acc[iy] = _mm512_fmadd_ps(d4y, _mm512_cvtepi32_ps(_mm512_add_epi32(isum[iy], isum2[iy])), acc[iy]);
+                acc[iy] = _mm512_fmadd_ps(m4,  _mm512_set1_ps(q8.y[iy][nbl].sum), acc[iy]);
+                isum[iy] = isum2[iy] = _mm512_setzero_si512();
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {

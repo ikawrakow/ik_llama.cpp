@@ -5128,8 +5128,11 @@ GGML_CALL size_t ggml_row_size(enum ggml_type type, int64_t ne) {
     if (type == GGML_TYPE_Q8_K || type == GGML_TYPE_Q8_K_R16) {
         int nb256 = ne / QK_K;
         int nbtail = (ne - QK_K*nb256)/32;
-        size_t tail_size = type == GGML_TYPE_Q8_K ? nbtail*sizeof(block_q8_2) : sizeof(float) + 32*nbtail;
-        return nb256*sizeof(block_q8_K) + tail_size;
+        if (type == GGML_TYPE_Q8_K) {
+            return nb256*sizeof(block_q8_K) + nbtail*(2*sizeof(float) + 2*sizeof(int16_t) + 32);
+        } else {
+            return nb256*(sizeof(block_q8_k_r16)/16) + (nbtail == 0 ? 0 : sizeof(float) + 32*nbtail);
+        }
     }
     if (type == GGML_TYPE_IQ3_KS_R16) {
         // 16-row bands: 16 f32 row scales + (ne/32) blocks of 204 B, padded so

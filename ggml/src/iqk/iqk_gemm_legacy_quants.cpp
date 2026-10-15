@@ -2054,49 +2054,22 @@ static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const Dat
             }
         }
         if (int nb0 = 8*(nb/8); nb0 < nb) {
-            auto prepare_block1 = [&] (const block_iq4_ks_r16 & b, const __m512 & d4, __m512 & scales, __m512 & mins) {
-                auto iscales = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)b.scales));
-                auto ishifts = _mm512_and_si512(iscales, _mm512_set1_epi32(1));
-                auto imins   = _mm512_add_epi32(_mm512_set1_epi32(-128), _mm512_slli_epi32(ishifts, 2));
-                iscales      = _mm512_sub_epi32(_mm512_and_si512(iscales, _mm512_set1_epi32(254)), _mm512_set1_epi32(127));
-                scales  = _mm512_mul_ps(d4, _mm512_cvtepi32_ps(iscales));
-                mins    = _mm512_mul_ps(scales, _mm512_cvtepi32_ps(imins));
-                for (int j = 0; j < 4; ++j) {
-                    auto bits = _mm512_loadu_si512(b.qs + 64*j);
-                    qx[j+0] = _mm512_shuffle_epi8(table, _mm512_and_si512(bits, m4));
-                    qx[j+4] = _mm512_shuffle_epi8(table, _mm512_and_si512(_mm512_srli_epi16(bits, 4), m4));
-                }
-            };
             int nbtail = nb - nb0;
-            float d8[8*nrc_y];
-            __m512 scales, mins;
-            for (int ib4 = 0; ib4 < nbtail/4; ++ib4) {
+            for (int k = 0; k < nbtail; ++k) {
+                prepare_block(iq4[nb0+k], iscales, imins);
+                _Pragma("GCC unroll 8")
                 for (int iy = 0; iy < nrc_y; ++iy) {
-                    auto yb = (const block_q8_2_x4 *)(q8.y[iy] + nb/8);
-                    _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)yb[ib4].d));
-                }
-                for (int k = 0; k < 4; ++k) {
-                    prepare_block1(iq4[nb0+4*ib4+k], d4, scales, mins);
-                    _Pragma("GCC unroll 8")
-                    for (int iy = 0; iy < nrc_y; ++iy) {
-                        auto yb = (const block_q8_2_x4 *)(q8.y[iy] + nb/8);
-                        auto sumi = qx_r8_q8_dot_product(qx, yb[ib4].qs+32*k);
-                        auto dy = _mm512_set1_ps(d8[8*iy+k]);
-                        acc[iy] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[iy]);
-                        acc[iy] = _mm512_fmadd_ps(mins, _mm512_set1_ps(d8[8*iy+k+4]), acc[iy]);
-                    }
+                    auto & by = q8.y[iy][nb/8];
+                    auto isum = qx_r8_q8_dot_product(qx, by.qs+32*k);
+                    auto bsums = (const int16_t *)(by.qs + 32*nbtail);
+                    isum = _mm512_dpwssd_epi32(isum, imins, _mm512_set1_epi16(bsums[2*k]+bsums[2*k+1]));
+                    sumi[iy] = _mm512_add_epi32(sumi[iy], _mm512_mullo_epi32(isum, iscales));
                 }
             }
-            for (int ib = 4*(nbtail/4); ib < nbtail; ++ib) {
-                prepare_block1(iq4[nb0+ib], d4, scales, mins);
-                for (int iy = 0; iy < nrc_y; ++iy) {
-                    auto qy = (const block_q8_2 *)(q8.y[iy] + nb/8);
-                    auto sumi = qx_r8_q8_dot_product(qx, qy[ib].qs);
-                    auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
-                    auto dy = _mm512_set1_ps(d8);
-                    acc[iy] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[iy]);
-                    acc[iy] = _mm512_fmadd_ps(mins, _mm512_set1_ps(m8), acc[iy]);
-                }
+            _Pragma("GCC unroll 8")
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                acc[iy] = _mm512_fmadd_ps(_mm512_mul_ps(d4, _mm512_set1_ps(q8.scale(iy, nb/8))), _mm512_cvtepi32_ps(sumi[iy]), acc[iy]);
+                sumi[iy] = _mm512_setzero_si512();
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
@@ -2178,7 +2151,6 @@ void iqk_convert_iq4_ks_r16_q8_k_r8(int n, const void * vx, size_t bx, void * vy
                     rescale_and_store(v2, y[ibl].qs + 512*k + 64*j + 256);
                 }
             }
-
         }
         y += nb;
         if (nbtail > 0) {
