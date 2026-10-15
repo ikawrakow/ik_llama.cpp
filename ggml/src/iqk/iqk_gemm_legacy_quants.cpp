@@ -2094,6 +2094,7 @@ void iqk_convert_iq4_ks_r16_q8_k_r8(int n, const void * vx, size_t bx, void * vy
 
     auto m1 = _mm256_set1_epi16(1);
     auto m4 = _mm512_set1_epi8(0xf);
+    auto s4 = _mm512_set1_epi32(0x04040404);
 
     static const int k_shuff[64] = {0,0,0,0,  1,1,1,1,  2,2,2,2,  3,3,3,3,  4,4,4,4,  5,5,5,5,  6,6,6,6,  7,7,7,7,  8,8,8,8,  9,9,9,9,
                                     10,10,10,10, 11,11,11,11, 12,12,12,12, 13,13,13,13, 14,14,14,14, 15,15,15,15};
@@ -2116,73 +2117,51 @@ void iqk_convert_iq4_ks_r16_q8_k_r8(int n, const void * vx, size_t bx, void * vy
         _mm_storeu_si128((__m128i *)(qs + 32), _mm_xor_si128(_mm512_cvtsepi32_epi8(i2), vxor));
         _mm_storeu_si128((__m128i *)(qs + 48), _mm_xor_si128(_mm512_cvtsepi32_epi8(i3), vxor));
     };
+    auto adjust_scales = [] (const block_iq4_ks_r16 * iq4, __m512 d4, int nk, float * stored) {
+        auto qmax = _mm256_setzero_si256();
+        for (int k = 0; k < nk; ++k) {
+            auto sas = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)iq4[k].scales));
+            auto scales = _mm256_sub_epi16(_mm256_and_si256(sas, _mm256_set1_epi16(254)), _mm256_set1_epi16(127));
+            qmax = _mm256_max_epi16(qmax, _mm256_abs_epi16(scales));
+        }
+        auto qmax32 = _mm512_cvtepi16_epi32(qmax);
+        int32_t max = std::max(1, _mm512_reduce_max_epi32(qmax32));
+        auto fmax = _mm512_set1_ps(max);
+        _mm512_storeu_ps(stored, _mm512_mul_ps(fmax, d4));
+        return _mm512_div_ps(_mm512_set1_ps(1.0f), fmax);
+    };
+    auto process_block = [&m1, &m4, &s4, &fscales, &s_shuffs, &table, &rescale_and_store] (const block_iq4_ks_r16 & iq4, int8_t * qs, __m512 fs0) {
+        auto sas = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)iq4.scales));
+        auto mask = _mm256_cmpeq_epi16_mask(_mm256_and_si256(sas, m1), m1);
+        auto shift = _mm512_mask_blend_epi32(mask, _mm512_setzero_si512(), s4);
+        auto iscales = _mm512_cvtepi16_epi32(_mm256_sub_epi16(_mm256_and_si256(sas, _mm256_set1_epi16(254)), _mm256_set1_epi16(127)));
+        auto fs = _mm512_mul_ps(fs0, _mm512_cvtepi32_ps(iscales));
+        for (int i = 0; i < 4; ++i) fscales[i] = _mm512_permutexvar_ps(s_shuffs[i], fs);
+        for (int j = 0; j < 4; ++j) {
+            auto bits = _mm512_loadu_si512(iq4.qs + 64*j);
+            auto v1 = _mm512_shuffle_epi8(table, _mm512_and_si512(bits, m4));
+            auto v2 = _mm512_shuffle_epi8(table, _mm512_and_si512(_mm512_srli_epi16(bits, 4), m4));
+            v1 = _mm512_add_epi8(v1, shift);
+            v2 = _mm512_add_epi8(v2, shift);
+            rescale_and_store(v1, qs + 64*j);
+            rescale_and_store(v2, qs + 64*j + 256);
+        }
+    };
     for (int ix = 0; ix < nrc_x; ix += k_nr) {
         auto dptr = (const float *)((const char *)vx + ix*bx);
         auto d4 = _mm512_loadu_ps(dptr);
         auto iq4 = (const block_iq4_ks_r16 *)(dptr + 16);
         for (int ibl = 0; ibl < nb; ++ibl) {
-            auto qmax = _mm256_setzero_si256();
+            auto fs0 = adjust_scales(iq4 + 8*ibl, d4, QK_K/32, y[ibl].d);
             for (int k = 0; k < QK_K/32; ++k) {
-                int ib = 8*ibl + k;
-                auto sas = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)iq4[ib].scales));
-                auto scales = _mm256_sub_epi16(_mm256_and_si256(sas, _mm256_set1_epi16(254)), _mm256_set1_epi16(127));
-                qmax = _mm256_max_epi16(qmax, _mm256_abs_epi16(scales));
-            }
-            auto qmax32 = _mm512_cvtepi16_epi32(qmax);
-            int32_t max = _mm512_reduce_max_epi32(qmax32);
-            auto fmax = _mm512_set1_ps(max);
-            _mm512_storeu_ps(y[ibl].d, _mm512_mul_ps(fmax, d4));
-            auto fs0 = _mm512_div_ps(_mm512_set1_ps(1.0f), fmax);
-            for (int k = 0; k < QK_K/32; ++k) {
-                int ib = 8*ibl + k;
-                auto sas = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)iq4[ib].scales));
-                auto mask = _mm256_cmpeq_epi16_mask(_mm256_and_si256(sas, m1), m1);
-                auto shift = _mm512_mask_blend_epi32(mask, _mm512_setzero_si512(), _mm512_set1_epi32(0x04040404));
-                auto iscales = _mm512_cvtepi16_epi32(_mm256_sub_epi16(_mm256_and_si256(sas, _mm256_set1_epi16(254)), _mm256_set1_epi16(127)));
-                auto fs = _mm512_mul_ps(fs0, _mm512_cvtepi32_ps(iscales));
-                for (int i = 0; i < 4; ++i) fscales[i] = _mm512_permutexvar_ps(s_shuffs[i], fs);
-                for (int j = 0; j < 4; ++j) {
-                    auto bits = _mm512_loadu_si512(iq4[ib].qs + 64*j);
-                    auto v1 = _mm512_shuffle_epi8(table, _mm512_and_si512(bits, m4));
-                    auto v2 = _mm512_shuffle_epi8(table, _mm512_and_si512(_mm512_srli_epi16(bits, 4), m4));
-                    v1 = _mm512_add_epi8(v1, shift);
-                    v2 = _mm512_add_epi8(v2, shift);
-                    rescale_and_store(v1, y[ibl].qs + 512*k + 64*j);
-                    rescale_and_store(v2, y[ibl].qs + 512*k + 64*j + 256);
-                }
+                process_block(iq4[8*ibl + k], y[ibl].qs + 512*k, fs0);
             }
         }
         y += nb;
         if (nbtail > 0) {
-            auto qmax = _mm256_setzero_si256();
+            auto fs0 = adjust_scales(iq4 + 8*nb, d4, nbtail, y->d);
             for (int k = 0; k < nbtail; ++k) {
-                int ib = 8*nb + k;
-                auto sas = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)iq4[ib].scales));
-                auto scales = _mm256_sub_epi16(_mm256_and_si256(sas, _mm256_set1_epi16(254)), _mm256_set1_epi16(127));
-                qmax = _mm256_max_epi16(qmax, _mm256_abs_epi16(scales));
-            }
-            auto qmax32 = _mm512_cvtepi16_epi32(qmax);
-            int32_t max = _mm512_reduce_max_epi32(qmax32);
-            auto fmax = _mm512_set1_ps(max);
-            _mm512_storeu_ps(y->d, _mm512_mul_ps(fmax, d4));
-            auto fs0 = _mm512_div_ps(_mm512_set1_ps(1.0f), fmax);
-            for (int k = 0; k < nbtail; ++k) {
-                int ib = 8*nb + k;
-                auto sas = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)iq4[ib].scales));
-                auto mask = _mm256_cmpeq_epi16_mask(_mm256_and_si256(sas, m1), m1);
-                auto shift = _mm512_mask_blend_epi32(mask, _mm512_setzero_si512(), _mm512_set1_epi32(0x04040404));
-                auto iscales = _mm512_cvtepi16_epi32(_mm256_sub_epi16(_mm256_and_si256(sas, _mm256_set1_epi16(254)), _mm256_set1_epi16(127)));
-                auto fs = _mm512_mul_ps(fs0, _mm512_cvtepi32_ps(iscales));
-                for (int i = 0; i < 4; ++i) fscales[i] = _mm512_permutexvar_ps(s_shuffs[i], fs);
-                for (int j = 0; j < 4; ++j) {
-                    auto bits = _mm512_loadu_si512(iq4[ib].qs + 64*j);
-                    auto v1 = _mm512_shuffle_epi8(table, _mm512_and_si512(bits, m4));
-                    auto v2 = _mm512_shuffle_epi8(table, _mm512_and_si512(_mm512_srli_epi16(bits, 4), m4));
-                    v1 = _mm512_add_epi8(v1, shift);
-                    v2 = _mm512_add_epi8(v2, shift);
-                    rescale_and_store(v1, y->qs + 512*k + 64*j);
-                    rescale_and_store(v2, y->qs + 512*k + 64*j + 256);
-                }
+                process_block(iq4[8*nb + k], y->qs + 512*k, fs0);
             }
             y = (block_q8_k_r16 *)((char *)y + k_nr*sizeof(float) + 32*k_nr*nbtail);
         }
