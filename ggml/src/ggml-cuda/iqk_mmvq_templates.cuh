@@ -5,6 +5,7 @@
 //
 
 #pragma once
+#include "mmvq.cuh"
 #include "iqk_mmvq.cuh"
 #include "iqk_cuda_common.h"
 #include "mmvq-args.h"
@@ -300,6 +301,13 @@ static __global__ void iqk_mul_mat_vec_q(
     const char * __restrict__ ids_data, const void * __restrict__ bias,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst, const int64_t row_size,
     const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, const int64_t bias_nb1) {
+#if __CUDA_ARCH__ != CC_PASCAL
+    // more than 8 columns is only used on sm_60, see ggml_cuda_mmvq_max_batch_size()
+    if constexpr (ncols_y > 8) {
+        NO_DEVICE_CODE;
+        return;
+    }
+#endif // __CUDA_ARCH__ != CC_PASCAL
     int i2 = blockIdx.y;
     int i02 = ids_data ? *(const int *)(ids_data + i2*ids_nb0) : i2;
     if (i02 < 0) return;
@@ -343,7 +351,8 @@ static void iqk_mul_mat_vec_q_cuda(const mmvq_args & args, cudaStream_t stream) 
     } else {
         GGML_ASSERT(args.ncols_x % ggml_blck_size(type) == 0);
     }
-    //GGML_ASSERT(ncols_y <= MMVQ_MAX_BATCH_SIZE);
+    constexpr int k_max_cols = ggml_cuda_has_arch(CC_PASCAL) ? MMVQ_MAX_NCOLS_PASCAL : MMVQ_MAX_BATCH_SIZE;
+    GGML_ASSERT(args.ncols_y <= k_max_cols);
 
     int id = ggml_cuda_get_device();
 
@@ -362,15 +371,9 @@ static void iqk_mul_mat_vec_q_cuda(const mmvq_args & args, cudaStream_t stream) 
                 nwarps = n_interleaved == 1 ? 4 : 1;
                 rows_per_cuda_block = n_interleaved == 1 ? 2 : n_interleaved;
                 break;
-            case 5:
-            case 6:
-            case 7:
-            case 8:
+            default:
                 nwarps = n_interleaved == 1 ? 2 : 1;
                 rows_per_cuda_block = n_interleaved == 1 ? 2 : n_interleaved;
-                break;
-            default:
-                GGML_ASSERT(false);
                 break;
         }
     }
@@ -491,6 +494,39 @@ static void iqk_mul_mat_vec_q_cuda(const mmvq_args & args, cudaStream_t stream) 
                     args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst,
                     row_size, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            break;
+        // 9-12 columns are only used on sm_60, so instantiate these kernels only when it is a compiled arch
+        case 9:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                iqk_mul_mat_vec_q<type, vdr, vec_dot_q_cuda, 9, n_interleaved, vec_dot_tail><<<block_nums, block_dims, 0, stream>>>(
+                        args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst,
+                        row_size, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
+        case 10:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                iqk_mul_mat_vec_q<type, vdr, vec_dot_q_cuda, 10, n_interleaved, vec_dot_tail><<<block_nums, block_dims, 0, stream>>>(
+                        args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst,
+                        row_size, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
+        case 11:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                iqk_mul_mat_vec_q<type, vdr, vec_dot_q_cuda, 11, n_interleaved, vec_dot_tail><<<block_nums, block_dims, 0, stream>>>(
+                        args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst,
+                        row_size, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
+        case 12:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                iqk_mul_mat_vec_q<type, vdr, vec_dot_q_cuda, 12, n_interleaved, vec_dot_tail><<<block_nums, block_dims, 0, stream>>>(
+                        args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst,
+                        row_size, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
             break;
         default:
             GGML_ASSERT(false);

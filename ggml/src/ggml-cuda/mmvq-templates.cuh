@@ -292,6 +292,14 @@ static __global__ void mul_mat_vec_q(
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst,
     const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, const int64_t bias_nb1) {
 
+#if __CUDA_ARCH__ != CC_PASCAL
+    // more than MMVQ_MAX_BATCH_SIZE columns is only used on sm_60, see ggml_cuda_mmvq_max_batch_size()
+    if constexpr (ncols_y > MMVQ_MAX_BATCH_SIZE) {
+        NO_DEVICE_CODE;
+        return;
+    }
+#endif // __CUDA_ARCH__ != CC_PASCAL
+
     int i2 = blockIdx.y;
     char * cdst = (char *)dst + i2*nb2;
     int i02 = ids_data ? *(const int *)(ids_data + i2*ids_nb0) : i2;
@@ -335,7 +343,8 @@ template <ggml_type type, int nwarps>
 static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
 
     GGML_ASSERT(args.ncols_x % ggml_blck_size(type) == 0);
-    GGML_ASSERT(args.ncols_y <= MMVQ_MAX_BATCH_SIZE);
+    constexpr int k_max_cols = ggml_cuda_has_arch(CC_PASCAL) ? MMVQ_MAX_NCOLS_PASCAL : MMVQ_MAX_BATCH_SIZE;
+    GGML_ASSERT(args.ncols_y <= k_max_cols);
 
     int id = ggml_cuda_get_device();
 
@@ -433,6 +442,31 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
         case 8:
             mul_mat_vec_q<type, 8, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            break;
+        // 9-12 columns are only used on sm_60, so instantiate these kernels only when it is a compiled arch
+        case 9:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                mul_mat_vec_q<type, 9, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
+        case 10:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                mul_mat_vec_q<type, 10, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
+        case 11:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                mul_mat_vec_q<type, 11, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
+        case 12:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                mul_mat_vec_q<type, 12, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
             break;
         default:
             GGML_ABORT("fatal error");
