@@ -4439,7 +4439,7 @@ void iqk_quantize_row_q8_K_T(const float * x, void * vy, int64_t k) {
         const float * xb = x + nb*QK_K;
         __m256 maxAbs = _mm256_setzero_ps();
         const float * xx = xb;
-        for (int ib = 0; ib < nbtail; ++ib) {
+        for (int ib = 0; ib < 4*nbtail; ++ib) {
             const __m256 v = _mm256_loadu_ps(xx); xx += 8;
             maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps(signBit, v));
         }
