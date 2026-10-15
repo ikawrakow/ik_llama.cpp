@@ -1356,6 +1356,12 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
     }
 
+    if (params->pure && ftype == LLAMA_FTYPE_MOSTLY_IQ2_S) {
+        // --pure must here ask for the ggml type itself (IQ2_S), not the ftype mixture recipe
+        // (which defaults to IQ2_XS, while ftype IQ2_M is the one defaulting to ggml type IQ2_S)
+        default_type = GGML_TYPE_IQ2_S;
+    }
+
     if (params->custom_quants && !ggml_is_quantized(default_type)) {
         LLAMA_LOG_WARN("%s: ignoring --custom-q rules because default type %s is not quantized\n",
                 __func__, ggml_type_name(default_type));
