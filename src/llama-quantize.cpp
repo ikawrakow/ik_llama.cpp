@@ -1024,8 +1024,7 @@ static size_t quantize_cuda_shard_rows(ggml_type new_type, const float * f32_dat
     return bytes;
 }
 
-// Largest remainder on group counts (ties to lower index), so every shard is a
-// multiple of group and satisfies the nrows%group==0 asserts of repacked quants.
+// Largest remainder on group counts, ties low: shards stay multiples of group (repacked asserts).
 static void split_rows_by_weight(int64_t nrows, const float * weights, int n_dev, int64_t * rows, int64_t group) {
     if (group < 1) {
         group = 1;
@@ -1122,14 +1121,12 @@ static void do_quantize(int nthread, const ggml_tensor * tensor, ggml_type new_t
         const llama_model_quantize_params * params) {
 #ifdef GGML_USE_CUDA
     if (params->cuda_quantize) {
-        // Symmetric Q4_0 (--symmetric-q40, d=amax/7) stays on CPU: no CUDA kernel.
-        // ne[3] > 1 likewise falls back: neither path threads the 4th dim (pre-existing).
+        // Symmetric Q4_0 and ne[3] > 1 stay on CPU (no kernel / unthreaded 4th dim).
         const bool symmetric_q4_0 = new_type == GGML_TYPE_Q4_0 && params->user_data &&
             static_cast<const quantize_user_data *>(params->user_data)->symmetric_q4_0;
         if (!symmetric_q4_0 && tensor->ne[3] <= 1) {
             if (params->cuda_quantize_n_devices > 0) {
-                // 2+ devices: row-split, same hashes as mono. A shard whose CUDA
-                // call misses falls back on its share of the thread budget below.
+                // 2+ devices: row-split (same hashes); missed shards fall back on shared threads.
                 new_size = do_quantize_cuda_quantize_split(tensor, new_type, f32_data, new_data, imatrix,
                         params->cuda_quantize_devices, params->cuda_quantize_split, params->cuda_quantize_n_devices, nthread, params);
             } else {
