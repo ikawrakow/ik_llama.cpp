@@ -465,6 +465,13 @@ ggml_cgraph * llm_build_context::build_defrag(const std::vector<uint32_t> & ids)
     return gf;
 }
 
+// defined below; declared here for use in the MTP embedding path
+static struct ggml_tensor * llm_build_hadamard_rotate(
+        struct ggml_context * ctx0,
+        struct ggml_tensor * cur,
+        const llama_hadamard_transform & t,
+        bool inverse);
+
 struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd) {
     struct ggml_tensor * cur = nullptr;
 
@@ -478,6 +485,12 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
         ggml_set_input(lctx.inp_tokens);
 
         cur = ggml_get_rows(ctx0, mtp_tok_embd, lctx.inp_tokens);
+
+        // undo the Hadamard rotation of the embedding table (latent token embedding);
+        // without this the draft head consumes embeddings in the rotated basis
+        if (auto rot = lctx.model.hadamard_rotation(mtp_tok_embd); rot != nullptr) {
+            cur = llm_build_hadamard_rotate(ctx0, cur, *rot, true);
+        }
     } else {
         lctx.inp_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, batch.n_tokens);
         ggml_set_input(lctx.inp_embd);
