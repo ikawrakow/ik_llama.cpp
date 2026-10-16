@@ -7141,11 +7141,17 @@ static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
         llm_arch_is_dsv4(lctx.model.arch));
 }
 
-static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
+static size_t llama_output_reserve(
+        llama_context & lctx,
+               size_t   n_outputs,
+               size_t   n_outputs_logits,
+               size_t   n_outputs_embd) {
     const auto & cparams = lctx.cparams;
     const auto & hparams = lctx.model.hparams;
 
-    const size_t n_outputs_max = std::max(n_outputs, (size_t) cparams.n_seq_max);
+    const size_t n_outputs_max        = std::max(n_outputs,        (size_t) cparams.n_seq_max);
+    const size_t n_outputs_logits_max = std::max(n_outputs_logits, (size_t) cparams.n_seq_max);
+    const size_t n_outputs_embd_max   = std::max(n_outputs_embd,   (size_t) cparams.n_seq_max);
 
     const auto n_batch = cparams.n_batch;
     const auto n_vocab = hparams.n_vocab;
@@ -7156,8 +7162,8 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     const bool has_logits = !cparams.embeddings || has_mtp;
     const bool has_embd   = lctx.is_encoding || (cparams.embeddings && (cparams.pooling_type == LLAMA_POOLING_TYPE_NONE)) || has_mtp;
 
-    const size_t logits_size = has_logits ? n_vocab*n_outputs_max : 0;
-    const size_t embd_size   = has_embd   ?  n_embd*n_outputs_max : 0;
+    const size_t logits_size = has_logits ? n_vocab*n_outputs_logits_max : 0;
+    const size_t embd_size   = has_embd   ?  n_embd*n_outputs_embd_max   : 0;
 
     if (lctx.output_ids.empty()) {
         // init, never resized afterwards
@@ -7223,6 +7229,9 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     return n_outputs_max;
 }
 
+static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
+    return llama_output_reserve(lctx, n_outputs, n_outputs, n_outputs);
+}
 
 static void llama_graph_compute(
         llama_context & lctx,
@@ -7392,7 +7401,7 @@ static int llama_decode_internal(
     n_outputs_embd = has_mtp && cparams.mtp_op_type == MTP_OP_NONE ? n_tokens_all : n_outputs;
     const size_t required_outputs = std::max<size_t>(n_outputs, n_outputs_embd);
     const bool is_dflash_decode = llm_arch_is_dflash_family(lctx.model.arch);
-    const size_t reserved_outputs = llama_output_reserve(lctx, required_outputs);
+    const size_t reserved_outputs = llama_output_reserve(lctx, required_outputs, n_outputs, n_outputs_embd);
     if (reserved_outputs < required_outputs) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, required_outputs);
         return -2;
@@ -10059,7 +10068,9 @@ struct llama_context * llama_init_from_model(
         const auto n_vocab = hparams.n_vocab;
         const auto n_embd  = llama_output_embd_width(*ctx);
 
-        const size_t logits_size = n_vocab*n_batch;
+        // MTP prefill needs n_batch hidden-state rows. Start with enough logits rows
+        // for the active sequences; llama_output_reserve() grows this on demand.
+        const size_t logits_size = n_vocab*std::max<size_t>(cparams.n_seq_max, 1);
         const size_t embd_size   = n_embd*n_batch;
 
         if (ctx->output_ids.empty()) {
