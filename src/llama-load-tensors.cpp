@@ -192,7 +192,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     ggml_context * get_context_for_tensor(ggml_context * ctx, const std::string & name);
 
     void create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias);
-    void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true, bool use_ctx_split = false);
+    void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true);
 
     void create_std_attn(int i, const LLM_TN & tn, llama_layer & layer, int n_embd, int n_embd_gqa, ggml_context * ctx_split);
     void create_std_ffn(int i, const LLM_TN & tn, llama_layer & layer, int n_ff, int n_embd, ggml_context * ctx_split);
@@ -473,6 +473,17 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
 }
 
 ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx, const std::string & name) {
+    if (model.split_output_tensor) {
+        if (name == "output.weight" || name == "output_extra.weight") {
+            return ctx_output_split;
+        }
+        if (name.find("output_norm") == 0 || name.find(".output_norm") != std::string::npos || name == "output.bias") {
+            return ctx_output_split;
+        }
+        if (name == "token_embd.weight" && ctx == ctx_output) {
+            return ctx_output_split;
+        }
+    }
     for (auto & o : overrides) {
         if (std::regex_search(name, o.first)) {
             if (o.second == default_cpu_buft) has_buft_overrides = true;
@@ -532,23 +543,25 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
         } \
         ctx_input        = ctx_map.at(model.buft_input.buft); \
         ctx_output       = ctx_map.at(model.buft_output.buft); \
-        ctx_output_split = ctx_map.at(model.buft_output.buft_matrix); \
+        ctx_output_split = model.split_output_tensor ? ctx_map.at(model.buft_output.buft_matrix) : ctx_output; \
+        if (model.split_output_tensor) { \
+            LLAMA_LOG_INFO("split_output_tensor = ON\n"); \
+        } \
         model.layers.resize(n_layer);\
         bool use_mmap_buffer = true;
 
 
-void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm, bool use_ctx_split) {
+void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm) {
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
-    auto out_ctx = use_ctx_split ? ctx_output_split : ctx_output;
     if (has_norm) {
-        model.output_norm = create_tensor(out_ctx, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+        model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     }
-    model.output = create_tensor(out_ctx, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+    model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
     // if output is NULL, init from the input tok embed
     if (model.output == NULL) {
-        model.output = create_tensor(out_ctx, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
     }
 }
 
