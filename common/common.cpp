@@ -3380,7 +3380,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f16"});
     options.push_back({ "*",         "-gap, --graph-attn-precision",    "Flash-attn precision under -sm graph (default: %s)", "f16"});
     options.push_back({ "*",         "-smgs, --split-mode-graph-scheduling", "Force Split Mode Graph Scheduling (default: %d)", params.split_mode_graph_scheduling});
-    options.push_back({ "*",         "-sot, --split-output-tensor",      "Force split of the Output Tensor in Split Mode Graph (default: %d)", params.split_output_tensor});
+    options.push_back({ "*",         "-sot, --split-output-tensor",      "Force split of the Output Tensor in Split Mode Graph/Attn (default: %d)", params.split_output_tensor});
     options.push_back({ "*",         "-sas,  --scheduler-async",        "Async evaluation of compute graphs (default: %d)", params.scheduler_async});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"

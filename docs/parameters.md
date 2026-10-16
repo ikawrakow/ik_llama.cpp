@@ -387,6 +387,7 @@ WIP
 | `-smf32, --split-mode-f32` | Use f32 for data exchange between GPUs | 0 | [PR 1087](https://github.com/ikawrakow/ik_llama.cpp/pull/1087) |
 | `-grt, --graph-reduce-type` | Type for data exchange between GPUs | f16 | q8_0 / bf16 / f16 / f32 Reduce the data transferred between GPUs [PR 1154](https://github.com/ikawrakow/ik_llama.cpp/pull/1154) |
 | `-smgs, --split-mode-graph-scheduling` | Force Split Mode Graph Scheduling | 0 | [PR 1068](https://github.com/ikawrakow/ik_llama.cpp/pull/1068) |
+| `-sot, --split-output-tensor` | Force split of the Output Tensor in Split Mode Graph/Attn | 0 |  |
 | `--max-gpu N` | Define (and use) a maximum number of GPUs per layer with split mode "graph" |  | This is of interest when there are more than 2 GPUs available, but using all of them leads to a lower performance than using just 2 (or using the default split mode "layer") [PR 1051](https://github.com/ikawrakow/ik_llama.cpp/pull/1051) |
 | `-cuda, --cuda-params` | Comma-separated list of cuda parameters | - | Powerful way to tweak Fusion, GPU offload threshold, and MMQ-ID threshold. [PR 910](https://github.com/ikawrakow/ik_llama.cpp/pull/910) [PR 1813](https://github.com/ikawrakow/ik_llama.cpp/pull/1813) |
 
