@@ -6,7 +6,38 @@
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 #include <hip/hip_fp16.h>
+#ifndef __HIP_BF16_H__
 #include <hip/hip_bf16.h>
+#endif
+
+// Map NVIDIA bfloat16 types to ROCm equivalents for gfx900 compatibility
+#if defined(__HIP_PLATFORM_AMD__)
+#define __HIP_NO_HALF_CONVERSIONS__ 1
+typedef __hip_bfloat16 nv_bfloat16;
+typedef __hip_bfloat162 nv_bfloat162;
+
+// Implicit float conversion helpers missing from ROCm __hip_bfloat16
+__device__ __forceinline__ float __bfloat162float_compat(const __hip_bfloat16 x) {
+    return __bfloat162float(x);
+}
+__device__ __forceinline__ __hip_bfloat16 __float2bfloat16_compat(const float x) {
+    return __float2bfloat16(x);
+}
+// HIP warp sync primitives
+#define __shfl_sync(mask, var, srcLane, width) __shfl(var, srcLane, width)
+#define __shfl_up_sync(mask, var, delta, width) __shfl_up(var, delta, width)
+#define __shfl_down_sync(mask, var, delta, width) __shfl_down(var, delta, width)
+#define __any_sync(mask, predicate) __any(predicate)
+#define __reduce_add_sync(mask, val) (val)
+#define __all_sync(mask, predicate) __all(predicate)
+#define __syncwarp(mask) __builtin_amdgcn_wave_barrier()
+
+template<typename T>
+__device__ __forceinline__ float ggml_hip_to_float(const T x) { return (float)x; }
+template<>
+__device__ __forceinline__ float ggml_hip_to_float(const __hip_bfloat16 x) { return __bfloat162float(x); }
+static inline hipError_t cudaStreamWaitEvent(hipStream_t stream, hipEvent_t event, unsigned int flags = 0) { return hipStreamWaitEvent(stream, event, flags); }
+#endif // __HIP_PLATFORM_AMD__
 #ifdef __HIP_PLATFORM_AMD__
 // for rocblas_initialize()
 #include "rocblas/rocblas.h"
@@ -96,7 +127,7 @@
 #define cudaStreamNonBlocking hipStreamNonBlocking
 #define cudaStreamPerThread hipStreamPerThread
 #define cudaStreamSynchronize hipStreamSynchronize
-#define cudaStreamWaitEvent hipStreamWaitEvent
+
 #define cudaStream_t hipStream_t
 #define cudaSuccess hipSuccess
 #define __trap() do { abort(); __builtin_unreachable(); } while(0)
@@ -127,6 +158,14 @@
 #endif // HIP_VERSION >= 60500000
 
 #define __CUDA_ARCH__ 1300
+#ifndef GGML_USE_HIP
+#define GGML_USE_HIP
+#endif
+#if defined(__gfx900__) || defined(__gfx906__) || defined(__gfx908__)
+#define GGML_HIP_WARP_SIZE 64
+#else
+#define GGML_HIP_WARP_SIZE 32
+#endif
 
 #if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__) || \
     defined(__gfx1150__) || defined(__gfx1151__)
@@ -225,3 +264,11 @@ static __device__ __forceinline__ half2 __shfl_xor(half2 var, int laneMask, int 
     return tmp.val;
 }
 #endif // defined(__HIP_PLATFORM_AMD__) && HIP_VERSION < 50600000
+#define cudaOccupancyMaxActiveBlocksPerMultiprocessor hipOccupancyMaxActiveBlocksPerMultiprocessor
+#define CUDA_R_16BF HIPBLAS_R_16B
+__device__ __forceinline__ int __dp4a(int a, int b, int c) {
+    // gfx900 fallback - no dot product hardware
+    const int8_t* a8 = reinterpret_cast<const int8_t*>(&a);
+    const int8_t* b8 = reinterpret_cast<const int8_t*>(&b);
+    return c + a8[0]*b8[0] + a8[1]*b8[1] + a8[2]*b8[2] + a8[3]*b8[3];
+}

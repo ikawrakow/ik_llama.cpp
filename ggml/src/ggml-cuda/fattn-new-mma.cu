@@ -1,3 +1,4 @@
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 // Adapted from https://github.com/ggml-org/llama.cpp/pull/13435
 //
 // Copyright (C) 2025 The ggml authors
@@ -2405,3 +2406,8 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
     //}
 }
 
+
+#else
+#include "fattn-new-mma.cuh"
+void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tensor * dst) { GGML_UNUSED(ctx); GGML_UNUSED(dst); }
+#endif

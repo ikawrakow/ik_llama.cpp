@@ -177,7 +177,7 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_iq4_nl(
 #ifdef FP16_AVAILABLE
         if (std::is_same<T, half>::value) {
             const half2  * Q_ds = (const half2  *) Q_ds_v;
-            sum += (T) (((half)sumi) * K_iq4_nl[ib].d * Q_ds[k_KQ_0/WARP_SIZE].x);
+            sum += (T) ((float)((half)sumi) * __half2float(K_iq4_nl[ib].d) * __half2float(Q_ds[k_KQ_0/WARP_SIZE].x));
         } else
 #endif // FP16_AVAILABLE
         {
