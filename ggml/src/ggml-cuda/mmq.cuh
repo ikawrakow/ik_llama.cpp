@@ -3949,7 +3949,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0               + kqsx] = d * ((bxi->scales[kqsx] & 254) - 127);
 #else
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + kqsx] = d * ((bxi->scales[kqsx] & 254) - 127);
+        x_df[i*(WARP_SIZE/4) + i/4   + kqsx] = d * ((bxi->scales[kqsx] & 254) - 127);
 #endif // INT8_MMA_AVAILABLE
     }
 }
