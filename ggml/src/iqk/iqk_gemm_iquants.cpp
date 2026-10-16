@@ -1,4 +1,5 @@
 #include "iqk_gemm_iquants.h"
+#include <atomic>
 
 #ifdef IQK_IMPLEMENT
 
@@ -1221,6 +1222,7 @@ static void mul_mat_iq2_xs_r4_q8_k_1(int n, const void * vx, size_t bx, const Da
             _mm512_store_si512(the_signs.vec + 1, _mm512_permutexvar_epi64(order, _mm512_packus_epi16(v[2], v[3])));
             auto isum01 = _mm512_setzero_si512();
             auto isum23 = _mm512_setzero_si512();
+#pragma GCC unroll 8
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto idx = the_idx.val + 16*ib;
                 auto w01 = _mm512_i64gather_epi64(_mm512_cvtepu16_epi64(_mm_loadu_si128((const __m128i *)idx + 0)), (const long long *)grid, 8);
@@ -1229,8 +1231,9 @@ static void mul_mat_iq2_xs_r4_q8_k_1(int n, const void * vx, size_t bx, const Da
                 auto y01 = _mm512_mask_sub_epi8(y, the_signs.val[2*ib+0], zero, y);
                 auto y23 = _mm512_mask_sub_epi8(y, the_signs.val[2*ib+1], zero, y);
                 auto sc  = _mm512_set1_epi64(the_scales.val[ib]);
-                isum01 = _mm512_dpwssd_epi32(isum01, _mm512_dpbusd_epi32(zero, w01, y01), _mm512_shuffle_epi8(sc, shuf01));
-                isum23 = _mm512_dpwssd_epi32(isum23, _mm512_dpbusd_epi32(zero, w23, y23), _mm512_shuffle_epi8(sc, shuf23));
+                isum01 = _mm512_dpwssds_epi32(isum01, _mm512_dpbusd_epi32(zero, w01, y01), _mm512_shuffle_epi8(sc, shuf01));
+                isum23 = _mm512_dpwssds_epi32(isum23, _mm512_dpbusd_epi32(zero, w23, y23), _mm512_shuffle_epi8(sc, shuf23));
+                std::atomic_signal_fence(std::memory_order_seq_cst);
             }
             isum01 = _mm512_add_epi32(isum01, _mm512_shuffle_epi32(isum01, _MM_PERM_BADC));
             isum01 = _mm512_add_epi32(isum01, _mm512_shuffle_epi32(isum01, _MM_PERM_CDAB));
@@ -1560,6 +1563,7 @@ static void mul_mat_iq2_s_r4_q8_k_1(int n, const void * vx, size_t bx, const Dat
             auto qh32 = (const uint32_t *)iq2[ibl].qh;
             auto isum01 = _mm512_setzero_si512();
             auto isum23 = _mm512_setzero_si512();
+#pragma GCC unroll 8
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto ql = iq2[ibl].qs + 16*ib;
                 auto qh  = _mm512_set1_epi32(qh32[ib]);
@@ -1573,8 +1577,9 @@ static void mul_mat_iq2_s_r4_q8_k_1(int n, const void * vx, size_t bx, const Dat
                 auto y01 = _mm512_mask_sub_epi8(y, sg64[2*ib+0], zero, y);
                 auto y23 = _mm512_mask_sub_epi8(y, sg64[2*ib+1], zero, y);
                 auto sc  = _mm512_set1_epi64(the_scales.val[ib]);
-                isum01 = _mm512_dpwssd_epi32(isum01, _mm512_dpbusd_epi32(zero, w01, y01), _mm512_shuffle_epi8(sc, shuf01));
-                isum23 = _mm512_dpwssd_epi32(isum23, _mm512_dpbusd_epi32(zero, w23, y23), _mm512_shuffle_epi8(sc, shuf23));
+                isum01 = _mm512_dpwssds_epi32(isum01, _mm512_dpbusd_epi32(zero, w01, y01), _mm512_shuffle_epi8(sc, shuf01));
+                isum23 = _mm512_dpwssds_epi32(isum23, _mm512_dpbusd_epi32(zero, w23, y23), _mm512_shuffle_epi8(sc, shuf23));
+                std::atomic_signal_fence(std::memory_order_seq_cst);
             }
             isum01 = _mm512_add_epi32(isum01, _mm512_shuffle_epi32(isum01, _MM_PERM_BADC));
             isum01 = _mm512_add_epi32(isum01, _mm512_shuffle_epi32(isum01, _MM_PERM_CDAB));
