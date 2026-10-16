@@ -2025,7 +2025,6 @@ void llm_load_hparams(
                     if (hparams.dflash_target_layer_ids[i] == 0) {
                         throw std::runtime_error("dflash2: target_layers must use one-based IDs");
                     }
-                    --hparams.dflash_target_layer_ids[i];
                 }
                 hparams.dflash_n_target_features = hparams.n_embd * hparams.dflash_n_target_layers;
                 if (hparams.dflash_selector_top_k == 0 ||
