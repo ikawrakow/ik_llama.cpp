@@ -1325,9 +1325,12 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
     }
 
+    // the fused up/gate op consumes the activation as-is; Hadamard-folded (Prism) weights need
+    // their activation transform, which is only applied by llm_build_lora_mm -> keep them separate
     if (lctx.cparams.fused_up_gate &&
         up && gate && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
+        lctx.model.hadamard_rotation(up) == nullptr && lctx.model.hadamard_rotation(gate) == nullptr &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
@@ -1740,6 +1743,7 @@ llm_expert_gating_func_type   gating_op,
     GGML_ASSERT(!up_gate_exps_b);
 
     if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type &&
+            lctx.model.hadamard_rotation(up_exps) == nullptr && lctx.model.hadamard_rotation(gate_exps) == nullptr &&
             (!cache_ids || (!up_exps_b && !gate_exps_b))) {
         ggml_tensor * up_weight = cached_up ? cached_up : up_exps;
         ggml_tensor * gate_weight = cached_gate ? cached_gate : gate_exps;
