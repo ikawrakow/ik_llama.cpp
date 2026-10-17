@@ -116,6 +116,7 @@ std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
         { GGML_TYPE_IQ4_KS_R4,   { GGML_TYPE_IQ4_KS, 4} },
         { GGML_TYPE_IQ4_KS_R16,  { GGML_TYPE_IQ4_KS, 16} },
         { GGML_TYPE_IQ5_KS_R4,   { GGML_TYPE_IQ5_KS, 4} },
+        { GGML_TYPE_IQ5_KS_R16,  { GGML_TYPE_IQ5_KS, 16} },
         { GGML_TYPE_IQ5_K_R4,    { GGML_TYPE_IQ5_K, 4} },
         { GGML_TYPE_MXFP4_R8,    { GGML_TYPE_MXFP4, 8} },
         { GGML_TYPE_PQ2_0_R8,    { GGML_TYPE_PQ2_0, 8} },
@@ -246,7 +247,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
         new_type == GGML_TYPE_IQ2_S_R4|| new_type == GGML_TYPE_IQ3_S_R4|| new_type == GGML_TYPE_IQ3_KS ||
         new_type == GGML_TYPE_IQ2_KT  || new_type == GGML_TYPE_IQ3_KT  || new_type == GGML_TYPE_IQ4_KT ||
         new_type == GGML_TYPE_IQ5_KS || new_type == GGML_TYPE_IQ5_KS_R4|| new_type == GGML_TYPE_IQ2_KL ||
-        new_type == GGML_TYPE_IQ1_KT  || new_type == GGML_TYPE_IQ4_KS_R16 || new_type == GGML_TYPE_IQ1_S_R4 ||
+        new_type == GGML_TYPE_IQ1_KT  || new_type == GGML_TYPE_IQ1_S_R4 ||
         new_type == GGML_TYPE_IQ1_M_R4) {
         const int blck = ggml_row_blck_size(new_type);
         if (nx % blck != 0) {
@@ -308,6 +309,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_Q4_K_R4:
             case GGML_TYPE_IQ5_KS:
             case GGML_TYPE_IQ5_KS_R4:
+            case GGML_TYPE_IQ5_KS_R16:
             case GGML_TYPE_Q4_K:   new_type = GGML_TYPE_Q5_0;   break;
             case GGML_TYPE_IQ5_K:
             case GGML_TYPE_IQ5_K_R4:
@@ -1332,6 +1334,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_IQ5_KS_R4:default_type = GGML_TYPE_IQ5_KS_R4;break;
         case LLAMA_FTYPE_MOSTLY_IQ3_KS_R16:default_type = GGML_TYPE_IQ3_KS_R16; break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KS_R16:default_type = GGML_TYPE_IQ4_KS_R16;break;
+        case LLAMA_FTYPE_MOSTLY_IQ5_KS_R16:default_type = GGML_TYPE_IQ5_KS_R16;break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KSS: default_type = GGML_TYPE_IQ4_KSS; break;
         case LLAMA_FTYPE_MOSTLY_IQ5_KS:  default_type = GGML_TYPE_IQ5_KS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ2_K:   default_type = GGML_TYPE_IQ2_K;   break;
