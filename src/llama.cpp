@@ -10404,18 +10404,32 @@ static bool llama_control_vector_init(struct llama_control_vector & cvec, const 
     GGML_ASSERT(cvec.ctxs.empty());
     GGML_ASSERT(cvec.bufs.empty());
 
-    // count layer buffer types
-    std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
-    for (int64_t i = 0; i < model.hparams.n_layer; i++) {
-        buft_layer_count[model.buft_layer[i].buft]++;
+    const int n_layer = model.hparams.n_layer;
+
+    // split mode graph: one more copy of every layer on each device, so apply_to can
+    // steer a device's partial before the reduce (see llama_control_vector::apply_to_reduce)
+    std::vector<ggml_backend_buffer_type_t> dev_buft;
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
+        for (size_t id = 0; id < model.splits.size(); ++id) {
+            dev_buft.push_back(llama_default_buffer_type_offload(model, model.devices[id]));
+        }
+    }
+
+    // count tensors per buffer type
+    std::map<ggml_backend_buffer_type_t, int> buft_tensor_count;
+    for (int64_t i = 0; i < n_layer; i++) {
+        buft_tensor_count[model.buft_layer[i].buft]++;
+    }
+    for (auto buft : dev_buft) {
+        buft_tensor_count[buft] += n_layer;
     }
 
     // allocate contexts
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
-    for (auto & it : buft_layer_count) {
-        int n_layers = it.second;
+    for (auto & it : buft_tensor_count) {
+        int n_tensors = it.second;
         struct ggml_init_params params = {
-            /*.mem_size   =*/ n_layers * ggml_tensor_overhead(),
+            /*.mem_size   =*/ n_tensors * ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc   =*/ true,
         };
@@ -10428,12 +10442,20 @@ static bool llama_control_vector_init(struct llama_control_vector & cvec, const 
     }
 
     // make tensors
-    cvec.tensors.reserve(model.hparams.n_layer);
+    cvec.tensors.reserve(n_layer);
     cvec.tensors.push_back(nullptr); // there's never a tensor for layer 0
-    for (size_t il = 1; il < model.hparams.n_layer; il++) {
+    for (int il = 1; il < n_layer; il++) {
         struct ggml_context * ctx = ctx_map.at(model.buft_layer[il].buft);
         ggml_tensor * tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, model.hparams.n_embd);
         cvec.tensors.push_back(tensor);
+    }
+    if (!dev_buft.empty()) {
+        cvec.dev_tensors.assign(n_layer, std::vector<ggml_tensor *>(dev_buft.size(), nullptr));
+        for (int il = 1; il < n_layer; il++) {
+            for (size_t id = 0; id < dev_buft.size(); ++id) {
+                cvec.dev_tensors[il][id] = ggml_new_tensor_1d(ctx_map.at(dev_buft[id]), GGML_TYPE_F32, model.hparams.n_embd);
+            }
+        }
     }
 
     // allocate tensors / buffers and zero
@@ -10486,6 +10508,11 @@ int32_t llama_control_vector_apply(struct llama_context * lctx, const float * da
         const size_t off = n_embd * (il - 1); // buffer doesn't have data for layer 0, since it's never present
         if (off + n_embd <= len) {
             ggml_backend_tensor_set(cvec.tensors[il], data + off, 0, n_embd * ggml_element_size(cvec.tensors[il]));
+            if (il < cvec.dev_tensors.size()) {
+                for (ggml_tensor * t : cvec.dev_tensors[il]) {
+                    ggml_backend_tensor_set(t, data + off, 0, n_embd * ggml_element_size(t));
+                }
+            }
         }
     }
 
