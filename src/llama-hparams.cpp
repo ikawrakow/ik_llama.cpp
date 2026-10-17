@@ -657,6 +657,35 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_MAPLE:
+            {
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
+
+                if (hparams.n_swa > 0) {
+                    hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+                    hparams.rope_freq_scale_train_swa = 1; //hparams.rope_freq_scale_train;
+
+                    if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false)) {
+                        for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                            hparams.swa_layers[i] = ((i + 1) % 4 != 0);
+                        }
+                    }
+
+                    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+                }
+
+                hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SOFTMAX;
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,   hparams.expert_gating_func,   false);
+                hparams.expert_weights_norm = true;
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,  hparams.expert_weights_norm,  false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE, hparams.expert_weights_scale, false);
+
+                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP, hparams.swiglu_limits, hparams.n_layer, false);
+
+                model.type = e_model::MODEL_UNKNOWN;
+            } break;
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
             {

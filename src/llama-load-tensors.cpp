@@ -137,6 +137,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_deepseek2_tensors(const LLM_TN & tn);
     bool create_deepseek4_tensors(const LLM_TN & tn);
+    bool create_maple_tensors(const LLM_TN & tn);
     bool create_openpangu_tensors(const LLM_TN & tn);
 
     bool create_glm_dsa_tensors(const LLM_TN & tn);
@@ -1645,6 +1646,48 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
 
         use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
 
+    }
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_maple_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+
+    model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+    model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+    if (model.output == NULL) {
+        model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+    }
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context * ctx_layer = ctx_for_layer(i);
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+
+        auto & layer = model.layers[i];
+
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+
+        use_mmap_buffer &= !merge_qkv(tn, i, 0);
+
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd});
+
+        layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
+        layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k});
+
+        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
+        layer.ffn_norm = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+
+        layer.ffn_gate_inp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
+
+        if (n_expert == 0) {
+            throw std::runtime_error("n_expert must be > 0 for MAPLE");
+        }
+        if (n_expert_used == 0) {
+            throw std::runtime_error("n_expert_used must be > 0 for MAPLE");
+        }
+
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
     }
     return use_mmap_buffer;
 }
@@ -5993,6 +6036,8 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_DEEPSEEK41:
             use_mmap_buffer = create_deepseek4_tensors(tn); break;
+        case LLM_ARCH_MAPLE:
+            use_mmap_buffer = create_maple_tensors(tn); break;
         case LLM_ARCH_GLM_DSA:
             use_mmap_buffer = create_glm_dsa_tensors(tn); break;
         case LLM_ARCH_OPENPANGU:
