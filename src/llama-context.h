@@ -11,6 +11,7 @@ class llama_moe_cache;
 
 #include <vector>
 #include <map>
+#include <tuple>
 #include <set>
 #include <memory>
 
@@ -706,6 +707,12 @@ struct llama_context {
 
     // token at each position of a sequence, read by the PLE n-gram hash
     std::map<llama_seq_id, std::vector<llama_token>> ple_hist;
+
+    // per-graph memo of Hadamard-rotated activations (prism.hadamard folded weights):
+    // several folded weights consume the same input activation; rotate it once per graph.
+    // Keyed by content (signs tensor + transform params), not by the per-weight transform
+    // pointer, so weights sharing one rotation reuse a single rotated tensor.
+    std::map<std::tuple<const struct ggml_tensor *, const struct ggml_tensor *, int64_t, int64_t, int64_t, int64_t>, struct ggml_tensor *> hadamard_memo;
 
     struct swa_window_view_state {
         bool active       = false;

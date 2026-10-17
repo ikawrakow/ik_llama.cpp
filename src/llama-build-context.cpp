@@ -94,6 +94,10 @@ llm_build_context::llm_build_context(
 }
 
 void llm_build_context::init() {
+    // a new graph is being built: drop the previous graph's rotated-activation memo
+    // (the cached tensors live in the previous graph's context)
+    lctx.hadamard_memo.clear();
+
     struct ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
         /*.mem_buffer =*/ buf_compute_meta.data(),
@@ -1062,7 +1066,17 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
           struct ggml_tensor * cur) {
     struct ggml_tensor * cur_mm = cur;
     if (auto rot = lctx.model.hadamard_rotation(w); rot != nullptr) {
-        cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+        // several folded weights consume the same input activation; rotate it once per graph.
+        // Key by content (signs tensor + transform params), not by the per-weight transform pointer
+        const auto memo_key = std::make_tuple((const struct ggml_tensor *) cur, (const struct ggml_tensor *) rot->signs,
+                                              rot->block_size, rot->perm_hd, rot->perm_nk, rot->perm_rep);
+        const auto memo_it  = lctx.hadamard_memo.find(memo_key);
+        if (memo_it != lctx.hadamard_memo.end()) {
+            cur_mm = memo_it->second;
+        } else {
+            cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+            lctx.hadamard_memo[memo_key] = cur_mm;
+        }
     }
     struct ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
     for (auto & it : lctx.lora_adapters) {
@@ -1114,7 +1128,17 @@ ggml_tensor * llm_build_context::llm_build_lora_mm_id(
           struct ggml_tensor * cache_ids) {
     struct ggml_tensor * cur_mm = cur;
     if (auto rot = lctx.model.hadamard_rotation(w); rot != nullptr) {
-        cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+        // several folded weights consume the same input activation; rotate it once per graph.
+        // Key by content (signs tensor + transform params), not by the per-weight transform pointer
+        const auto memo_key = std::make_tuple((const struct ggml_tensor *) cur, (const struct ggml_tensor *) rot->signs,
+                                              rot->block_size, rot->perm_hd, rot->perm_nk, rot->perm_rep);
+        const auto memo_it  = lctx.hadamard_memo.find(memo_key);
+        if (memo_it != lctx.hadamard_memo.end()) {
+            cur_mm = memo_it->second;
+        } else {
+            cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+            lctx.hadamard_memo[memo_key] = cur_mm;
+        }
     }
     struct ggml_tensor * res = ggml_mul_mat_id(ctx0, cache_w ? cache_w : w, cur_mm, cache_ids ? cache_ids : ids);
     for (auto & it : lctx.lora_adapters) {
