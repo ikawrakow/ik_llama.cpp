@@ -25,7 +25,7 @@ struct mtmd_bitmap {
 struct mtmd_image_tokens {
     uint32_t nx; // number of tokens in x direction
     uint32_t ny; // number of tokens in y direction
-    bool use_mrope_pos = false; // use M-RoPE position counting (the whole image is 1 temporal position)
+    bool use_mrope_pos = false; // use M-RoPE position counting (the image takes max(nx, ny) positions)
     uint32_t n_tokens() const { return nx * ny; }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
@@ -1123,7 +1123,8 @@ const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
 
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
     if (image_tokens->use_mrope_pos) {
-        return 1; // for M-RoPE, the whole image is 1 in temporal dimension
+        // for M-RoPE, the text after the image starts after its largest side, as in HF get_rope_index()
+        return std::max(image_tokens->nx, image_tokens->ny);
     }
     return image_tokens->n_tokens();
 }
