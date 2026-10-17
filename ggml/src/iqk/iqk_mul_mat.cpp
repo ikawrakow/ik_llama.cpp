@@ -281,6 +281,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_KS_R4: return nrc_y >= 32 ? q8_k_type : type;
 #ifdef HAVE_FANCY_SIMD
             case GGML_TYPE_IQ4_KS_R16: return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ5_KS_R16: return nrc_y >= 32 ? q8_k_type : type;
 #endif
             case GGML_TYPE_IQ4_KSS: return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ4_K  : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
