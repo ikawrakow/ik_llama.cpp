@@ -141,6 +141,7 @@ void llm_build_context::init() {
 }
 
 void llm_build_context::free() {
+    lctx.cvec.graph = nullptr;
     if (ctx0) {
         ggml_free(ctx0);
         ctx0 = nullptr;
@@ -2878,6 +2879,8 @@ ggml_cgraph * llm_build_context::llama_build_graph(
 
     llm.init();
 
+    lctx.cvec.graph = nullptr; // set by new_graph_custom; builders using their own graph get the plain add
+
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_NANBEIGE:
@@ -3742,5 +3745,7 @@ int32_t llama_model_n_nextn_layer(const llama_model * model) {
 
 ggml_cgraph * llm_build_context::new_graph_custom() {
     int max_nodes = lctx.max_nodes(n_tokens, n_kv);
-    return ggml_new_graph_custom(ctx0, max_nodes, false);
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx0, max_nodes, false);
+    lctx.cvec.graph = gf;
+    return gf;
 }

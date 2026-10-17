@@ -13429,7 +13429,8 @@ static void ggml_compute_forward_add_f16_f32(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
-    GGML_ASSERT(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+    // src1 may be broadcast across the rows of src0
+    GGML_ASSERT(ggml_can_repeat_rows(src1, src0) && ggml_are_same_shape(src0, dst));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -13461,14 +13462,14 @@ static void ggml_compute_forward_add_f16_f32(
     if (nb10 == sizeof(float)) {
         if (dst->type == GGML_TYPE_F16) {
             for (int ir = ir0; ir < ir1; ++ir) {
-                // src0, src1 and dst are same shape => same indices
+                // src0 and dst are same shape => same indices
                 const int i3 = ir/(ne2*ne1);
                 const int i2 = (ir - i3*ne2*ne1)/ne1;
                 const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
 
                 ggml_fp16_t * dst_ptr  = (ggml_fp16_t *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1);
                 ggml_fp16_t * src0_ptr = (ggml_fp16_t *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
-                float *       src1_ptr = (float *)       ((char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11);
+                float *       src1_ptr = (float *)       ((char *) src1->data + (i3%ne13)*nb13 + (i2%ne12)*nb12 + (i1%ne11)*nb11);
 
                 for (int i = 0; i < ne0; i++) {
                     dst_ptr[i] = GGML_FP32_TO_FP16(GGML_FP16_TO_FP32(src0_ptr[i]) + src1_ptr[i]);
@@ -13476,14 +13477,14 @@ static void ggml_compute_forward_add_f16_f32(
             }
         } else {
             for (int ir = ir0; ir < ir1; ++ir) {
-                // src0, src1 and dst are same shape => same indices
+                // src0 and dst are same shape => same indices
                 const int i3 = ir/(ne2*ne1);
                 const int i2 = (ir - i3*ne2*ne1)/ne1;
                 const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
 
                 float *       dst_ptr  = (float *)       ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1);
                 ggml_fp16_t * src0_ptr = (ggml_fp16_t *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
-                float *       src1_ptr = (float *)       ((char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11);
+                float *       src1_ptr = (float *)       ((char *) src1->data + (i3%ne13)*nb13 + (i2%ne12)*nb12 + (i1%ne11)*nb11);
 
                 for (int i = 0; i < ne0; i++) {
                     dst_ptr[i] = GGML_FP16_TO_FP32(src0_ptr[i]) + src1_ptr[i];
@@ -13555,7 +13556,8 @@ static void ggml_compute_forward_add_bf16_f32(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
-    GGML_ASSERT(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+    // src1 may be broadcast across the rows of src0
+    GGML_ASSERT(ggml_can_repeat_rows(src1, src0) && ggml_are_same_shape(src0, dst));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -13587,14 +13589,14 @@ static void ggml_compute_forward_add_bf16_f32(
     if (nb10 == sizeof(float)) {
         if (dst->type == GGML_TYPE_BF16) {
             for (int ir = ir0; ir < ir1; ++ir) {
-                // src0, src1 and dst are same shape => same indices
+                // src0 and dst are same shape => same indices
                 const int i3 = ir/(ne2*ne1);
                 const int i2 = (ir - i3*ne2*ne1)/ne1;
                 const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
 
                 ggml_bf16_t * dst_ptr  = (ggml_bf16_t *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1);
                 ggml_bf16_t * src0_ptr = (ggml_bf16_t *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
-                float *       src1_ptr = (float *)       ((char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11);
+                float *       src1_ptr = (float *)       ((char *) src1->data + (i3%ne13)*nb13 + (i2%ne12)*nb12 + (i1%ne11)*nb11);
 
                 for (int i = 0; i < ne0; i++) {
                     dst_ptr[i] = GGML_FP32_TO_BF16(GGML_BF16_TO_FP32(src0_ptr[i]) + src1_ptr[i]);
@@ -13602,14 +13604,14 @@ static void ggml_compute_forward_add_bf16_f32(
             }
         } else {
             for (int ir = ir0; ir < ir1; ++ir) {
-                // src0, src1 and dst are same shape => same indices
+                // src0 and dst are same shape => same indices
                 const int i3 = ir/(ne2*ne1);
                 const int i2 = (ir - i3*ne2*ne1)/ne1;
                 const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
 
                 float *       dst_ptr  = (float *)       ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1);
                 ggml_bf16_t * src0_ptr = (ggml_bf16_t *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
-                float *       src1_ptr = (float *)       ((char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11);
+                float *       src1_ptr = (float *)       ((char *) src1->data + (i3%ne13)*nb13 + (i2%ne12)*nb12 + (i1%ne11)*nb11);
 
                 for (int i = 0; i < ne0; i++) {
                     dst_ptr[i] = GGML_BF16_TO_FP32(src0_ptr[i]) + src1_ptr[i];
