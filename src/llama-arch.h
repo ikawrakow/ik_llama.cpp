@@ -98,6 +98,7 @@ enum llm_arch {
     LLM_ARCH_MUSE_GLIMMER,
     LLM_ARCH_LFM2,
     LLM_ARCH_LFM2MOE,
+    LLM_ARCH_MAPLE,
     LLM_ARCH_UNKNOWN,
 };
 

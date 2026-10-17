@@ -100,6 +100,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MUSE_GLIMMER,    "muse-glimmer" },
     { LLM_ARCH_LFM2,            "lfm2"         },
     { LLM_ARCH_LFM2MOE,         "lfm2moe"      },
+    { LLM_ARCH_MAPLE,           "maple"        },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
