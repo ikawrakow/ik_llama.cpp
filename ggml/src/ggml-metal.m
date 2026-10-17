@@ -342,6 +342,7 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_IM2COL_F16,
     GGML_METAL_KERNEL_TYPE_IM2COL_F32,
     GGML_METAL_KERNEL_TYPE_UPSCALE_F32,
+    GGML_METAL_KERNEL_TYPE_UPSCALE_BILINEAR_F32,
     GGML_METAL_KERNEL_TYPE_PAD_F32,
     GGML_METAL_KERNEL_TYPE_ARANGE_F32,
     GGML_METAL_KERNEL_TYPE_TIMESTEP_EMBEDDING_F32,
@@ -1012,6 +1013,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(int n_cb) {
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_IM2COL_F16,                    im2col_f16,                     true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_IM2COL_F32,                    im2col_f32,                     true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_UPSCALE_F32,                   upscale_f32,                    true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_UPSCALE_BILINEAR_F32,          upscale_bilinear_f32,           true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_PAD_F32,                       pad_f32,                        true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_TIMESTEP_EMBEDDING_F32,        timestep_embedding_f32,         true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ARANGE_F32,                    arange_f32,                     true);
@@ -1198,6 +1200,8 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
         case GGML_OP_POOL_2D:
             return false;
         case GGML_OP_UPSCALE:
+            // no bicubic kernel
+            return (((const int32_t *) op->op_params)[0] & 0xFF) != GGML_SCALE_MODE_BICUBIC;
         case GGML_OP_PAD:
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
@@ -3459,12 +3463,23 @@ static void ggml_metal_encode_node(
             {
                 GGML_ASSERT(src0->type == GGML_TYPE_F32);
 
-                const float sf0 = (float)ne0/src0->ne[0];
-                const float sf1 = (float)ne1/src0->ne[1];
+                float sf0 = (float)ne0/src0->ne[0];
+                float sf1 = (float)ne1/src0->ne[1];
                 const float sf2 = (float)ne2/src0->ne[2];
                 const float sf3 = (float)ne3/src0->ne[3];
 
-                const id<MTLComputePipelineState> pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_UPSCALE_F32].pipeline;
+                const int32_t mode_flags = ((const int32_t *) dst->op_params)[0];
+
+                float poffs = 0.5f;
+                if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
+                    poffs = 0.0f;
+                    sf0 = ne0 > 1 && ne00 > 1 ? (float)(ne0 - 1) / (ne00 - 1) : sf0;
+                    sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
+                }
+
+                const id<MTLComputePipelineState> pipeline = (mode_flags & 0xFF) == GGML_SCALE_MODE_BILINEAR
+                    ? ctx->kernels[GGML_METAL_KERNEL_TYPE_UPSCALE_BILINEAR_F32].pipeline
+                    : ctx->kernels[GGML_METAL_KERNEL_TYPE_UPSCALE_F32].pipeline;
 
                 [encoder setComputePipelineState:pipeline];
                 [encoder setBuffer:id_src0 offset:offs_src0 atIndex:0];
@@ -3489,6 +3504,7 @@ static void ggml_metal_encode_node(
                 [encoder setBytes:&sf1  length:sizeof(sf1)  atIndex:19];
                 [encoder setBytes:&sf2  length:sizeof(sf2)  atIndex:20];
                 [encoder setBytes:&sf3  length:sizeof(sf3)  atIndex:21];
+                [encoder setBytes:&poffs length:sizeof(poffs) atIndex:22];
 
                 const int nth = MIN((int) pipeline.maxTotalThreadsPerThreadgroup, ne0);
 
