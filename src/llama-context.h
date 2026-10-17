@@ -56,11 +56,19 @@ struct llama_kv_cell {
     llama_token tok = -1;
     llama_pos delta = 0;
     int32_t   src   = 0; // used by recurrent state models to copy states
+    // M-RoPE 2D position (h, w); the tokens of an image share pos and are ordered by (y, x)
+    llama_pos y = 0;
+    llama_pos x = 0;
 
     std::set<llama_seq_id> seq_id;
 
     bool has_seq_id(const llama_seq_id & id) const {
         return seq_id.find(id) != seq_id.end();
+    }
+
+    // causal mask: true if this cell comes after the token at (p, py, px)
+    bool is_after(llama_pos p, llama_pos py, llama_pos px) const {
+        return pos > p || (pos == p && (y > py || (y == py && x > px)));
     }
 
     bool is_empty() const {
