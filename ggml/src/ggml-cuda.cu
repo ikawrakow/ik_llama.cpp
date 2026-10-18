@@ -3431,9 +3431,15 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     dst_row.nb[2] = nb1;
     dst_row.nb[3] = nb1;
 
-    bool fuse_down = false;
-    if (next && next->op == GGML_OP_MUL_MAT_ID) {
-        fuse_down = true;
+    bool fuse_down = next && next->op == GGML_OP_MUL_MAT_ID;
+    // The down result of an expert is written to next before the up/gate data of the remaining experts is read.
+    // If the up/gate experts are copies of host tensors, next may have been allocated on top of them.
+    for (int j = 0; fuse_down && j < GGML_MAX_SRC; ++j) {
+        auto src = dst->src[j];
+        fuse_down = !src || (const char *)src->data >= (const char *)next->data + ggml_nbytes(next) ||
+                            (const char *)next->data >= (const char *)src->data + ggml_nbytes(src);
+    }
+    if (fuse_down) {
         final_dst = *next;
         final_dst.ne[1] = final_dst.ne[2] = final_dst.ne[3] = 1;
         final_dst.nb[2] = final_dst.nb[3] = final_dst.nb[1];
