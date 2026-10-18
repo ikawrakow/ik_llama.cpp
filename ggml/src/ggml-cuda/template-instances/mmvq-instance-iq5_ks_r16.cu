@@ -4,7 +4,9 @@ __device__ __forceinline__ void vec_dot_iq5_ks_r16_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
 
     const float * dptr = (const float *)vbq;
-    const auto bq4 = (const block_iq4_ks_r16 *)(dptr + 16) + kbx;
+    const auto bq5 = (const block_iq5_ks_r16 *)(dptr + 16) + kbx;
+
+    auto values = (const uint8_t *)iq5nl_values;
 
     const int ir = 4*(blockIdx.x%4);
     const int il = iqs / 8;  // 0 or 1
@@ -12,25 +14,33 @@ __device__ __forceinline__ void vec_dot_iq5_ks_r16_q8_1(
     auto d8 = __half22float2(bq8_1->ds);
     const int32_t * q8 = (const int *)bq8_1->qs + 2*il;
 
-    auto sas = (const uint32_t *)(bq4->scales + ir);
+    auto sas = (const uint32_t *)(bq5->scales + ir);
     uint32_t shifts[1];
     int32_t  scales[1];
     #pragma unroll
     for (int j = 0; j < 1; ++j) {
-        shifts[j] = (sas[j] & 0x01010101) << 1;
+        shifts[j] = sas[j] & 0x01010101;
         scales[j] = __vsub4(sas[j] & 0xfefefefe, 0x7f7f7f7f);
     }
+    // qh[16];
+    // qs[64];
     auto shifts8 = (const uint8_t *)shifts;
     auto scales8 = (const  int8_t *)scales;
+    auto qs = (const uint32_t *)bq5->qs + 32*il + ir;
+    auto qh = (const uint32_t *)bq5->qs + ir;
+    int32_t aux32[2];
+    const uint8_t * a8 = (const uint8_t *)aux32;
     int32_t isum[4];
     #pragma unroll
     for (int j = 0; j < 4; ++j) {
-        auto q4 = (const int *)bq4->qs + 32*il + ir + j;
+        uint32_t h = qh[j] >> 2*il;
+        aux32[0] = (qs[j] & 0x0f0f0f0f) | ((h << 4) & 0x10101010);
+        aux32[1] = ((qs[j] >> 4) & 0x0f0f0f0f) | (h & 0x10101010);
         int sumi = 0;
-        int2 val = get_int_from_table_16(q4[0], iq4k_values);
-        sumi = ggml_cuda_dp4a(val.x, q8[0], ggml_cuda_dp4a(val.y, q8[4], sumi));
-        val = get_int_from_table_16(q4[16], iq4k_values);
-        sumi = ggml_cuda_dp4a(val.x, q8[1], ggml_cuda_dp4a(val.y, q8[5], sumi));
+        sumi = ggml_cuda_dp4a(int_from_table(a8, values), q8[0], ggml_cuda_dp4a(int_from_table(a8+4, values), q8[4], sumi));
+        aux32[0] = (qs[j+16] & 0x0f0f0f0f) | ((h << 3) & 0x10101010);
+        aux32[1] = ((qs[j+16] >> 4) & 0x0f0f0f0f) | ((h >> 1) & 0x10101010);
+        sumi = ggml_cuda_dp4a(int_from_table(a8, values), q8[1], ggml_cuda_dp4a(int_from_table(a8+4, values), q8[5], sumi));
         isum[j] = sumi * scales8[j];
     }
     #pragma unroll
