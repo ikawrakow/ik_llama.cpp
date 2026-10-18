@@ -31,25 +31,26 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         const block_iq5_ks_r16 * bxi = (const block_iq5_ks_r16 *)(dptr + 16) + block_id;
 
         const int ls = (bxi->scales[ir] & 254) - 127;
-        auto values = (const uint8_t *)iq5nl_values + ((bxi->scales[ir] & 1) << 5);
+        auto values = iq5nl_values + ((bxi->scales[ir] & 1) << 5);
 
-        uint32_t aux32[2];
-        const uint8_t * aux8 = (const uint8_t *)aux32;
         const int qh = get_int_b4(bxi->qh, ir);
 #pragma unroll
         for (int j = 0; j < 4; ++j) {
             const int q4 = get_int_b4(bxi->qs, 16*j+ir);
-            aux32[0] = ((q4 >> 0) & 0x0f0f0f0f) | ((qh << (4-j)) & 0x10101010);
-            aux32[1] = ((q4 >> 4) & 0x0f0f0f0f) | ((qh >>    j ) & 0x10101010);
-            const char4 v1 = make_char4(values[aux8[0]], values[aux8[1]], values[aux8[2]], values[aux8[3]]);
-            const char4 v2 = make_char4(values[aux8[4]], values[aux8[5]], values[aux8[6]], values[aux8[7]]);
+            const int2 va = get_int_from_table_16(q4, values);
+            const int2 vb = get_int_from_table_16(q4, values + 16);
+            uint32_t h  = qh >> j;
+            uint32_t h1 = __vcmpne4(h & 0x01010101, 0x01010101);
+            uint32_t h2 = __vcmpne4(h & 0x10101010, 0x10101010);
+            int v1 = (va.x & h1) | (vb.x & ~h1);
+            int v2 = (va.y & h2) | (vb.y & ~h2);
             const int k0 = 8*kqsx + j;
 #ifdef INT8_MMA_AVAILABLE
-            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + k0 + 0] = *(const int *)&v1;
-            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + k0 + 4] = *(const int *)&v2;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + k0 + 0] = v1;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + k0 + 4] = v2;
 #else
-            x_qs[i*(2*WARP_SIZE + 1)     + k0 + 0] = *(const int *)&v1;
-            x_qs[i*(2*WARP_SIZE + 1)     + k0 + 4] = *(const int *)&v2;
+            x_qs[i*(2*WARP_SIZE + 1)     + k0 + 0] = v1;
+            x_qs[i*(2*WARP_SIZE + 1)     + k0 + 4] = v2;
 #endif // INT8_MMA_AVAILABLE
         }
 #ifdef INT8_MMA_AVAILABLE
