@@ -27,7 +27,7 @@ __device__ __forceinline__ void vec_dot_iq5_ks_r16_q8_1(
     auto shifts8 = (const uint8_t *)shifts;
     auto scales8 = (const  int8_t *)scales;
     auto qs = (const uint32_t *)bq5->qs + 32*il + ir;
-    auto qh = (const uint32_t *)bq5->qs + ir;
+    auto qh = (const uint32_t *)bq5->qh + ir;
     int32_t aux32[2];
     const uint8_t * a8 = (const uint8_t *)aux32;
     int32_t isum[4];
