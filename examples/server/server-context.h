@@ -24,6 +24,11 @@ enum slot_command {
     SLOT_COMMAND_RELEASE,
 };
 
+struct server_prev_cache_point {
+    server_cache_point pt;
+    llama_token before, at; // prompt tokens at n_tokens - 1 and n_tokens
+};
+
 struct server_slot {
     int id;
     int id_task = -1;
@@ -121,6 +126,16 @@ struct server_slot {
 
     llama_pos checkpoint_pos = -1;
     bool do_checkpoint = false;
+
+    // branch points (--ctx-checkpoints-messages): message boundaries of the current prompt, and
+    // those of the previous prompt of the same family with the tokens around them, to tell
+    // where this request diverged from it
+    std::vector<server_cache_point> cache_points;
+    std::vector<server_prev_cache_point> prev_cache_points;
+    uint64_t cache_points_family = 0; // hash of the prompt before its first boundary
+    size_t cache_point_i = 0;
+    int32_t cache_points_n_prompt = -1; // prompt size the points were computed for
+    bool do_branch_checkpoint = false;
     bool image_just_processed = false;
 
     // sampling
@@ -404,6 +419,21 @@ struct server_context {
     void apply_checkpoint(server_slot & slot);
 
     void create_checkpoint_at_interval(server_slot & slot);
+
+    bool is_branch_point(server_slot & slot, int32_t n_in_batch) const;
+
+    void learn_branch_points(server_slot & slot, int32_t n_common);
+
+    // per prompt family (hash of the prompt up to its first boundary, i.e. the system prompt): the
+    // boundary kind that last would have saved work, and the chat request count at that time
+    struct branch_family {
+        int32_t kind = -1; // learned boundary kind, -1 = none yet
+        int64_t hit  = 0;  // request count when it last saved work
+        int64_t seen = 0;  // request count of the family's last prompt
+        std::vector<server_prev_cache_point> points; // boundaries of that prompt
+    };
+    std::unordered_map<uint64_t, branch_family> branch_families;
+    int64_t branch_n_requests = 0;
 
     void release_slot_after_final_response(server_slot & slot);
 };

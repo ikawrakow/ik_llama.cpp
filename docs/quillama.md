@@ -346,6 +346,74 @@ output, plus any experts the calibration text never routed to. If many attention
 tensors are listed, the imatrix uses different tensor names than this build, and those tensors are
 quantized without it.
 
+### 17. Branch-point checkpoints at message boundaries (idea from Magnitude)
+
+Hybrid/recurrent models (Qwen3-Next, Qwen3.5) and compacted SWA caches (Gemma with
+`--swa-compress`) cannot cut the cache back to an arbitrary prefix. A request that changes text in
+the middle of the prompt resumes from the newest context checkpoint before the change, or
+re-processes everything. Checkpoints used to be taken only at batch ends (every `n_batch` tokens),
+a few tokens before the prompt end, and during generation. A chat bot that puts per-request text
+right after its system prompt (person cards, retrieved memories) therefore re-processed the
+system prompt on every request.
+
+[Magnitude](https://github.com/magnitudedev/magnitude) keeps a checkpoint where requests are likely
+to diverge: at message boundaries. quillama now does the same for chat requests
+(`--ctx-checkpoints-messages N`, default 2, 0 = off):
+
+- Candidates are the end of the leading system message(s), i.e. the starts of the following messages
+  up to the first non-system one, and the starts of the last N messages. A leading boundary is kept
+  if rendering the messages before it gives an exact prefix of the prompt. A trailing one is measured
+  on a skeleton chat with the earlier messages emptied, and kept only if the prompt ends with exactly
+  the text the template emits from that message on. Templates that reorder or merge messages
+  (DeepSeek moves system notes to the front, Mistral folds them into the user turn) simply yield
+  fewer points. Checked on the Qwen3, Gemma 4, Llama 3.1, GLM-4.7, Mistral 3.2 and DeepSeek V3.1
+  templates.
+- Boundaries are learned per prompt family (prompts with the same system prompt), not assumed.
+  The server remembers each family's last boundaries. When a request arrives, it checks where the
+  request diverges from the cached prompt. If the family's previous prompt had a boundary inside
+  the shared part that would have saved at least 128 tokens over the checkpoint the request
+  resumes from, that kind of boundary (the k-th of the leading system block, or the start of the
+  j-th last message) is used for the family until another kind is seen or 16 chat requests pass
+  without a hit. Until then prompts are split exactly as without the option. A layout that never
+  diverges at a boundary keeps its batch-end checkpoints, which a moved split would give up.
+- The batch is ended at a boundary only where the prompt still needs the same number of ubatches.
+  The split moves, it is not added: on MoE models a small ubatch costs nearly a full pass over the
+  weights (synthetic Qwen3-Next: 25 tok/s at 64 tokens vs 167 tok/s at 2048), so an extra split
+  costs seconds. A boundary also has to save at least 128 tokens over the newest checkpoint and lie
+  128 tokens before the prompt end.
+- Only for models that need checkpoints. Dense and MoE models with a normal cache, multimodal
+  prompts and plain `/completion` prompts are unchanged. Measured on a hybrid (Qwen3-Next) model;
+  the Gemma `--swa-compress` path uses the same checkpoint code but was not benchmarked here.
+
+Synthetic Qwen3-Next (8 layers, IQ3_K, 4 threads), chat of 3.2k tokens: 1.4k-token system
+prompt, 12 turns, a last user message, and per-request text either as a second system message right
+after the system prompt ("cards") or as a system message after the chat ("note", one more turn per
+request). Prompt processing time summed over each sequence, option off vs on (greedy outputs
+identical in 63 of 64 requests, see below):
+
+| sequence | `-ub 2048` | `-ub 512` |
+| --- | --- | --- |
+| cards change on every request (5 requests) | 48.6 s → 31.8 s (0.65×); from the 3rd request 9.5 s → 4.5 s each | 124.9 s → 90.9 s (0.73×) |
+| note at the end, one more turn each (5) | 27.4 s → 25.8 s (0.94×, same tokens) | 65.4 s → 43.4 s (0.66×); 10.5 s → 3.2 s each once learned |
+| two prompt families (different system prompts) interleaved (12) | 95.4 s → 85.0 s (0.89×) | 219.0 s → 192.6 s (0.88×) |
+| both layouts with the same system prompt, one after the other (10) | 72.0 s → 59.0 s (0.82×) | 192.4 s → 160.3 s (0.83×) |
+
+The first request of a family and the first one that diverges at a boundary cost the same as
+before. Known limit: the last row. After a client switches from the "cards" to the "note" layout
+under the same system prompt, the checkpoint left at the end of the system prompt is the best
+resume point, and the batches that start there no longer end on the `n_batch` grid. So the note
+requests that follow re-process more than without the option (1.1–1.8× per request) until the
+prefix changes. The same happens to the greedy output of one of those requests, which differs
+because a different split changes the rounding of the recurrent layers, as the cache history
+already does without the option. Use `--ctx-checkpoints-messages 0` for a server whose clients do
+that.
+
+Template rendering for the boundaries adds no measurable time (161-message chat, fully cached
+repeats: 131 ms median off, 121 ms on). Dense and MoE synthetic models: identical outputs and times,
+no checkpoints created. Each kept boundary is one more checkpoint (12.6 MiB on the synthetic model,
+~285 MiB for Gemma 4 26B at 131k with `--swa-compress`), within the existing `--ctx-checkpoints`
+cap and eviction.
+
 ### Recommended settings for an AVX2 EPYC VPS (Zen 2/3, no AVX-512)
 
 * `-ctk q8_0 -ctv q8_0`: half the KV memory of f16 with negligible quality loss, and at least as

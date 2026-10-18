@@ -23,6 +23,10 @@ of RAM and an SSD:
   dense model under a memory cap).
 - **`llama-quantize` reads upstream GGUF importance matrices** (e.g. unsloth's `imatrix_unsloth.gguf`)
   as well as ik's `.dat`, so ik's IQ*_K types can be made with published calibration data.
+- **Hybrid models (Qwen3-Next, Qwen3.5) and Gemma with `--swa-compress` keep a context checkpoint at
+  chat message boundaries**, so a request that only changes text after the system prompt resumes
+  there instead of re-processing everything: 2–3× faster on such requests once the server has seen
+  where a prompt family diverges, never an extra batch (`--ctx-checkpoints-messages`, idea from Magnitude).
 - Server robustness: prompt-prefix reuse checked by a regression test, hardened slot
   save/restore, no draft tokens accepted after end-of-generation. Tests cover all of the above,
   including upstream llama.cpp's grammar / JSON-schema suite.

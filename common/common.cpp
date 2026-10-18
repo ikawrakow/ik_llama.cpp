@@ -3240,6 +3240,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ctx_checkpoints_tolerance = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "-ctx-ckpt-msg" || arg == "--ctx-checkpoints-messages") {
+        CHECK_ARG
+        params.ctx_checkpoints_msg = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--ctx-ckpt-spill-dir" || arg == "--ctx-checkpoints-spill-dir") {
         CHECK_ARG
         params.ctx_checkpoint_spill_dir = argv[i];
@@ -3468,6 +3473,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "--ctx-ckpt-live-n N, --ctx-checkpoints-live-n N",           "max checkpoints with resident data when spill is on (default: %d)",params.ctx_checkpoint_ram_live});
     options.push_back({ "*",           "-ctx-ckpt-i N, --ctx-checkpoints-interval N",  "minimum number of tokens between each context checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_interval});
     options.push_back({ "*",           "-ctx-ckpt-t N, --ctx-checkpoints-tolerance N", "the number of tokens before the full prompt to create the checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_tolerance});
+    options.push_back({ "*",           "-ctx-ckpt-msg N, --ctx-checkpoints-messages N", "chat requests: also checkpoint at message boundaries (end of the leading system messages and the starts of the last N messages), so a request that changes only a later message reuses everything before it (default: %d, 0 = off)",params.ctx_checkpoints_msg});
     options.push_back({ "*",           "-ctx-ckpt-e NAME, --ctx-checkpoints-eviction NAME", "Eviction strategy for checkpoint. Accepts fifo, variance and auto. Auto defaults to variance. Variance preserves coverage and maintains uniform interval.  (default: variance)" });
     options.push_back({ "*",           "-cram, --cache-ram N",          "set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)",params.cache_ram_mib });
     options.push_back({ "*",           "-crs,  --cache-ram-similarity N",           "minimum fraction of a cached entry that must match the new prompt for that entry to be reusable (default: %.2f).",params.cache_ram_similarity });

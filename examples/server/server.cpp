@@ -1168,6 +1168,11 @@ int main(int argc, char ** argv) {
                     task.id = ctx_server.queue_tasks.get_new_id();
                     task.index = i;
 
+                    if (inputs.size() == 1 && prompt.is_string() && data.contains("__cache_points") &&
+                        !inputs[i].has_mtmd_data()) {
+                        task.cache_points = cache_points_to_tokens(llama_get_vocab(ctx_server.ctx),
+                            prompt.get<std::string>(), inputs[i], data.at("__cache_points"));
+                    }
                     task.tokens = std::move(inputs[i]);
                     task.data = data;
                     //task.params = server_task::params_from_json_cmpl(

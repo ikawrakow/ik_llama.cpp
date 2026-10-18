@@ -520,6 +520,11 @@ void server_context::init() {
             /* force_pure_content    */ params_base.force_pure_content_parser
            // /* media_path            */ params_base.media_path,
         };
+        // message-boundary checkpoints only matter where the cache cannot be truncated back to a prefix
+        if (params_base.ctx_checkpoints_n > 0 &&
+            (llama_model_has_recurrent(model) || llama_kv_cache_is_compacted(ctx))) {
+            chat_params.cache_point_msgs = std::max(0, params_base.ctx_checkpoints_msg);
+        }
     }
 
 }
@@ -585,6 +590,9 @@ void server_slot::reset() {
     checkpoint_pos = -1;
     image_just_processed = false;
     do_checkpoint = false;
+    // cache_points stay: launch_slot_with_task turns them into prev_cache_points
+    cache_point_i = 0;
+    do_branch_checkpoint = false;
     if (spec != nullptr) {
         common_speculative_clear_sequence(spec, id);
     }
@@ -1417,6 +1425,39 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     // get prompt
     if (!task.infill) {
         slot.prompt_tokens = std::move(task.tokens);
+        slot.cache_points = std::move(task.cache_points);
+        slot.cache_points_family = 0;
+        slot.prev_cache_points.clear();
+        if (!slot.cache_points.empty()) {
+            ++branch_n_requests;
+            // FNV-1a over the tokens before the first boundary (the system prompt)
+            const int32_t n_key = slot.cache_points.front().n_tokens;
+            uint64_t h = 1469598103934665603ULL;
+            for (int32_t i = 0; i < n_key; ++i) {
+                h = (h ^ (uint32_t) slot.prompt_tokens[i]) * 1099511628211ULL;
+            }
+            slot.cache_points_family = h;
+            if (branch_families.size() >= 256 && branch_families.count(h) == 0) {
+                // forget the family seen longest ago
+                auto oldest = branch_families.begin();
+                for (auto it = branch_families.begin(); it != branch_families.end(); ++it) {
+                    if (it->second.seen < oldest->second.seen) {
+                        oldest = it;
+                    }
+                }
+                branch_families.erase(oldest);
+            }
+            auto & fam = branch_families[h];
+            slot.prev_cache_points = std::move(fam.points);
+            fam.points.clear();
+            for (const auto & pt : slot.cache_points) {
+                fam.points.push_back({ pt, slot.prompt_tokens[pt.n_tokens - 1], slot.prompt_tokens[pt.n_tokens] });
+            }
+            fam.seen = branch_n_requests;
+        }
+        slot.cache_point_i = 0;
+        slot.cache_points_n_prompt = slot.prompt_tokens.size();
+        slot.do_branch_checkpoint = false;
 
         const auto & prompt = data.find("prompt");
         if (prompt != data.end()) {
@@ -3879,6 +3920,89 @@ static bool verify_restored_checkpoint(
     return true;
 }
 
+// a boundary has to save at least this many tokens over the checkpoint the request would use instead
+static constexpr int32_t kMinBranchGain = 128;
+// the learned boundary kind is dropped after this many chat requests without a hit
+static constexpr int64_t kBranchMemory = 16;
+
+// Called with the length of the prefix the new prompt shares with the slot's cache (which may
+// have just been restored from the RAM prompt cache), before a checkpoint is restored. If the
+// cache holds the previous prompt of the same family (same system prompt), and that prompt had a
+// boundary inside the shared prefix at least kMinBranchGain tokens past the checkpoint the
+// request can resume from (not counting one taken at that boundary), a checkpoint there pays off
+// for this family: remember the boundary's kind. Only that one kind is used for the family, until
+// another kind is seen or kBranchMemory requests pass without a hit. Until then prompts are split
+// exactly as without the option, so a layout that never diverges at a boundary loses no
+// batch-end checkpoint to it (one moved split cannot serve two kinds anyway).
+void server_context::learn_branch_points(server_slot & slot, int32_t n_common) {
+    const server_cache_point * best = nullptr;
+    for (const auto & p : slot.prev_cache_points) {
+        const int32_t b = p.pt.n_tokens;
+        if (b > n_common || b >= (int32_t) slot.cache_tokens.size() ||
+            slot.cache_tokens[b - 1] != p.before || slot.cache_tokens[b] != p.at) {
+            continue; // past the divergence, or the slot's cache holds a different prompt now
+        }
+        if (best == nullptr || b > best->n_tokens) {
+            best = &p.pt;
+        }
+    }
+    if (best == nullptr) {
+        return;
+    }
+    int64_t resume = 0;
+    for (const auto & c : slot.server_cached_prompt.checkpoints) {
+        if (c.n_tokens <= n_common && c.n_tokens != best->n_tokens) {
+            resume = std::max<int64_t>(resume, c.n_tokens);
+        }
+    }
+    if (best->n_tokens - resume >= kMinBranchGain) {
+        auto fam = branch_families.find(slot.cache_points_family);
+        if (fam != branch_families.end()) {
+            fam->second.kind = best->kind;
+            fam->second.hit  = branch_n_requests;
+        }
+    }
+}
+
+// A branch point is a message boundary the prompt has just reached (n_in_batch of this slot's
+// prompt tokens are in the current batch). Ending the batch there costs an extra pass over the
+// weights if it adds a ubatch, and on MoE models a small ubatch costs nearly as much as a full
+// one, so the batch is only ended where the prompt still needs the same number of ubatches: the
+// split moves, it is not added. It is also skipped unless it saves real work: kMinBranchGain
+// tokens past the newest checkpoint, and that many before the prompt-end checkpoint.
+bool server_context::is_branch_point(server_slot & slot, int32_t n_in_batch) const {
+    if (slot.cache_points.empty() || slot.truncated || slot.cache_points_n_prompt != slot.n_prompt_tokens) {
+        return false;
+    }
+    const int32_t n = slot.n_past_prompt;
+    while (slot.cache_point_i < slot.cache_points.size() && slot.cache_points[slot.cache_point_i].n_tokens < n) {
+        ++slot.cache_point_i;
+    }
+    if (slot.cache_point_i >= slot.cache_points.size() || slot.cache_points[slot.cache_point_i].n_tokens != n) {
+        return false;
+    }
+    const int32_t kind = slot.cache_points[slot.cache_point_i].kind;
+    ++slot.cache_point_i;
+    // only the boundary kind where a request of this prompt family recently diverged
+    const auto fam = branch_families.find(slot.cache_points_family);
+    if (fam == branch_families.end() || kind != fam->second.kind || branch_n_requests - fam->second.hit > kBranchMemory) {
+        return false;
+    }
+    const auto & ckpts = slot.server_cached_prompt.checkpoints;
+    const int64_t last = ckpts.empty() ? 0 : ckpts.back().n_tokens;
+    if (n - last < kMinBranchGain || slot.n_prompt_tokens - n < kMinBranchGain) {
+        return false;
+    }
+    // ubatches needed for the rest of the prompt (up to the prompt-end split) with and without
+    // ending the batch here
+    const int64_t u   = std::max<int64_t>(1, std::min<int64_t>(llama_n_ubatch(ctx), (int64_t) llama_n_batch(ctx)));
+    const int64_t tol = params_base.ctx_checkpoints_tolerance > 0 ? params_base.ctx_checkpoints_tolerance : 0;
+    const int64_t s   = n - n_in_batch;                  // prompt index where this batch started
+    const int64_t e   = std::max<int64_t>(n, slot.n_prompt_tokens - tol);
+    auto n_ub = [u](int64_t len) { return (len + u - 1) / u; };
+    return n_ub(n - s) + n_ub(e - n) == n_ub(e - s);
+}
+
 void server_context::create_checkpoint_at_interval(server_slot & slot) {
     if (!this->params_base.do_checkpoint) {
         return;
@@ -4297,6 +4421,9 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             // reuse any previously computed tokens that are common with the new prompt
                             common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens);
                             LLAMA_LOG_INFO("======== Cache: cache_size = %d, n_past =  %d, n_past_prompt = %d\n", (int32_t)slot.cache_tokens.size(),  (int32_t)prefix.first, (int32_t)prefix.second);
+                            if (params_base.do_checkpoint) {
+                                learn_branch_points(slot, prefix.first);
+                            }
                             int32_t size_threshold = 20;
                             slot.n_past = prefix.first;
                             slot.n_past_prompt = prefix.second;
@@ -4483,6 +4610,10 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     slot.image_just_processed = false;
                     if (params_base.do_checkpoint && slot.n_prompt_tokens - slot.n_past_prompt == params_base.ctx_checkpoints_tolerance) {
                         slot.do_checkpoint = true;
+                        break;
+                    }
+                    if (params_base.do_checkpoint && is_branch_point(slot, batch.n_tokens - prompt_batch_i0)) {
+                        slot.do_branch_checkpoint = true;
                         break;
                     }
 
@@ -5174,7 +5305,12 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             if (!is_active_slot || slot.i_batch < (int)i || slot.i_batch >= (int)(i + n_tokens)) {
                 // save checkpoint during prompt processing
                 if (slot.command == SLOT_COMMAND_LOAD_PROMPT) {
-                    if (slot.do_checkpoint) {
+                    if (slot.do_branch_checkpoint) {
+                        slot.do_branch_checkpoint = false;
+                        if (create_checkpoint(slot)) {
+                            slot.checkpoint_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
+                        }
+                    } else if (slot.do_checkpoint) {
                         create_checkpoint(slot, true);
                     } else {
                         create_checkpoint_at_interval(slot);

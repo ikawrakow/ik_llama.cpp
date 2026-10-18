@@ -93,6 +93,7 @@ struct server_task {
     // used by SERVER_TASK_TYPE_INFERENCE
     struct slot_params params;
     server_tokens tokens;
+    std::vector<server_cache_point> cache_points; // message boundaries, sorted by position
 
     server_task_type type;
     json data;

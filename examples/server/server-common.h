@@ -293,7 +293,15 @@ struct server_chat_params {
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     bool force_pure_content = false;
+    int  cache_point_msgs = 0; // > 0: report message-boundary offsets (see --ctx-checkpoints-messages)
 };
+
+// a message boundary in a chat prompt (see --ctx-checkpoints-messages)
+struct server_cache_point {
+    int32_t n_tokens; // prompt tokens before the boundary
+    int32_t kind;     // 0..3: k-th boundary of the leading system block; 4 + j: start of the j-th last message
+};
+constexpr int32_t SERVER_CACHE_POINT_KINDS = 16;
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
@@ -521,6 +529,11 @@ server_tokens tokenize_input_subprompt(const llama_vocab* vocab, mtmd_context* m
  * - "prompt": [[12, 34, "string", 56, 78], [12, 34, 56], { "prompt_string": "string", "multimodal_data": [ "base64" ]}]
  */
 std::vector<server_tokens> tokenize_input_prompts(const llama_vocab* vocab, mtmd_context* mctx, const json& json_prompt, bool add_special, bool parse_special);
+
+// map the [byte offset, kind] pairs of oaicompat_chat_params_parse's "__cache_points" to token
+// counts in `tokens` (the tokenized `prompt`); offsets that do not fall on a token boundary are
+// dropped
+std::vector<server_cache_point> cache_points_to_tokens(const llama_vocab* vocab, const std::string& prompt, const server_tokens& tokens, const json& offsets);
 
 // Assuming raw_buffer has .data() and .size() members
 void print_files_info(const std::vector<raw_buffer>& files);

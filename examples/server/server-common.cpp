@@ -884,6 +884,91 @@ json oaicompat_chat_params_parse(
         }
     }
 
+    // branch points: byte offsets in the prompt where a message starts. A later request usually
+    // diverges at one of them (new per-request system/card text, an edited last message), and a
+    // recurrent or compacted cache can only resume from a checkpoint taken at or before that
+    // point. Candidates are the starts of the messages after the leading system message(s) and
+    // the starts of the last N messages.
+    //  - leading boundary k: render messages [0, k) and keep it if it is an exact prefix of the
+    //    prompt (cheap, the head is short)
+    //  - trailing boundary k: rendering [0, k) would cost a full render per point on a long chat,
+    //    so render a skeleton instead, the same messages with [0, k) emptied, and measure the text
+    //    the template emits from message k on; the point is kept only if the prompt ends with
+    //    exactly that text
+    // Each point is emitted as [offset, kind] (see server_cache_point); the server learns which
+    // kinds are worth a checkpoint for this client's prompts.
+    if (opt.cache_point_msgs > 0 && inputs.messages.size() >= 2) {
+        const size_t n_msgs = inputs.messages.size();
+        const std::string & full = chat_params.prompt;
+        std::vector<size_t> lead, tail;
+        for (size_t k = 1; k < n_msgs && lead.size() < 4; ++k) {
+            lead.push_back(k);
+            if (inputs.messages[k].role != "system") {
+                break; // start of the first non-system message closes the leading block
+            }
+        }
+        for (size_t k = n_msgs - std::min<size_t>(n_msgs - 1, opt.cache_point_msgs); k < n_msgs; ++k) {
+            if (std::find(lead.begin(), lead.end(), k) == lead.end()) {
+                tail.push_back(k);
+            }
+        }
+
+        common_chat_templates_inputs tmp = inputs;
+        tmp.json_schema.clear(); // only the rendered text is needed, not a grammar
+        tmp.grammar.clear();
+        auto render = [&](std::vector<common_chat_msg> msgs, bool add_gen) -> std::string {
+            tmp.messages = std::move(msgs);
+            tmp.add_generation_prompt = add_gen;
+            return common_chat_templates_apply(opt.tmpls.get(), tmp).prompt;
+        };
+
+        auto points = json::array();
+        for (size_t li = 0; li < lead.size(); ++li) {
+            const size_t k = lead[li];
+            try {
+                const std::string head = render({ inputs.messages.begin(), inputs.messages.begin() + k }, false);
+                if (!head.empty() && head.size() < full.size() && full.compare(0, head.size(), head) == 0) {
+                    points.push_back({ head.size(), (int) li });
+                }
+            } catch (const std::exception &) {
+                // some templates refuse a partial conversation (e.g. must end with a user turn)
+            }
+        }
+        if (!tail.empty()) {
+            // the skeleton keeps the opening messages (template logic often keys on the first
+            // message) and the two before k (role alternation), emptied, then messages [k, n) as is
+            const size_t n_open = lead.empty() ? 1 : lead.back();
+            for (size_t k : tail) {
+                std::vector<common_chat_msg> skel;
+                for (size_t m = 0; m < k; ++m) {
+                    if (m < n_open || m + 2 >= k) {
+                        skel.push_back(inputs.messages[m]);
+                        skel.back().content.clear();
+                        skel.back().content_parts.clear();
+                        skel.back().reasoning_content.clear();
+                    }
+                }
+                const size_t n_head = skel.size();
+                skel.insert(skel.end(), inputs.messages.begin() + k, inputs.messages.end());
+                try {
+                    const std::string s_head = render({ skel.begin(), skel.begin() + n_head }, false);
+                    const std::string s_all  = render(skel, inputs.add_generation_prompt);
+                    if (s_all.size() > s_head.size() && s_all.compare(0, s_head.size(), s_head) == 0) {
+                        const size_t n_tail = s_all.size() - s_head.size();
+                        if (n_tail < full.size() &&
+                            full.compare(full.size() - n_tail, n_tail, s_all, s_head.size(), n_tail) == 0) {
+                            points.push_back({ full.size() - n_tail, (int) std::min<size_t>(3 + n_msgs - k, SERVER_CACHE_POINT_KINDS - 1) });
+                        }
+                    }
+                } catch (const std::exception &) {
+                }
+            }
+        }
+        if (!points.empty()) {
+            llama_params["__cache_points"] = points;
+        }
+    }
+
     llama_params["chat_format"] = static_cast<int>(chat_params.format);
     llama_params["prompt"] = chat_params.prompt;
     if (!chat_params.grammar.empty()) {
@@ -1979,6 +2064,64 @@ std::vector<server_tokens> tokenize_input_prompts(const llama_vocab* vocab, mtmd
     }
     return result;
 }
+std::vector<server_cache_point> cache_points_to_tokens(const llama_vocab* vocab, const std::string& prompt, const server_tokens& tokens, const json& offsets) {
+    std::vector<server_cache_point> out;
+    if (!offsets.is_array()) {
+        return out;
+    }
+    const size_t n_tok = tokens.n_tokens();
+    size_t n_seen = 0;
+    for (const auto & o : offsets) {
+        if (++n_seen > 8) {
+            break; // the chat parser emits at most 6; the key can also arrive in a raw request body
+        }
+        if (!o.is_array() || o.size() != 2 || !o[0].is_number_unsigned() || !o[1].is_number_integer()) {
+            continue;
+        }
+        const size_t  off  = o[0].get<size_t>();
+        const int32_t kind = o[1].get<int32_t>();
+        if (kind < 0 || kind >= SERVER_CACHE_POINT_KINDS) {
+            continue;
+        }
+        if (off == 0 || off >= prompt.size()) {
+            continue;
+        }
+        int64_t n = -1;
+        if (off > prompt.size() / 2) {
+            // short tail: tokenize what follows the boundary and match it against the end
+            const auto tail = common_tokenize(vocab, prompt.substr(off), false, true);
+            if (!tail.empty() && tail.size() < n_tok) {
+                const size_t base = n_tok - tail.size();
+                bool same = true;
+                for (size_t i = 0; i < tail.size() && same; ++i) {
+                    same = tokens[base + i] == tail[i];
+                }
+                if (same) {
+                    n = base;
+                }
+            }
+        }
+        if (n < 0) {
+            const auto head = common_tokenize(vocab, prompt.substr(0, off), true, true);
+            if (!head.empty() && head.size() < n_tok) {
+                bool same = true;
+                for (size_t i = 0; i < head.size() && same; ++i) {
+                    same = tokens[i] == head[i];
+                }
+                if (same) {
+                    n = head.size();
+                }
+            }
+        }
+        if (n > 0) {
+            out.push_back({ (int32_t) n, kind });
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const auto & a, const auto & b) { return a.n_tokens < b.n_tokens; });
+    out.erase(std::unique(out.begin(), out.end(), [](const auto & a, const auto & b) { return a.n_tokens == b.n_tokens; }), out.end());
+    return out;
+}
+
 // Assuming raw_buffer has .data() and .size() members
 void print_files_info(const std::vector<raw_buffer>& files) {
     for (size_t i = 0; i < files.size(); ++i) {
