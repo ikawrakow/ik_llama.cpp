@@ -3749,3 +3749,45 @@ ggml_cgraph * llm_build_context::new_graph_custom() {
     lctx.cvec.graph = gf;
     return gf;
 }
+
+// Split mode graph: add this device's copy of the direction (shared one as fallback),
+// for builders that rebuild the residual per device.
+ggml_tensor * llama_control_vector::apply_to_device(ggml_context * ctx, ggml_tensor * cur, int il, int id) const {
+    ggml_tensor * layer_dir = tensor_for(il);
+    if (layer_dir == nullptr) {
+        return cur;
+    }
+    if ((size_t) il < dev_tensors.size() && id >= 0 && id < (int) dev_tensors[il].size() && dev_tensors[il][id]) {
+        layer_dir = dev_tensors[il][id];
+    }
+    return ggml_add(ctx, cur, layer_dir);
+}
+
+// Reduce is a sum: adding the direction to one device's partial before it
+// steers every device's result, avoiding a post-reduce cross-device copy.
+ggml_tensor * llama_control_vector::apply_to_reduce(ggml_context * ctx, ggml_tensor * cur, int il) const {
+    if (!graph || cur->op != GGML_OP_REDUCE || cur->op_params[3] == 1 || (size_t) il >= dev_tensors.size() ||
+        graph->n_nodes == 0 || graph->nodes[graph->n_nodes - 1] != cur) {
+        return nullptr;
+    }
+    const int n = cur->op_params[1];
+    for (int k = 0; k < n; ++k) {
+        ggml_tensor * src = cur->src[k];
+        // skip the reduce's own storage, and devices that only receive a copy of the result
+        if (!src || src == cur->view_src || (cur->op_params[4] & (1u << k)) ||
+            k >= (int) dev_tensors[il].size() || !dev_tensors[il][k]) {
+            continue;
+        }
+        if (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16 && src->type != GGML_TYPE_BF16) {
+            return nullptr; // reduce type without CUDA add support for an f32 direction
+        }
+        ggml_tensor * steered = ggml_add(ctx, src, dev_tensors[il][k]);
+        // the reduce is already the last graph node: put the add in front of it
+        graph->n_nodes--;
+        ggml_build_forward_expand(graph, steered);
+        graph->nodes[graph->n_nodes++] = cur;
+        cur->src[k] = steered;
+        return cur;
+    }
+    return nullptr;
+}
