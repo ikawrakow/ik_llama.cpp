@@ -4368,19 +4368,18 @@ void mul_mat_iq3_ks_r16_q8_0(int n, const void * vx, size_t bx, const DataInfo& 
     }
 }
 
-template <int nrc_y>
-void mul_mat_iq4_ks_r16_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+template <typename Dequant, int nrc_y>
+inline void mul_mat_iqX_ks_r16_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
     Q8<nrc_y, block_q8_0_x4> q8(info);
-    auto table = vld1q_s8(iq4k_values);
-    auto m4 = vdupq_n_u8(0xf);
+    Dequant deq;
     int nb = n / QK8_0;
     float32x4_t acc[2*nrc_y] = {};
     int8x16_t qx[16];
     float d8[4*nrc_y];
     for (int ix = 0; ix < nrc_x; ix += 16) {
         auto dptr = (const float *)((const char *)vx + ix*bx);
-        auto iq4 = (const block_iq4_ks_r16 *)(dptr + 16);
+        auto iq = (const typename Dequant::type *)(dptr + 16);
         for (int ip = 0; ip < 2; ++ip) {
         auto d4 = vld1q_f32_x2(dptr + 8*ip);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
@@ -4388,25 +4387,8 @@ void mul_mat_iq4_ks_r16_q8_0(int n, const void * vx, size_t bx, const DataInfo& 
                 vst1q_f32(d8+4*iy, vcvt_f32_f16(vld1_f16((const float16_t *)q8.y[iy][ib4].d)));
             }
             for (int k = 0; k < 4; ++k) {
-                auto sas16 = vmovl_u8(vld1_u8(iq4[4*ib4+k].scales + 8*ip));
-                auto sas32l = vmovl_u16(vget_low_u16(sas16));
-                auto sas32h = vmovl_u16(vget_high_u16(sas16));
-                auto one = vdupq_n_u32(1);
-                auto shiftl = vceqq_u32(vandq_u32(sas32l, one), one);
-                auto shifth = vceqq_u32(vandq_u32(sas32h, one), one);
-                auto addl = vreinterpretq_s8_u8(vandq_u8(vdupq_n_u8(4), vreinterpretq_u8_u32(shiftl)));
-                auto addh = vreinterpretq_s8_u8(vandq_u8(vdupq_n_u8(4), vreinterpretq_u8_u32(shifth)));
-                sas32l = vandq_u32(sas32l, vdupq_n_u32(254));
-                sas32h = vandq_u32(sas32h, vdupq_n_u32(254));
-                auto scalesl = vmulq_f32(d4.val[0], vcvtq_f32_s32(vsubq_s32(vreinterpretq_s32_u32(sas32l), vdupq_n_s32(127))));
-                auto scalesh = vmulq_f32(d4.val[1], vcvtq_f32_s32(vsubq_s32(vreinterpretq_s32_u32(sas32h), vdupq_n_s32(127))));
-                for (int j = 0; j < 4; ++j) {
-                    auto bits = vld1q_u8_x2(iq4[4*ib4+k].qs + 32*ip + 64*j);
-                    qx[2*j+0] = vaddq_s8(vqtbl1q_s8(table, vandq_u8 (bits.val[0], m4)), addl);
-                    qx[2*j+8] = vaddq_s8(vqtbl1q_s8(table, vshrq_n_u8(bits.val[0], 4)), addl);
-                    qx[2*j+1] = vaddq_s8(vqtbl1q_s8(table, vandq_u8 (bits.val[1], m4)), addh);
-                    qx[2*j+9] = vaddq_s8(vqtbl1q_s8(table, vshrq_n_u8(bits.val[1], 4)), addh);
-                }
+                float32x4_t scalesl, scalesh;
+                deq.prepare(iq[4*ib4+k], ip, d4, scalesl, scalesh, qx);
                 int32x4_t sumi1, sumi2;
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     qx_0_q8_0_dot(qx, q8.y[iy][ib4].qs+32*k, sumi1, sumi2);
@@ -4416,20 +4398,18 @@ void mul_mat_iq4_ks_r16_q8_0(int n, const void * vx, size_t bx, const DataInfo& 
                 }
             }
         }
-        //for (int ib = 4*(nb/4); ib < nb; ++ib) {
-        //    auto scales16 = vld1q_f16((const float16_t *)iq8[ib].d);
-        //    auto scales1 = vcvt_f32_f16(vget_low_f16 (scales16));
-        //    auto scales2 = vcvt_f32_f16(vget_high_f16(scales16));
-        //    for (int j = 0; j < 16; ++j) qx[j] = vld1q_s8(iq8[ib].qs + 16*j);
-        //    int32x4_t sumi1, sumi2;
-        //    for (int iy = 0; iy < nrc_y; ++iy) {
-        //        auto qy = (const block_q8_0 *)q8.y[iy];
-        //        qx_0_q8_0_dot(qx, qy[ib].qs, sumi1, sumi2);
-        //        auto dy = vdupq_n_f32(GGML_FP16_TO_FP32(qy[ib].d));
-        //        acc[2*iy+0] = vfmaq_f32(acc[2*iy+0], vmulq_f32(scales1, dy), vcvtq_f32_s32(sumi1));
-        //        acc[2*iy+1] = vfmaq_f32(acc[2*iy+1], vmulq_f32(scales2, dy), vcvtq_f32_s32(sumi2));
-        //    }
-        //}
+        for (int ib = 4*(nb/4); ib < nb; ++ib) {
+            float32x4_t scalesl, scalesh;
+            deq.prepare(iq[ib], ip, d4, scalesl, scalesh, qx);
+            int32x4_t sumi1, sumi2;
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto yb = (const block_q8_0 *)q8.y[iy];
+                qx_0_q8_0_dot(qx, yb[ib].qs, sumi1, sumi2);
+                auto dy = vdupq_n_f32(GGML_FP16_TO_FP32(yb[ib].d));
+                acc[2*iy+0] = vfmaq_f32(acc[2*iy+0], vmulq_f32(scalesl, dy), vcvtq_f32_s32(sumi1));
+                acc[2*iy+1] = vfmaq_f32(acc[2*iy+1], vmulq_f32(scalesh, dy), vcvtq_f32_s32(sumi2));
+            }
+        }
         for (int iy = 0; iy < nrc_y; ++iy) {
             info.store(ix+0+8*ip, iy, acc[2*iy+0]);
             info.store(ix+4+8*ip, iy, acc[2*iy+1]);
@@ -4437,6 +4417,86 @@ void mul_mat_iq4_ks_r16_q8_0(int n, const void * vx, size_t bx, const DataInfo& 
         }
         }
     }
+}
+
+struct DequantIQ4KS {
+    using type = block_iq4_ks_r16;
+    const int8x16_t table = load_table();
+    const uint8x16_t   m4 = vdupq_n_u8(0xf);
+    static int8x16_t load_table() { return vld1q_s8(iq4k_values); }
+    inline void prepare(const type & iq, int ip, const float32x4x2_t & d4, float32x4_t & scalesl, float32x4_t & scalesh,
+            int8x16_t * qx) const {
+        auto sas16 = vmovl_u8(vld1_u8(iq.scales + 8*ip));
+        auto sas32l = vmovl_u16(vget_low_u16(sas16));
+        auto sas32h = vmovl_u16(vget_high_u16(sas16));
+        auto one = vdupq_n_u32(1);
+        auto shiftl = vceqq_u32(vandq_u32(sas32l, one), one);
+        auto shifth = vceqq_u32(vandq_u32(sas32h, one), one);
+        auto addl = vreinterpretq_s8_u8(vandq_u8(vdupq_n_u8(4), vreinterpretq_u8_u32(shiftl)));
+        auto addh = vreinterpretq_s8_u8(vandq_u8(vdupq_n_u8(4), vreinterpretq_u8_u32(shifth)));
+        sas32l = vandq_u32(sas32l, vdupq_n_u32(254));
+        sas32h = vandq_u32(sas32h, vdupq_n_u32(254));
+        scalesl = vmulq_f32(d4.val[0], vcvtq_f32_s32(vsubq_s32(vreinterpretq_s32_u32(sas32l), vdupq_n_s32(127))));
+        scalesh = vmulq_f32(d4.val[1], vcvtq_f32_s32(vsubq_s32(vreinterpretq_s32_u32(sas32h), vdupq_n_s32(127))));
+        for (int j = 0; j < 4; ++j) {
+            auto bits = vld1q_u8_x2(iq.qs + 32*ip + 64*j);
+            qx[2*j+0] = vaddq_s8(vqtbl1q_s8(table, vandq_u8 (bits.val[0], m4)), addl);
+            qx[2*j+8] = vaddq_s8(vqtbl1q_s8(table, vshrq_n_u8(bits.val[0], 4)), addl);
+            qx[2*j+1] = vaddq_s8(vqtbl1q_s8(table, vandq_u8 (bits.val[1], m4)), addh);
+            qx[2*j+9] = vaddq_s8(vqtbl1q_s8(table, vshrq_n_u8(bits.val[1], 4)), addh);
+        }
+    }
+};
+
+struct DequantIQ5KS {
+    using type = block_iq5_ks_r16;
+    const int8x16x2_t table = load_table();
+    const uint8x16_t     m4 = vdupq_n_u8(0xf);
+    const uint8x16_t hmask  = vdupq_n_u8(0x10);
+    static int8x16x2_t load_table() { return vld1q_s8_x2(iq5nl_values); }
+    inline void prepare(const type & iq, int ip, const float32x4x2_t & d4, float32x4_t & scalesl, float32x4_t & scalesh,
+            int8x16_t * qx) const {
+        auto sas16 = vmovl_u8(vld1_u8(iq.scales + 8*ip));
+        auto sas32l = vmovl_u16(vget_low_u16(sas16));
+        auto sas32h = vmovl_u16(vget_high_u16(sas16));
+        auto one = vdupq_n_u32(1);
+        auto shiftl = vceqq_u32(vandq_u32(sas32l, one), one);
+        auto shifth = vceqq_u32(vandq_u32(sas32h, one), one);
+        auto addl = vreinterpretq_s8_u8(vandq_u8(vdupq_n_u8(2), vreinterpretq_u8_u32(shiftl)));
+        auto addh = vreinterpretq_s8_u8(vandq_u8(vdupq_n_u8(2), vreinterpretq_u8_u32(shifth)));
+        sas32l = vandq_u32(sas32l, vdupq_n_u32(254));
+        sas32h = vandq_u32(sas32h, vdupq_n_u32(254));
+        scalesl = vmulq_f32(d4.val[0], vcvtq_f32_s32(vsubq_s32(vreinterpretq_s32_u32(sas32l), vdupq_n_s32(127))));
+        scalesh = vmulq_f32(d4.val[1], vcvtq_f32_s32(vsubq_s32(vreinterpretq_s32_u32(sas32h), vdupq_n_s32(127))));
+        auto hbits = vld1q_u8_x2(iq.qh + 32*ip);
+        for (int j = 0; j < 4; ++j) {
+            auto bits = vld1q_u8_x2(iq.qs + 32*ip + 64*j);
+            qx[2*j+0] = vandq_u8 (bits.val[0], m4);
+            qx[2*j+1] = vandq_u8 (bits.val[1], m4);
+            qx[2*j+8] = vshrq_n_u8(bits.val[0], 4);
+            qx[2*j+9] = vshrq_n_u8(bits.val[1], 4);
+            qx[2*j+0] = vorrq_u8(qx[2*j+0], vandq_u8(hmask, vshlq_n_u8(hbits.val[0], 4)));
+            qx[2*j+1] = vorrq_u8(qx[2*j+1], vandq_u8(hmask, vshlq_n_u8(hbits.val[1], 4)));
+            qx[2*j+8] = vorrq_u8(qx[2*j+8], vandq_u8(hmask, hbits.val[0]));
+            qx[2*j+9] = vorrq_u8(qx[2*j+9], vandq_u8(hmask, hbits.val[1]));
+            qx[2*j+0] = vaddq_s8(vqtbl2q_s8(table, qx[2*j+0]), addl);
+            qx[2*j+1] = vaddq_s8(vqtbl2q_s8(table, qx[2*j+1]), addh);
+            qx[2*j+8] = vaddq_s8(vqtbl2q_s8(table, qx[2*j+8]), addl);
+            qx[2*j+9] = vaddq_s8(vqtbl2q_s8(table, qx[2*j+9]), addh);
+            hbits.val[0] = vshrq_n_u8(hbits.val[0], 1);
+            hbits.val[1] = vshrq_n_u8(hbits.val[1], 1);
+        }
+    }
+};
+
+template <int nrc_y>
+void mul_mat_iq4_ks_r16_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    mul_mat_iqX_ks_r16_q8_0<DequantIQ4KS, nrc_y>(n, vx, bx, info, nrc_x);
+}
+
+template <int nrc_y>
+void mul_mat_iq5_ks_r16_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    mul_mat_iqX_ks_r16_q8_0<DequantIQ5KS, nrc_y>(n, vx, bx, info, nrc_x);
 }
 
 typedef struct {
@@ -4847,6 +4907,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             break;
         case GGML_TYPE_IQ4_KS_R16:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq4_ks_r16_q8_0, kernels);
+            break;
+        case GGML_TYPE_IQ5_KS_R16:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq5_ks_r16_q8_0, kernels);
             break;
         default:
             return false;
