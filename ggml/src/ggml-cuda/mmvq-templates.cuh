@@ -11,6 +11,11 @@
 #include "vecdotq.cuh"
 #include "mmvq-args.h"
 
+static constexpr __host__ __device__ int mmvq_rows_per_cuda_block(const ggml_type type, const int ncols_y, const int arch) {
+    const bool two_rows_n1 = (arch <= CC_PASCAL || arch == CC_TURING) && type != GGML_TYPE_Q3_K;
+    return ncols_y == 1 ? (two_rows_n1 ? 2 : 1) : ncols_y < 4 ? 1 : 2;
+}
+
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
@@ -84,6 +89,8 @@ static __device__ void k_mul_mat_vec_q(
 
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
     constexpr int rows_per_cuda_block = 1;
+#elif defined(__CUDA_ARCH__) && !defined(GGML_USE_MUSA)
+    constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block(type, ncols_y, __CUDA_ARCH__);
 #else
     constexpr int rows_per_cuda_block = ncols_y < 4 ? 1 : 2;
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
@@ -169,6 +176,8 @@ static __device__ void k_fused_mul_mat_vec_q(
 
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
     constexpr int rows_per_cuda_block = 1;
+#elif defined(__CUDA_ARCH__) && !defined(GGML_USE_MUSA)
+    constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block(type, ncols_y, __CUDA_ARCH__);
 #else
     constexpr int rows_per_cuda_block = ncols_y < 4 ? 1 : 2;
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
@@ -346,10 +355,14 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
     constexpr int k_max_cols = ggml_cuda_has_arch(CC_PASCAL) ? MMVQ_MAX_NCOLS_PASCAL : MMVQ_MAX_BATCH_SIZE;
     GGML_ASSERT(args.ncols_y <= k_max_cols);
 
+#ifdef GGML_USE_MUSA
+    int64_t rows_per_cuda_block = args.ncols_y < 4 ? 1 : 2;
+#else
     int id = ggml_cuda_get_device();
+    const int cc = ggml_cuda_info().devices[id].cc;
 
-    int64_t rows_per_cuda_block = ggml_cuda_info().devices[id].cc < CC_RDNA2 ?
-        args.ncols_y < 4 ? 1 : 2 : 1;
+    int64_t rows_per_cuda_block = cc < CC_RDNA2 ? mmvq_rows_per_cuda_block(type, args.ncols_y, ggml_cuda_highest_compiled_arch(cc)) : 1;
+#endif
 
     const int64_t nblocks = (args.nrows_x + rows_per_cuda_block - 1) / rows_per_cuda_block;
     const dim3 block_nums(nblocks, args.ne2, 1);
