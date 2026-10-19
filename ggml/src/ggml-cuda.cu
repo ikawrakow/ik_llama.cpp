@@ -4417,7 +4417,7 @@ GGML_CALL static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend,
     CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
 }
 
-GGML_CALL bool ggml_backend_cuda_try_tensor_set_async(ggml_backend_t backend,
+GGML_CALL bool ggml_cuda_moe_cache_try_tensor_set_async(ggml_backend_t backend,
         ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     if (!backend || !ggml_backend_is_cuda(backend) || !tensor || !data || !tensor->data || offset > ggml_nbytes(tensor) ||
             size > ggml_nbytes(tensor) - offset) return false;
@@ -4545,7 +4545,7 @@ GGML_CALL static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
     GGML_UNUSED(backend);
 }
 
-GGML_CALL bool ggml_backend_cuda_try_synchronize(ggml_backend_t backend) {
+GGML_CALL bool ggml_cuda_moe_cache_try_synchronize(ggml_backend_t backend) {
     if (!backend || !ggml_backend_is_cuda(backend)) return false;
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
     if (cudaSetDevice(cuda_ctx->device) != cudaSuccess) return false;
@@ -5616,11 +5616,17 @@ GGML_API bool ggml_cuda_moe_cache_dispatch(
         void * device_q8, float * device_output, float * host_output,
         size_t input_bytes, size_t output_bytes,
         int64_t k, int64_t m, size_t expert_bytes, int32_t n_hits,
-        int32_t n_activations, int64_t padded_k) {
+        int32_t n_activations, int64_t padded_k,
+        const void * expert_gate, enum ggml_unary_op unary_op, float limit) {
+    const bool fused = expert_gate != nullptr;
+    const bool quantized = type != GGML_TYPE_F16;
     if (!backend || !backend->context || !expert_bank || !host_input || !device_input ||
         !device_output || !host_output || k <= 0 || m <= 0 || n_hits <= 0 ||
-        n_activations <= 0 || (type != GGML_TYPE_F16 && padded_k < k) ||
-        (type != GGML_TYPE_F16 && (!device_q8 || !ggml_cuda_mmvq_type_supported(type)))) {
+        n_activations <= 0 || expert_bytes == 0 || (fused && type == GGML_TYPE_F16) ||
+        (quantized && (!device_q8 || padded_k < k || padded_k % QK8_1 != 0 ||
+                       !ggml_cuda_mmvq_type_supported(type))) ||
+        (fused && unary_op != GGML_UNARY_OP_SILU && unary_op != GGML_UNARY_OP_SWIGLU_OAI) ||
+        (!fused && unary_op != GGML_UNARY_OP_COUNT)) {
         return false;
     }
     if ((size_t) n_hits > SIZE_MAX/(2*sizeof(int32_t)) ||
@@ -5633,9 +5639,11 @@ GGML_API bool ggml_cuda_moe_cache_dispatch(
     if (act_bytes > SIZE_MAX - ids_bytes) return false;
     const size_t expected_input_bytes = ids_bytes + act_bytes;
     const size_t expected_output_bytes = (size_t) n_hits*(size_t) m*sizeof(float);
+    const size_t q8_row_bytes = quantized ? (size_t)(padded_k/QK8_1)*sizeof(block_q8_1) : 0;
     if (expected_input_bytes > input_bytes || expected_output_bytes != output_bytes ||
         expert_bytes == 0 || (size_t) n_hits > (size_t) INT_MAX ||
-        (size_t) n_activations > (size_t) INT_MAX) {
+        (size_t) n_activations > (size_t) INT_MAX ||
+        (quantized && (q8_row_bytes == 0 || (size_t)n_activations > SIZE_MAX/q8_row_bytes))) {
         return false;
     }
 
@@ -5660,75 +5668,17 @@ GGML_API bool ggml_cuda_moe_cache_dispatch(
         err = cudaPeekAtLastError();
         if (err != cudaSuccess) goto fail;
     } else {
-        if (padded_k % QK8_1 != 0) goto fail;
         quantize_row_q8_1_cuda(activations, device_q8, k, n_activations, 1,
                 padded_k, type, stream);
         err = cudaPeekAtLastError();
         if (err != cudaSuccess) goto fail;
-        ggml_cuda_moe_cache_mmv(*ctx, type, expert_bank, device_q8,
+        ggml_cuda_moe_cache_mmv(*ctx, type, expert_bank, expert_gate, device_q8,
                 slot_ids, activation_map, device_output, k, m, expert_bytes,
-                n_hits, padded_k, stream);
+                n_hits, padded_k, fused ? unary_op : GGML_UNARY_OP_COUNT,
+                fused ? limit : 0.0f, stream);
         err = cudaPeekAtLastError();
         if (err != cudaSuccess) goto fail;
     }
-    err = cudaMemcpyAsync(host_output, device_output, expected_output_bytes,
-            cudaMemcpyDeviceToHost, stream);
-    if (err != cudaSuccess) goto fail;
-    return true;
-
-fail:
-    if (queued) cudaStreamSynchronize(stream);
-    cudaGetLastError();
-    return false;
-}
-
-GGML_API bool ggml_cuda_moe_cache_dispatch_fused(
-        ggml_backend_t backend, enum ggml_type type,
-        const void * expert_up, const void * expert_gate,
-        const void * host_input, void * device_input, void * device_q8,
-        float * device_output, float * host_output,
-        size_t input_bytes, size_t output_bytes,
-        int64_t k, int64_t m, size_t expert_bytes, int32_t n_hits,
-        int32_t n_activations, int64_t padded_k, enum ggml_unary_op unary_op, float limit) {
-    if (!backend || !backend->context || !expert_up || !expert_gate || !host_input || !device_input ||
-        !device_q8 || !device_output || !host_output || k <= 0 || m <= 0 || n_hits <= 0 ||
-        n_activations <= 0 || padded_k < k || padded_k % QK8_1 != 0 || expert_bytes == 0 ||
-        (unary_op != GGML_UNARY_OP_SILU && unary_op != GGML_UNARY_OP_SWIGLU_OAI) ||
-        !ggml_cuda_mmvq_type_supported(type)) return false;
-    if ((size_t) n_hits > SIZE_MAX/(2*sizeof(int32_t)) ||
-        (size_t) n_activations > SIZE_MAX/(size_t) k/sizeof(float) ||
-        (size_t) n_hits > SIZE_MAX/(size_t) m/sizeof(float)) return false;
-    const size_t ids_bytes = (size_t)n_hits*2*sizeof(int32_t);
-    const size_t act_bytes = (size_t)n_activations*(size_t)k*sizeof(float);
-    if (act_bytes > SIZE_MAX-ids_bytes) return false;
-    const size_t expected_input_bytes = ids_bytes+act_bytes;
-    const size_t expected_output_bytes = (size_t)n_hits*(size_t)m*sizeof(float);
-    const size_t q8_row_bytes = (size_t)(padded_k/QK8_1)*sizeof(block_q8_1);
-    if (expected_input_bytes > input_bytes || expected_output_bytes != output_bytes ||
-        (size_t)n_hits > (size_t)INT_MAX || (size_t)n_activations > (size_t)INT_MAX ||
-        (size_t)n_activations > SIZE_MAX/q8_row_bytes) return false;
-
-    ggml_backend_cuda_context * ctx = (ggml_backend_cuda_context *)backend->context;
-    ggml_cuda_set_device(ctx->device);
-    cudaStream_t stream = ctx->stream();
-    const int32_t * slot_ids = (const int32_t *)device_input;
-    const int32_t * activation_map = slot_ids+n_hits;
-    const float * activations = (const float *)(activation_map+n_hits);
-    (void)cudaGetLastError();
-    bool queued = false;
-    cudaError_t err = cudaMemcpyAsync(device_input, host_input, expected_input_bytes,
-            cudaMemcpyHostToDevice, stream);
-    if (err != cudaSuccess) goto fail;
-    queued = true;
-    quantize_row_q8_1_cuda(activations, device_q8, k, n_activations, 1,
-            padded_k, type, stream);
-    err = cudaPeekAtLastError();
-    if (err != cudaSuccess) goto fail;
-    ggml_cuda_moe_cache_mmv_fused(*ctx, type, expert_up, expert_gate, device_q8,
-            slot_ids, activation_map, device_output, k, m, expert_bytes, n_hits,
-            padded_k, unary_op, limit, stream);
-    err = cudaPeekAtLastError();
-    if (err != cudaSuccess) goto fail;
     err = cudaMemcpyAsync(host_output, device_output, expected_output_bytes,
             cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) goto fail;

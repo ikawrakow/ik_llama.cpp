@@ -18992,8 +18992,7 @@ static void ggml_compute_forward_moe_with_provider(
         return;
     }
 
-    const uint8_t * cpu_rows = state->dispatched ? state->cpu_rows : NULL;
-    compute_rows(params, dst, cpu_rows);
+    compute_rows(params, dst, state->cpu_rows);
 
     ggml_barrier(params->shared);
 
@@ -19016,12 +19015,6 @@ static void ggml_compute_forward_moe_with_provider(
         provider->end(provider->user_data, state->request);
         memset(state, 0, sizeof(*state));
     }
-}
-
-static void ggml_compute_forward_mul_mat_id_with_provider(
-        const struct ggml_compute_params * params,
-              struct ggml_tensor * dst) {
-    ggml_compute_forward_moe_with_provider(params, dst, dst->src[2], dst->src[0]->ne[2], ggml_compute_forward_mul_mat_id_impl);
 }
 
 #if GGML_USE_IQK_MULMAT
@@ -19268,12 +19261,6 @@ static void ggml_compute_forward_mul_mat_id_up_gate_impl(
     }
 #endif
 #undef MMID_MATRIX_ROW
-}
-
-static void ggml_compute_forward_mul_mat_id_up_gate_with_provider(
-        const struct ggml_compute_params * params,
-              struct ggml_tensor * dst) {
-    ggml_compute_forward_moe_with_provider(params, dst, dst->src[3], dst->src[0]->ne[2], ggml_compute_forward_mul_mat_id_up_gate_impl);
 }
 
 static void ggml_compute_forward_mul_mat_up_gate(
@@ -27187,7 +27174,8 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 if (params->shared->moe_provider &&
                     ggml_compute_moe_provider_eligible(params->shared->moe_provider, tensor->src[2])) {
-                    ggml_compute_forward_mul_mat_id_with_provider(params, tensor);
+                    ggml_compute_forward_moe_with_provider(params, tensor, tensor->src[2],
+                            tensor->src[0]->ne[2], ggml_compute_forward_mul_mat_id_impl);
                 } else {
                     ggml_compute_forward_mul_mat_id_impl(params, tensor, NULL);
                 }
@@ -27196,7 +27184,8 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 if (params->shared->moe_provider &&
                     ggml_compute_moe_provider_eligible(params->shared->moe_provider, tensor->src[3])) {
-                    ggml_compute_forward_mul_mat_id_up_gate_with_provider(params, tensor);
+                    ggml_compute_forward_moe_with_provider(params, tensor, tensor->src[3],
+                            tensor->src[0]->ne[2], ggml_compute_forward_mul_mat_id_up_gate_impl);
                 } else {
                     ggml_compute_forward_mul_mat_id_up_gate_impl(params, tensor, NULL);
                 }

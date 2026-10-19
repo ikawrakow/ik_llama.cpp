@@ -141,9 +141,6 @@ extern "C" {
         void * context;
     };
 
-    GGML_API void ggml_backend_sched_set_moe_provider(
-            ggml_backend_sched_t sched, const struct ggml_moe_provider * provider);
-
     //
     // Backend registry
     //

@@ -12,8 +12,8 @@ extern "C" {
 
 // The scheduler borrows this provider until synchronized and replaced or destroyed.
 // A successful begin is paired with exactly one end. A failed begin owns no session.
-// gpu_rows is indexed by token * selected_experts + selection and is zeroed before plan.
-// Failed dispatch/collection must quiesce writes before returning false. Successful collect makes GPU rows visible.
+// Row masks use token * selected_experts + selection. Failed dispatch/collection
+// must quiesce writes; successful collection publishes completed GPU rows.
 struct ggml_moe_provider {
     void * user_data;
     bool (*begin)(void * user_data, const struct ggml_tensor * op, void ** request);
@@ -32,6 +32,12 @@ GGML_API void ggml_backend_sched_set_moe_provider(
         ggml_backend_sched_t sched,
         const struct ggml_moe_provider * provider);
 
+#ifdef GGML_USE_CUDA
+GGML_API GGML_CALL bool ggml_cuda_moe_cache_try_tensor_set_async(ggml_backend_t backend,
+        struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
+GGML_API GGML_CALL bool ggml_cuda_moe_cache_try_synchronize(ggml_backend_t backend);
+#endif
+
 #ifdef __cplusplus
 }
 
@@ -44,15 +50,7 @@ GGML_API bool ggml_cuda_moe_cache_dispatch(
         void * device_q8, float * device_output, float * host_output,
         size_t input_bytes, size_t output_bytes,
         int64_t k, int64_t m, size_t expert_bytes, int32_t n_hits,
-        int32_t n_activations, int64_t padded_k);
-
-GGML_API bool ggml_cuda_moe_cache_dispatch_fused(
-        ggml_backend_t backend, enum ggml_type type,
-        const void * expert_up, const void * expert_gate,
-        const void * host_input, void * device_input, void * device_q8,
-        float * device_output, float * host_output,
-        size_t input_bytes, size_t output_bytes,
-        int64_t k, int64_t m, size_t expert_bytes, int32_t n_hits,
-        int32_t n_activations, int64_t padded_k, enum ggml_unary_op unary_op, float limit);
+        int32_t n_activations, int64_t padded_k,
+        const void * expert_gate, enum ggml_unary_op unary_op, float limit);
 #endif
 #endif

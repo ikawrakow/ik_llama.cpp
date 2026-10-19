@@ -635,7 +635,7 @@ struct llama_moe_cache::impl {
                         break;
                     }
 #ifdef GGML_USE_CUDA
-                    if (!ggml_backend_cuda_try_tensor_set_async(engine.backend, part.destination,
+                    if (!ggml_cuda_moe_cache_try_tensor_set_async(engine.backend, part.destination,
                                 (const uint8_t *) part.source->data + part.source_offset,
                                 part.destination_offset, part.bytes)) {
                         failed = true;
@@ -657,7 +657,7 @@ struct llama_moe_cache::impl {
 
             if (submitted_bytes != 0) {
 #ifdef GGML_USE_CUDA
-                if (!ggml_backend_cuda_try_synchronize(engine.backend)) failed = true;
+                if (!ggml_cuda_moe_cache_try_synchronize(engine.backend)) failed = true;
 #else
                 failed = true;
 #endif
@@ -1588,11 +1588,11 @@ bool llama_moe_cache::impl::provider_dispatch(void * user_data, void * request, 
         }
         float limit = 0.0f;
         memcpy(&limit, (const char *)op->op_params+sizeof(int32_t), sizeof(limit));
-        if (!ggml_cuda_moe_cache_dispatch_fused(d.provider_backend, type, up_weights, gate_weights,
+        if (!ggml_cuda_moe_cache_dispatch(d.provider_backend, type, up_weights,
                 buffers.host, buffers.device, buffers.device_q8, buffers.device_output, buffers.host_output,
                 buffers.input_bytes, buffers.output_bytes, (int64_t)k, (int64_t)m, expert_bytes,
                 (int32_t)n_hit, (int32_t)req->n_unique_activations, padded_k,
-                moe_fused_unary(op), limit)) return false;
+                gate_weights, moe_fused_unary(op), limit)) return false;
         ggml_backend_event_record(ws.event);
 #endif
     } else {
@@ -1613,7 +1613,8 @@ bool llama_moe_cache::impl::provider_dispatch(void * user_data, void * request, 
         if (!ggml_cuda_moe_cache_dispatch(d.provider_backend, type, bank->data,
                 buffers.host, buffers.device, buffers.device_q8, buffers.device_output, buffers.host_output,
                 buffers.input_bytes, buffers.output_bytes, (int64_t) k, (int64_t) m, bank->nb[2],
-                (int32_t) n_hit, (int32_t) req->n_unique_activations, padded_k)) return false;
+                (int32_t) n_hit, (int32_t) req->n_unique_activations, padded_k,
+                nullptr, GGML_UNARY_OP_COUNT, 0.0f)) return false;
         ggml_backend_event_record(ws.event);
 #endif
     }
