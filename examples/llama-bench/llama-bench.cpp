@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cinttypes>
@@ -16,17 +17,20 @@
 #include <cstring>
 #include <ctime>
 #include <cstdlib>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <numeric>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ggml.h"
 #include "llama.h"
 #include "common.h"
+#include "cpu_power.h"
 #include "ggml-cuda.h"
 #include "ggml-sycl.h"
 
@@ -280,6 +284,11 @@ struct cmd_params {
     output_formats output_format_stderr;
     std::vector<int32_t> cpu_affinity;
     bool cpu_affinity_auto = false;
+    int  cpu_power_cap = 100;
+    bool cpu_power_set = false;
+    std::string cpu_power_sweep;
+    int cpu_power_hold = 0;
+    int cpu_power_hold_minutes = 10;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -331,6 +340,11 @@ static const cmd_params cmd_params_defaults = {
     /* output_format_stderr */ NONE,
     /* cpu_affinity         */ {},
     /* cpu_affinity_auto    */ false,
+    /* cpu_power_cap        */ 100,
+    /* cpu_power_set        */ false,
+    /* cpu_power_sweep      */ {},
+    /* cpu_power_hold       */ 0,
+    /* cpu_power_hold_minutes */ 10,
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -352,6 +366,10 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  --n-cpu-moe <n>                     (default: none)\n");
     printf("  --cpu-affinity                      pin threads to the physical P-cores (hybrid CPUs)\n");
+    printf("  -cp,  --cpu-power <1..100>          cap CPU frequency to N%% of the hardware maximum (Linux cpufreq; 100 = reset)\n");
+    printf("  -cps, --cpu-power-sweep <list>      run one benchmark per cap (e.g. 45,50,55,60,65,70,75) and recommend one (needs root)\n");
+    printf("  -cph, --cpu-power-hold <1..100>     sustained test at a fixed cap, reports plateau and stability (needs root)\n");
+    printf("  -cpm, --cpu-power-hold-minutes <n>  duration of the hold test (default: %d)\n", cmd_params_defaults.cpu_power_hold_minutes);
     printf("  -cm, --cpu-mask <mask>              pin threads to CPUs in bitmask (e.g. 0x55, 64 CPUs max)\n");
     printf("  -cr, --cpu-range <list>             pin threads to CPUs (e.g. 0-3,8,10-11)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
@@ -935,6 +953,62 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
         } else if (arg == "--cpu-affinity") {
             params.cpu_affinity.clear();
             params.cpu_affinity_auto = true;
+        } else if (arg == "-cp" || arg == "--cpu-power") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            int percent = 0;
+            try {
+                percent = std::stoi(argv[i]);
+            } catch (...) {
+                invalid_param = true;
+                break;
+            }
+            if (percent < 1 || percent > 100) {
+                fprintf(stderr, "error: invalid --cpu-power value '%s' (expected 1..100)\n", argv[i]);
+                invalid_param = true;
+                break;
+            }
+            params.cpu_power_cap = percent;
+            params.cpu_power_set = true;
+        } else if (arg == "-cps" || arg == "--cpu-power-sweep") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.cpu_power_sweep = argv[i];
+        } else if (arg == "-cph" || arg == "--cpu-power-hold") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            int value = 0;
+            try {
+                value = std::stoi(argv[i]);
+            } catch (...) {
+                invalid_param = true;
+                break;
+            }
+            if (value < 1 || value > 100) {
+                fprintf(stderr, "error: invalid --cpu-power-hold value '%s' (expected 1..100)\n", argv[i]);
+                invalid_param = true;
+                break;
+            }
+            params.cpu_power_hold = value;
+        } else if (arg == "-cpm" || arg == "--cpu-power-hold-minutes") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            int value = 0;
+            try {
+                value = std::stoi(argv[i]);
+            } catch (...) {
+                invalid_param = true;
+                break;
+            }
+            params.cpu_power_hold_minutes = std::max(1, value);
         } else {
             invalid_param = true;
             break;
@@ -2189,6 +2263,509 @@ static std::unique_ptr<printer> create_printer(output_formats format) {
     GGML_ABORT("fatal error");
 }
 
+#if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
+#endif
+
+static std::string sweep_shell_quote(const std::string & s) {
+    std::string out = "'";
+    for (const char c : s) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
+    }
+    out += "'";
+    return out;
+}
+
+static int sweep_json_int_field(const std::string & obj, const char * key) {
+    const size_t pos = obj.find(key);
+    if (pos == std::string::npos) {
+        return 0;
+    }
+    return (int) std::strtol(obj.c_str() + pos + std::strlen(key), nullptr, 10);
+}
+
+// Identify pp/tg by n_prompt/n_gen.
+static double sweep_json_avg_ts(const std::string & out, bool prompt) {
+    size_t pos = 0;
+    while ((pos = out.find("\"avg_ts\":", pos)) != std::string::npos) {
+        const char * start = out.c_str() + pos + 9;
+        char * end = nullptr;
+        const double value = std::strtod(start, &end);
+        if (end == start) {
+            pos += 9;
+            continue;
+        }
+        const size_t obj_start = out.rfind('{', pos);
+        const size_t obj_end = out.find('}', pos);
+        if (obj_start == std::string::npos || obj_end == std::string::npos) {
+            break;
+        }
+        const std::string obj = out.substr(obj_start, obj_end - obj_start);
+        const int n_prompt = sweep_json_int_field(obj, "\"n_prompt\":");
+        const int n_gen    = sweep_json_int_field(obj, "\"n_gen\":");
+        if ((prompt && n_prompt > 0) || (!prompt && n_gen > 0)) {
+            return value;
+        }
+        pos = obj_end + 1;
+    }
+    return 0.0;
+}
+
+static int run_cpu_power_sweep(int argc, char ** argv, const cmd_params & params) {
+    if (!cpu_power_supported()) {
+        fprintf(stderr, "error: --cpu-power-sweep is not supported on this platform\n");
+        return 1;
+    }
+
+    std::vector<int> percents;
+    {
+        const std::string & s = params.cpu_power_sweep;
+        size_t i = 0;
+        while (i < s.size()) {
+            const size_t j = s.find(',', i);
+            const std::string part = s.substr(i, j == std::string::npos ? std::string::npos : j - i);
+            try {
+                const int value = std::stoi(part);
+                if (value >= 1 && value <= 100) {
+                    percents.push_back(value);
+                }
+            } catch (...) {
+
+            }
+            if (j == std::string::npos) {
+                break;
+            }
+            i = j + 1;
+        }
+    }
+    if (percents.empty()) {
+        fprintf(stderr, "error: invalid --cpu-power-sweep list\n");
+        return 1;
+    }
+
+    // Child command: fixed workload, JSON output.
+    std::vector<std::string> child;
+    child.push_back(argv[0]);
+    bool has_p = false;
+    bool has_n = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "-cps" || a == "--cpu-power-sweep" ||
+            a == "-cp"  || a == "--cpu-power" ||
+            a == "-cph" || a == "--cpu-power-hold" ||
+            a == "-cpm" || a == "--cpu-power-hold-minutes") {
+            ++i;
+            continue;
+        }
+        if (a == "-r" || a == "--reps" || a == "-o" || a == "--output") {
+            ++i;
+            continue;
+        }
+        if (a == "-p" || a == "--n-prompt") {
+            has_p = true;
+        }
+        if (a == "-n" || a == "--n-gen") {
+            has_n = true;
+        }
+        child.push_back(a);
+    }
+    if (!has_p) {
+        child.push_back("-p");
+        child.push_back("512");
+    }
+    if (!has_n) {
+        child.push_back("-n");
+        child.push_back("512");
+    }
+    child.push_back("-r");
+    child.push_back("1");
+    child.push_back("-o");
+    child.push_back("json");
+
+    struct sweep_row {
+        int     pct;
+        int64_t freq_mhz;
+        double  pp;
+        double  tg;
+        int     temp_c;
+        bool    throttled;
+    };
+
+    std::vector<sweep_row> rows;
+
+    {
+        std::ifstream loadavg("/proc/loadavg");
+        double load = 0.0;
+        if (loadavg >> load && load > 0.5) {
+            printf("note: load average %.2f; close background apps for a clean sweep\n", load);
+        }
+    }
+
+    auto cool_down = [&](int pct) {
+        // Cool at 30% to also slow background tasks.
+        const int cool_pct = std::min(30, pct);
+        cpu_power_apply(params.cpu_affinity, { cool_pct });
+
+        const int target_c = 75;
+        const int min_sec  = 45;
+        const int max_sec  = 180;
+        const int start_c  = cpu_power_max_temp_c();
+        // No sensor: nothing to wait for.
+        if (start_c < 0) {
+            return;
+        }
+        printf("--- cooling down at %d%% (min %d s, up to %d s, target <= %d C, now %d C) ---\n",
+               cool_pct, min_sec, max_sec, target_c, start_c);
+        int elapsed = 0;
+        for (; elapsed < max_sec; ++elapsed) {
+            const int temp = cpu_power_max_temp_c();
+            if (elapsed >= min_sec && temp >= 0 && temp <= target_c) {
+                break;
+            }
+            if (elapsed % 5 == 0) {
+                printf("    %d C after %d s\n", temp, elapsed);
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        printf("  -> %d C after %d s\n", cpu_power_max_temp_c(), elapsed);
+    };
+
+    for (size_t idx = 0; idx < percents.size(); ++idx) {
+        const int pct = percents[idx];
+        cool_down(pct);
+        const cpu_power_info info = cpu_power_apply(params.cpu_affinity, { pct });
+        if (!info.applied) {
+            fprintf(stderr, "error: --cpu-power-sweep needs root and a supported cpufreq interface (%s)\n",
+                    info.message.c_str());
+            cpu_power_restore();
+            return 1;
+        }
+        if (idx == 0) {
+            printf("| pct | cap MHz | MHz | pp t/s | tg t/s | temp | throttled |\n");
+            printf("|-----|---------|-----|--------|--------|------|-----------|\n");
+        }
+
+        std::atomic<bool> sampling{true};
+        std::vector<int>     temps;
+        std::vector<int64_t> freqs;
+        std::thread sampler([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            while (sampling.load()) {
+                const int temp = cpu_power_max_temp_c();
+                const int64_t freq = cpu_power_busy_freq_mhz(params.cpu_affinity);
+                if (temp >= 0) {
+                    temps.push_back(temp);
+                }
+                if (freq > 0) {
+                    freqs.push_back(freq);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        });
+
+        std::string cmd;
+        for (const auto & a : child) {
+            cmd += sweep_shell_quote(a) + " ";
+        }
+#if defined(__linux__)
+        cmd += "2>/dev/null";
+#endif
+
+        std::string out;
+        FILE * fp = popen(cmd.c_str(), "r");
+        if (fp) {
+            char buf[4096];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
+                out.append(buf, n);
+            }
+            const int rc = pclose(fp);
+            if (rc != 0) {
+                fprintf(stderr, "warning: child benchmark exited with status %d\n", rc);
+            }
+        } else {
+            fprintf(stderr, "error: failed to run child benchmark\n");
+        }
+
+        sampling = false;
+        sampler.join();
+
+        int64_t freq_sum = 0;
+        for (const int64_t f : freqs) {
+            freq_sum += f;
+        }
+        const int64_t freq_mhz = freqs.empty() ? 0 : freq_sum / (int64_t) freqs.size();
+        int temp_c = 0;
+        for (const int t : temps) {
+            temp_c = std::max(temp_c, t);
+        }
+
+        const double pp = sweep_json_avg_ts(out, true);
+        const double tg = sweep_json_avg_ts(out, false);
+        // Throttle on >10% frequency drop or Tjmax.
+        const bool throttled =
+            (info.target_mhz > 0 && freq_mhz > 0 && freq_mhz < info.target_mhz * 9 / 10) ||
+            temp_c >= 99;
+
+        rows.push_back({ pct, freq_mhz, pp, tg, temp_c, throttled });
+        printf("| %3d | %7lld | %4lld | %6.2f | %6.2f | %3d C | %s |\n",
+               pct, (long long) info.target_mhz, (long long) freq_mhz,
+               pp, tg, temp_c, throttled ? "yes" : "no");
+    }
+
+    cpu_power_restore();
+
+    const sweep_row * best = nullptr;
+    for (const auto & row : rows) {
+        if (row.throttled) {
+            continue;
+        }
+        if (!best || row.tg > best->tg) {
+            best = &row;
+        }
+    }
+    if (!best) {
+        for (const auto & row : rows) {
+            if (!best || row.tg > best->tg) {
+                best = &row;
+            }
+        }
+        printf("\nnote: every point was throttled; the recommendation is the fastest, "
+               "but a lower cap or better cooling may sustain more over time\n");
+    }
+    if (best) {
+        printf("\nrecommended: --cpu-power %d  (%.2f t/s, %d C%s)\n",
+               best->pct, best->tg, best->temp_c, best->throttled ? ", throttled" : "");
+    }
+    return 0;
+}
+
+static int run_cpu_power_hold(const cmd_params & params) {
+    if (!cpu_power_supported()) {
+        fprintf(stderr, "error: --cpu-power-hold is not supported on this platform\n");
+        return 1;
+    }
+
+    const cpu_power_info info = cpu_power_apply(params.cpu_affinity, { params.cpu_power_hold });
+    if (!info.applied) {
+        fprintf(stderr, "error: --cpu-power-hold needs root and a supported cpufreq interface (%s)\n",
+                info.message.c_str());
+        cpu_power_restore();
+        return 1;
+    }
+
+    printf("CPU power hold: %d%% -> %lld MHz on %d CPUs (%s)\n",
+           params.cpu_power_hold, (long long) info.target_mhz, info.n_cpus, info.backend.c_str());
+
+    std::vector<cmd_params_instance> instances = get_cmd_params_instances(params);
+    if (instances.empty()) {
+        fprintf(stderr, "error: no benchmark configuration for --cpu-power-hold\n");
+        cpu_power_restore();
+        return 1;
+    }
+
+    cmd_params_instance inst = instances.front();
+    inst.cpu_affinity = params.cpu_affinity;
+    inst.n_prompt = std::max(inst.n_prompt, 1);
+    inst.n_gen    = std::max(inst.n_gen, 512); // fit the chunk
+    inst.test_kind = TEST_KIND_TG;
+
+    llama_backend_init();
+    llama_numa_init(params.numa);
+
+    llama_model * lmodel = llama_model_load_from_file(inst.model.c_str(), inst.to_llama_mparams());
+    if (lmodel == nullptr) {
+        fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
+        cpu_power_restore();
+        llama_backend_free();
+        return 1;
+    }
+
+    llama_context * ctx = llama_init_from_model(lmodel, inst.to_llama_cparams());
+    if (ctx == nullptr) {
+        fprintf(stderr, "%s: error: failed to create context\n", __func__);
+        llama_free_model(lmodel);
+        cpu_power_restore();
+        llama_backend_free();
+        return 1;
+    }
+
+    const int chunk_tokens = 512;
+    // Always warm up at the cap.
+    const int warmup_sec   = 30;
+    const int hold_sec     = std::max(1, params.cpu_power_hold_minutes) * 60;
+
+    auto run_chunk = [&](double & tg, int64_t & freq_mhz, int64_t & max_freq_mhz, int & temp_c) {
+        std::atomic<bool> sampling{true};
+        std::vector<int>     temps;
+        std::vector<int64_t> freqs;
+        int64_t chunk_max_freq = 0;
+        std::thread sampler([&] {
+            while (sampling.load()) {
+                const int temp = cpu_power_max_temp_c();
+                const int64_t freq = cpu_power_busy_freq_mhz(params.cpu_affinity);
+                const int64_t max_freq = cpu_power_max_freq_mhz(params.cpu_affinity);
+                if (temp >= 0) {
+                    temps.push_back(temp);
+                }
+                if (freq > 0) {
+                    freqs.push_back(freq);
+                }
+                chunk_max_freq = std::max(chunk_max_freq, max_freq);
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        });
+
+        llama_kv_cache_clear(ctx);
+        llama_kv_cache_seq_rm(ctx, 0, -1, -1); // reset positions
+        test_prompt(ctx, 1, 0, inst.n_batch, inst.n_threads.second);
+
+        const uint64_t t0 = get_time_ns();
+        test_gen(ctx, chunk_tokens, 1, inst.n_threads.first);
+        const uint64_t dt = get_time_ns() - t0;
+
+        sampling = false;
+        sampler.join();
+
+        int64_t freq_sum = 0;
+        for (const int64_t f : freqs) {
+            freq_sum += f;
+        }
+        freq_mhz = freqs.empty() ? 0 : freq_sum / (int64_t) freqs.size();
+        max_freq_mhz = chunk_max_freq;
+        temp_c = 0;
+        for (const int t : temps) {
+            temp_c = std::max(temp_c, t);
+        }
+        tg = dt > 0 ? chunk_tokens * 1e9 / (double) dt : 0.0;
+    };
+
+    int64_t overall_max_freq = 0;
+    int     overall_max_temp = 0;
+
+    if (warmup_sec > 0) {
+        printf("warming up for %d s at %d%% (not measured)...\n", warmup_sec, params.cpu_power_hold);
+        const uint64_t start = get_time_ns();
+        double tg;
+        int64_t freq;
+        int64_t max_freq;
+        int temp;
+        int64_t freq_sum = 0;
+        int     freq_n   = 0;
+        int     temp_max = 0;
+        while ((get_time_ns() - start) / 1000000000ull < (uint64_t) warmup_sec) {
+            run_chunk(tg, freq, max_freq, temp);
+            if (freq > 0) {
+                freq_sum += freq;
+                ++freq_n;
+            }
+            temp_max = std::max(temp_max, temp);
+            overall_max_freq = std::max(overall_max_freq, max_freq);
+            overall_max_temp = std::max(overall_max_temp, temp);
+        }
+        printf("warm-up done: %lld MHz mean, %lld MHz max, %d C\n",
+               (long long) (freq_n > 0 ? freq_sum / freq_n : 0),
+               (long long) overall_max_freq, temp_max);
+    }
+
+    struct hold_row {
+        double  elapsed;
+        double  tg;
+        int64_t freq_mhz;
+        int64_t max_freq_mhz;
+        int     temp_c;
+        bool    throttled;
+    };
+
+    std::vector<hold_row> rows;
+    printf("| elapsed | tg t/s | MHz | max | temp | throttled |\n");
+    printf("|---------|--------|-----|-----|------|-----------|\n");
+
+    const uint64_t start = get_time_ns();
+    while (true) {
+        double tg;
+        int64_t freq;
+        int64_t max_freq;
+        int temp;
+        run_chunk(tg, freq, max_freq, temp);
+
+        const double elapsed = (get_time_ns() - start) / 1e9;
+        const bool throttled =
+            (info.target_mhz > 0 && freq > 0 && freq < info.target_mhz * 9 / 10) ||
+            temp >= 99;
+
+        overall_max_freq = std::max(overall_max_freq, max_freq);
+        overall_max_temp = std::max(overall_max_temp, temp);
+        rows.push_back({ elapsed, tg, freq, max_freq, temp, throttled });
+        printf("| %6.0f s | %6.2f | %4lld | %4lld | %3d C | %s |\n",
+               elapsed, tg, (long long) freq, (long long) max_freq,
+               temp, throttled ? "yes" : "no");
+
+        if (elapsed >= hold_sec) {
+            break;
+        }
+    }
+
+    // CV over the second half.
+    const size_t cv_start = rows.size() / 2;
+    double mean = 0.0;
+    for (size_t i = cv_start; i < rows.size(); ++i) {
+        mean += rows[i].tg;
+    }
+    mean /= (double) (rows.size() - cv_start);
+    double var = 0.0;
+    for (size_t i = cv_start; i < rows.size(); ++i) {
+        var += (rows[i].tg - mean) * (rows[i].tg - mean);
+    }
+    const double cv = rows.size() > 1 && mean > 0
+        ? 100.0 * std::sqrt(var / (double) (rows.size() - cv_start)) / mean
+        : 0.0;
+
+    const size_t tail = std::min<size_t>(3, rows.size());
+    double plateau = 0.0;
+    for (size_t i = rows.size() - tail; i < rows.size(); ++i) {
+        plateau += rows[i].tg;
+    }
+    plateau /= (double) tail;
+
+    bool any_throttled = false;
+    for (const auto & row : rows) {
+        any_throttled |= row.throttled;
+    }
+    const bool downward = rows.size() > 1 && plateau < rows.front().tg * 0.95;
+
+    printf("\nplateau (last %zu): %.2f t/s, CV %.1f %%, %d C\n",
+           tail, plateau, cv, rows.empty() ? 0 : rows.back().temp_c);
+    printf("observed max: %lld MHz (cap %lld MHz), %d C\n",
+           (long long) overall_max_freq, (long long) info.target_mhz, overall_max_temp);
+    if (info.target_mhz > 0 && overall_max_freq > info.target_mhz * 105 / 100) {
+        printf("warning: observed frequency exceeded the cap; --cpu-power may not be enforced\n");
+    }
+
+    const int lower = std::max(1, params.cpu_power_hold - 5);
+    if (cv < 5.0 && !any_throttled && !downward) {
+        printf("verdict: stable - --cpu-power %d is sustainable\n", params.cpu_power_hold);
+        printf("recommended: --cpu-power %d\n", params.cpu_power_hold);
+    } else if (any_throttled || downward) {
+        printf("verdict: thermal throttling - this cap is not sustainable\n");
+        printf("recommended: --cpu-power %d (one step lower)\n", lower);
+    } else {
+        printf("verdict: unstable - high variance without a clear thermal drop\n");
+        printf("recommended: --cpu-power %d (more stable)\n", lower);
+    }
+
+    cpu_power_restore();
+    llama_free(ctx);
+    llama_free_model(lmodel);
+    llama_backend_free();
+    return 0;
+}
+
 int main(int argc, char ** argv) {
     // try to set locale for unicode characters in markdown
     setlocale(LC_CTYPE, ".UTF-8");
@@ -2206,6 +2783,24 @@ int main(int argc, char ** argv) {
 #endif
 
     cmd_params params = parse_cmd_params(argc, argv);
+
+    if (!params.cpu_power_sweep.empty()) {
+        return run_cpu_power_sweep(argc, argv, params);
+    }
+
+    if (params.cpu_power_hold > 0) {
+        return run_cpu_power_hold(params);
+    }
+
+    if (params.cpu_power_set) {
+        const cpu_power_info info = cpu_power_apply(params.cpu_affinity, { params.cpu_power_cap });
+        if (info.applied) {
+            fprintf(stderr, "llama-bench: CPU power %d%% -> %lld MHz on %d CPUs (%s)\n",
+                    params.cpu_power_cap, (long long) info.target_mhz, info.n_cpus, info.backend.c_str());
+        } else {
+            fprintf(stderr, "llama-bench: CPU power not applied: %s\n", info.message.c_str());
+        }
+    }
 
     // initialize llama.cpp
     if (!params.verbose) {

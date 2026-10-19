@@ -1,0 +1,31 @@
+[Unit]
+Description=llama-server with CPU power cap
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# The server itself runs unprivileged.
+User=llama
+Group=llama
+
+# The '+' prefix runs only these commands as root.
+ExecStartPre=+/usr/local/bin/llama-cpu-power set 65
+ExecStart=/usr/local/bin/llama-server -m /models/model.gguf --host 127.0.0.1 --port 8080
+# Also runs after a crash or SIGKILL of the main process.
+ExecStopPost=+/usr/local/bin/llama-cpu-power reset
+
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+
+# Sandbox. /sys stays writable for the helper; /models must be outside /home.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

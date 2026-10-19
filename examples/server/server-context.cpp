@@ -237,6 +237,9 @@ server_context::~server_context() {
 
 bool server_context::load_model(const gpt_params& params_) {
     params_base = params_;
+    if (params_base.power_sleep < 100) {
+        LOG_WRN("%s: --power-sleep is CLI-only and is ignored by llama-server; use --cpu-power for a stable cap\n", __func__);
+    }
 
     llama_init_result llama_init = llama_init_from_gpt_params(params_base);
 

@@ -6,6 +6,7 @@
 #include "chat.h"
 
 #include "common.h"
+#include "cpu_power.h"
 #include "speculative.h"
 #include "mtmd.h"
 #include "sampling.h"
@@ -2361,6 +2362,9 @@ int main(int argc, char ** argv) {
     };
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
+
+    // Chain above: restore the cap before exit.
+    cpu_power_install_signal_handlers();
 
     ctx_server.queue_tasks.start_loop();
 

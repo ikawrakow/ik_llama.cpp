@@ -10,6 +10,7 @@
 #endif
 
 #include "common.h"
+#include "cpu_power.h"
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "llama-vocab.h"
@@ -21,6 +22,7 @@
 #include <cerrno>
 #include <cinttypes>
 #include <climits>
+#include <chrono>
 #include <cmath>
 #include <codecvt>
 #include <cstdlib>
@@ -97,6 +99,54 @@ common_time_meas::~common_time_meas() {
     if (t_start_us >= 0) {
         t_acc += ggml_time_us() - t_start_us;
     }
+}
+
+void common_power_throttle_init(common_power_throttle & throttle, int32_t percent) {
+    throttle.percent      = percent > 0 ? std::min<int32_t>(percent, 100) : 100;
+    throttle.batch_avg_us = 0.0;
+    throttle.token_avg_us = 0.0;
+}
+
+bool common_power_throttle_enabled(const common_power_throttle * throttle) {
+    return throttle != nullptr && throttle->percent > 0 && throttle->percent < 100;
+}
+
+int64_t common_power_sleep_us(double work_us, int32_t percent) {
+    if (percent <= 0 || percent >= 100 || work_us <= 0.0 || !std::isfinite(work_us)) {
+        return 0;
+    }
+    const double sleep_us = work_us * (100.0 - percent) / percent;
+    return (sleep_us >= 1.0 && std::isfinite(sleep_us)) ? (int64_t) sleep_us : 0;
+}
+
+int common_power_decode(llama_context * ctx, llama_batch batch, common_power_throttle * throttle) {
+    if (!common_power_throttle_enabled(throttle)) {
+        return llama_decode(ctx, batch);
+    }
+
+    const int64_t t_start_us = llama_time_us();
+    const int ret = llama_decode(ctx, batch);
+    if (ret != 0) {
+        return ret;
+    }
+
+    // Synchronize for accurate timing on async backends.
+    llama_synchronize(ctx);
+
+    const double elapsed_us = (double) (llama_time_us() - t_start_us);
+    double & avg_us = batch.n_tokens == 1 ? throttle->token_avg_us : throttle->batch_avg_us;
+
+    // EMA to avoid over-sleeping on outliers.
+    constexpr double alpha = 0.25;
+    avg_us = avg_us > 0.0 ? (1.0 - alpha) * avg_us + alpha * elapsed_us : elapsed_us;
+
+    // Sleep after the batch; the average duty cycle is p%.
+    const int64_t sleep_us = common_power_sleep_us(avg_us, throttle->percent);
+    if (sleep_us > 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+    }
+
+    return 0;
 }
 
 bool common_speculative_type_is_dflash_family(enum common_speculative_type type) {
@@ -1011,6 +1061,11 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
     get_env("LLAMA_ARG_V_CACHE_HADAMARD", params.v_cache_hadamard);
+    if (std::getenv("LLAMA_ARG_CPU_POWER") != nullptr) {
+        params.cpu_power_set = true;
+    }
+    get_env("LLAMA_ARG_CPU_POWER",        params.cpu_power_cap);
+    get_env("LLAMA_ARG_POWER_SLEEP",      params.power_sleep);
 
 }
 
@@ -2445,6 +2500,41 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cpu_affinity_configured = true;
         return true;
     }
+    if (arg == "-cp" || arg == "--cpu-power") {
+        CHECK_ARG;
+        int percent = 0;
+        try {
+            percent = std::stoi(argv[i]);
+        } catch (...) {
+            invalid_param = true;
+            return true;
+        }
+        if (percent < 1 || percent > 100) {
+            fprintf(stderr, "error: Invalid value for --cpu-power: %d (must be in 1..100)\n", percent);
+            invalid_param = true;
+        } else {
+            params.cpu_power_cap = percent;
+            params.cpu_power_set = true;
+        }
+        return true;
+    }
+    if (arg == "-psl" || arg == "--power-sleep") {
+        CHECK_ARG;
+        int percent = 0;
+        try {
+            percent = std::stoi(argv[i]);
+        } catch (...) {
+            invalid_param = true;
+            return true;
+        }
+        if (percent < 1 || percent > 100) {
+            fprintf(stderr, "error: Invalid value for --power-sleep: %d (must be in 1..100)\n", percent);
+            invalid_param = true;
+        } else {
+            params.power_sleep = percent;
+        }
+        return true;
+    }
     if (arg == "-prexp" || arg == "--prefetch-experts") {
         params.prefetch_experts = true;
         return true;
@@ -3591,6 +3681,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-prexp-t, --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
     options.push_back({ "*",           "       --cpu-affinity",          "pin CPU workers to the physical P-cores (hybrid CPUs only)"});
+    options.push_back({ "*",           "-cp,    --cpu-power N",           "cap CPU clock to N%% (e.g. 60-70) to avoid thermal throttling and sustain max tokens/s on laptops; restores on exit/signals; SIGKILL leaves it set (llama-cpu-power reset); needs root; Linux only; 100 = reset"});
+    options.push_back({ "*",           "-psl,   --power-sleep N",         "portable duty-cycle throttle for the CLI: sleep between decode calls so the CPU works N%% of the time (1..100; no root; 100 = off)"});
     options.push_back({ "*",           "-cm,   --cpu-mask MASK",         "pin CPU workers to the logical CPUs set in MASK (hex or decimal bitmask, e.g. 0x55; 64 CPUs max, use --cpu-range for more)"});
     options.push_back({ "*",           "-cr,   --cpu-range LIST",        "pin CPU workers to the given logical CPUs (e.g. 0-3,8,10-11)"});
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
@@ -4391,6 +4483,16 @@ static void llama_init_sampler_from_model(const llama_model * model, common_para
 
 struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     llama_init_result iparams;
+
+    if (params.cpu_power_set) {
+        const cpu_power_info info = cpu_power_apply(params.cpu_affinity, { params.cpu_power_cap });
+        if (info.applied) {
+            LOG_INF("%s: CPU power %d%% -> %lld MHz on %d CPUs (%s)\n", __func__,
+                    params.cpu_power_cap, (long long) info.target_mhz, info.n_cpus, info.backend.c_str());
+        } else {
+            LOG_WRN("%s: CPU power not applied: %s\n", __func__, info.message.c_str());
+        }
+    }
 
     auto mparams = common_model_params_to_llama(params);
 

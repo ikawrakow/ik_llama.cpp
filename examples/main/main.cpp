@@ -1,4 +1,5 @@
 #include "common.h"
+#include "cpu_power.h"
 #include "speculative.h"
 #include "chat.h"
 #include "console.h"
@@ -140,6 +141,9 @@ int main(int argc, char ** argv) {
     if (!common_speculative_prepare_startup(params)) {
         return 1;
     }
+
+    common_power_throttle power_throttle;
+    common_power_throttle_init(power_throttle, params.power_sleep);
 
     common_params_sampling & sparams = params.sparams;
 
@@ -540,6 +544,9 @@ int main(int argc, char ** argv) {
 #endif
     }
 
+    // Chain above: restore the cap before exit.
+    cpu_power_install_signal_handlers();
+
     if (params.interactive) {
         LOG_TEE("%s: interactive mode on.\n", __func__);
 
@@ -832,7 +839,7 @@ int main(int argc, char ** argv) {
 
                 for (int i = 0; i < input_size; i += params.n_batch) {
                     int n_eval = std::min(input_size - i, params.n_batch);
-                    if (llama_decode(ctx_guidance, llama_batch_get_one(input_buf + i, n_eval, n_past_guidance, 0))) {
+                    if (common_power_decode(ctx_guidance, llama_batch_get_one(input_buf + i, n_eval, n_past_guidance, 0), &power_throttle)) {
                         LOG_TEE("%s : failed to eval\n", __func__);
                         return 1;
                     }
@@ -864,7 +871,7 @@ int main(int argc, char ** argv) {
                     batch = llama_batch_get_one(&embd[i], n_eval, n_past, 0);
                 }
 
-                if (llama_decode(ctx, batch)) {
+                if (common_power_decode(ctx, batch, &power_throttle)) {
                     if (need_prompt_target_features) {
                         llama_batch_free(batch);
                     }
@@ -1024,7 +1031,7 @@ int main(int argc, char ** argv) {
                             verify_indices.push_back((int) i + 1);
                         }
 
-                        if (llama_decode(ctx, verify_batch)) {
+                        if (common_power_decode(ctx, verify_batch, &power_throttle)) {
                             llama_batch_free(verify_batch);
                             LOG_TEE("%s : failed to eval speculative batch\n", __func__);
                             return 1;

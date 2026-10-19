@@ -59,6 +59,7 @@ add_library(${TARGET} STATIC
 	chat-peg-parser.cpp
     chat-peg-parser.h
     common.cpp
+    cpu_power.cpp
     sampling.h
     sampling.cpp
     console.h
