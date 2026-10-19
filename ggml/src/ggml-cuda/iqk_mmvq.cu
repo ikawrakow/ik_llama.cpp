@@ -15,6 +15,9 @@ void iqk_mul_mat_vec_q(ggml_type type, const mmvq_args & args, cudaStream_t stre
         case GGML_TYPE_IQ2_BN:
             mul_mat_vec_iq2_bn_q8_1_cuda(args, stream);
             break;
+        case GGML_TYPE_PQ2_0:
+            mul_mat_vec_pq2_0_q8_1_cuda(args, stream);
+            break;
         case GGML_TYPE_IQ2_K:
             mul_mat_vec_iq2_k_q8_1_cuda(args, stream);
             break;
