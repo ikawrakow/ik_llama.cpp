@@ -4267,6 +4267,14 @@ static bool is_model_split_supported(const llama_model & model) {
     return it != k_supported.end();
 }
 
+// Prism models (ternary packs that declare prism.hadamard.*, e.g. Ternary Bonsai): their weights
+// are stored Hadamard-folded and the activation-side rotations are not split-aware, so split
+// mode 'graph' mis-computes them. Fall back to 'layer' like the other unsupported models.
+static bool is_prism_model(llama_model_loader & ml) {
+    uint32_t version = 0;
+    return ml.get_key("prism.hadamard.version", version, false);
+}
+
 struct expert_tensors {
     ggml_tensor * up = nullptr;
     ggml_tensor * gate = nullptr;
@@ -4581,6 +4589,12 @@ static bool llm_load_tensors(
                                                       : "this Gemma4 variant");
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("===========================================================\n\n");
+            split_mode = LLAMA_SPLIT_MODE_LAYER;
+        } else if (is_prism_model(ml)) {
+            LLAMA_LOG_WARN("\n=======================================================\n");
+            LLAMA_LOG_WARN("Split mode 'graph' is not supported for Prism models\n");
+            LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
+            LLAMA_LOG_WARN("=======================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
         } else if (!is_model_split_supported(model)) {
             LLAMA_LOG_WARN("\n=======================================================\n");
