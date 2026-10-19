@@ -2137,6 +2137,7 @@ bool common_speculative_load_draft_model(
     params.model_dft = loaded_model;
     params.cparams_dft = common_context_params_to_llama(params_dft);
     params.cparams_dft.moe_cache_size = 0;
+    params.cparams_dft.moe_cache_miss_policy = LLAMA_MOE_CACHE_MISS_UPLOAD;
     // draft affinity; inherits the target one when not requested
     const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
         ? params.cpu_affinity
@@ -2186,6 +2187,7 @@ bool common_speculative_prepare_mtp_runtime(
         common_speculative_apply_draft_threads(params, params_mtp);
         params.cparams_dft = common_context_params_to_llama(params_mtp);
         params.cparams_dft.moe_cache_size = 0;
+        params.cparams_dft.moe_cache_miss_policy = LLAMA_MOE_CACHE_MISS_UPLOAD;
         // same draft affinity as the external draft path
         const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
             ? params.cpu_affinity

@@ -419,6 +419,7 @@ struct llama_context {
 
     static bool sched_copy_moe_cache(ggml_backend_t backend, const ggml_tensor * src,
             ggml_tensor * dst, ggml_cgraph * graph, ggml_backend_sched_copy_phase phase, void * user_data);
+    void install_moe_cache_execution();
 
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;

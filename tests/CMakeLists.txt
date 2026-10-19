@@ -224,3 +224,8 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 add_executable(test-moe-cache-shares test-moe-cache-shares.cpp)
 target_include_directories(test-moe-cache-shares PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME test-moe-cache-shares COMMAND $<TARGET_FILE:test-moe-cache-shares>)
+
+add_executable(test-moe-cpu-on-miss test-moe-cpu-on-miss.cpp)
+target_include_directories(test-moe-cpu-on-miss PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/ggml/src)
+target_link_libraries(test-moe-cpu-on-miss PRIVATE ggml)
+add_test(NAME test-moe-cpu-on-miss COMMAND $<TARGET_FILE:test-moe-cpu-on-miss>)

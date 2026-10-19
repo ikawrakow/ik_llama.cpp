@@ -23,6 +23,10 @@ extern "C" {
 // backend API
 GGML_API GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, const void * params, const void * model);
 
+GGML_API GGML_CALL bool ggml_backend_cuda_try_tensor_set_async(ggml_backend_t backend,
+        struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
+GGML_API GGML_CALL bool ggml_backend_cuda_try_synchronize(ggml_backend_t backend);
+
 GGML_API GGML_CALL bool ggml_backend_is_cuda(ggml_backend_t backend);
 
 // device buffer

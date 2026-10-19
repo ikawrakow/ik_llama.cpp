@@ -3,6 +3,7 @@
 // ggml-backend internal header
 
 #include "ggml-backend.h"
+#include "ggml-moe-provider.h"
 
 #ifdef  __cplusplus
 extern "C" {
@@ -139,6 +140,9 @@ extern "C" {
         ggml_backend_t backend;
         void * context;
     };
+
+    GGML_API void ggml_backend_sched_set_moe_provider(
+            ggml_backend_sched_t sched, const struct ggml_moe_provider * provider);
 
     //
     // Backend registry

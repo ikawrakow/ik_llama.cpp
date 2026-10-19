@@ -3,6 +3,7 @@
 #include "ggml-impl.h"
 #include "ggml-rpc.h"
 #include "ggml-moe-prefetch.h"
+#include "ggml-moe-provider.h"
 
 #include <cassert>
 #include <climits>
@@ -878,7 +879,10 @@ GGML_CALL static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backe
     GGML_UNUSED(backend);
 }
 
-GGML_CALL static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+static enum ggml_status ggml_backend_cpu_graph_compute_with_provider(
+        ggml_backend_t backend,
+        struct ggml_cgraph * cgraph,
+        const struct ggml_moe_provider * provider) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
 
     struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads);
@@ -900,7 +904,12 @@ GGML_CALL static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t 
     cplan.cpu_affinity        = cpu_ctx->cpu_affinity;
     cplan.n_cpu_affinity      = cpu_ctx->n_cpu_affinity;
 
-    return ggml_graph_compute(cgraph, &cplan);
+    return provider ? ggml_graph_compute_with_moe_provider(cgraph, &cplan, provider)
+                    : ggml_graph_compute(cgraph, &cplan);
+}
+
+GGML_CALL static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+    return ggml_backend_cpu_graph_compute_with_provider(backend, cgraph, NULL);
 }
 
 GGML_CALL static bool ggml_backend_cpu_supports_op(ggml_backend_t backend, const struct ggml_tensor * op) {
@@ -1223,6 +1232,7 @@ struct ggml_backend_sched {
     std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync;
     std::array<bool, GGML_SCHED_MAX_BACKENDS> own_cpy;
 
+    const struct ggml_moe_provider * moe_provider;
     bool only_active_experts;
     bool split_mode_graph;
     bool is_async = false;
@@ -1245,6 +1255,11 @@ void ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op 
     } else {
         sched->op_offload[i] &= (~(1u << j));
     }
+}
+
+void ggml_backend_sched_set_moe_provider(ggml_backend_sched_t sched, const struct ggml_moe_provider * provider) {
+    GGML_ASSERT(sched != NULL);
+    sched->moe_provider = provider;
 }
 
 void ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool on_or_off) {
@@ -2207,7 +2222,9 @@ static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_back
         int64_t tim2 = ggml_time_us();
         printf("%s(.1.): %d us\n", __func__, (int)(tim2-tim1));
 #endif
-        enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
+        enum ggml_status ec = sched->moe_provider && ggml_backend_is_cpu(split_backend)
+            ? ggml_backend_cpu_graph_compute_with_provider(split_backend, &split->graph, sched->moe_provider)
+            : ggml_backend_graph_compute_async(split_backend, &split->graph);
         if (ec != GGML_STATUS_SUCCESS) {
             return ec;
         }
@@ -2234,7 +2251,9 @@ static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_back
             printf("%s(.2.): %d us\n", __func__, (int)(tim2-tim1));
 #endif
 
-            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
+            enum ggml_status ec = sched->moe_provider && ggml_backend_is_cpu(split_backend)
+                ? ggml_backend_cpu_graph_compute_with_provider(split_backend, &gv, sched->moe_provider)
+                : ggml_backend_graph_compute_async(split_backend, &gv);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
             }

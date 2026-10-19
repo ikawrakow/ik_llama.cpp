@@ -3,14 +3,33 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-moe-cache-share.h"
+#include "llama-moe-cache-residency.h"
 
 #include "ggml-cpp.h"
+#include "ggml-cuda.h"
+#include "ggml-moe-provider.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <condition_variable>
+#include <cstring>
+#include <mutex>
+#include <new>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 
 namespace {
+
+bool backend_is_cuda(ggml_backend * backend) {
+#ifdef GGML_USE_CUDA
+    return ggml_backend_is_cuda(backend);
+#else
+    (void) backend;
+    return false;
+#endif
+}
 
 struct moe_cache_lru {
     struct fill { int32_t expert; int32_t slot; };
@@ -116,18 +135,170 @@ static bool same_layout(const std::vector<ggml_tensor *> & a, const std::vector<
     return true;
 }
 
+static enum ggml_unary_op moe_fused_unary(const ggml_tensor * op) {
+    int32_t value = 0;
+    memcpy(&value, op->op_params, sizeof(value));
+    return (enum ggml_unary_op) value;
+}
+
 } // namespace
 
 struct llama_moe_cache::impl {
+    enum class fill_enqueue_result { accepted, coalesced, unavailable, invalid, occupied,
+        no_free_slot, job_limit, byte_limit, no_victim };
+    struct binding {
+        int32_t layer;
+        int32_t part;
+        ggml_tensor * cached;
+    };
+    struct provider_row {
+        size_t row = 0;
+        int32_t slot = -1;
+        int32_t expert = -1;
+        uint64_t generation = 0;
+    };
+    static constexpr size_t max_provider_rows = 1024;
+    static constexpr size_t regular_provider_bucket_rows = 4;
+    struct provider_request {
+        binding weight = { -1, -1, nullptr };
+        binding second_weight = { -1, -1, nullptr };
+        const ggml_tensor * op = nullptr;
+        std::array<provider_row, max_provider_rows> rows{};
+        std::array<llama_moe_cache_residency::key, max_provider_rows> route_keys{};
+        std::array<int32_t, max_provider_rows> pinned_slots{};
+        std::array<uint64_t, max_provider_rows> pinned_generations{};
+        std::array<llama_moe_cache_residency::pin, max_provider_rows> pins{};
+        std::array<llama_moe_cache_residency::key, max_provider_rows> miss_candidates{};
+        size_t n_rows = 0;
+        size_t n_hit = 0;
+        size_t n_pins = 0;
+        size_t n_valid = 0;
+        size_t n_miss_candidates = 0;
+        size_t n_tokens = 0;
+        size_t n_unique_activations = 0;
+        std::array<int32_t, max_provider_rows> activation_map{};
+        std::array<const float *, max_provider_rows> unique_activations{};
+        bool fused = false;
+        bool selected_down = false;
+        bool direct_regular = false;
+        bool direct_fused = false;
+        bool active = false;
+        bool submitted = false;
+        bool completed = false;
+        bool admission_plan_valid = false;
+        bool admission_driver = false;
+        bool large_batch_admission_bypass = false;
+    };
+    struct regular_workspace {
+        ggml_backend_buffer_ptr device_buffer;
+        ggml_backend_buffer_ptr staging_buffer;
+        ggml_backend_event_t event = nullptr;
+        size_t input_capacity = 0;
+        size_t q8_capacity = 0;
+        size_t output_capacity = 0;
+    };
+    static constexpr size_t max_fill_jobs = 128;
+    static constexpr size_t max_fill_parts = 4;
+    static constexpr size_t max_fill_bytes = 512u * 1024u * 1024u;
+    struct fill_part {
+        ggml_tensor * source = nullptr;
+        ggml_tensor * destination = nullptr;
+        size_t source_offset = 0;
+        size_t destination_offset = 0;
+        size_t bytes = 0;
+    };
+    struct fill_job {
+        int32_t group = -1;
+        int32_t slot = -1;
+        llama_moe_cache_residency::key owner;
+        uint64_t generation = 0;
+        std::array<fill_part, max_fill_parts> parts{};
+        size_t n_parts = 0;
+        size_t bytes = 0;
+    };
+    struct fill_counters {
+        size_t accepted = 0;
+        size_t dropped = 0;
+        size_t completed = 0;
+        size_t failed = 0;
+        size_t cancelled = 0;
+        size_t stale = 0;
+    };
+    struct group_admission_state {
+        std::mutex mutex;
+        std::vector<uint8_t> demand;
+        std::vector<uint8_t> live_ready;
+        std::vector<int32_t> lru_prev;
+        std::vector<int32_t> lru_next;
+        std::vector<uint8_t> lru_member;
+        int32_t lru_head = -1;
+        int32_t lru_tail = -1;
+        size_t deferred = 0;
+
+        void initialize(size_t n_keys, size_t n_slots) {
+            demand.assign(n_keys, 0);
+            live_ready.assign(n_keys, 0);
+            lru_prev.assign(n_slots, -1);
+            lru_next.assign(n_slots, -1);
+            lru_member.assign(n_slots, 0);
+        }
+        void remove_lru(int32_t slot) {
+            if (slot < 0 || (size_t)slot >= lru_member.size() || !lru_member[slot]) return;
+            const int32_t prev = lru_prev[slot], next = lru_next[slot];
+            if (prev >= 0) lru_next[prev] = next; else lru_head = next;
+            if (next >= 0) lru_prev[next] = prev; else lru_tail = prev;
+            lru_prev[slot] = lru_next[slot] = -1;
+            lru_member[slot] = 0;
+        }
+        void insert_mru(int32_t slot) {
+            if (slot < 0 || (size_t)slot >= lru_member.size()) return;
+            remove_lru(slot);
+            lru_prev[slot] = lru_tail;
+            lru_next[slot] = -1;
+            if (lru_tail >= 0) lru_next[lru_tail] = slot; else lru_head = slot;
+            lru_tail = slot;
+            lru_member[slot] = 1;
+        }
+        void touch_lru(int32_t slot) {
+            if (slot < 0 || (size_t)slot >= lru_member.size() || !lru_member[slot]) return;
+            if (lru_tail != slot) insert_mru(slot);
+        }
+    };
+    struct fill_engine {
+        ggml_backend * backend = nullptr;
+        std::thread worker;
+        std::thread::id worker_id;
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::array<fill_job, max_fill_jobs> queue{};
+        size_t head = 0;
+        size_t queued = 0;
+        size_t outstanding = 0;
+        size_t outstanding_bytes = 0;
+        size_t max_jobs = max_fill_jobs;
+        size_t max_bytes = max_fill_bytes;
+        bool stopping = false;
+        bool inflight = false;
+        bool inflight_cancelled = false;
+        bool publishing = false;
+        fill_job inflight_job;
+        fill_counters counters;
+    };
     struct device {
         ggml_backend * backend = nullptr;
         ggml_backend_buffer_type * buft = nullptr;
         int32_t model_device = -1;
+        int32_t cuda_ordinal = -1;
         double split = 0.0;
         size_t host_bytes = 0;
         size_t buffer_size = 0;
         ggml_context_ptr ctx;
         ggml_backend_buffer_ptr buffer;
+        ggml_backend * provider_backend = nullptr;
+        std::unique_ptr<fill_engine> fills;
+        bool admission_engine_ready = false;
+        provider_request request;
+        regular_workspace regular;
     };
     struct group {
         int32_t device = -1;
@@ -137,16 +308,14 @@ struct llama_moe_cache::impl {
         size_t host_bytes = 0;
         int32_t n_slots = 0;
         moe_cache_lru lru;
+        std::unique_ptr<llama_moe_cache_residency> residency;
+        std::unique_ptr<group_admission_state> admission;
     };
     struct layer {
         int32_t group = -1;
+        int32_t admission_part = -1;
         ggml_tensor * slot_map = nullptr;
         std::vector<ggml_tensor *> experts;
-    };
-    struct binding {
-        int32_t layer;
-        int32_t part;
-        ggml_tensor * cached;
     };
     struct stats { size_t hits = 0; size_t misses = 0; size_t evictions = 0; size_t bytes = 0; };
 
@@ -165,12 +334,35 @@ struct llama_moe_cache::impl {
     size_t buf_host_size = 0;
     stats stats_small, stats_large;
     size_t requested_size;
+    bool cpu_on_miss;
     mutable size_t large_batch_skips = 0;
     mutable size_t incompatible_layer_skips = 0;
+    struct ggml_moe_provider moe_provider = {};
+    std::atomic_size_t active_provider_requests{0};
+    struct cpu_miss_runtime_stats { size_t operations = 0, eligible_rows = 0, committed_gpu_rows = 0; } cpu_miss_stats;
+    size_t residency_pin_acquisitions = 0;
+    size_t residency_pin_releases = 0;
+    size_t residency_pin_release_failures = 0;
+    mutable std::mutex fill_init_mutex;
+    std::mutex fill_enqueue_mutex;
 
+    static bool provider_begin(void * user_data, const ggml_tensor * op, void ** request);
+    static bool provider_plan(void * user_data, void * request, const ggml_tensor * op, uint8_t * gpu_rows, size_t n_rows);
+    static bool provider_dispatch(void * user_data, void * request, ggml_tensor * op, const uint8_t * gpu_rows, size_t n_rows);
+    static bool provider_collect(void * user_data, void * request, ggml_tensor * op, const uint8_t * gpu_rows, size_t n_rows);
+    static void provider_end(void * user_data, void * request);
+    void touch_ready_pins_locked(const group & g, const llama_moe_cache_residency::pin * pins, size_t n_pins);
+    bool ensure_regular_workspace(device & d, size_t input_bytes, size_t q8_bytes, size_t output_bytes);
     impl(const llama_model & model, const std::vector<ggml_backend *> & backends,
-            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size)
-            : n_expert_used(model.hparams.n_expert_used), layers(model.layers.size()), requested_size(size) {
+            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size, bool cpu_on_miss)
+            : n_expert_used(model.hparams.n_expert_used), layers(model.layers.size()), requested_size(size), cpu_on_miss(cpu_on_miss) {
+        moe_provider.user_data = this;
+        moe_provider.begin = provider_begin;
+        moe_provider.plan = provider_plan;
+        moe_provider.dispatch = provider_dispatch;
+        moe_provider.collect = provider_collect;
+        moe_provider.end = provider_end;
+
         if (model.hparams.n_expert == 0 || n_expert_used <= 0) {
             throw std::runtime_error("MoE cache requires a MoE model");
         }
@@ -182,6 +374,7 @@ struct llama_moe_cache::impl {
                 device d;
                 d.backend = backends[i];
                 d.buft = bufts[i];
+                if (backend_is_cuda(d.backend)) d.cuda_ordinal = cuda_ordinal_for_buft(d.buft);
                 devices.push_back(std::move(d));
             }
         }
@@ -196,7 +389,7 @@ struct llama_moe_cache::impl {
             if (il >= model.default_layer_device.size()) continue;
             const int32_t model_device = model.default_layer_device[il];
             if (model_device < 0 || (size_t) model_device >= model.devices.size()) continue;
-            const auto * layer_buft = model.default_buffer_type_offload(model_device);
+            const auto * layer_buft = model.default_buffer_type_offload(model.devices[model_device]);
             auto it_dev = std::find_if(devices.begin(), devices.end(), [&](const device & d) { return d.buft == layer_buft; });
             if (it_dev == devices.end()) continue;
             const int32_t id = (int32_t) (it_dev - devices.begin());
@@ -215,6 +408,7 @@ struct llama_moe_cache::impl {
             }
         }
         if (groups.empty()) {
+            if (cpu_on_miss) throw std::runtime_error("CPU-on-miss requires host-resident eligible MoE expert weights");
             LLAMA_LOG_WARN("%s: no complete host-resident expert layer is eligible. MoE cache is inactive\n", __func__);
             return;
         }
@@ -263,6 +457,15 @@ struct llama_moe_cache::impl {
                 continue;
             }
             g.lru.init((int32_t) layers.size(), n_expert, g.n_slots);
+            if (cpu_on_miss) {
+                g.residency = std::make_unique<llama_moe_cache_residency>(
+                        (size_t) g.n_slots, layers.size(), (size_t) n_expert);
+                if ((size_t) n_expert > SIZE_MAX / layers.size()) {
+                    throw std::runtime_error("MoE admission key set is too large");
+                }
+                g.admission = std::make_unique<group_admission_state>();
+                g.admission->initialize(layers.size() * (size_t) n_expert, (size_t)g.n_slots);
+            }
             device_tensor_counts[g.device] += g.ref.size() * (1 + g.layers.size());
             host_layer_count += g.layers.size();
         }
@@ -298,6 +501,7 @@ struct llama_moe_cache::impl {
                             bank->nb[1], bank->nb[2], 0);
                     ggml_format_name(cached, "moe_cache.%s", l.experts[ip]->name);
                     bindings[l.experts[ip]] = { il, (int32_t) ip, cached };
+                    if (l.admission_part < 0) l.admission_part = bindings[l.experts[ip]].part;
                 }
                 l.slot_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
                 ggml_format_name(l.slot_map, "moe_cache.slot_map-%d", il);
@@ -331,9 +535,581 @@ struct llama_moe_cache::impl {
                         g.layers.size(), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]));
             }
         }
+        if (cpu_on_miss) {
+            for (size_t i = 0; i < devices.size(); ++i) {
+                device & d = devices[i];
+                const bool has_admission_group = std::any_of(groups.begin(), groups.end(), [&](const group & g) {
+                    return g.device == (int32_t) i && g.n_slots > 0 && g.admission;
+                });
+                if (!has_admission_group) continue;
+                d.admission_engine_ready = ensure_fill_engine(i);
+                if (!d.admission_engine_ready) {
+                    LLAMA_LOG_WARN("%s: live MoE fill admission is disabled for CUDA device %d because setup failed\n",
+                            __func__, d.cuda_ordinal);
+                }
+            }
+        }
     }
 
-    ~impl() { log_stats(); }
+    static int32_t cuda_ordinal_for_buft(ggml_backend_buffer_type * buft) {
+#ifdef GGML_USE_CUDA
+        for (int32_t i = 0; i < ggml_backend_cuda_get_device_count(); ++i) {
+            if (ggml_backend_cuda_buffer_type(i) == buft) return i;
+        }
+#else
+        (void) buft;
+#endif
+        return -1;
+    }
+
+    void set_expert_bank_async(device & d, ggml_tensor * bank, const void * src, size_t offset, size_t size) {
+        ggml_backend_tensor_set_async(d.backend, bank, src, offset, size);
+    }
+
+    bool ensure_fill_engine(size_t device_id) {
+        if (device_id >= devices.size()) return false;
+        std::lock_guard<std::mutex> init_lock(fill_init_mutex);
+        device & d = devices[device_id];
+        if (d.fills) return true;
+#ifndef GGML_USE_CUDA
+        return false;
+#else
+        if (d.cuda_ordinal < 0) return false;
+        std::unique_ptr<fill_engine> engine(new (std::nothrow) fill_engine());
+        if (!engine) return false;
+        engine->backend = ggml_backend_cuda_init(d.cuda_ordinal, nullptr, nullptr);
+        if (!engine->backend) return false;
+        d.fills = std::move(engine);
+        try {
+            d.fills->worker = std::thread([this, device_id] { fill_worker(device_id); });
+            std::unique_lock<std::mutex> lock(d.fills->mutex);
+            d.fills->changed.wait(lock, [&] { return d.fills->worker_id != std::thread::id{}; });
+        } catch (...) {
+            ggml_backend_free(d.fills->backend);
+            d.fills.reset();
+            return false;
+        }
+        return true;
+#endif
+    }
+
+    void fill_worker(size_t device_id) {
+        device & d = devices[device_id];
+        fill_engine & engine = *d.fills;
+        {
+            std::lock_guard<std::mutex> lock(engine.mutex);
+            engine.worker_id = std::this_thread::get_id();
+            engine.changed.notify_all();
+        }
+        for (;;) {
+            fill_job job;
+            {
+                std::unique_lock<std::mutex> lock(engine.mutex);
+                engine.changed.wait(lock, [&] { return engine.stopping || engine.queued != 0; });
+                if (engine.stopping && engine.queued == 0) break;
+                job = engine.queue[engine.head];
+                engine.queue[engine.head] = {};
+                engine.head = (engine.head + 1) % max_fill_jobs;
+                --engine.queued;
+                engine.inflight = true;
+                engine.inflight_cancelled = false;
+                engine.publishing = false;
+                engine.inflight_job = job;
+                engine.changed.notify_all();
+            }
+
+            bool failed = false;
+            size_t submitted_bytes = 0;
+            if (!failed) {
+                for (size_t ip = 0; ip < job.n_parts; ++ip) {
+                    const fill_part & part = job.parts[ip];
+                    if (!part.source || !part.destination || !part.source->data || !part.destination->data ||
+                            part.source_offset > ggml_nbytes(part.source) ||
+                            part.bytes > ggml_nbytes(part.source) - part.source_offset ||
+                            part.destination_offset > ggml_nbytes(part.destination) ||
+                            part.bytes > ggml_nbytes(part.destination) - part.destination_offset) {
+                        failed = true;
+                        break;
+                    }
+#ifdef GGML_USE_CUDA
+                    if (!ggml_backend_cuda_try_tensor_set_async(engine.backend, part.destination,
+                                (const uint8_t *) part.source->data + part.source_offset,
+                                part.destination_offset, part.bytes)) {
+                        failed = true;
+                        break;
+                    }
+#else
+                    failed = true;
+                    break;
+#endif
+                    submitted_bytes += part.bytes;
+                }
+            }
+
+            bool cancelled = false;
+            if (!failed) {
+                std::unique_lock<std::mutex> lock(engine.mutex);
+                cancelled = engine.inflight_cancelled || engine.stopping;
+            }
+
+            if (submitted_bytes != 0) {
+#ifdef GGML_USE_CUDA
+                if (!ggml_backend_cuda_try_synchronize(engine.backend)) failed = true;
+#else
+                failed = true;
+#endif
+            }
+            if (!failed && !cancelled) {
+                std::lock_guard<std::mutex> lock(engine.mutex);
+                cancelled = engine.inflight_cancelled || engine.stopping;
+                engine.publishing = !cancelled;
+            }
+
+            group & g = groups[job.group];
+            bool published = false;
+            if (failed) {
+                g.residency->fail((size_t) job.slot, job.owner, job.generation);
+            } else if (cancelled) {
+                g.residency->cancel((size_t) job.slot, job.owner, job.generation);
+            } else if (cpu_on_miss && g.admission) {
+                // Keep the live-ready view atomic with residency publication for provider telemetry.
+                std::lock_guard<std::mutex> lock(g.admission->mutex);
+                published = g.residency->complete((size_t) job.slot, job.owner, job.generation);
+                if (published) {
+                    const size_t key_index = (size_t) job.owner.layer*(size_t) g.ref[0]->ne[2] +
+                            (size_t) job.owner.expert;
+                    GGML_ASSERT(key_index < g.admission->live_ready.size());
+                    g.admission->live_ready[key_index] = 1;
+                    g.admission->demand[key_index] = 0;
+                    g.admission->insert_mru(job.slot);
+                }
+            } else {
+                published = g.residency->complete((size_t) job.slot, job.owner, job.generation);
+                if (published) {
+                    layer & l = layers[job.owner.layer];
+                    const int32_t encoded = job.owner.layer*(int32_t) g.ref[0]->ne[2] + job.owner.expert;
+                    g.lru.key_of[job.slot] = encoded;
+                    g.lru.touch(job.slot);
+                    ((int32_t *) l.slot_map->data)[job.owner.expert] = job.slot;
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(engine.mutex);
+                if (failed) {
+                    ++engine.counters.failed;
+                } else if (cancelled) {
+                    ++engine.counters.cancelled;
+                } else if (published) {
+                    ++engine.counters.completed;
+                } else {
+                    ++engine.counters.stale;
+                }
+                GGML_ASSERT(engine.outstanding > 0 && engine.outstanding_bytes >= job.bytes);
+                --engine.outstanding;
+                engine.outstanding_bytes -= job.bytes;
+                engine.inflight = false;
+                engine.inflight_cancelled = false;
+                engine.publishing = false;
+                engine.inflight_job = {};
+                engine.changed.notify_all();
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(engine.mutex);
+            engine.worker_id = {};
+            engine.changed.notify_all();
+        }
+    }
+
+    void stop_fill_engine(device & d, bool destroy = true) {
+        if (!d.fills) return;
+        fill_engine & engine = *d.fills;
+        std::array<fill_job, max_fill_jobs> cancelled{};
+        size_t n_cancelled = 0;
+        fill_job inflight_job;
+        bool retire_inflight = false;
+        {
+            std::lock_guard<std::mutex> lock(engine.mutex);
+            engine.stopping = true;
+            while (engine.queued != 0) {
+                cancelled[n_cancelled] = engine.queue[engine.head];
+                engine.queue[engine.head] = {};
+                engine.head = (engine.head + 1) % max_fill_jobs;
+                --engine.queued;
+                --engine.outstanding;
+                engine.outstanding_bytes -= cancelled[n_cancelled].bytes;
+                ++engine.counters.cancelled;
+                ++n_cancelled;
+            }
+            if (engine.inflight && !engine.publishing) {
+                engine.inflight_cancelled = true;
+                inflight_job = engine.inflight_job;
+                retire_inflight = true;
+            }
+            engine.changed.notify_all();
+        }
+        for (size_t i = 0; i < n_cancelled; ++i) {
+            const fill_job & job = cancelled[i];
+            groups[job.group].residency->cancel((size_t) job.slot, job.owner, job.generation);
+        }
+        if (retire_inflight) {
+            groups[inflight_job.group].residency->retire(
+                    (size_t) inflight_job.slot, inflight_job.owner, inflight_job.generation);
+        }
+        if (engine.worker.joinable()) engine.worker.join();
+        GGML_ASSERT(engine.outstanding == 0 && engine.queued == 0 && !engine.inflight);
+        if (destroy) {
+            if (engine.backend) ggml_backend_free(engine.backend);
+            engine.backend = nullptr;
+            d.fills.reset();
+        }
+    }
+
+    fill_enqueue_result enqueue_fill_locked(int32_t il, int32_t expert, int32_t slot) {
+        using result = fill_enqueue_result;
+        if (!cpu_on_miss || il < 0 || (size_t) il >= layers.size() || expert < 0 || slot < -1) return result::invalid;
+        layer & l = layers[il];
+        if (l.group < 0 || l.experts.empty()) return result::unavailable;
+        const int32_t group_id = l.group;
+        group & g = groups[group_id];
+        if (!g.residency || (slot >= 0 && (size_t) slot >= (size_t) g.n_slots) ||
+                expert >= g.ref[0]->ne[2]) return result::invalid;
+        device & d = devices[g.device];
+        if (!backend_is_cuda(d.backend) || d.cuda_ordinal < 0 || l.experts.size() != g.banks.size() ||
+                l.experts.size() > max_fill_parts) return result::unavailable;
+
+        if (!d.admission_engine_ready || !d.fills) return result::unavailable;
+        fill_engine & engine = *d.fills;
+
+        const llama_moe_cache_residency::key owner = { il, expert };
+        auto existing = g.residency->find(owner);
+        if (existing.state == llama_moe_cache_residency::slot_state::ready ||
+                existing.state == llama_moe_cache_residency::slot_state::copying) {
+            std::lock_guard<std::mutex> lock(engine.mutex);
+            return result::coalesced;
+        }
+        if (existing.state != llama_moe_cache_residency::slot_state::free) return result::occupied;
+
+        if (slot == -1) {
+            slot = -1;
+            for (int32_t candidate = 0; candidate < g.n_slots; ++candidate) {
+                if (g.residency->reusable((size_t) candidate)) {
+                    slot = candidate;
+                    break;
+                }
+            }
+            if (slot < 0) return result::no_free_slot;
+        }
+        if ((size_t) slot >= (size_t) g.n_slots) return result::invalid;
+
+        fill_job job;
+        job.group = group_id;
+        job.slot = slot;
+        job.owner = owner;
+        for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+            ggml_tensor * src = l.experts[ip];
+            ggml_tensor * dst = g.banks[ip];
+            if (!src || !dst || !src->data || !dst->data || src->ne[2] != g.ref[0]->ne[2] ||
+                    src->nb[2] == 0 || src->nb[2] != dst->nb[2] ||
+                    (size_t) slot > SIZE_MAX/src->nb[2] || (size_t) expert > SIZE_MAX/src->nb[2]) return result::invalid;
+            const size_t bytes = src->nb[2];
+            if (bytes > SIZE_MAX - job.bytes) return result::invalid;
+            fill_part & part = job.parts[job.n_parts++];
+            part.source = src;
+            part.destination = dst;
+            part.source_offset = (size_t) expert*src->nb[2];
+            part.destination_offset = (size_t) slot*dst->nb[2];
+            part.bytes = bytes;
+            job.bytes += bytes;
+        }
+        if (job.n_parts == 0 || job.bytes == 0) return result::invalid;
+        if (job.bytes > max_fill_bytes) {
+            std::lock_guard<std::mutex> lock(engine.mutex);
+            ++engine.counters.dropped;
+            return result::byte_limit;
+        }
+
+        if (!g.residency->reserve((size_t) slot, owner, job.generation)) {
+            existing = g.residency->find(owner);
+            if (existing.state == llama_moe_cache_residency::slot_state::ready ||
+                    existing.state == llama_moe_cache_residency::slot_state::copying) {
+                std::lock_guard<std::mutex> lock(engine.mutex);
+                return result::coalesced;
+            }
+            return result::occupied;
+        }
+
+        result dropped = result::accepted;
+        {
+            std::lock_guard<std::mutex> lock(engine.mutex);
+            if (engine.stopping) {
+                dropped = result::unavailable;
+            } else if (engine.outstanding >= engine.max_jobs) {
+                ++engine.counters.dropped;
+                dropped = result::job_limit;
+            } else if (job.bytes > engine.max_bytes || engine.outstanding_bytes > engine.max_bytes - job.bytes) {
+                ++engine.counters.dropped;
+                dropped = result::byte_limit;
+            } else {
+                const size_t tail = (engine.head + engine.queued) % max_fill_jobs;
+                engine.queue[tail] = job;
+                ++engine.queued;
+                ++engine.outstanding;
+                engine.outstanding_bytes += job.bytes;
+                ++engine.counters.accepted;
+                engine.changed.notify_all();
+            }
+        }
+        if (dropped != result::accepted) {
+            g.residency->cancel((size_t) slot, owner, job.generation);
+            return dropped;
+        }
+        return result::accepted;
+    }
+
+    fill_enqueue_result enqueue_free_slot(int32_t il, int32_t expert) {
+        // Live admission must never wait behind cancellation or another enqueue path.
+        std::unique_lock<std::mutex> lock(fill_enqueue_mutex, std::try_to_lock);
+        if (!lock.owns_lock()) return fill_enqueue_result::unavailable;
+        return enqueue_fill_locked(il, expert, -1);
+    }
+
+    fill_enqueue_result enqueue_replacement(int32_t il, int32_t expert,
+            const int32_t * excluded_slots, size_t n_excluded_slots, int32_t * accepted_slot) {
+        using result = fill_enqueue_result;
+        if (accepted_slot) *accepted_slot = -1;
+        // Lock order for replacement is enqueue -> group admission -> fill queue -> residency.
+        // Provider pinning drops the residency lock before touching admission state.
+        std::unique_lock<std::mutex> enqueue_lock(fill_enqueue_mutex, std::try_to_lock);
+        if (!enqueue_lock.owns_lock() || il < 0 || (size_t)il >= layers.size() || expert < 0) return result::unavailable;
+        layer & l = layers[il];
+        if (l.group < 0 || l.experts.empty()) return result::unavailable;
+        const int32_t group_id = l.group;
+        group & g = groups[group_id];
+        if (!g.admission || !g.residency || (size_t)expert >= (size_t)g.ref[0]->ne[2]) return result::invalid;
+        device & d = devices[g.device];
+        if (!d.admission_engine_ready || !d.fills || l.experts.size() != g.banks.size() ||
+                l.experts.size() > max_fill_parts) return result::unavailable;
+
+        fill_job job;
+        job.group = group_id;
+        job.owner = { il, expert };
+        for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+            ggml_tensor * src = l.experts[ip];
+            ggml_tensor * dst = g.banks[ip];
+            if (!src || !dst || !src->data || !dst->data || src->ne[2] != g.ref[0]->ne[2] ||
+                    src->nb[2] == 0 || src->nb[2] != dst->nb[2] ||
+                    (size_t)expert > SIZE_MAX/src->nb[2] ||
+                    (size_t)g.n_slots > SIZE_MAX/dst->nb[2]) return result::invalid;
+            fill_part & part = job.parts[job.n_parts++];
+            part.source = src;
+            part.destination = dst;
+            part.source_offset = (size_t)expert*src->nb[2];
+            part.bytes = src->nb[2];
+            if (part.bytes > SIZE_MAX-job.bytes) return result::invalid;
+            job.bytes += part.bytes;
+        }
+        if (!job.n_parts || !job.bytes) return result::invalid;
+        if (job.bytes > max_fill_bytes) return result::byte_limit;
+
+        group_admission_state & admission = *g.admission;
+        std::lock_guard<std::mutex> admission_lock(admission.mutex);
+        const auto existing = g.residency->find(job.owner);
+        if (existing.state == llama_moe_cache_residency::slot_state::ready ||
+                existing.state == llama_moe_cache_residency::slot_state::copying) {
+            std::lock_guard<std::mutex> queue_lock(d.fills->mutex);
+            return result::coalesced;
+        }
+        if (existing.state != llama_moe_cache_residency::slot_state::free) return result::occupied;
+
+        for (int32_t slot = 0; slot < g.n_slots; ++slot) {
+            if (g.residency->reusable((size_t)slot)) return result::no_free_slot;
+        }
+
+        std::lock_guard<std::mutex> queue_lock(d.fills->mutex);
+        fill_engine & engine = *d.fills;
+        if (engine.stopping) return result::unavailable;
+        if (engine.outstanding >= engine.max_jobs) {
+            ++engine.counters.dropped;
+            return result::job_limit;
+        }
+        if (job.bytes > engine.max_bytes || engine.outstanding_bytes > engine.max_bytes-job.bytes) {
+            ++engine.counters.dropped;
+            return result::byte_limit;
+        }
+
+        int32_t victim_slot = admission.lru_head;
+        uint64_t new_generation = 0;
+        llama_moe_cache_residency::snapshot victim;
+        for (int32_t slot = admission.lru_head; slot >= 0; slot = admission.lru_next[slot]) {
+            bool excluded = false;
+            for (size_t i = 0; excluded_slots && i < n_excluded_slots; ++i) excluded |= excluded_slots[i] == slot;
+            if (excluded) continue;
+            const auto candidate = g.residency->inspect((size_t)slot);
+            if (candidate.state != llama_moe_cache_residency::slot_state::ready || candidate.pins != 0 ||
+                    candidate.slot != slot || candidate.owner.layer < 0 || candidate.owner.expert < 0) continue;
+            const size_t victim_index = (size_t)candidate.owner.layer*(size_t)g.ref[0]->ne[2] +
+                    (size_t)candidate.owner.expert;
+            if (victim_index >= admission.live_ready.size() || !admission.live_ready[victim_index]) continue;
+            if (!g.residency->replace_ready((size_t)slot, candidate.owner, candidate.generation,
+                        job.owner, new_generation)) continue;
+            victim_slot = slot;
+            victim = candidate;
+            break;
+        }
+        if (victim.generation == 0) {
+            ++admission.deferred;
+            return result::no_victim;
+        }
+
+        const size_t victim_index = (size_t)victim.owner.layer*(size_t)g.ref[0]->ne[2] +
+                (size_t)victim.owner.expert;
+        GGML_ASSERT(victim_index < admission.live_ready.size());
+        admission.live_ready[victim_index] = 0;
+        admission.remove_lru(victim_slot);
+        job.slot = victim_slot;
+        job.generation = new_generation;
+        if (accepted_slot) *accepted_slot = victim_slot;
+        for (size_t ip = 0; ip < job.n_parts; ++ip) {
+            job.parts[ip].destination_offset = (size_t)victim_slot*job.parts[ip].destination->nb[2];
+        }
+        const size_t tail = (engine.head + engine.queued) % max_fill_jobs;
+        engine.queue[tail] = job;
+        ++engine.queued;
+        ++engine.outstanding;
+        engine.outstanding_bytes += job.bytes;
+        ++engine.counters.accepted;
+        engine.changed.notify_all();
+        return result::accepted;
+    }
+
+    void admit_provider_misses(provider_request & req) {
+        if (!cpu_on_miss || !req.admission_plan_valid) return;
+        const int32_t il = req.weight.layer;
+        if (il < 0 || (size_t) il >= layers.size()) return;
+        group & g = groups[layers[il].group];
+        if (!g.admission) return;
+        group_admission_state & admission = *g.admission;
+
+        if (req.large_batch_admission_bypass) return;
+
+        const size_t n_experts = (size_t) g.ref[0]->ne[2];
+        const size_t full_key_count = g.layers.size() * n_experts;
+        const bool first_miss_admits = (size_t) g.n_slots >= full_key_count;
+        size_t accepted_jobs = 0;
+        std::array<int32_t, 8> replacement_slots{};
+        size_t n_replacement_slots = 0;
+
+        for (size_t i = 0; i < req.n_miss_candidates; ++i) {
+            const auto key = req.miss_candidates[i];
+            if (key.layer < 0 || (size_t) key.layer >= layers.size() || key.expert < 0 ||
+                    (size_t) key.expert >= n_experts) continue;
+            const size_t demand_index = (size_t) key.layer*n_experts + (size_t) key.expert;
+            if (demand_index >= admission.demand.size()) continue;
+
+            uint8_t demand = 0;
+            bool has_free_slot = false;
+            bool node_capped = false;
+            bool already_in_flight = false;
+            bool demand_incremented = false;
+            {
+                std::lock_guard<std::mutex> lock(admission.mutex);
+                if (!req.admission_driver) continue;
+                // Publication uses this same lock, so READY/COPYING is decided
+                // before this observation can mutate whole-expert demand.
+                const auto existing = g.residency->find(key);
+                if (existing.state == llama_moe_cache_residency::slot_state::ready ||
+                        existing.state == llama_moe_cache_residency::slot_state::copying) {
+                    if (existing.state == llama_moe_cache_residency::slot_state::ready) {
+                        admission.demand[demand_index] = 0;
+                    }
+                    already_in_flight = true;
+                } else {
+                    demand = admission.demand[demand_index];
+                    if (demand < 8) {
+                        ++demand;
+                        demand_incremented = true;
+                    }
+                    admission.demand[demand_index] = demand;
+                    for (int32_t slot = 0; slot < g.n_slots; ++slot) {
+                        if (g.residency->reusable((size_t)slot)) {
+                            has_free_slot = true;
+                            break;
+                        }
+                    }
+                }
+                const uint8_t threshold = has_free_slot ? (first_miss_admits ? 1 : 2) : 8;
+                if (!already_in_flight && demand < threshold) {
+                    ++admission.deferred;
+                    continue;
+                }
+            }
+
+            if (already_in_flight) {
+                continue;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(admission.mutex);
+                node_capped = accepted_jobs >= 8;
+                if (node_capped) ++admission.deferred;
+            }
+            if (node_capped) continue;
+
+            int32_t replacement_slot = -1;
+            const auto result = has_free_slot ? enqueue_free_slot(key.layer, key.expert) :
+                    enqueue_replacement(key.layer, key.expert, replacement_slots.data(),
+                            n_replacement_slots, &replacement_slot);
+            if (result == fill_enqueue_result::no_free_slot ||
+                    result == fill_enqueue_result::occupied) {
+                std::lock_guard<std::mutex> lock(admission.mutex);
+                ++admission.deferred;
+            } else if (result == fill_enqueue_result::no_victim) {
+                // The full-pool deferral was recorded by enqueue_replacement.
+            } else if (result == fill_enqueue_result::accepted) {
+                ++accepted_jobs;
+                if (!has_free_slot && replacement_slot >= 0 && n_replacement_slots < replacement_slots.size()) {
+                    replacement_slots[n_replacement_slots++] = replacement_slot;
+                }
+            } else if (result != fill_enqueue_result::coalesced) {
+                std::lock_guard<std::mutex> lock(admission.mutex);
+                ++admission.deferred;
+            } else {
+                // A competing enqueue won after the initial absent-key decision.
+                // Undo only this observation unless publication already reset demand.
+                std::lock_guard<std::mutex> lock(admission.mutex);
+                const auto existing = g.residency->find(key);
+                if (existing.state == llama_moe_cache_residency::slot_state::ready) {
+                    admission.demand[demand_index] = 0;
+                } else if (demand_incremented) {
+                    if (admission.demand[demand_index] != 0) --admission.demand[demand_index];
+                }
+            }
+        }
+    }
+
+    ~impl() {
+        for (device & d : devices) stop_fill_engine(d, false);
+        GGML_ASSERT(active_provider_requests.load(std::memory_order_acquire) == 0);
+        for (const group & g : groups) {
+            GGML_ASSERT(!g.residency || g.residency->live_pins() == 0);
+        }
+        log_stats();
+        for (device & d : devices) {
+            if (d.request.submitted && !d.request.completed && d.regular.event) {
+                ggml_backend_event_synchronize(d.regular.event);
+                d.request.completed = true;
+            }
+            if (d.regular.event) ggml_backend_event_free(d.regular.event);
+            d.regular.event = nullptr;
+            d.regular.staging_buffer.reset();
+            d.regular.device_buffer.reset();
+            if (d.provider_backend) ggml_backend_free(d.provider_backend);
+            if (d.fills && d.fills->backend) ggml_backend_free(d.fills->backend);
+            d.fills.reset();
+        }
+    }
 
     ggml_backend * backend(int32_t il) const {
         if (il < 0 || (size_t) il >= layers.size() || layers[il].group < 0) return nullptr;
@@ -365,13 +1141,14 @@ struct llama_moe_cache::impl {
 
     bool copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
             ggml_backend_sched_copy_phase phase) {
+        if (cpu_on_miss) return false;
         auto it = layer_of.find(src);
         if (it == layer_of.end()) return false;
         if (phase == GGML_BACKEND_SCHED_COPY_PHASE_QUERY) return true;
         const int32_t il = it->second;
         layer & l = layers[il];
         group & g = groups[l.group];
-        const device & d = devices[g.device];
+        device & d = devices[g.device];
         GGML_ASSERT(backend == d.backend);
         const ggml_tensor * lookup = nullptr;
         for (int i = 0; i < ggml_graph_n_nodes(graph) && !lookup; ++i) {
@@ -402,7 +1179,7 @@ struct llama_moe_cache::impl {
                 size_t n = 1;
                 while (i+n < fills.size() && fills[i+n].expert == fills[i].expert + (int32_t)n &&
                         fills[i+n].slot == fills[i].slot + (int32_t)n) ++n;
-                ggml_backend_tensor_set_async(backend, bank, (const uint8_t *) w->data + fills[i].expert*expert_size,
+                set_expert_bank_async(d, bank, (const uint8_t *) w->data + fills[i].expert*expert_size,
                         fills[i].slot*expert_size, n*expert_size);
                 bytes += n*expert_size;
                 i += n;
@@ -418,28 +1195,512 @@ struct llama_moe_cache::impl {
     }
 
     void log_stats() const {
-        auto log = [](const char * name, const stats & s) {
-            const size_t n = s.hits + s.misses;
-            if (n) LLAMA_LOG_INFO("llama_moe_cache: %s hits=%zu misses=%zu evictions=%zu hit-rate=%.2f%% uploaded=%.2f MiB\n",
-                    name, s.hits, s.misses, s.evictions, 100.0*s.hits/n, s.bytes/1048576.0);
-        };
-        size_t actual_size = buf_host_size;
-        for (const device & d : devices) actual_size += d.buffer_size;
+        size_t allocated = buf_host_size;
+        for (const device & d : devices) allocated += d.buffer_size;
         LLAMA_LOG_INFO("llama_moe_cache: requested %.2f MiB, allocated %.2f MiB\n",
-                requested_size / 1048576.0, actual_size / 1048576.0);
-        log("ubatch <= 8", stats_small);
-        log("ubatch 9-32", stats_large);
+                requested_size / 1048576.0, allocated / 1048576.0);
+        auto log_upload = [](const char * name, const stats & s) {
+            const size_t accesses = s.hits + s.misses;
+            if (accesses) LLAMA_LOG_INFO("llama_moe_cache: %s hits=%zu misses=%zu evictions=%zu hit-rate=%.2f%% uploaded=%.2f MiB\n",
+                    name, s.hits, s.misses, s.evictions, 100.0*s.hits/accesses, s.bytes/1048576.0);
+        };
+        log_upload("ubatch <= 8", stats_small);
+        log_upload("ubatch 9-32", stats_large);
         if (large_batch_skips || incompatible_layer_skips) {
             LLAMA_LOG_INFO("llama_moe_cache: skipped %zu large-batch and %zu ineligible layer accesses\n",
                     large_batch_skips, incompatible_layer_skips);
         }
+        if (!cpu_on_miss || cpu_miss_stats.operations == 0) return;
+        size_t accepted = 0, completed = 0, failed = 0, dropped = 0;
+        for (const device & d : devices) if (d.fills) {
+            std::lock_guard<std::mutex> lock(d.fills->mutex);
+            const auto & c = d.fills->counters;
+            accepted += c.accepted;
+            completed += c.completed;
+            failed += c.failed + c.cancelled + c.stale;
+            dropped += c.dropped;
+        }
+        size_t deferred = 0;
+        for (const group & g : groups) if (g.admission) {
+            std::lock_guard<std::mutex> lock(g.admission->mutex);
+            deferred += g.admission->deferred;
+        }
+        LLAMA_LOG_INFO("llama_moe_cache: cpu_miss operation_rows_committed/eligible=%zu/%zu fills_completed/accepted=%zu/%zu fills_dropped_or_deferred=%zu fills_failed_cancelled_stale=%zu\n",
+                cpu_miss_stats.committed_gpu_rows, cpu_miss_stats.eligible_rows,
+                completed, accepted, dropped + deferred, failed);
     }
 };
 
+bool llama_moe_cache::impl::provider_begin(void * user_data, const ggml_tensor * op, void ** request) {
+    impl * self = (impl *) user_data;
+    *request = nullptr;
+    if (!self->cpu_on_miss || !op || !op->src[0]) return false;
+    const bool fused = op->op == GGML_OP_MOE_FUSED_UP_GATE;
+    if (!fused && op->op != GGML_OP_MUL_MAT_ID) return false;
+    const ggml_tensor * ids = fused ? op->src[3] : op->src[2];
+    const ggml_tensor * input = fused ? op->src[2] : op->src[1];
+    if (ids && ids->ne[1] > max_batch) ++self->large_batch_skips;
+    if (!ids || !input || ids->type != GGML_TYPE_I32 || ids->nb[0] != sizeof(int32_t) ||
+            input->type != GGML_TYPE_F32 || input->nb[0] != sizeof(float) || input->ne[0] <= 0 ||
+            input->ne[1] <= 0 || input->ne[2] != ids->ne[1] || input->ne[3] != 1 ||
+            ids->ne[0] <= 0 || ids->ne[1] <= 0 || ids->ne[2] != 1 || ids->ne[3] != 1 ||
+            op->ne[0] <= 0 || op->ne[1] != ids->ne[0] || op->ne[2] != ids->ne[1] || op->ne[3] != 1) return false;
+    if (fused) {
+        if (input->ne[1] != 1) return false;
+        // Until the CUDA provider supports fused biases, keep those layouts on the stock CPU operation.
+        if (op->src[4] || op->src[5] || !ggml_is_quantized(op->src[0]->type) ||
+                (op->src[1] && (op->src[1]->type != op->src[0]->type ||
+                        !ggml_are_same_shape(op->src[0], op->src[1]))) ||
+                (op->src[1] ? op->src[0]->ne[1] : op->src[0]->ne[1]/2) != op->ne[0] ||
+                (!op->src[1] && (op->src[0]->ne[1] % 2 != 0)) ||
+                op->src[0]->ne[0] != input->ne[0] || op->src[0]->ne[2] <= 0 ||
+                op->src[0]->ne[3] != 1 ||
+                (moe_fused_unary(op) != GGML_UNARY_OP_SILU &&
+                        moe_fused_unary(op) != GGML_UNARY_OP_SWIGLU_OAI)) return false;
+    } else if ((input->ne[1] != 1 && input->ne[1] != ids->ne[0]) ||
+            !input->ne[2] || op->src[0]->ne[0] <= 0 || op->src[0]->ne[1] <= 0 ||
+            op->src[0]->ne[2] <= 0 || op->ne[0] != op->src[0]->ne[1]) {
+        return false;
+    }
+#ifdef GGML_USE_CUDA
+    if (!ggml_cuda_moe_cache_type_supported(op->src[0]->type) ||
+            (fused && !ggml_is_quantized(op->src[0]->type))) return false;
+#endif
+    if ((input->buffer && !ggml_backend_buffer_is_host(input->buffer)) ||
+            (ids->buffer && !ggml_backend_buffer_is_host(ids->buffer)) ||
+            (op->buffer && !ggml_backend_buffer_is_host(op->buffer))) return false;
+    if (fused && op->src[1] && op->src[1]->buffer && !ggml_backend_buffer_is_host(op->src[1]->buffer)) return false;
+
+    const auto it = self->bindings.find(op->src[0]);
+    if (it == self->bindings.end()) return false;
+    const binding selected = it->second;
+    if (selected.layer < 0 || (size_t) selected.layer >= self->layers.size()) return false;
+    const layer & l = self->layers[selected.layer];
+    if (l.group < 0 || selected.part < 0 || (size_t) selected.part >= l.experts.size()) return false;
+    const group & g = self->groups[l.group];
+    device & d = self->devices[g.device];
+    binding selected_second = { -1, -1, nullptr };
+    if (fused && op->src[1]) {
+        const auto second_it = self->bindings.find(op->src[1]);
+        if (second_it == self->bindings.end()) return false;
+        selected_second = second_it->second;
+        if (selected_second.layer != selected.layer || selected_second.part < 0 ||
+                (size_t) selected_second.part >= g.banks.size() ||
+                self->layers[selected_second.layer].group != l.group) return false;
+    }
+    if (!backend_is_cuda(d.backend) || d.cuda_ordinal < 0 || d.request.active) return false;
+    const int32_t cache_backend_ordinal = cuda_ordinal_for_buft(ggml_backend_get_default_buffer_type(d.backend));
+    if (cache_backend_ordinal != d.cuda_ordinal) return false;
+    ggml_tensor * bank = g.banks[selected.part];
+    if (!bank->buffer) return false;
+    const int32_t bank_ordinal = cuda_ordinal_for_buft(ggml_backend_buffer_get_type(bank->buffer));
+    if (bank_ordinal != d.cuda_ordinal) return false;
+    if (fused && op->src[1]) {
+        ggml_tensor * bank2 = g.banks[selected_second.part];
+        if (!bank2->buffer || cuda_ordinal_for_buft(ggml_backend_buffer_get_type(bank2->buffer)) != d.cuda_ordinal) return false;
+    }
+
+    provider_request * req = &d.request;
+    req->weight = selected;
+    req->second_weight = selected_second;
+    req->op = op;
+    req->n_rows = 0;
+    req->n_hit = 0;
+    req->n_valid = 0;
+    req->n_miss_candidates = 0;
+    req->n_tokens = (size_t) ids->ne[1];
+    req->n_pins = 0;
+    req->fused = fused;
+    req->selected_down = !fused && ids->ne[0] > 1 && input->ne[1] == ids->ne[0];
+    req->direct_regular = false;
+    req->direct_fused = false;
+    req->n_unique_activations = 0;
+    req->submitted = false;
+    req->completed = false;
+    req->admission_plan_valid = false;
+    req->admission_driver = fused && l.admission_part >= 0
+            ? (selected.part == l.admission_part || selected_second.part == l.admission_part)
+            : (!fused && l.admission_part >= 0 && selected.part == l.admission_part);
+    req->large_batch_admission_bypass = false;
+    req->active = true;
+    self->active_provider_requests.fetch_add(1, std::memory_order_release);
+    *request = req;
+    return true;
+}
+
+bool llama_moe_cache::impl::ensure_regular_workspace(
+        device & d, size_t input_bytes, size_t q8_bytes, size_t output_bytes) {
+#ifndef GGML_USE_CUDA
+    GGML_UNUSED(d);
+    GGML_UNUSED(input_bytes);
+    GGML_UNUSED(q8_bytes);
+    GGML_UNUSED(output_bytes);
+    return false;
+#else
+    if (input_bytes == 0 || output_bytes == 0 || d.cuda_ordinal < 0) return false;
+    if (!d.provider_backend) {
+        d.provider_backend = ggml_backend_cuda_init(d.cuda_ordinal, "graphs=0", this);
+        if (!d.provider_backend) return false;
+    }
+    if (!backend_is_cuda(d.provider_backend)) return false;
+    const int32_t provider_ordinal = cuda_ordinal_for_buft(
+            ggml_backend_get_default_buffer_type(d.provider_backend));
+    if (provider_ordinal != d.cuda_ordinal) return false;
+
+    regular_workspace & ws = d.regular;
+    const auto grow = [](size_t current, size_t required) {
+        size_t result = current ? current : 4096;
+        while (result < required && result <= SIZE_MAX/2) result *= 2;
+        return result < required ? required : result;
+    };
+    const size_t input_capacity = grow(ws.input_capacity, input_bytes);
+    const size_t q8_capacity = grow(ws.q8_capacity, std::max<size_t>(q8_bytes, 1));
+    const size_t output_capacity = grow(ws.output_capacity, output_bytes);
+    if (input_capacity > SIZE_MAX - q8_capacity ||
+        input_capacity + q8_capacity > SIZE_MAX - output_capacity ||
+        input_capacity > SIZE_MAX - output_capacity) return false;
+
+    const bool needs_buffers = !ws.device_buffer || !ws.staging_buffer ||
+            input_capacity != ws.input_capacity || q8_capacity != ws.q8_capacity ||
+            output_capacity != ws.output_capacity;
+    if (needs_buffers) {
+        const size_t device_size = input_capacity + q8_capacity + output_capacity;
+        const size_t host_size = input_capacity + output_capacity;
+        ggml_backend_buffer_ptr device_buffer(ggml_backend_buft_alloc_buffer(
+                ggml_backend_get_default_buffer_type(d.provider_backend), device_size));
+        ggml_backend_buffer_ptr staging_buffer(ggml_backend_buft_alloc_buffer(
+                ggml_backend_cuda_host_buffer_type(), host_size));
+        if (!device_buffer || !staging_buffer || !ggml_backend_buffer_get_base(device_buffer.get()) ||
+            !ggml_backend_buffer_get_base(staging_buffer.get())) return false;
+        ws.device_buffer = std::move(device_buffer);
+        ws.staging_buffer = std::move(staging_buffer);
+        ws.input_capacity = input_capacity;
+        ws.q8_capacity = q8_capacity;
+        ws.output_capacity = output_capacity;
+    }
+    if (!ws.event) {
+        ws.event = ggml_backend_event_new(d.provider_backend);
+        if (!ws.event) return false;
+    }
+    return true;
+#endif
+}
+
+void llama_moe_cache::impl::touch_ready_pins_locked(const group & g,
+        const llama_moe_cache_residency::pin * pins, size_t n_pins) {
+    if (!g.admission || !pins) return;
+    for (size_t i = 0; i < n_pins; ++i) {
+        const auto & pin = pins[i];
+        const size_t key_index = (size_t)pin.owner.layer*(size_t)g.ref[0]->ne[2] +
+                (size_t)pin.owner.expert;
+        if (key_index < g.admission->live_ready.size() && g.admission->live_ready[key_index]) {
+            g.admission->touch_lru((int32_t)pin.slot);
+        }
+    }
+}
+
+bool llama_moe_cache::impl::provider_plan(void * user_data, void * request, const ggml_tensor * op,
+        uint8_t * gpu_rows, size_t n_rows) {
+    impl * self = (impl *) user_data;
+    provider_request * req = (provider_request *) request;
+    if (!req || !req->active || op != req->op) return false;
+    const ggml_tensor * ids = req->fused ? op->src[3] : op->src[2];
+    if (!ids || ids->ne[0] <= 0 || ids->ne[1] <= 0 || (size_t) ids->ne[0] > SIZE_MAX / (size_t) ids->ne[1] ||
+            n_rows > max_provider_rows || n_rows != (size_t) ids->ne[0] * (size_t) ids->ne[1]) return false;
+
+    const layer & l = self->layers[req->weight.layer];
+    const group & g = self->groups[l.group];
+    req->n_rows = n_rows;
+    req->n_hit = 0;
+    const int64_t n_selected = ids->ne[0];
+    for (int64_t token = 0; token < ids->ne[1]; ++token) {
+        for (int64_t selection = 0; selection < n_selected; ++selection) {
+            const size_t row = (size_t) token*n_selected + selection;
+            const int32_t expert = *(const int32_t *) ((const char *) ids->data + token*ids->nb[1] + selection*ids->nb[0]);
+            req->route_keys[row] = {};
+            req->pinned_slots[row] = -1;
+            req->pinned_generations[row] = 0;
+            if (expert < 0 || expert >= g.ref[0]->ne[2]) continue;
+            ++req->n_valid;
+            req->route_keys[row] = { req->weight.layer, expert };
+        }
+    }
+    if (!g.residency) {
+        ++self->cpu_miss_stats.operations;
+        self->cpu_miss_stats.eligible_rows += req->n_valid;
+        return true;
+    }
+    if (!g.residency->pin_rows(req->route_keys.data(), n_rows,
+                req->pinned_slots.data(), req->pinned_generations.data(),
+                req->pins.data(), req->pins.size(), req->n_pins)) return false;
+    self->residency_pin_acquisitions += req->n_pins;
+    req->n_tokens = (size_t) ids->ne[1];
+    if (self->cpu_on_miss && g.admission) {
+        req->admission_plan_valid = true;
+        req->large_batch_admission_bypass = req->n_tokens > 8;
+        if (!req->large_batch_admission_bypass) {
+            for (size_t row = 0; row < n_rows; ++row) {
+                const auto key = req->route_keys[row];
+                if (key.layer < 0 || req->pinned_slots[row] >= 0) continue;
+                bool duplicate = false;
+                for (size_t i = 0; i < req->n_miss_candidates; ++i) {
+                    if (req->miss_candidates[i] == key) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate) req->miss_candidates[req->n_miss_candidates++] = key;
+            }
+        }
+    }
+    for (size_t row = 0; row < n_rows; ++row) {
+            const int32_t slot = req->pinned_slots[row];
+            if (slot < 0) continue;
+            gpu_rows[row] = 1;
+            GGML_ASSERT(req->n_hit < req->rows.size());
+            const int32_t expert = req->route_keys[row].expert;
+            req->rows[req->n_hit++] = { row, slot, expert, req->pinned_generations[row] };
+    }
+    if (g.admission && req->n_hit != 0) {
+        std::lock_guard<std::mutex> lock(g.admission->mutex);
+        // One pin represents each unique (group, slot, generation) used by this node.
+        self->touch_ready_pins_locked(g, req->pins.data(), req->n_pins);
+    }
+    ++self->cpu_miss_stats.operations;
+    self->cpu_miss_stats.eligible_rows += req->n_valid;
+    return true;
+}
+
+bool llama_moe_cache::impl::provider_dispatch(void * user_data, void * request, ggml_tensor * op,
+        const uint8_t * gpu_rows, size_t n_rows) {
+    impl * self = (impl *) user_data;
+#ifndef GGML_USE_CUDA
+    (void) self;
+#endif
+    provider_request * req = (provider_request *) request;
+    const ggml_tensor * ids = req && req->fused ? op->src[3] : (req ? op->src[2] : nullptr);
+    if (!req || !req->active || op != req->op || req->n_hit == 0 || req->n_hit > req->rows.size() ||
+            !ids || n_rows != req->n_rows || n_rows != (size_t) ids->ne[0]*(size_t) ids->ne[1]) return false;
+    for (size_t i = 0; i < req->n_hit; ++i) if (!gpu_rows[req->rows[i].row]) return false;
+
+#ifdef GGML_USE_CUDA
+    const layer & l = self->layers[req->weight.layer];
+    const group & g = self->groups[l.group];
+    device & d = self->devices[g.device];
+    const size_t n_hit = req->n_hit;
+#endif
+    if (req->fused) {
+#ifndef GGML_USE_CUDA
+        return false;
+#else
+        const ggml_tensor * source = op->src[2];
+        const size_t k = (size_t) source->ne[0];
+        const size_t m = (size_t) op->ne[0];
+        const ggml_type type = op->src[0]->type;
+        if (k == 0 || m == 0 || n_hit > max_provider_rows ||
+                n_hit > SIZE_MAX/(2*sizeof(int32_t)) || k > SIZE_MAX/sizeof(float)/n_hit ||
+                m > SIZE_MAX/sizeof(float)/n_hit || k > (size_t)INT64_MAX-511) return false;
+
+        req->n_unique_activations = 0;
+        for (size_t i = 0; i < n_hit; ++i) {
+            const size_t row = req->rows[i].row;
+            const size_t token = row/(size_t)ids->ne[0];
+            const float * activation = (const float *)((const char *)source->data + token*source->nb[2]);
+            size_t unique = 0;
+            while (unique < req->n_unique_activations && req->unique_activations[unique] != activation) ++unique;
+            if (unique == req->n_unique_activations) {
+                req->unique_activations[unique] = activation;
+                ++req->n_unique_activations;
+            }
+            req->activation_map[i] = (int32_t)unique;
+        }
+        const size_t ids_bytes = n_hit*2*sizeof(int32_t);
+        const size_t activation_bytes = req->n_unique_activations*k*sizeof(float);
+        if (activation_bytes > SIZE_MAX-ids_bytes) return false;
+        const size_t input_bytes = ids_bytes+activation_bytes;
+        const size_t output_bytes = n_hit*m*sizeof(float);
+        const int64_t padded_k = GGML_PAD((int64_t)k, 512);
+        const size_t q8_row_bytes = ggml_row_size(GGML_TYPE_Q8_1, padded_k);
+        if (req->n_unique_activations > SIZE_MAX/q8_row_bytes ||
+                !self->ensure_regular_workspace(d, input_bytes,
+                        req->n_unique_activations*q8_row_bytes, output_bytes)) return false;
+
+        regular_workspace & ws = d.regular;
+        uint8_t * host = (uint8_t *)ggml_backend_buffer_get_base(ws.staging_buffer.get());
+        uint8_t * device = (uint8_t *)ggml_backend_buffer_get_base(ws.device_buffer.get());
+        if (!host || !device) return false;
+        int32_t * host_slots = (int32_t *)host;
+        int32_t * host_activation_map = host_slots+n_hit;
+        float * host_activations = (float *)(host_activation_map+n_hit);
+        for (size_t i = 0; i < n_hit; ++i) {
+            host_slots[i] = req->rows[i].slot;
+            host_activation_map[i] = req->activation_map[i];
+        }
+        for (size_t i = 0; i < req->n_unique_activations; ++i) {
+            memcpy(host_activations+i*k, req->unique_activations[i], k*sizeof(float));
+        }
+
+        ggml_tensor * up_bank = g.banks[req->weight.part];
+        ggml_tensor * gate_bank = nullptr;
+        size_t expert_bytes = up_bank->nb[2];
+        const void * up_weights = up_bank->data;
+        const void * gate_weights = nullptr;
+        if (req->second_weight.part >= 0) {
+            gate_bank = g.banks[req->second_weight.part];
+            if (gate_bank->nb[2] != expert_bytes) return false;
+            gate_weights = gate_bank->data;
+        } else {
+            if (expert_bytes % 2 != 0 || up_bank->ne[1] != (int64_t)(2*m)) return false;
+            gate_weights = up_bank->data;
+            up_weights = (const char *)up_bank->data + expert_bytes/2;
+        }
+        uint8_t * device_q8 = device+ws.input_capacity;
+        float * device_output = (float *)(device_q8+ws.q8_capacity);
+        float * host_output = (float *)(host+ws.input_capacity);
+        float limit = 0.0f;
+        memcpy(&limit, (const char *)op->op_params+sizeof(int32_t), sizeof(limit));
+        if (!ggml_cuda_moe_cache_dispatch_fused(d.provider_backend, type, up_weights, gate_weights,
+                host, device, device_q8, device_output, host_output,
+                input_bytes, output_bytes, (int64_t)k, (int64_t)m, expert_bytes,
+                (int32_t)n_hit, (int32_t)req->n_unique_activations, padded_k,
+                moe_fused_unary(op), limit)) return false;
+        ggml_backend_event_record(ws.event);
+        req->direct_fused = true;
+#endif
+    } else {
+#ifndef GGML_USE_CUDA
+        return false;
+#else
+        const ggml_tensor * source = op->src[1];
+        const size_t k = (size_t) source->ne[0];
+        const size_t m = (size_t) op->ne[0];
+        const ggml_type type = op->src[0]->type;
+        if (k == 0 || m == 0 || n_hit > max_provider_rows ||
+            n_hit > SIZE_MAX/(2*sizeof(int32_t)) || k > SIZE_MAX/sizeof(float)/n_hit ||
+            m > SIZE_MAX/sizeof(float)/n_hit) return false;
+
+        req->n_unique_activations = 0;
+        for (size_t i = 0; i < n_hit; ++i) {
+            const size_t row = req->rows[i].row;
+            const size_t token = row/(size_t) ids->ne[0];
+            const size_t selection = row%(size_t) ids->ne[0];
+            const size_t input_selection = source->ne[1] > 1 ? selection : 0;
+            const float * activation = (const float *) ((const char *) source->data +
+                    token*source->nb[2] + input_selection*source->nb[1]);
+            size_t unique = 0;
+            while (unique < req->n_unique_activations && req->unique_activations[unique] != activation) ++unique;
+            if (unique == req->n_unique_activations) {
+                req->unique_activations[unique] = activation;
+                ++req->n_unique_activations;
+            }
+            req->activation_map[i] = (int32_t) unique;
+        }
+        const size_t ids_bytes = n_hit*2*sizeof(int32_t);
+        const size_t activation_bytes = req->n_unique_activations*k*sizeof(float);
+        if (activation_bytes > SIZE_MAX-ids_bytes) return false;
+        const size_t input_bytes = ids_bytes + activation_bytes;
+        const size_t output_bytes = n_hit*m*sizeof(float);
+        if (type != GGML_TYPE_F16 && k > (size_t) INT64_MAX - 511) return false;
+        const int64_t padded_k = type == GGML_TYPE_F16 ? 0 : GGML_PAD((int64_t) k, 512);
+        const size_t q8_row_bytes = type == GGML_TYPE_F16 ? 0 : ggml_row_size(GGML_TYPE_Q8_1, padded_k);
+        if (q8_row_bytes && req->n_unique_activations > SIZE_MAX/q8_row_bytes) return false;
+        const size_t q8_bytes = req->n_unique_activations*q8_row_bytes;
+        if (!self->ensure_regular_workspace(d, input_bytes, q8_bytes, output_bytes)) return false;
+
+        regular_workspace & ws = d.regular;
+        uint8_t * host = (uint8_t *) ggml_backend_buffer_get_base(ws.staging_buffer.get());
+        uint8_t * device = (uint8_t *) ggml_backend_buffer_get_base(ws.device_buffer.get());
+        if (!host || !device) return false;
+        int32_t * host_slots = (int32_t *) host;
+        int32_t * host_activation_map = host_slots + n_hit;
+        float * host_activations = (float *) (host_activation_map + n_hit);
+        for (size_t i = 0; i < n_hit; ++i) {
+            host_slots[i] = req->rows[i].slot;
+            host_activation_map[i] = req->activation_map[i];
+        }
+        for (size_t i = 0; i < req->n_unique_activations; ++i) {
+            memcpy(host_activations + i*k, req->unique_activations[i], k*sizeof(float));
+        }
+
+        ggml_tensor * bank = g.banks[req->weight.part];
+        uint8_t * device_q8 = device + ws.input_capacity;
+        float * device_output = (float *) (device_q8 + ws.q8_capacity);
+        float * host_output = (float *) (host + ws.input_capacity);
+        if (!ggml_cuda_moe_cache_dispatch(d.provider_backend, type, bank->data,
+                host, device, device_q8, device_output, host_output,
+                input_bytes, output_bytes, (int64_t) k, (int64_t) m, bank->nb[2],
+                (int32_t) n_hit, (int32_t) req->n_unique_activations, padded_k)) return false;
+        ggml_backend_event_record(ws.event);
+        req->direct_regular = true;
+#endif
+    }
+    req->submitted = true;
+    req->completed = false;
+    return true;
+}
+
+bool llama_moe_cache::impl::provider_collect(void * user_data, void * request, ggml_tensor * op,
+        const uint8_t * gpu_rows, size_t n_rows) {
+    impl * self = (impl *) user_data;
+    provider_request * req = (provider_request *) request;
+    if (!req || !req->active || op != req->op || !req->submitted || n_rows != req->n_rows ||
+            (!req->direct_regular && !req->direct_fused)) return false;
+    const layer & l = self->layers[req->weight.layer];
+    device & d = self->devices[self->groups[l.group].device];
+    if (!d.regular.event) return false;
+    ggml_backend_event_synchronize(d.regular.event);
+    req->completed = true;
+    const auto * staging = (const uint8_t *) ggml_backend_buffer_get_base(d.regular.staging_buffer.get());
+    if (!staging) return false;
+    const size_t row_bytes = (size_t) op->ne[0]*sizeof(float);
+    for (size_t i = 0; i < req->n_hit; ++i) {
+        const size_t row = req->rows[i].row;
+        const ggml_tensor * ids = req->fused ? op->src[3] : op->src[2];
+        const size_t token = row/(size_t) ids->ne[0];
+        const size_t selection = row%(size_t) ids->ne[0];
+        void * dst = (char *) op->data + token*op->nb[2] + selection*op->nb[1];
+        memcpy(dst, staging + d.regular.input_capacity + i*row_bytes, row_bytes);
+    }
+    self->cpu_miss_stats.committed_gpu_rows += req->n_hit;
+    GGML_UNUSED(gpu_rows);
+    return true;
+}
+
+void llama_moe_cache::impl::provider_end(void * user_data, void * request) {
+    impl * self = (impl *) user_data;
+    provider_request * req = (provider_request *) request;
+    if (!req || !req->active) return;
+    const layer & l = self->layers[req->weight.layer];
+    device & d = self->devices[self->groups[l.group].device];
+    if (req->submitted && !req->completed && d.regular.event) {
+        ggml_backend_event_synchronize(d.regular.event);
+        req->completed = true;
+    }
+    if (req->n_pins != 0) {
+        const group & g = self->groups[l.group];
+        const bool released = g.residency->release_pins(req->pins.data(), req->n_pins);
+        GGML_ASSERT(released && "provider pin release must match its request snapshot");
+        self->residency_pin_releases += req->n_pins;
+        req->n_pins = 0;
+    }
+    self->active_provider_requests.fetch_sub(1, std::memory_order_release);
+    self->admit_provider_misses(*req);
+    req->submitted = false;
+    req->completed = true;
+    req->active = false;
+    req->op = nullptr;
+    req->n_rows = req->n_hit = req->n_valid = 0;
+    req->second_weight = { -1, -1, nullptr };
+    req->fused = req->selected_down = false;
+    req->direct_regular = req->direct_fused = false;
+    req->admission_plan_valid = req->admission_driver = req->large_batch_admission_bypass = false;
+    req->n_miss_candidates = 0;
+}
+
 llama_moe_cache::llama_moe_cache(const llama_model & model,
         const std::vector<ggml_backend *> & backends,
-        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size)
-        : pimpl(new impl(model, backends, bufts, size)) {}
+        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size, bool cpu_on_miss)
+        : pimpl(new impl(model, backends, bufts, size, cpu_on_miss)) {}
 
 llama_moe_cache::~llama_moe_cache() = default;
 ggml_backend * llama_moe_cache::backend(int32_t il) const { return pimpl->backend(il); }
@@ -447,3 +1708,9 @@ ggml_tensor * llama_moe_cache::get_slot_map(int32_t il, int64_t n_tokens, int64_
 ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * t) const { return pimpl->get_experts(t); }
 bool llama_moe_cache::copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
         ggml_backend_sched_copy_phase phase) { return pimpl->copy(backend, src, dst, graph, phase); }
+const ggml_moe_provider * llama_moe_cache::provider() const { return &pimpl->moe_provider; }
+bool llama_moe_cache::has_eligible_layers() const {
+    return std::any_of(pimpl->layers.begin(), pimpl->layers.end(), [&](const impl::layer & l) {
+        return l.group >= 0 && pimpl->groups[l.group].n_slots > 0;
+    });
+}
