@@ -685,7 +685,7 @@ struct llama_model {
     }
 
     float swiglu_limit(uint32_t il, bool shared) const {
-        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && !llm_arch_is_dsv4(arch) && arch != LLM_ARCH_GLM5NEXT && !hparams.dflash_dsv4) {
+        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && !llm_arch_is_dsv4(arch) && arch != LLM_ARCH_GLM5NEXT && arch != LLM_ARCH_MAPLE && !hparams.dflash_dsv4) {
             return 0.0f;
         }
         return shared ? hparams.swiglu_limits_shared[il] : hparams.swiglu_limits[il];
@@ -715,6 +715,7 @@ struct llama_model {
     bool supports_swa_compress() const {
         return arch == LLM_ARCH_OPENPANGU || llm_arch_is_dsv4(arch)
             || arch == LLM_ARCH_LAGUNA    || arch == LLM_ARCH_GEMMA4
+            || arch == LLM_ARCH_MAPLE
             || supports_dflash_swa_compress() ;
     }
 

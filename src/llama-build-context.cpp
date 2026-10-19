@@ -3002,6 +3002,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_mellum();
             } break;
+        case LLM_ARCH_MAPLE:
+            {
+                result = llm.build_maple();
+            } break;
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
             {
