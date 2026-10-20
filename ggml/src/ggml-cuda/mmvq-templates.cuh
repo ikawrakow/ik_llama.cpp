@@ -191,13 +191,13 @@ static __device__ void k_fused_mul_mat_vec_q(
 // partial sum for each thread
     float tmp_u[ncols_y][rows_per_cuda_block] = {0.0f};
     float tmp_g[ncols_y][rows_per_cuda_block] = {0.0f};
-    float local_bias_u[rows_per_cuda_block]    = { 0.0f };
-    float local_bias_g[rows_per_cuda_block]    = { 0.0f };
+    float local_bias_u = 0.0f;
+    float local_bias_g = 0.0f;
     if (bias_u && threadIdx.y == 0 && threadIdx.x < rows_per_cuda_block && row0 + threadIdx.x < nrows_dst) {
-        local_bias_u[threadIdx.x] = bias_u[row0 + threadIdx.x];
+        local_bias_u = bias_u[row0 + threadIdx.x];
     }
     if (bias_g && threadIdx.y == 0 && threadIdx.x < rows_per_cuda_block && row0 + threadIdx.x < nrows_dst) {
-        local_bias_g[threadIdx.x] = bias_g[row0 + threadIdx.x];
+        local_bias_g = bias_g[row0 + threadIdx.x];
     }
 
     const block_q8_1 * y = (const block_q8_1 *) vy;
@@ -250,8 +250,16 @@ static __device__ void k_fused_mul_mat_vec_q(
         }
 
         if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || row0 + threadIdx.x < nrows_dst)) {
-            float u = tmp_u[j][threadIdx.x];
-            float g = tmp_g[j][threadIdx.x];
+            // a select instead of tmp_u[j][threadIdx.x], which would put tmp_u/tmp_g in local memory
+            float u = tmp_u[j][0];
+            float g = tmp_g[j][0];
+#pragma unroll
+            for (int i = 1; i < rows_per_cuda_block; ++i) {
+                if (threadIdx.x == i) {
+                    u = tmp_u[j][i];
+                    g = tmp_g[j][i];
+                }
+            }
             float r;
             if (unary_op == GGML_UNARY_OP_SWIGLU_OAI && !bias_u) {
                 constexpr float alpha = 1.702f;
@@ -277,8 +285,8 @@ static __device__ void k_fused_mul_mat_vec_q(
                 default: {
                   constexpr float alpha = 1.702f;
                   constexpr float limit = 7.0f;
-                  g += local_bias_g[threadIdx.x];
-                  u += local_bias_u[threadIdx.x];
+                  g += local_bias_g;
+                  u += local_bias_u;
                   g = fminf(g, limit);
                   u = fmaxf(fminf(u, limit), -limit);
                   r = g / (1.0f + expf(-g * alpha)) * (1.0f + u);
