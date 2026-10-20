@@ -303,16 +303,18 @@ size_t ggml_cuda_quantize_ks(int device, ggml_type type, const float * src, void
     if (n_per_row % QK_K) {
         return 0;
     }
-    if (type == GGML_TYPE_IQ4_KS_R4 || type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ5_KS_R4) {
-        const ggml_type base = type == GGML_TYPE_IQ5_KS_R4 ? GGML_TYPE_IQ5_KS : GGML_TYPE_IQ4_KS;
+    if (type == GGML_TYPE_IQ4_KS_R4 || type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ5_KS_R4 || type == GGML_TYPE_IQ5_KS_R16) {
+        const ggml_type base = type == GGML_TYPE_IQ5_KS_R4 || type == GGML_TYPE_IQ5_KS_R16 ? GGML_TYPE_IQ5_KS : GGML_TYPE_IQ4_KS;
         std::vector<char> tmp(nrows*nslice*ggml_row_size(base, n_per_row));
         const size_t size = ggml_cuda_quantize_ks(device, base, src, tmp.data(), nrows, n_per_row, nslice, imatrix);
         if (type == GGML_TYPE_IQ4_KS_R4) {
             repack_iq4_ks(nrows*nslice, n_per_row, (const block_iq4_ks *)tmp.data(), (block_iq4_ks_r4 *)dst, false);
         } else if (type == GGML_TYPE_IQ4_KS_R16) {
             repack_iq4_ks_r16(nrows*nslice, n_per_row, (const block_iq4_ks *)tmp.data(), (block_iq4_ks_r16 *)dst, false, n_per_row);
-        } else {
+        } else if (type == GGML_TYPE_IQ5_KS_R4) {
             repack_iq5_ks(nrows*nslice, n_per_row, (const block_iq5_ks *)tmp.data(), (block_iq5_ks_r4 *)dst, false);
+        } else {
+            repack_iq5_ks_r16(nrows*nslice, n_per_row, (const block_iq5_ks *)tmp.data(), (block_iq5_ks_r16 *)dst, false, n_per_row);
         }
         return size;
     }

@@ -851,6 +851,12 @@ typedef struct {
 } block_iq5_ks_r4;
 static_assert(sizeof(block_iq5_ks_r4) == 4*sizeof(block_iq5_ks), "wrong iq5_ks_r4 block size/padding");
 
+typedef struct {
+    uint8_t  scales[16];
+    uint8_t  qs[8*QK8_0];
+    uint8_t  qh[2*QK8_0];
+} block_iq5_ks_r16;
+static_assert(sizeof(block_iq5_ks_r16) == 16 + 10*QK8_0, "wrong iq5_ks_r16 block size/padding");
 
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL

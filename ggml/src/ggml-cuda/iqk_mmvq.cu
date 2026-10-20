@@ -93,6 +93,9 @@ void iqk_mul_mat_vec_q(ggml_type type, const mmvq_args & args, cudaStream_t stre
         case GGML_TYPE_IQ4_KS_R16:
             mul_mat_vec_iq4_ks_r16_q8_1_cuda(args, stream);
             break;
+        case GGML_TYPE_IQ5_KS_R16:
+            mul_mat_vec_iq5_ks_r16_q8_1_cuda(args, stream);
+            break;
         default:
             GGML_ABORT("fatal error");
             break;

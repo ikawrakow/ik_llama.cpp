@@ -281,6 +281,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_KS_R4: return nrc_y >= 32 ? q8_k_type : type;
 #ifdef HAVE_FANCY_SIMD
             case GGML_TYPE_IQ4_KS_R16: return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ5_KS_R16: return nrc_y >= 32 ? q8_k_type : type;
 #endif
             case GGML_TYPE_IQ4_KSS: return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ4_K  : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
@@ -392,6 +393,7 @@ struct MulMat {
             case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_MXFP4_R8:
             case GGML_TYPE_IQ4_KS_R16:
+            case GGML_TYPE_IQ5_KS_R16:
             case GGML_TYPE_IQ3_KS_R16:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
@@ -433,6 +435,7 @@ struct MulMat {
             case GGML_TYPE_PTQ1_0_R8: return 8;
             case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_IQ4_KS_R16:
+            case GGML_TYPE_IQ5_KS_R16:
             case GGML_TYPE_IQ3_KS_R16:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
@@ -533,6 +536,7 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
         //case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_NL_R4:
         case GGML_TYPE_IQ4_KS_R16:
+        case GGML_TYPE_IQ5_KS_R16:
             return iqk_convert_legacy_quants_q8_r8(typeA, n, vx, bx, vy, nrc_x);
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_M:
@@ -993,6 +997,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_MXFP4_R8:
         case GGML_TYPE_IQ4_KS_R16:
+        case GGML_TYPE_IQ5_KS_R16:
             return iqk_set_kernels_legacy_quants(ne00, typeA, typeB, mm.funcs, mm.func16);
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_M:
@@ -1091,6 +1096,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_IQ4_NL_R4:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_IQ4_KS_R16:
+        case GGML_TYPE_IQ5_KS_R16:
             return iqk_set_kernels_legacy_quants(ne00, typeA, typeB, m.funcs, m.func16);
         case GGML_TYPE_IQ1_BN:
         case GGML_TYPE_IQ2_BN:
