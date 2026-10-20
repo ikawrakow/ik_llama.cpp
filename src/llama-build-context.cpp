@@ -1350,6 +1350,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         return cur;
     }
 
+    if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
+        add_extra->op_params[3] = 0;
+    }
     auto cur = input;
     //if (input->op == GGML_OP_REDUCE) {
     //    if (input->src[lctx.model.main_gpu]) cur = input->src[lctx.model.main_gpu];
