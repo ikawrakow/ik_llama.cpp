@@ -563,6 +563,10 @@ bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
         return true;
     }
 
+    if (type == GGML_TYPE_IQ1_S_R4) {
+        return false;
+    }
+
     if (ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_DP4A) {
         return false;
     }
