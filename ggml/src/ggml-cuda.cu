@@ -3431,9 +3431,15 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     dst_row.nb[2] = nb1;
     dst_row.nb[3] = nb1;
 
-    bool fuse_down = false;
-    if (next && next->op == GGML_OP_MUL_MAT_ID) {
-        fuse_down = true;
+    bool fuse_down = next && next->op == GGML_OP_MUL_MAT_ID;
+    // The down result of an expert is written to next before the up/gate data of the remaining experts is read.
+    // If the up/gate experts are copies of host tensors, next may have been allocated on top of them.
+    for (int j = 0; fuse_down && j < GGML_MAX_SRC; ++j) {
+        auto src = dst->src[j];
+        fuse_down = !src || (const char *)src->data >= (const char *)next->data + ggml_nbytes(next) ||
+                            (const char *)next->data >= (const char *)src->data + ggml_nbytes(src);
+    }
+    if (fuse_down) {
         final_dst = *next;
         final_dst.ne[1] = final_dst.ne[2] = final_dst.ne[3] = 1;
         final_dst.nb[2] = final_dst.nb[3] = final_dst.nb[1];
@@ -3466,12 +3472,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         dst_up_contiguous.alloc(2*sizeof(float)*ggml_nelements(dst));
         dst_gate_contiguous.alloc(sizeof(float)*ggml_nelements(dst));
     }
-    ggml_cuda_pool_alloc<char> final_dst_contiguous(ctx.pool());
-    if (fuse_down) {
-        final_dst.data = final_dst_contiguous.alloc(ggml_nelements(next));
-        final_dst.src[1] = &dst_row;
-    }
-
     src1_row.data = src1_contiguous.get();
 
     ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool());
@@ -3484,6 +3484,13 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         } else {
             CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
         }
+    }
+
+    ggml_cuda_pool_alloc<char> final_dst_contiguous(ctx.pool());
+    if (fuse_down) {
+        const int max_rows = *std::max_element(moe_counts.begin(), moe_counts.end());
+        final_dst.data = final_dst_contiguous.alloc(sizeof(float)*next->ne[0]*max_rows);
+        final_dst.src[1] = &dst_row;
     }
 
     for (int64_t i02 = 0; i02 < n_as; i02++) {
