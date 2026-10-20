@@ -247,6 +247,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ4_KS_R4     = 345, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KS_R16    = 346, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ3_KS_R16    = 347, // except 1d tensors (16-row interleaved iq3ks-class codebook 3-bit)
+        LLAMA_FTYPE_MOSTLY_IQ5_KS_R16    = 348, // except 1d tensors (16-row interleaved iq3ks-class codebook 3-bit)
         LLAMA_FTYPE_MOSTLY_IQ5_KS_R4     = 350, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_MXFP4_R8      = 351, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_KV_R8      = 398, // except 1d tensors
@@ -564,7 +565,11 @@ extern "C" {
         bool dry_run;                        //
         bool partial_requant;                // quantize only missing split files in the split quantized .gguf destination directory
         size_t slab_size;                    // tensors larger than this many bytes of f32 are processed in slabs of up to this size (at least one slice or row group), 0 = never
-        bool cuda_quantize;                  // quantize IQ4_KT and IQ3_KT on the first CUDA device
+        bool cuda_quantize;                  // quantize IQ4_KT, IQ3_KT, IQ2_KT, IQ1_KT, IQ3_KS, IQ4_KS, IQ4_KS_R4, IQ4_KS_R16, IQ5_KS, and IQ5_KS_R4 on a CUDA device
+        int  cuda_quantize_device;           // CUDA device index used by --cuda-quantize (default 0)
+        int  cuda_quantize_n_devices;        // row-split device count, 0 = off
+        int  cuda_quantize_devices[16];      // row-split ordinals (-dev CUDA0,CUDA1,CUDA2)
+        float cuda_quantize_split[16];       // row-split shares, sum 1 (-ts 3,3,2)
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules
@@ -894,6 +899,9 @@ extern "C" {
 
     // Save the current recurrent state as a speculative checkpoint.
     LLAMA_API bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id);
+
+    // Save the current recurrent state as a rewind checkpoint
+    LLAMA_API bool llama_rewind_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id, int max_tokens);
 
     // Restore the recurrent state after speculative decode.
     LLAMA_API bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_seq_id seq_id,

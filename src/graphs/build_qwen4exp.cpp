@@ -530,6 +530,8 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     ggml_cgraph * gf = new_graph_custom();
 
     const bool is_mtp = lctx.cparams.mtp_op_type != MTP_OP_NONE;
+    const bool emit_logits = lctx.cparams.mtp_op_type == MTP_OP_DRAFT_GEN ||
+            lctx.cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
 
     // the MTP pass walks only the QSA tail: no recurrent state, so the draft
     // context has zero qnext state slots and the delta-net ctor must not run
@@ -683,6 +685,12 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     if (is_mtp) {
         // wide stream out: the next draft step's hidden input (scheme A)
         ggml_tensor * flat = ggml_reshape_2d(ctx0, res_hc, hc * n_embd, n_tokens);
+
+        if (!emit_logits) {
+            ggml_build_forward_expand(gf, flat);
+            return gf;
+        }
+
         ggml_tensor * h_next = inp_out_ids ? ggml_get_rows(ctx0, flat, inp_out_ids) : flat;
         cb(h_next, "result_mtp_embd", -1);
         ggml_set_output(h_next);
@@ -704,10 +712,13 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     if (lctx.cparams.mtp && hparams.n_embd_out > hparams.n_embd) {
         // hand the draft the pre-mixer wide stream for its first step
         ggml_tensor * flat = ggml_reshape_2d(ctx0, res_hc, hc * n_embd, n_tokens);
-        ggml_tensor * h_nextn = inp_out_ids ? ggml_get_rows(ctx0, flat, inp_out_ids) : flat;
-        cb(h_nextn, "result_mtp_embd", -1);
-        ggml_set_output(h_nextn);
-        ggml_build_forward_expand(gf, h_nextn);
+        cb(flat, "result_mtp_embd", -1);
+        ggml_set_output(flat);
+        ggml_build_forward_expand(gf, flat);
+
+        if (n_outputs == 0) {
+            return gf;
+        }
     }
 
     ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams, res_hc,

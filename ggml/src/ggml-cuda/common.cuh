@@ -200,6 +200,10 @@ constexpr int ggml_cuda_highest_compiled_arch(const int arch) {
     return ggml_cuda_highest_compiled_arch_impl(arch, 0, __CUDA_ARCH_LIST__);
 }
 #else
+static constexpr bool ggml_cuda_has_arch(const int) {
+    return true;
+}
+
 static int ggml_cuda_highest_compiled_arch(const int arch) {
     return arch;
 }
@@ -607,6 +611,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ2_BN> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_PQ2_0> {
+    static constexpr int qk = QK_PQ2_0;
+    static constexpr int qr = PQR2_0;
+    static constexpr int qi = PQI2_0;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ4_NL> {
     static constexpr int qk = QK4_NL;
     static constexpr int qr = QR4_NL;
@@ -726,6 +737,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KS_R16> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ5_KS_R16> {
+    static constexpr int qk = QK8_0;
+    static constexpr int qr = QR4_0;
+    static constexpr int qi = 16;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KSS> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR4_XS;
@@ -811,6 +829,7 @@ struct ggml_cuda_device_info {
         bool    vmm;                // virtual memory support
         size_t  vmm_granularity;    // granularity of virtual memory
         size_t  total_vram;
+        bool    integrated;
     };
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};

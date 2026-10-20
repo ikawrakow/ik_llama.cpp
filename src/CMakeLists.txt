@@ -96,6 +96,7 @@ add_library(llama
             graphs/build_qwen2.cpp
             graphs/build_qwen3.cpp
             graphs/build_mellum.cpp
+            graphs/build_maple.cpp
             graphs/build_qwen3next.cpp
             graphs/build_lfm2.cpp
             graphs/build_qwen4exp.cpp

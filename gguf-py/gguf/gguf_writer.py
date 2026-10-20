@@ -739,6 +739,9 @@ class GGUFWriter:
     def add_sliding_window_pattern(self, value: Sequence[bool]) -> None:
         self.add_array(Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch), value)
 
+    def add_swiglu_clamp_exp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP_EXP.format(arch=self.arch), values)
+
     def add_dense_features_dims(self, dense:str, in_f:int, out_f:int) -> None:
         self.add_uint32(Keys.LLM.DENSE_FEAT_IN_SIZE.format(arch=self.arch, dense=dense), in_f)
         self.add_uint32(Keys.LLM.DENSE_FEAT_OUT_SIZE.format(arch=self.arch, dense=dense), out_f)

@@ -94,6 +94,10 @@ llm_build_context::llm_build_context(
 }
 
 void llm_build_context::init() {
+    // a new graph is being built: drop the previous graph's rotated-activation memo
+    // (the cached tensors live in the previous graph's context)
+    lctx.hadamard_memo.clear();
+
     struct ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
         /*.mem_buffer =*/ buf_compute_meta.data(),
@@ -141,6 +145,7 @@ void llm_build_context::init() {
 }
 
 void llm_build_context::free() {
+    lctx.cvec.graph = nullptr;
     if (ctx0) {
         ggml_free(ctx0);
         ctx0 = nullptr;
@@ -465,6 +470,13 @@ ggml_cgraph * llm_build_context::build_defrag(const std::vector<uint32_t> & ids)
     return gf;
 }
 
+// defined below; declared here for use in the MTP embedding path
+static struct ggml_tensor * llm_build_hadamard_rotate(
+        struct ggml_context * ctx0,
+        struct ggml_tensor * cur,
+        const llama_hadamard_transform & t,
+        bool inverse);
+
 struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd) {
     struct ggml_tensor * cur = nullptr;
 
@@ -478,6 +490,12 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
         ggml_set_input(lctx.inp_tokens);
 
         cur = ggml_get_rows(ctx0, mtp_tok_embd, lctx.inp_tokens);
+
+        // undo the Hadamard rotation of the embedding table (latent token embedding);
+        // without this the draft head consumes embeddings in the rotated basis
+        if (auto rot = lctx.model.hadamard_rotation(mtp_tok_embd); rot != nullptr) {
+            cur = llm_build_hadamard_rotate(ctx0, cur, *rot, true);
+        }
     } else {
         lctx.inp_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, batch.n_tokens);
         ggml_set_input(lctx.inp_embd);
@@ -1049,7 +1067,17 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
           struct ggml_tensor * cur) {
     struct ggml_tensor * cur_mm = cur;
     if (auto rot = lctx.model.hadamard_rotation(w); rot != nullptr) {
-        cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+        // several folded weights consume the same input activation; rotate it once per graph.
+        // Key by content (signs tensor + transform params), not by the per-weight transform pointer
+        const auto memo_key = std::make_tuple((const struct ggml_tensor *) cur, (const struct ggml_tensor *) rot->signs,
+                                              rot->block_size, rot->perm_hd, rot->perm_nk, rot->perm_rep);
+        const auto memo_it  = lctx.hadamard_memo.find(memo_key);
+        if (memo_it != lctx.hadamard_memo.end()) {
+            cur_mm = memo_it->second;
+        } else {
+            cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+            lctx.hadamard_memo[memo_key] = cur_mm;
+        }
     }
     struct ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
     for (auto & it : lctx.lora_adapters) {
@@ -1101,7 +1129,17 @@ ggml_tensor * llm_build_context::llm_build_lora_mm_id(
           struct ggml_tensor * cache_ids) {
     struct ggml_tensor * cur_mm = cur;
     if (auto rot = lctx.model.hadamard_rotation(w); rot != nullptr) {
-        cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+        // several folded weights consume the same input activation; rotate it once per graph.
+        // Key by content (signs tensor + transform params), not by the per-weight transform pointer
+        const auto memo_key = std::make_tuple((const struct ggml_tensor *) cur, (const struct ggml_tensor *) rot->signs,
+                                              rot->block_size, rot->perm_hd, rot->perm_nk, rot->perm_rep);
+        const auto memo_it  = lctx.hadamard_memo.find(memo_key);
+        if (memo_it != lctx.hadamard_memo.end()) {
+            cur_mm = memo_it->second;
+        } else {
+            cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+            lctx.hadamard_memo[memo_key] = cur_mm;
+        }
     }
     struct ggml_tensor * res = ggml_mul_mat_id(ctx0, cache_w ? cache_w : w, cur_mm, cache_ids ? cache_ids : ids);
     for (auto & it : lctx.lora_adapters) {
@@ -1325,9 +1363,12 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
     }
 
+    // the fused up/gate op consumes the activation as-is; Hadamard-folded (Prism) weights need
+    // their activation transform, which is only applied by llm_build_lora_mm -> keep them separate
     if (lctx.cparams.fused_up_gate &&
         up && gate && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
+        lctx.model.hadamard_rotation(up) == nullptr && lctx.model.hadamard_rotation(gate) == nullptr &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
@@ -1740,6 +1781,7 @@ llm_expert_gating_func_type   gating_op,
     GGML_ASSERT(!up_gate_exps_b);
 
     if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type &&
+            lctx.model.hadamard_rotation(up_exps) == nullptr && lctx.model.hadamard_rotation(gate_exps) == nullptr &&
             (!cache_ids || (!up_exps_b && !gate_exps_b))) {
         ggml_tensor * up_weight = cached_up ? cached_up : up_exps;
         ggml_tensor * gate_weight = cached_gate ? cached_gate : gate_exps;
@@ -2878,6 +2920,8 @@ ggml_cgraph * llm_build_context::llama_build_graph(
 
     llm.init();
 
+    lctx.cvec.graph = nullptr; // set by new_graph_custom; builders using their own graph get the plain add
+
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_NANBEIGE:
@@ -2960,6 +3004,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_MELLUM:
             {
                 result = llm.build_mellum();
+            } break;
+        case LLM_ARCH_MAPLE:
+            {
+                result = llm.build_maple();
             } break;
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
@@ -3742,5 +3790,49 @@ int32_t llama_model_n_nextn_layer(const llama_model * model) {
 
 ggml_cgraph * llm_build_context::new_graph_custom() {
     int max_nodes = lctx.max_nodes(n_tokens, n_kv);
-    return ggml_new_graph_custom(ctx0, max_nodes, false);
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx0, max_nodes, false);
+    lctx.cvec.graph = gf;
+    return gf;
+}
+
+// Split mode graph: add this device's copy of the direction (shared one as fallback),
+// for builders that rebuild the residual per device.
+ggml_tensor * llama_control_vector::apply_to_device(ggml_context * ctx, ggml_tensor * cur, int il, int id) const {
+    ggml_tensor * layer_dir = tensor_for(il);
+    if (layer_dir == nullptr) {
+        return cur;
+    }
+    if ((size_t) il < dev_tensors.size() && id >= 0 && id < (int) dev_tensors[il].size() && dev_tensors[il][id]) {
+        layer_dir = dev_tensors[il][id];
+    }
+    return ggml_add(ctx, cur, layer_dir);
+}
+
+// Reduce is a sum: adding the direction to one device's partial before it
+// steers every device's result, avoiding a post-reduce cross-device copy.
+ggml_tensor * llama_control_vector::apply_to_reduce(ggml_context * ctx, ggml_tensor * cur, int il) const {
+    if (!graph || cur->op != GGML_OP_REDUCE || cur->op_params[3] == 1 || (size_t) il >= dev_tensors.size() ||
+        graph->n_nodes == 0 || graph->nodes[graph->n_nodes - 1] != cur) {
+        return nullptr;
+    }
+    const int n = cur->op_params[1];
+    for (int k = 0; k < n; ++k) {
+        ggml_tensor * src = cur->src[k];
+        // skip the reduce's own storage, and devices that only receive a copy of the result
+        if (!src || src == cur->view_src || (cur->op_params[4] & (1u << k)) ||
+            k >= (int) dev_tensors[il].size() || !dev_tensors[il][k]) {
+            continue;
+        }
+        if (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16 && src->type != GGML_TYPE_BF16) {
+            return nullptr; // reduce type without CUDA add support for an f32 direction
+        }
+        ggml_tensor * steered = ggml_add(ctx, src, dev_tensors[il][k]);
+        // the reduce is already the last graph node: put the add in front of it
+        graph->n_nodes--;
+        ggml_build_forward_expand(graph, steered);
+        graph->nodes[graph->n_nodes++] = cur;
+        cur->src[k] = steered;
+        return cur;
+    }
+    return nullptr;
 }

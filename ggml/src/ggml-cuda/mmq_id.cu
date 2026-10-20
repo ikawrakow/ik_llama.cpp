@@ -257,6 +257,9 @@ static void ggml_cuda_mul_mat_q_switch_type_id(ggml_backend_cuda_context & ctx, 
         case GGML_TYPE_IQ5_K_R4:
             mul_mat_q_case_id<GGML_TYPE_IQ5_K_R4>(ctx, args, stream);
             break;
+        case GGML_TYPE_IQ5_KS_R16:
+            mul_mat_q_case_id<GGML_TYPE_IQ5_KS_R16>(ctx, args, stream);
+            break;
         case GGML_TYPE_IQ6_K:
             mul_mat_q_case_id<GGML_TYPE_IQ6_K>(ctx, args, stream);
             break;
@@ -347,13 +350,14 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
     float       *  dst_d = (float       *)  dst->data;
 
     // If src0 is a temporary compute buffer, clear any potential padding.
+    // If src0 is a view (one expert), the padding is at the end of the tensor it views.
     if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
-        const size_t size_data  = ggml_nbytes(src0);
-        const size_t size_alloc = ggml_backend_buffer_get_alloc_size(src0->buffer, src0);
+        const ggml_tensor * src0_full = src0->view_src ? src0->view_src : src0;
+        const size_t size_data  = ggml_nbytes(src0_full);
+        const size_t size_alloc = ggml_backend_buffer_get_alloc_size(src0_full->buffer, src0_full);
         if (size_alloc > size_data) {
-            GGML_ASSERT(ggml_is_contiguously_allocated(src0));
-            GGML_ASSERT(!src0->view_src);
-            CUDA_CHECK(cudaMemsetAsync((char *) src0->data + size_data, 0, size_alloc - size_data, stream));
+            GGML_ASSERT(ggml_is_contiguously_allocated(src0_full));
+            CUDA_CHECK(cudaMemsetAsync((char *) src0_full->data + size_data, 0, size_alloc - size_data, stream));
         }
     }
 
@@ -540,6 +544,7 @@ bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
         case GGML_TYPE_IQ4_K_R4:
         case GGML_TYPE_IQ5_KS:
         case GGML_TYPE_IQ5_KS_R4:
+        case GGML_TYPE_IQ5_KS_R16:
         case GGML_TYPE_IQ5_K:
         case GGML_TYPE_IQ5_K_R4:
         case GGML_TYPE_IQ6_K:
@@ -560,6 +565,10 @@ bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
 
     if (turing_mma_available(cc)) {
         return true;
+    }
+
+    if (type == GGML_TYPE_IQ1_S_R4) {
+        return false;
     }
 
     if (ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_DP4A) {
