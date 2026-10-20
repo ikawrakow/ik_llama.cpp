@@ -289,16 +289,52 @@ struct llama_kv_cache {
     };
 
     gpu_checkpoint ckpt;
+    std::map<llama_pos, gpu_checkpoint *> ckpt_rewind_map;
+    std::vector<std::unique_ptr<gpu_checkpoint>> ckpt_rewind_pool;
 
-    bool checkpoint_alloc_shadows(bool conv_only_shadow = false);
+    bool checkpoint_alloc_shadows(llama_ckpt_data ckpt_type, bool conv_only_shadow = false);
     bool checkpoint_supported() const;
-    bool checkpoint_save(ggml_backend_sched_t sched);
-    bool checkpoint_restore(ggml_backend_sched_t sched);
-    void checkpoint_delete();
+    bool checkpoint_save(ggml_backend_sched_t sched, llama_ckpt_data ckpt_type);
+    bool checkpoint_restore(ggml_backend_sched_t sched, llama_ckpt_data ckpt_type);
+    void checkpoint_delete(llama_ckpt_data ckpt_type);
+
+    gpu_checkpoint & llama_get_ckpt(llama_ckpt_data ckpt_type) {
+        if (ckpt_type.type == LLAMA_CHECKPOINT_REWIND) {
+            if (!ckpt_rewind_map.contains(ckpt_type.pos)) {
+                //gpu_checkpoint fake;
+                bool found = false;
+                for (auto & saved_ckpt : ckpt_rewind_pool) {
+                    if (!saved_ckpt->saved && !saved_ckpt->dsv4_shadow_saved) {
+                        ckpt_rewind_map[ckpt_type.pos] = saved_ckpt.get();
+                        found = true;
+                        break;
+                    }                              
+                }
+                if (!found) {
+                    ckpt_rewind_pool.push_back(std::make_unique<gpu_checkpoint>());
+                    ckpt_rewind_map[ckpt_type.pos] = ckpt_rewind_pool.back().get();
+                }
+            }
+            return *ckpt_rewind_map[ckpt_type.pos];       
+        }
+        return ckpt;
+    }
+
+    bool llama_ckpt_mode_equal(llama_ckpt_data ckpt_type, int mode) const {
+        if (ckpt_type.type == LLAMA_CHECKPOINT_REWIND) {
+            return false;
+            //if (!ckpt_rewind_map.contains(ckpt_type.pos)) {
+            //    return false;
+            //}
+            //const auto & ckpt1 = ckpt_rewind_map[ckpt_type.pos];
+            //return ckpt1.selected_spec_mode== mode;
+        }
+        return ckpt.selected_spec_mode == mode;
+    }
 
     // Per-step checkpoint: allocate, restore step k's full state (SSM + conv) to cache
     bool per_step_alloc(const llama_model & model, int max_tokens);
-    bool per_step_restore(ggml_backend_sched_t sched, int step, uint32_t slot);
+    bool per_step_restore(ggml_backend_sched_t sched, llama_ckpt_data ckpt_type, int step, uint32_t slot);
 
     ~llama_kv_cache() {
         for (struct ggml_context * ctx : ctxs) {

@@ -1057,7 +1057,7 @@ static void ds4_build_comp(ggml_tensor * cur, llm_build_context & llm, ggml_cont
     llm.lctx.dsv4.persisted_rings.insert(cache_state);
     llm.lctx.dsv4.persisted_rings.insert(cache_score);
     // per-step checkpoint capture reads these per-token rows after compute (only for batches it covers)
-    if (llama_dsv4_per_step_capture_active(llm.lctx) &&
+    if (llama_dsv4_per_step_capture_active(llm.lctx, { LLAMA_CHECKPOINT_SPEC, 0 }) &&
         plan.state_delta_src_idxs.size() <= (size_t) DSV4_PER_STEP_MAX_STATE_ROWS) {
         ggml_set_output(state_kv);
         ggml_set_output(state_score);

@@ -299,6 +299,16 @@ extern "C" {
         MTP_OP_DRAFT_GEN        = 3,
     };
 
+    enum llama_ckpt_type {
+        LLAMA_CHECKPOINT_SPEC = 0,
+        LLAMA_CHECKPOINT_REWIND = 1,
+    };
+
+    typedef struct llama_ckpt_data {
+        enum llama_ckpt_type type;
+        llama_pos pos;
+    } llama_ckpt_data;
+
     typedef struct llama_token_data {
         llama_token id; // token id
         float logit;    // log-odds of the token
@@ -894,24 +904,29 @@ extern "C" {
     };
 
     // Initialise the checkpoint system for the upcoming speculation window.
-    LLAMA_API int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens);
+    LLAMA_API int llama_spec_ckpt_init(struct llama_context * ctx, llama_ckpt_data ckpt_type, int mode, int max_tokens);
 
     // Save the current recurrent state as a speculative checkpoint.
-    LLAMA_API bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id);
+    LLAMA_API bool llama_spec_ckpt_save(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id);
 
     // Save the current recurrent state as a rewind checkpoint
-    LLAMA_API bool llama_rewind_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id, int max_tokens);
+    LLAMA_API bool llama_rewind_ckpt_save(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id, int max_tokens);
+
+    LLAMA_API bool llama_rewind_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id);
+
+    LLAMA_API bool llama_rewind_ckpt_release(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id);
+
 
     // Restore the recurrent state after speculative decode.
-    LLAMA_API bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_seq_id seq_id,
+    LLAMA_API bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id,
                                             llama_pos n_past, int accepted_step);
 
     LLAMA_API enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
-            struct llama_context * ctx, llama_seq_id seq_id,
+            struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id,
             llama_pos n_past, int accepted_step);
 
     // Discard the saved checkpoint and reset internal mode state.
-    LLAMA_API void llama_spec_ckpt_discard(struct llama_context * ctx);
+    LLAMA_API void llama_spec_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_type);
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails
