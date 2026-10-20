@@ -347,13 +347,14 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
     float       *  dst_d = (float       *)  dst->data;
 
     // If src0 is a temporary compute buffer, clear any potential padding.
+    // If src0 is a view (one expert), the padding is at the end of the tensor it views.
     if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
-        const size_t size_data  = ggml_nbytes(src0);
-        const size_t size_alloc = ggml_backend_buffer_get_alloc_size(src0->buffer, src0);
+        const ggml_tensor * src0_full = src0->view_src ? src0->view_src : src0;
+        const size_t size_data  = ggml_nbytes(src0_full);
+        const size_t size_alloc = ggml_backend_buffer_get_alloc_size(src0_full->buffer, src0_full);
         if (size_alloc > size_data) {
-            GGML_ASSERT(ggml_is_contiguously_allocated(src0));
-            GGML_ASSERT(!src0->view_src);
-            CUDA_CHECK(cudaMemsetAsync((char *) src0->data + size_data, 0, size_alloc - size_data, stream));
+            GGML_ASSERT(ggml_is_contiguously_allocated(src0_full));
+            CUDA_CHECK(cudaMemsetAsync((char *) src0_full->data + size_data, 0, size_alloc - size_data, stream));
         }
     }
 

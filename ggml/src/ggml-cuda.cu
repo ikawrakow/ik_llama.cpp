@@ -2736,9 +2736,10 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
         }
     }
 
-    // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
+    // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_q
+    // (mul_mat_vec_q does not read past the end of a row).
     // But if src0 is also a view of another tensor then this cannot be done safely because it may overwrite valid tensor data.
-    // Therefore, in such cases use cuBLAS.
+    // Therefore, in such cases use cuBLAS instead of mul_mat_q.
     const size_t src0_nbytes = ggml_nbytes(src0);
     const size_t src0_alloc  = ggml_backend_buffer_get_alloc_size(src0->buffer, src0);
     const bool   src0_padded = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
@@ -2750,7 +2751,7 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
     bool use_dequantize_mul_mat_vec = ggml_cuda_dmmv_type_supported(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
         && src0->ne[0] % (GGML_CUDA_DMMV_X*2) == 0 && src1->ne[1] == 1;
-    bool          use_mul_mat_vec_q =  ggml_is_quantized(src0->type) && !bad_padding_clear
+    bool          use_mul_mat_vec_q =  ggml_is_quantized(src0->type)
         && ggml_cuda_mmvq_type_supported(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
         && src1->ne[1] <= ggml_cuda_mmvq_max_batch_size(cc);
@@ -2769,7 +2770,7 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
 
     if ((use_mul_mat_vec_q || use_mul_mat_q) && src1->ne[2]*src1->ne[3] == 1) {
         // This return does not go through ggml_cuda_op_mul_mat, which is where the padding is otherwise cleared.
-        if (src0_padded) {
+        if (src0_padded && !use_mul_mat_vec_q) {
             CUDA_CHECK(cudaMemsetAsync((char *) src0->data + src0_nbytes, 0, src0_alloc - src0_nbytes, ctx.stream()));
         }
         return ggml_cuda_mul_mat_q(ctx, src0, src1, dst, cgraph, node_n, use_mul_mat_vec_q);
@@ -3019,6 +3020,7 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     src0_row.ne[2] = 1;
     src0_row.ne[3] = 1;
     src0_row.nb[3] = nb02;
+    src0_row.view_src = dst->src[0];
 
     src1_row.ne[1] = 1;
     src1_row.ne[2] = 1;
@@ -3413,10 +3415,12 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     src0_1_row.ne[2] = 1;
     src0_1_row.ne[3] = 1;
     src0_1_row.nb[3] = nb02;
+    src0_1_row.view_src = dst->src[0];
     if (src0_2) {
         src0_2_row.ne[2] = 1;
         src0_2_row.ne[3] = 1;
         src0_2_row.nb[3] = nb02;
+        src0_2_row.view_src = dst->src[1];
     }
 
     src1_row.ne[1] = 1;
@@ -3446,6 +3450,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         final_src = *next->src[0];
         final_src.ne[2] = final_src.ne[3] = 1;
         final_src.nb[3] = final_src.nb[2];
+        final_src.view_src = next->src[0];
     }
 
     ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool());
