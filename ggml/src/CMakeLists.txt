@@ -610,7 +610,7 @@ if (GGML_RPC)
 
     set(GGML_HEADERS_RPC ../include/ggml-rpc.h ggml-rpc-transport.h)
     set(GGML_SOURCES_RPC ggml-rpc.cpp ggml-rpc-transport.cpp)
-
+		
 endif()
 
 function(detect_host_compiler)

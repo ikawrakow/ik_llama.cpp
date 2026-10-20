@@ -153,13 +153,12 @@ bool residency_contract() {
     if (!state.reserve(0, key, generation)) return false;
     if (state.find(key).state == residency::slot_state::ready) return false;
     int32_t slot = -1;
-    uint64_t row_generation = 0;
     residency::pin pin[1]{};
     size_t n_pins = 0;
-    if (!state.pin_rows(&key, 1, &slot, &row_generation, pin, 1, n_pins) || n_pins != 0) return false;
+    if (!state.pin_rows(&key, 1, &slot, pin, 1, n_pins) || n_pins != 0) return false;
     if (state.complete(0, key, generation + 1) || state.find(key).state == residency::slot_state::ready) return false;
     if (!state.complete(0, key, generation) || state.find(key).state != residency::slot_state::ready) return false;
-    if (!state.pin_rows(&key, 1, &slot, &row_generation, pin, 1, n_pins) || n_pins != 1) return false;
+    if (!state.pin_rows(&key, 1, &slot, pin, 1, n_pins) || n_pins != 1) return false;
     uint64_t replacement_generation = 0;
     if (state.replace_ready(0, key, generation, { 1, 1 }, replacement_generation)) return false;
     if (!state.retire(0, key, generation) || state.inspect(0).state != residency::slot_state::retired) return false;
@@ -180,9 +179,9 @@ int main() {
             !run_boundary_case(4, true, behavior::reject_dispatch) ||
             !run_boundary_case(4, true, behavior::fail_collect) ||
             !run_boundary_case(33, true, behavior::mixed)) {
-        std::fprintf(stderr, "CPU-on-miss compact provider regression failed\n");
+        std::fprintf(stderr, "async MoE provider regression failed\n");
         return 1;
     }
-    std::puts("CPU-on-miss compact provider regression passed");
+    std::puts("async MoE provider regression passed");
     return 0;
 }

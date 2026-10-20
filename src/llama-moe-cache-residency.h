@@ -52,8 +52,7 @@ public:
         return true;
     }
 
-    // Atomically remove a zero-pin READY owner and reserve the same slot for
-    // the next generation. There is no observable FREE interval.
+    // Replaces an unpinned READY owner without exposing the slot as FREE.
     bool replace_ready(size_t slot, key expected_owner, uint64_t expected_generation,
             key new_owner, uint64_t & generation) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -120,22 +119,20 @@ public:
         return slot < slots_.size() && slots_[slot].state == slot_state::free;
     }
 
-    // The whole request is pinned under one lock, then execution proceeds without holding it.
-    bool pin_rows(const key * owners, size_t n_rows, int32_t * row_slots, uint64_t * row_generations,
+    // Pins the whole request atomically, then releases the lock before execution.
+    bool pin_rows(const key * owners, size_t n_rows, int32_t * row_slots,
             pin * pins, size_t pin_capacity, size_t & n_pins) {
         std::lock_guard<std::mutex> lock(mutex_);
         n_pins = 0;
-        if ((n_rows && (!owners || !row_slots || !row_generations)) || pin_capacity < n_rows || (n_rows && !pins)) return false;
+        if ((n_rows && (!owners || !row_slots)) || pin_capacity < n_rows || (n_rows && !pins)) return false;
         for (size_t row = 0; row < n_rows; ++row) {
             row_slots[row] = -1;
-            row_generations[row] = 0;
             if (!valid(owners[row])) continue;
             const int32_t slot = ready_[index(owners[row])];
             if (slot < 0 || (size_t) slot >= slots_.size()) continue;
             slot_record & record = slots_[slot];
             if (record.state != slot_state::ready || !(record.owner == owners[row])) continue;
             row_slots[row] = slot;
-            row_generations[row] = record.generation;
             bool already_pinned = false;
             for (size_t i = 0; i < n_pins; ++i) {
                 if (pins[i].slot == (size_t) slot && pins[i].generation == record.generation &&
@@ -209,8 +206,6 @@ private:
         uint32_t pins = 0;
         bool copy_pending = false;
     };
-
-    // Acquire one group lock at a time; backend work and CPU kernels run unlocked.
     mutable std::mutex mutex_;
     std::vector<slot_record> slots_;
     size_t n_layers_;

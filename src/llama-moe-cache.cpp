@@ -154,37 +154,30 @@ struct llama_moe_cache::impl {
     struct provider_row {
         size_t row = 0;
         int32_t slot = -1;
-        int32_t expert = -1;
-        uint64_t generation = 0;
     };
-    static constexpr size_t max_provider_rows = 1024;
-    static constexpr size_t regular_provider_bucket_rows = 4;
     struct provider_request {
         binding weight = { -1, -1, nullptr };
         binding second_weight = { -1, -1, nullptr };
         const ggml_tensor * op = nullptr;
-        std::array<provider_row, max_provider_rows> rows{};
-        std::array<llama_moe_cache_residency::key, max_provider_rows> route_keys{};
-        std::array<int32_t, max_provider_rows> pinned_slots{};
-        std::array<uint64_t, max_provider_rows> pinned_generations{};
-        std::array<llama_moe_cache_residency::pin, max_provider_rows> pins{};
-        std::array<llama_moe_cache_residency::key, max_provider_rows> miss_candidates{};
+        std::array<provider_row, GGML_MOE_PROVIDER_MAX_ROWS> rows{};
+        std::array<llama_moe_cache_residency::key, GGML_MOE_PROVIDER_MAX_ROWS> route_keys{};
+        std::array<int32_t, GGML_MOE_PROVIDER_MAX_ROWS> pinned_slots{};
+        std::array<llama_moe_cache_residency::pin, GGML_MOE_PROVIDER_MAX_ROWS> pins{};
+        std::array<llama_moe_cache_residency::key, GGML_MOE_PROVIDER_MAX_ROWS> miss_candidates{};
         size_t n_rows = 0;
         size_t n_hit = 0;
         size_t n_pins = 0;
         size_t n_valid = 0;
         size_t n_miss_candidates = 0;
-        size_t n_tokens = 0;
         size_t n_unique_activations = 0;
-        std::array<int32_t, max_provider_rows> activation_map{};
-        std::array<const float *, max_provider_rows> unique_activations{};
+        std::array<int32_t, GGML_MOE_PROVIDER_MAX_ROWS> activation_map{};
+        std::array<const float *, GGML_MOE_PROVIDER_MAX_ROWS> unique_activations{};
         bool fused = false;
         bool active = false;
         bool submitted = false;
         bool completed = false;
         bool admission_plan_valid = false;
         bool admission_driver = false;
-        bool large_batch_admission_bypass = false;
     };
     struct direct_workspace {
         ggml_backend_buffer_ptr device_buffer;
@@ -224,26 +217,19 @@ struct llama_moe_cache::impl {
     };
     struct fill_counters {
         size_t accepted = 0;
-        size_t dropped = 0;
         size_t completed = 0;
-        size_t failed = 0;
-        size_t cancelled = 0;
-        size_t stale = 0;
+        size_t failures = 0;
     };
     struct group_admission_state {
         std::mutex mutex;
         std::vector<uint8_t> demand;
-        std::vector<uint8_t> live_ready;
         std::vector<int32_t> lru_prev;
         std::vector<int32_t> lru_next;
         std::vector<uint8_t> lru_member;
         int32_t lru_head = -1;
         int32_t lru_tail = -1;
-        size_t deferred = 0;
-
         void initialize(size_t n_keys, size_t n_slots) {
             demand.assign(n_keys, 0);
-            live_ready.assign(n_keys, 0);
             lru_prev.assign(n_slots, -1);
             lru_next.assign(n_slots, -1);
             lru_member.assign(n_slots, 0);
@@ -273,7 +259,6 @@ struct llama_moe_cache::impl {
     struct fill_engine {
         ggml_backend * backend = nullptr;
         std::thread worker;
-        std::thread::id worker_id;
         std::mutex mutex;
         std::condition_variable changed;
         std::array<fill_job, max_fill_jobs> queue{};
@@ -300,7 +285,6 @@ struct llama_moe_cache::impl {
         ggml_backend_buffer_ptr buffer;
         ggml_backend * provider_backend = nullptr;
         std::unique_ptr<fill_engine> fills;
-        bool admission_engine_ready = false;
         provider_request request;
         direct_workspace direct;
     };
@@ -323,7 +307,6 @@ struct llama_moe_cache::impl {
     };
     struct stats { size_t hits = 0; size_t misses = 0; size_t evictions = 0; size_t bytes = 0; };
 
-    static constexpr int64_t max_batch = 32;
 
     int32_t n_expert_used;
     std::vector<device> devices;
@@ -338,13 +321,10 @@ struct llama_moe_cache::impl {
     size_t buf_host_size = 0;
     stats stats_small, stats_large;
     size_t requested_size;
-    bool cpu_on_miss;
-    mutable size_t large_batch_skips = 0;
-    mutable size_t incompatible_layer_skips = 0;
+    bool async_mode;
     struct ggml_moe_provider moe_provider = {};
     std::atomic_size_t active_provider_requests{0};
-    struct cpu_miss_runtime_stats { size_t operations = 0, eligible_rows = 0, committed_gpu_rows = 0; } cpu_miss_stats;
-    mutable std::mutex fill_init_mutex;
+    struct async_runtime_stats { size_t operations = 0, eligible_rows = 0, committed_gpu_rows = 0; } async_stats;
     std::mutex fill_enqueue_mutex;
 
     static bool provider_begin(void * user_data, const ggml_tensor * op, void ** request);
@@ -357,8 +337,8 @@ struct llama_moe_cache::impl {
     bool prepare_direct_inputs(provider_request & req, const ggml_tensor * source,
             const ggml_tensor * ids, size_t k, size_t m, int64_t padded_k, direct_buffers & buffers);
     impl(const llama_model & model, const std::vector<ggml_backend *> & backends,
-            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size, bool cpu_on_miss)
-            : n_expert_used(model.hparams.n_expert_used), layers(model.layers.size()), requested_size(size), cpu_on_miss(cpu_on_miss) {
+            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size, bool async_mode)
+            : n_expert_used(model.hparams.n_expert_used), layers(model.layers.size()), requested_size(size), async_mode(async_mode) {
         moe_provider.user_data = this;
         moe_provider.begin = provider_begin;
         moe_provider.plan = provider_plan;
@@ -411,7 +391,7 @@ struct llama_moe_cache::impl {
             }
         }
         if (groups.empty()) {
-            if (cpu_on_miss) throw std::runtime_error("CPU-on-miss requires host-resident eligible MoE expert weights");
+            if (async_mode) throw std::runtime_error("asynchronous MoE cache requires host-resident eligible expert weights");
             LLAMA_LOG_WARN("%s: no complete host-resident expert layer is eligible. MoE cache is inactive\n", __func__);
             return;
         }
@@ -446,7 +426,7 @@ struct llama_moe_cache::impl {
             return total;
         };
 
-        size_t host_layer_count = 0;
+        size_t cache_layer_count = 0;
         std::vector<size_t> device_tensor_counts(devices.size(), 0);
         for (group & g : groups) {
             const device & d = devices[g.device];
@@ -459,8 +439,8 @@ struct llama_moe_cache::impl {
                 g.n_slots = 0;
                 continue;
             }
-            g.lru.init((int32_t) layers.size(), n_expert, g.n_slots);
-            if (cpu_on_miss) {
+            if (!async_mode) g.lru.init((int32_t) layers.size(), n_expert, g.n_slots);
+            if (async_mode) {
                 g.residency = std::make_unique<llama_moe_cache_residency>(
                         (size_t) g.n_slots, layers.size(), (size_t) n_expert);
                 if ((size_t) n_expert > SIZE_MAX / layers.size()) {
@@ -469,10 +449,10 @@ struct llama_moe_cache::impl {
                 g.admission = std::make_unique<group_admission_state>();
                 g.admission->initialize(layers.size() * (size_t) n_expert, (size_t)g.n_slots);
             }
-            device_tensor_counts[g.device] += g.ref.size() * (1 + g.layers.size());
-            host_layer_count += g.layers.size();
+            device_tensor_counts[g.device] += g.ref.size() * (1 + (async_mode ? 0 : g.layers.size()));
+            cache_layer_count += g.layers.size();
         }
-        if (host_layer_count == 0) throw std::runtime_error("MoE cache budget is too small to hold one token");
+        if (cache_layer_count == 0) throw std::runtime_error("MoE cache budget is too small to hold one token");
 
         auto make_ctx = [](size_t n_tensors) {
             ggml_init_params params = { n_tensors * ggml_tensor_overhead(), nullptr, true };
@@ -481,9 +461,12 @@ struct llama_moe_cache::impl {
             return ctx;
         };
         for (size_t id = 0; id < devices.size(); ++id) if (device_tensor_counts[id]) devices[id].ctx = make_ctx(device_tensor_counts[id]);
-        ctx_host = make_ctx(host_layer_count);
         const auto buft_host = ggml_backend_cpu_buffer_type();
-        const size_t alignment_host = ggml_backend_buft_get_alignment(buft_host);
+        size_t alignment_host = 0;
+        if (!async_mode) {
+            ctx_host = make_ctx(cache_layer_count);
+            alignment_host = ggml_backend_buft_get_alignment(buft_host);
+        }
 
         for (group & g : groups) {
             if (g.n_slots == 0) continue;
@@ -499,17 +482,22 @@ struct llama_moe_cache::impl {
                 l.group = (int32_t) (&g - groups.data());
                 l.experts = layer_experts(model.layers[il]);
                 for (size_t ip = 0; ip < l.experts.size(); ++ip) {
-                    ggml_tensor * bank = g.banks[ip];
-                    ggml_tensor * cached = ggml_view_3d(d.ctx.get(), bank, bank->ne[0], bank->ne[1], g.n_slots,
-                            bank->nb[1], bank->nb[2], 0);
-                    ggml_format_name(cached, "moe_cache.%s", l.experts[ip]->name);
+                    ggml_tensor * cached = nullptr;
+                    if (!async_mode) {
+                        ggml_tensor * bank = g.banks[ip];
+                        cached = ggml_view_3d(d.ctx.get(), bank, bank->ne[0], bank->ne[1], g.n_slots,
+                                bank->nb[1], bank->nb[2], 0);
+                        ggml_format_name(cached, "moe_cache.%s", l.experts[ip]->name);
+                    }
                     bindings[l.experts[ip]] = { il, (int32_t) ip, cached };
                     if (l.admission_part < 0) l.admission_part = bindings[l.experts[ip]].part;
                 }
-                l.slot_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
-                ggml_format_name(l.slot_map, "moe_cache.slot_map-%d", il);
-                layer_of[l.slot_map] = il;
-                buf_host_size += GGML_PAD(ggml_nbytes(l.slot_map), alignment_host);
+                if (!async_mode) {
+                    l.slot_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
+                    ggml_format_name(l.slot_map, "moe_cache.slot_map-%d", il);
+                    layer_of[l.slot_map] = il;
+                    buf_host_size += GGML_PAD(ggml_nbytes(l.slot_map), alignment_host);
+                }
             }
             d.buffer_size += alloc_size(g, g.n_slots);
         }
@@ -521,11 +509,13 @@ struct llama_moe_cache::impl {
             ggml_backend_buffer_clear(d.buffer.get(), 0);
             d.buffer_size = ggml_backend_buffer_get_size(d.buffer.get());
         }
-        buf_host.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_host.get(), buft_host));
-        if (!buf_host) throw std::runtime_error("failed to allocate MoE cache slot maps");
-        ggml_backend_buffer_clear(buf_host.get(), 0xff);
-        buf_host_size = ggml_backend_buffer_get_size(buf_host.get());
-        for (group & g : groups) for (int32_t il : g.layers) g.lru.slot_map[il] = (int32_t *) layers[il].slot_map->data;
+        if (!async_mode) {
+            buf_host.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_host.get(), buft_host));
+            if (!buf_host) throw std::runtime_error("failed to allocate MoE cache slot maps");
+            ggml_backend_buffer_clear(buf_host.get(), 0xff);
+            buf_host_size = ggml_backend_buffer_get_size(buf_host.get());
+            for (group & g : groups) for (int32_t il : g.layers) g.lru.slot_map[il] = (int32_t *) layers[il].slot_map->data;
+        }
         for (device & d : devices) if (d.buffer) ggml_backend_buffer_set_usage(d.buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         if (buf_host) ggml_backend_buffer_set_usage(buf_host.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         for (size_t i = 0; i < devices.size(); ++i) {
@@ -538,15 +528,14 @@ struct llama_moe_cache::impl {
                         g.layers.size(), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]));
             }
         }
-        if (cpu_on_miss) {
+        if (async_mode) {
             for (size_t i = 0; i < devices.size(); ++i) {
                 device & d = devices[i];
                 const bool has_admission_group = std::any_of(groups.begin(), groups.end(), [&](const group & g) {
                     return g.device == (int32_t) i && g.n_slots > 0 && g.admission;
                 });
                 if (!has_admission_group) continue;
-                d.admission_engine_ready = ensure_fill_engine(i);
-                if (!d.admission_engine_ready) {
+                if (!ensure_fill_engine(i)) {
                     LLAMA_LOG_WARN("%s: live MoE fill admission is disabled for CUDA device %d because setup failed\n",
                             __func__, d.cuda_ordinal);
                 }
@@ -571,7 +560,6 @@ struct llama_moe_cache::impl {
 
     bool ensure_fill_engine(size_t device_id) {
         if (device_id >= devices.size()) return false;
-        std::lock_guard<std::mutex> init_lock(fill_init_mutex);
         device & d = devices[device_id];
         if (d.fills) return true;
 #ifndef GGML_USE_CUDA
@@ -585,8 +573,6 @@ struct llama_moe_cache::impl {
         d.fills = std::move(engine);
         try {
             d.fills->worker = std::thread([this, device_id] { fill_worker(device_id); });
-            std::unique_lock<std::mutex> lock(d.fills->mutex);
-            d.fills->changed.wait(lock, [&] { return d.fills->worker_id != std::thread::id{}; });
         } catch (...) {
             ggml_backend_free(d.fills->backend);
             d.fills.reset();
@@ -599,11 +585,6 @@ struct llama_moe_cache::impl {
     void fill_worker(size_t device_id) {
         device & d = devices[device_id];
         fill_engine & engine = *d.fills;
-        {
-            std::lock_guard<std::mutex> lock(engine.mutex);
-            engine.worker_id = std::this_thread::get_id();
-            engine.changed.notify_all();
-        }
         for (;;) {
             fill_job job;
             {
@@ -674,39 +655,24 @@ struct llama_moe_cache::impl {
                 g.residency->fail((size_t) job.slot, job.owner, job.generation);
             } else if (cancelled) {
                 g.residency->cancel((size_t) job.slot, job.owner, job.generation);
-            } else if (cpu_on_miss && g.admission) {
-                // Keep the live-ready view atomic with residency publication for provider telemetry.
+            } else {
+                GGML_ASSERT(g.admission);
                 std::lock_guard<std::mutex> lock(g.admission->mutex);
                 published = g.residency->complete((size_t) job.slot, job.owner, job.generation);
                 if (published) {
                     const size_t key_index = (size_t) job.owner.layer*(size_t) g.ref[0]->ne[2] +
                             (size_t) job.owner.expert;
-                    GGML_ASSERT(key_index < g.admission->live_ready.size());
-                    g.admission->live_ready[key_index] = 1;
                     g.admission->demand[key_index] = 0;
                     g.admission->insert_mru(job.slot);
-                }
-            } else {
-                published = g.residency->complete((size_t) job.slot, job.owner, job.generation);
-                if (published) {
-                    layer & l = layers[job.owner.layer];
-                    const int32_t encoded = job.owner.layer*(int32_t) g.ref[0]->ne[2] + job.owner.expert;
-                    g.lru.key_of[job.slot] = encoded;
-                    g.lru.touch(job.slot);
-                    ((int32_t *) l.slot_map->data)[job.owner.expert] = job.slot;
                 }
             }
 
             {
                 std::lock_guard<std::mutex> lock(engine.mutex);
-                if (failed) {
-                    ++engine.counters.failed;
-                } else if (cancelled) {
-                    ++engine.counters.cancelled;
-                } else if (published) {
-                    ++engine.counters.completed;
+                if (failed || cancelled || !published) {
+                    ++engine.counters.failures;
                 } else {
-                    ++engine.counters.stale;
+                    ++engine.counters.completed;
                 }
                 GGML_ASSERT(engine.outstanding > 0 && engine.outstanding_bytes >= job.bytes);
                 --engine.outstanding;
@@ -717,11 +683,6 @@ struct llama_moe_cache::impl {
                 engine.inflight_job = {};
                 engine.changed.notify_all();
             }
-        }
-        {
-            std::lock_guard<std::mutex> lock(engine.mutex);
-            engine.worker_id = {};
-            engine.changed.notify_all();
         }
     }
 
@@ -742,7 +703,7 @@ struct llama_moe_cache::impl {
                 --engine.queued;
                 --engine.outstanding;
                 engine.outstanding_bytes -= cancelled[n_cancelled].bytes;
-                ++engine.counters.cancelled;
+                ++engine.counters.failures;
                 ++n_cancelled;
             }
             if (engine.inflight && !engine.publishing) {
@@ -803,11 +764,9 @@ struct llama_moe_cache::impl {
         using result = fill_enqueue_result;
         if (engine.stopping) return result::unavailable;
         if (engine.outstanding >= max_fill_jobs) {
-            ++engine.counters.dropped;
             return result::job_limit;
         }
         if (bytes > max_fill_bytes || engine.outstanding_bytes > max_fill_bytes-bytes) {
-            ++engine.counters.dropped;
             return result::byte_limit;
         }
         return result::accepted;
@@ -823,121 +782,121 @@ struct llama_moe_cache::impl {
         engine.changed.notify_all();
     }
 
-    fill_enqueue_result enqueue_fill_locked(int32_t il, int32_t expert, int32_t slot) {
+    fill_enqueue_result resolve_fill_target(int32_t il, int32_t expert,
+            layer *& l, group *& g, device *& d) {
         using result = fill_enqueue_result;
-        if (!cpu_on_miss || il < 0 || (size_t) il >= layers.size() || expert < 0 || slot < -1) return result::invalid;
-        layer & l = layers[il];
-        if (l.group < 0 || l.experts.empty()) return result::unavailable;
-        const int32_t group_id = l.group;
-        group & g = groups[group_id];
-        if (!g.residency || (slot >= 0 && (size_t) slot >= (size_t) g.n_slots) ||
-                expert >= g.ref[0]->ne[2]) return result::invalid;
-        device & d = devices[g.device];
-        if (!backend_is_cuda(d.backend) || d.cuda_ordinal < 0 || l.experts.size() != g.banks.size() ||
-                l.experts.size() > max_fill_parts) return result::unavailable;
+        l = nullptr;
+        g = nullptr;
+        d = nullptr;
+        if (!async_mode || il < 0 || (size_t) il >= layers.size() || expert < 0) return result::invalid;
+        l = &layers[il];
+        if (l->group < 0 || l->experts.empty()) return result::unavailable;
+        g = &groups[l->group];
+        if (!g->residency || (size_t) expert >= (size_t) g->ref[0]->ne[2]) return result::invalid;
+        d = &devices[g->device];
+        if (!backend_is_cuda(d->backend) || d->cuda_ordinal < 0 || !d->fills ||
+                l->experts.size() != g->banks.size() || l->experts.size() > max_fill_parts) return result::unavailable;
+        return result::accepted;
+    }
 
-        if (!d.admission_engine_ready || !d.fills) return result::unavailable;
-        fill_engine & engine = *d.fills;
-
-        const llama_moe_cache_residency::key owner = { il, expert };
-        auto existing = g.residency->find(owner);
+    fill_enqueue_result coalesce_fill_owner(group & g, fill_engine & engine,
+            llama_moe_cache_residency::key owner) {
+        using result = fill_enqueue_result;
+        const auto existing = g.residency->find(owner);
         if (existing.state == llama_moe_cache_residency::slot_state::ready ||
                 existing.state == llama_moe_cache_residency::slot_state::copying) {
             std::lock_guard<std::mutex> lock(engine.mutex);
             return result::coalesced;
         }
-        if (existing.state != llama_moe_cache_residency::slot_state::free) return result::occupied;
+        return existing.state == llama_moe_cache_residency::slot_state::free ? result::accepted : result::occupied;
+    }
 
-        if (slot == -1) {
-            slot = -1;
-            for (int32_t candidate = 0; candidate < g.n_slots; ++candidate) {
-                if (g.residency->reusable((size_t) candidate)) {
-                    slot = candidate;
-                    break;
-                }
-            }
-            if (slot < 0) return result::no_free_slot;
-        }
-        if ((size_t) slot >= (size_t) g.n_slots) return result::invalid;
+    fill_enqueue_result prepare_fill_job(int32_t group_id, int32_t il, int32_t expert,
+            int32_t slot, fill_job & job) {
+        const auto result = build_fill_job(group_id, il, expert, slot, job);
+        if (result != fill_enqueue_result::accepted) return result;
+        return job.bytes <= max_fill_bytes ? result : fill_enqueue_result::byte_limit;
+    }
 
-        fill_job job;
-        const result built = build_fill_job(group_id, il, expert, slot, job);
-        if (built != result::accepted) return built;
-        if (job.bytes > max_fill_bytes) {
-            std::lock_guard<std::mutex> lock(engine.mutex);
-            ++engine.counters.dropped;
-            return result::byte_limit;
-        }
-        if (!g.residency->reserve((size_t) slot, owner, job.generation)) {
-            existing = g.residency->find(owner);
-            if (existing.state == llama_moe_cache_residency::slot_state::ready ||
-                    existing.state == llama_moe_cache_residency::slot_state::copying) {
-                std::lock_guard<std::mutex> lock(engine.mutex);
-                return result::coalesced;
-            }
-            return result::occupied;
-        }
-
-        result queued = result::accepted;
+    fill_enqueue_result queue_reserved_fill(group & g, fill_engine & engine, const fill_job & job) {
+        fill_enqueue_result status;
         {
             std::lock_guard<std::mutex> lock(engine.mutex);
-            queued = check_fill_queue_locked(engine, job.bytes);
-            if (queued == result::accepted) {
-                publish_fill_locked(engine, job);
+            status = check_fill_queue_locked(engine, job.bytes);
+            if (status == fill_enqueue_result::accepted) publish_fill_locked(engine, job);
+        }
+        if (status != fill_enqueue_result::accepted) {
+            g.residency->cancel((size_t) job.slot, job.owner, job.generation);
+        }
+        return status;
+    }
+
+    fill_enqueue_result enqueue_fill_locked(int32_t il, int32_t expert) {
+        using result = fill_enqueue_result;
+        layer * l;
+        group * g;
+        device * d;
+        const auto resolved = resolve_fill_target(il, expert, l, g, d);
+        if (resolved != result::accepted) return resolved;
+        fill_engine & engine = *d->fills;
+        const llama_moe_cache_residency::key owner = { il, expert };
+        const auto state = coalesce_fill_owner(*g, engine, owner);
+        if (state != result::accepted) return state;
+
+        int32_t slot = -1;
+        for (int32_t candidate = 0; candidate < g->n_slots; ++candidate) {
+            if (g->residency->reusable((size_t) candidate)) {
+                slot = candidate;
+                break;
             }
         }
-        if (queued != result::accepted) {
-            g.residency->cancel((size_t) slot, owner, job.generation);
-            return queued;
+        if (slot < 0) return result::no_free_slot;
+
+        fill_job job;
+        const auto prepared = prepare_fill_job(l->group, il, expert, slot, job);
+        if (prepared != result::accepted) return prepared;
+        if (!g->residency->reserve((size_t) slot, owner, job.generation)) {
+            const auto current = coalesce_fill_owner(*g, engine, owner);
+            return current == result::accepted ? result::occupied : current;
         }
-        return result::accepted;
+        return queue_reserved_fill(*g, engine, job);
     }
 
     fill_enqueue_result enqueue_free_slot(int32_t il, int32_t expert) {
-        // Live admission must never wait behind cancellation or another enqueue path.
         std::unique_lock<std::mutex> lock(fill_enqueue_mutex, std::try_to_lock);
         if (!lock.owns_lock()) return fill_enqueue_result::unavailable;
-        return enqueue_fill_locked(il, expert, -1);
+        return enqueue_fill_locked(il, expert);
     }
 
     fill_enqueue_result enqueue_replacement(int32_t il, int32_t expert,
             const int32_t * excluded_slots, size_t n_excluded_slots, int32_t * accepted_slot) {
         using result = fill_enqueue_result;
         if (accepted_slot) *accepted_slot = -1;
-        // Lock order for replacement is enqueue -> group admission -> fill queue -> residency.
-        // Provider pinning drops the residency lock before touching admission state.
+        // Lock order: enqueue -> admission -> fill queue -> residency.
         std::unique_lock<std::mutex> enqueue_lock(fill_enqueue_mutex, std::try_to_lock);
-        if (!enqueue_lock.owns_lock() || il < 0 || (size_t)il >= layers.size() || expert < 0) return result::unavailable;
-        layer & l = layers[il];
-        if (l.group < 0 || l.experts.empty()) return result::unavailable;
-        const int32_t group_id = l.group;
-        group & g = groups[group_id];
-        if (!g.admission || !g.residency || (size_t)expert >= (size_t)g.ref[0]->ne[2]) return result::invalid;
-        device & d = devices[g.device];
-        if (!d.admission_engine_ready || !d.fills || l.experts.size() != g.banks.size() ||
-                l.experts.size() > max_fill_parts) return result::unavailable;
+        if (!enqueue_lock.owns_lock()) return result::unavailable;
+        layer * l;
+        group * g;
+        device * d;
+        const auto resolved = resolve_fill_target(il, expert, l, g, d);
+        if (resolved != result::accepted) return resolved;
+        if (!g->admission) return result::unavailable;
 
         fill_job job;
-        const result built = build_fill_job(group_id, il, expert, -1, job);
-        if (built != result::accepted) return built;
-        if (job.bytes > max_fill_bytes) return result::byte_limit;
+        const auto prepared = prepare_fill_job(l->group, il, expert, -1, job);
+        if (prepared != result::accepted) return prepared;
 
-        group_admission_state & admission = *g.admission;
+        group_admission_state & admission = *g->admission;
         std::lock_guard<std::mutex> admission_lock(admission.mutex);
-        const auto existing = g.residency->find(job.owner);
-        if (existing.state == llama_moe_cache_residency::slot_state::ready ||
-                existing.state == llama_moe_cache_residency::slot_state::copying) {
-            std::lock_guard<std::mutex> queue_lock(d.fills->mutex);
-            return result::coalesced;
-        }
-        if (existing.state != llama_moe_cache_residency::slot_state::free) return result::occupied;
+        fill_engine & engine = *d->fills;
+        const auto state = coalesce_fill_owner(*g, engine, job.owner);
+        if (state != result::accepted) return state;
 
-        for (int32_t slot = 0; slot < g.n_slots; ++slot) {
-            if (g.residency->reusable((size_t)slot)) return result::no_free_slot;
+        for (int32_t slot = 0; slot < g->n_slots; ++slot) {
+            if (g->residency->reusable((size_t)slot)) return result::no_free_slot;
         }
 
-        std::lock_guard<std::mutex> queue_lock(d.fills->mutex);
-        fill_engine & engine = *d.fills;
+        std::lock_guard<std::mutex> queue_lock(engine.mutex);
         const result queue_status = check_fill_queue_locked(engine, job.bytes);
         if (queue_status != result::accepted) return queue_status;
 
@@ -948,27 +907,20 @@ struct llama_moe_cache::impl {
             bool excluded = false;
             for (size_t i = 0; excluded_slots && i < n_excluded_slots; ++i) excluded |= excluded_slots[i] == slot;
             if (excluded) continue;
-            const auto candidate = g.residency->inspect((size_t)slot);
+            const auto candidate = g->residency->inspect((size_t)slot);
             if (candidate.state != llama_moe_cache_residency::slot_state::ready || candidate.pins != 0 ||
-                    candidate.slot != slot || candidate.owner.layer < 0 || candidate.owner.expert < 0) continue;
-            const size_t victim_index = (size_t)candidate.owner.layer*(size_t)g.ref[0]->ne[2] +
-                    (size_t)candidate.owner.expert;
-            if (victim_index >= admission.live_ready.size() || !admission.live_ready[victim_index]) continue;
-            if (!g.residency->replace_ready((size_t)slot, candidate.owner, candidate.generation,
+                    candidate.slot != slot || candidate.owner.layer < 0 || candidate.owner.expert < 0 ||
+                    (size_t) slot >= admission.lru_member.size() || !admission.lru_member[slot]) continue;
+            if (!g->residency->replace_ready((size_t)slot, candidate.owner, candidate.generation,
                         job.owner, new_generation)) continue;
             victim_slot = slot;
             victim = candidate;
             break;
         }
         if (victim.generation == 0) {
-            ++admission.deferred;
             return result::no_victim;
         }
 
-        const size_t victim_index = (size_t)victim.owner.layer*(size_t)g.ref[0]->ne[2] +
-                (size_t)victim.owner.expert;
-        GGML_ASSERT(victim_index < admission.live_ready.size());
-        admission.live_ready[victim_index] = 0;
         admission.remove_lru(victim_slot);
         job.slot = victim_slot;
         job.generation = new_generation;
@@ -978,11 +930,6 @@ struct llama_moe_cache::impl {
         }
         publish_fill_locked(engine, job);
         return result::accepted;
-    }
-
-    void defer_admission(group_admission_state & admission) {
-        std::lock_guard<std::mutex> lock(admission.mutex);
-        ++admission.deferred;
     }
 
     void rollback_miss_demand(group & g, llama_moe_cache_residency::key key,
@@ -998,14 +945,12 @@ struct llama_moe_cache::impl {
     }
 
     void admit_provider_misses(provider_request & req) {
-        if (!cpu_on_miss || !req.admission_plan_valid) return;
+        if (!async_mode || !req.admission_plan_valid) return;
         const int32_t il = req.weight.layer;
         if (il < 0 || (size_t) il >= layers.size()) return;
         group & g = groups[layers[il].group];
         if (!g.admission) return;
         group_admission_state & admission = *g.admission;
-
-        if (req.large_batch_admission_bypass) return;
 
         const size_t n_experts = (size_t) g.ref[0]->ne[2];
         const size_t full_key_count = g.layers.size() * n_experts;
@@ -1026,8 +971,7 @@ struct llama_moe_cache::impl {
             {
                 std::lock_guard<std::mutex> lock(admission.mutex);
                 if (!req.admission_driver) continue;
-                // Publication uses this same lock, so READY/COPYING is decided
-                // before this observation can mutate whole-expert demand.
+                // Admission and publication share this lock, keeping READY/COPYING stable here
                 const auto existing = g.residency->find(key);
                 if (existing.state == llama_moe_cache_residency::slot_state::ready) {
                     admission.demand[demand_index] = 0;
@@ -1049,13 +993,11 @@ struct llama_moe_cache::impl {
                 }
                 const uint8_t threshold = has_free_slot ? (first_miss_admits ? 1 : 2) : 8;
                 if (demand < threshold) {
-                    ++admission.deferred;
                     continue;
                 }
             }
 
             if (accepted_jobs >= 8) {
-                defer_admission(admission);
                 continue;
             }
 
@@ -1063,21 +1005,13 @@ struct llama_moe_cache::impl {
             const auto result = has_free_slot ? enqueue_free_slot(key.layer, key.expert) :
                     enqueue_replacement(key.layer, key.expert, replacement_slots.data(),
                             n_replacement_slots, &replacement_slot);
-            if (result == fill_enqueue_result::no_free_slot ||
-                    result == fill_enqueue_result::occupied) {
-                defer_admission(admission);
-            } else if (result == fill_enqueue_result::no_victim) {
-                // The full-pool deferral was recorded by enqueue_replacement.
-            } else if (result == fill_enqueue_result::accepted) {
+            if (result == fill_enqueue_result::accepted) {
                 ++accepted_jobs;
                 if (!has_free_slot && replacement_slot >= 0 && n_replacement_slots < replacement_slots.size()) {
                     replacement_slots[n_replacement_slots++] = replacement_slot;
                 }
-            } else if (result != fill_enqueue_result::coalesced) {
-                defer_admission(admission);
-            } else {
-                // A competing enqueue won after the initial absent-key decision.
-                // Undo only this observation unless publication already reset demand.
+            } else if (result == fill_enqueue_result::coalesced) {
+                // A concurrent enqueue won, undo only this observation.
                 rollback_miss_demand(g, key, demand_index, demand_incremented);
             }
         }
@@ -1111,20 +1045,11 @@ struct llama_moe_cache::impl {
     }
 
     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const {
-        if (il < 0 || (size_t) il >= layers.size() || layers[il].group < 0) {
-            ++incompatible_layer_skips;
-            return nullptr;
-        }
+        if (il < 0 || (size_t) il >= layers.size() || layers[il].group < 0) return nullptr;
         const layer & l = layers[il];
         const group & g = groups[l.group];
-        if (n_tokens <= 0 || n_tokens > max_batch) {
-            ++large_batch_skips;
-            return nullptr;
-        }
-        if (std::min<int64_t>(n_tokens*n_expert_used, l.slot_map->ne[1]) > g.n_slots) {
-            ++incompatible_layer_skips;
-            return nullptr;
-        }
+        if (n_tokens <= 0 || n_tokens > GGML_MOE_PROVIDER_MAX_BATCH) return nullptr;
+        if (std::min<int64_t>(n_tokens*n_expert_used, l.slot_map->ne[1]) > g.n_slots) return nullptr;
         return l.slot_map;
     }
 
@@ -1135,7 +1060,7 @@ struct llama_moe_cache::impl {
 
     bool copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
             ggml_backend_sched_copy_phase phase) {
-        if (cpu_on_miss) return false;
+        if (async_mode) return false;
         auto it = layer_of.find(src);
         if (it == layer_of.end()) return false;
         if (phase == GGML_BACKEND_SCHED_COPY_PHASE_QUERY) return true;
@@ -1200,40 +1125,29 @@ struct llama_moe_cache::impl {
         };
         log_upload("ubatch <= 8", stats_small);
         log_upload("ubatch 9-32", stats_large);
-        if (large_batch_skips || incompatible_layer_skips) {
-            LLAMA_LOG_INFO("llama_moe_cache: skipped %zu large-batch and %zu ineligible layer accesses\n",
-                    large_batch_skips, incompatible_layer_skips);
-        }
-        if (!cpu_on_miss || cpu_miss_stats.operations == 0) return;
-        size_t accepted = 0, completed = 0, failed = 0, dropped = 0;
+        if (!async_mode || async_stats.operations == 0) return;
+        size_t accepted = 0, completed = 0, failures = 0;
         for (const device & d : devices) if (d.fills) {
             std::lock_guard<std::mutex> lock(d.fills->mutex);
             const auto & c = d.fills->counters;
             accepted += c.accepted;
             completed += c.completed;
-            failed += c.failed + c.cancelled + c.stale;
-            dropped += c.dropped;
+            failures += c.failures;
         }
-        size_t deferred = 0;
-        for (const group & g : groups) if (g.admission) {
-            std::lock_guard<std::mutex> lock(g.admission->mutex);
-            deferred += g.admission->deferred;
-        }
-        LLAMA_LOG_INFO("llama_moe_cache: cpu_miss operation_rows_committed/eligible=%zu/%zu fills_completed/accepted=%zu/%zu fills_dropped_or_deferred=%zu fills_failed_cancelled_stale=%zu\n",
-                cpu_miss_stats.committed_gpu_rows, cpu_miss_stats.eligible_rows,
-                completed, accepted, dropped + deferred, failed);
+        LLAMA_LOG_INFO("llama_moe_cache: async operation_rows_committed/eligible=%zu/%zu fills_completed/accepted=%zu/%zu fills_failed_cancelled_stale=%zu\n",
+                async_stats.committed_gpu_rows, async_stats.eligible_rows,
+                completed, accepted, failures);
     }
 };
 
 bool llama_moe_cache::impl::provider_begin(void * user_data, const ggml_tensor * op, void ** request) {
     impl * self = (impl *) user_data;
     *request = nullptr;
-    if (!self->cpu_on_miss || !op || !op->src[0]) return false;
+    if (!self->async_mode || !op || !op->src[0]) return false;
     const bool fused = op->op == GGML_OP_MOE_FUSED_UP_GATE;
     if (!fused && op->op != GGML_OP_MUL_MAT_ID) return false;
     const ggml_tensor * ids = fused ? op->src[3] : op->src[2];
     const ggml_tensor * input = fused ? op->src[2] : op->src[1];
-    if (ids && ids->ne[1] > max_batch) ++self->large_batch_skips;
     if (!ids || !input || ids->type != GGML_TYPE_I32 || ids->nb[0] != sizeof(int32_t) ||
             input->type != GGML_TYPE_F32 || input->nb[0] != sizeof(float) || input->ne[0] <= 0 ||
             input->ne[1] <= 0 || input->ne[2] != ids->ne[1] || input->ne[3] != 1 ||
@@ -1241,7 +1155,7 @@ bool llama_moe_cache::impl::provider_begin(void * user_data, const ggml_tensor *
             op->ne[0] <= 0 || op->ne[1] != ids->ne[0] || op->ne[2] != ids->ne[1] || op->ne[3] != 1) return false;
     if (fused) {
         if (input->ne[1] != 1) return false;
-        // Until the CUDA provider supports fused biases, keep those layouts on the stock CPU operation.
+        // Fused bias layouts fall back until direct CUDA dispatch supports them.
         if (op->src[4] || op->src[5] || !ggml_is_quantized(op->src[0]->type) ||
                 (op->src[1] && (op->src[1]->type != op->src[0]->type ||
                         !ggml_are_same_shape(op->src[0], op->src[1]))) ||
@@ -1302,7 +1216,6 @@ bool llama_moe_cache::impl::provider_begin(void * user_data, const ggml_tensor *
     req->n_hit = 0;
     req->n_valid = 0;
     req->n_miss_candidates = 0;
-    req->n_tokens = (size_t) ids->ne[1];
     req->n_pins = 0;
     req->fused = fused;
     req->n_unique_activations = 0;
@@ -1312,7 +1225,6 @@ bool llama_moe_cache::impl::provider_begin(void * user_data, const ggml_tensor *
     req->admission_driver = fused && l.admission_part >= 0
             ? (selected.part == l.admission_part || selected_second.part == l.admission_part)
             : (!fused && l.admission_part >= 0 && selected.part == l.admission_part);
-    req->large_batch_admission_bypass = false;
     req->active = true;
     self->active_provider_requests.fetch_add(1, std::memory_order_release);
     *request = req;
@@ -1391,7 +1303,7 @@ bool llama_moe_cache::impl::prepare_direct_inputs(provider_request & req,
     return false;
 #else
     if (!source || !source->data || !ids || ids->ne[0] <= 0 || req.n_hit == 0 ||
-            req.n_hit > max_provider_rows || k == 0 || m == 0 ||
+            req.n_hit > GGML_MOE_PROVIDER_MAX_ROWS || k == 0 || m == 0 ||
             k > SIZE_MAX/sizeof(float)/req.n_hit || m > SIZE_MAX/sizeof(float)/req.n_hit ||
             req.n_hit > SIZE_MAX/(2*sizeof(int32_t))) return false;
 
@@ -1459,9 +1371,7 @@ void llama_moe_cache::impl::touch_ready_pins_locked(const group & g,
     if (!g.admission || !pins) return;
     for (size_t i = 0; i < n_pins; ++i) {
         const auto & pin = pins[i];
-        const size_t key_index = (size_t)pin.owner.layer*(size_t)g.ref[0]->ne[2] +
-                (size_t)pin.owner.expert;
-        if (key_index < g.admission->live_ready.size() && g.admission->live_ready[key_index]) {
+        if (pin.slot < g.admission->lru_member.size() && g.admission->lru_member[pin.slot]) {
             g.admission->touch_lru((int32_t)pin.slot);
         }
     }
@@ -1474,7 +1384,7 @@ bool llama_moe_cache::impl::provider_plan(void * user_data, void * request, cons
     if (!req || !req->active || op != req->op) return false;
     const ggml_tensor * ids = req->fused ? op->src[3] : op->src[2];
     if (!ids || ids->ne[0] <= 0 || ids->ne[1] <= 0 || (size_t) ids->ne[0] > SIZE_MAX / (size_t) ids->ne[1] ||
-            n_rows > max_provider_rows || n_rows != (size_t) ids->ne[0] * (size_t) ids->ne[1]) return false;
+            n_rows > GGML_MOE_PROVIDER_MAX_ROWS || n_rows != (size_t) ids->ne[0] * (size_t) ids->ne[1]) return false;
 
     const layer & l = self->layers[req->weight.layer];
     const group & g = self->groups[l.group];
@@ -1487,25 +1397,23 @@ bool llama_moe_cache::impl::provider_plan(void * user_data, void * request, cons
             const int32_t expert = *(const int32_t *) ((const char *) ids->data + token*ids->nb[1] + selection*ids->nb[0]);
             req->route_keys[row] = {};
             req->pinned_slots[row] = -1;
-            req->pinned_generations[row] = 0;
             if (expert < 0 || expert >= g.ref[0]->ne[2]) continue;
             ++req->n_valid;
             req->route_keys[row] = { req->weight.layer, expert };
         }
     }
     if (!g.residency) {
-        ++self->cpu_miss_stats.operations;
-        self->cpu_miss_stats.eligible_rows += req->n_valid;
+        ++self->async_stats.operations;
+        self->async_stats.eligible_rows += req->n_valid;
         return true;
     }
     if (!g.residency->pin_rows(req->route_keys.data(), n_rows,
-                req->pinned_slots.data(), req->pinned_generations.data(),
+                req->pinned_slots.data(),
                 req->pins.data(), req->pins.size(), req->n_pins)) return false;
-    req->n_tokens = (size_t) ids->ne[1];
-    if (self->cpu_on_miss && g.admission) {
+    const size_t n_tokens = (size_t) ids->ne[1];
+    if (self->async_mode && g.admission) {
         req->admission_plan_valid = true;
-        req->large_batch_admission_bypass = req->n_tokens > 8;
-        if (!req->large_batch_admission_bypass) {
+        if (n_tokens <= 8) {
             for (size_t row = 0; row < n_rows; ++row) {
                 const auto key = req->route_keys[row];
                 if (key.layer < 0 || req->pinned_slots[row] >= 0) continue;
@@ -1525,16 +1433,14 @@ bool llama_moe_cache::impl::provider_plan(void * user_data, void * request, cons
             if (slot < 0) continue;
             gpu_rows[row] = 1;
             GGML_ASSERT(req->n_hit < req->rows.size());
-            const int32_t expert = req->route_keys[row].expert;
-            req->rows[req->n_hit++] = { row, slot, expert, req->pinned_generations[row] };
+            req->rows[req->n_hit++] = { row, slot };
     }
     if (g.admission && req->n_hit != 0) {
         std::lock_guard<std::mutex> lock(g.admission->mutex);
-        // One pin represents each unique (group, slot, generation) used by this node.
         self->touch_ready_pins_locked(g, req->pins.data(), req->n_pins);
     }
-    ++self->cpu_miss_stats.operations;
-    self->cpu_miss_stats.eligible_rows += req->n_valid;
+    ++self->async_stats.operations;
+    self->async_stats.eligible_rows += req->n_valid;
     return true;
 }
 
@@ -1564,7 +1470,7 @@ bool llama_moe_cache::impl::provider_dispatch(void * user_data, void * request, 
         const size_t k = (size_t) source->ne[0];
         const size_t m = (size_t) op->ne[0];
         const ggml_type type = op->src[0]->type;
-        if (k == 0 || m == 0 || n_hit > max_provider_rows ||
+        if (k == 0 || m == 0 || n_hit > GGML_MOE_PROVIDER_MAX_ROWS ||
                 k > (size_t)INT64_MAX-511) return false;
         const int64_t padded_k = GGML_PAD((int64_t)k, 512);
         direct_buffers buffers;
@@ -1645,7 +1551,7 @@ bool llama_moe_cache::impl::provider_collect(void * user_data, void * request, g
         void * dst = (char *) op->data + token*op->nb[2] + selection*op->nb[1];
         memcpy(dst, staging + d.direct.input_capacity + i*row_bytes, row_bytes);
     }
-    self->cpu_miss_stats.committed_gpu_rows += req->n_hit;
+    self->async_stats.committed_gpu_rows += req->n_hit;
     GGML_UNUSED(gpu_rows);
     return true;
 }
@@ -1675,14 +1581,14 @@ void llama_moe_cache::impl::provider_end(void * user_data, void * request) {
     req->n_rows = req->n_hit = req->n_valid = 0;
     req->second_weight = { -1, -1, nullptr };
     req->fused = false;
-    req->admission_plan_valid = req->admission_driver = req->large_batch_admission_bypass = false;
+    req->admission_plan_valid = req->admission_driver = false;
     req->n_miss_candidates = 0;
 }
 
 llama_moe_cache::llama_moe_cache(const llama_model & model,
         const std::vector<ggml_backend *> & backends,
-        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size, bool cpu_on_miss)
-        : pimpl(new impl(model, backends, bufts, size, cpu_on_miss)) {}
+        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size, bool async_mode)
+        : pimpl(new impl(model, backends, bufts, size, async_mode)) {}
 
 llama_moe_cache::~llama_moe_cache() = default;
 ggml_backend * llama_moe_cache::backend(int32_t il) const { return pimpl->backend(il); }

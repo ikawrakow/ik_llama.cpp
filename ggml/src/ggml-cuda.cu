@@ -1452,7 +1452,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
     // Whether to request the kernel to attempt to defragment memory to back the region with 2M hugepages.
     // Otherwise dependent on kernel settings:
-    //   * enabled="always":  Hand over whatever 2M pages it has on hand and the rest will be 4k
+    //   * enabled="always":  Hand over whatever 2M pages it has on hand and the rest will be 4k 
     //   * enabled="madvise": 4k pages
     //   * enabled="never":   4k pages
     // Potluck on performance. If there's not much defragmentation to do, then you win. Otherwise come back in an hour.

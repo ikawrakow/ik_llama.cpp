@@ -18,7 +18,7 @@ public:
     llama_moe_cache(const llama_model & model,
             const std::vector<ggml_backend *> & backends,
             const std::vector<ggml_backend_buffer_type *> & bufts,
-            size_t size, bool cpu_on_miss = false);
+            size_t size, bool async_mode = false);
     ~llama_moe_cache();
 
     ggml_backend * backend(int32_t il) const;

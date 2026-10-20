@@ -924,8 +924,8 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     if (params.fit && params.moe_cache_size > 0) {
         throw std::invalid_argument("error: --fit cannot be combined with --moe-cache-mib because fit does not reserve context-time cache memory");
     }
-    if (params.moe_cache_miss_policy == LLAMA_MOE_CACHE_MISS_CPU && params.moe_cache_size == 0) {
-        throw std::invalid_argument("error: --moe-cache-miss cpu requires a nonzero --moe-cache-mib budget");
+    if (params.moe_cache_async && params.moe_cache_size == 0) {
+        throw std::invalid_argument("error: --moe-cache-async requires a nonzero --moe-cache-mib budget");
     }
 
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
@@ -2407,16 +2407,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.moe_cache_size = (size_t) mib * 1024 * 1024;
         return true;
     }
-    if (arg == "--moe-cache-miss") {
-        CHECK_ARG
-        if (strcmp(argv[i], "upload") == 0) {
-            params.moe_cache_miss_policy = LLAMA_MOE_CACHE_MISS_UPLOAD;
-        } else if (strcmp(argv[i], "cpu") == 0) {
-            params.moe_cache_miss_policy = LLAMA_MOE_CACHE_MISS_CPU;
-        } else {
-            fprintf(stderr, "error: Invalid value for --moe-cache-miss: %s (expected upload or cpu)\n", argv[i]);
-            invalid_param = true;
-        }
+    if (arg == "--moe-cache-async" || arg == "-mca") {
+        params.moe_cache_async = true;
         return true;
     }
     if (arg == "--fit") {
@@ -3599,7 +3591,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "       --moe-cache-mib N",       "Total GPU cache budget in MiB for CPU-resident MoE experts, split across GPUs (default: 0, disabled)"});
-    options.push_back({ "*",           "       --moe-cache-miss MODE",   "MoE cache miss handling: upload (default) or cpu (experimental, requires cache budget)"});
+    options.push_back({ "*",           "-mca,   --moe-cache-async",       "fill MoE cache misses asynchronously; current misses run on CPU (requires --moe-cache-mib)"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
     options.push_back({ "*",           "-dexp,  --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
     options.push_back({ "*",           "-dple,  --defer-ple",            "keep sparse tables (PLE, engram) on the file instead of resident in memory (Linux, Windows)"});
@@ -4706,7 +4698,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
 
     cparams.n_ctx             = params.n_ctx;
     cparams.moe_cache_size    = params.moe_cache_size;
-    cparams.moe_cache_miss_policy = params.moe_cache_miss_policy;
+    cparams.moe_cache_async = params.moe_cache_async;
     cparams.n_seq_max         = params.n_parallel;
     cparams.n_batch           = n_batch;
     cparams.n_ubatch          = n_ubatch;

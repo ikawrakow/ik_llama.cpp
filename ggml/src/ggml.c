@@ -3021,9 +3021,6 @@ struct ggml_context_container {
     struct ggml_context context;
 };
 
-#define GGML_MOE_PROVIDER_MAX_BATCH 32
-#define GGML_MOE_PROVIDER_MAX_ROWS 1024
-
 struct ggml_moe_provider_state {
     void * request;
     uint8_t gpu_rows[GGML_MOE_PROVIDER_MAX_ROWS];
@@ -23193,7 +23190,7 @@ static void ggml_compute_forward_pad_f32(
         for (int ib = ith; ib < nblocks; ib += nth) {
             int first = ib*k_block_size;
             int last  = MIN(first + k_block_size, nelem);
-            //
+            // 
             //int ii = first;
             //int i3 = ii/(ne0*ne1*ne2); ii -= i3*ne0*ne1*ne2;
             //int i2 = ii/(ne0*ne1    ); ii -= i2*ne0*ne1;

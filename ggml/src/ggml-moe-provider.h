@@ -6,14 +6,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define GGML_MOE_PROVIDER_MAX_BATCH 32
+#define GGML_MOE_PROVIDER_MAX_ROWS 1024
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// The scheduler borrows this provider until synchronized and replaced or destroyed.
-// A successful begin is paired with exactly one end. A failed begin owns no session.
-// Row masks use token * selected_experts + selection. Failed dispatch/collection
-// must quiesce writes; successful collection publishes completed GPU rows.
+// Borrowed until scheduler synchronization, successful begin() is paired with end().
+// Rows are token-major and failed dispatch/collection must quiesce writes.
 struct ggml_moe_provider {
     void * user_data;
     bool (*begin)(void * user_data, const struct ggml_tensor * op, void ** request);
@@ -42,7 +43,6 @@ GGML_API GGML_CALL bool ggml_cuda_moe_cache_try_synchronize(ggml_backend_t backe
 }
 
 #ifdef GGML_USE_CUDA
-// Enqueues one packed cache input copy, direct expert matvec, and actual-row output copy.
 GGML_API bool ggml_cuda_moe_cache_type_supported(enum ggml_type type);
 GGML_API bool ggml_cuda_moe_cache_dispatch(
         ggml_backend_t backend, enum ggml_type type,
