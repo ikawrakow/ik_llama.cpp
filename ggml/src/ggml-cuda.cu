@@ -4556,10 +4556,25 @@ static inline const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
 }
 
 static inline ggml_cuda_graph * ggml_cuda_get_graph(ggml_backend_cuda_context & ctx, const void * key) {
+    const int64_t time_now = ggml_time_us();
+
+    // sweep every 5s, evicting cuda graphs unused for >=10s
+    if (time_now - ctx.last_graph_eviction_sweep >= 5'000'000) {
+        ctx.last_graph_eviction_sweep = time_now;
+        for (auto it = ctx.cuda_graphs.begin(); it != ctx.cuda_graphs.end(); ) {
+            if (time_now - it->second->last_used_time >= 10'000'000) {
+                it = ctx.cuda_graphs.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     auto & graph = ctx.cuda_graphs[key];
     if (!graph) {
         graph = std::make_unique<ggml_cuda_graph>();
     }
+    graph->last_used_time = time_now;
     return graph.get();
 }
 
@@ -4745,7 +4760,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
     [[maybe_unused]] const bool integrated = false; //ggml_cuda_info().devices[cuda_ctx->device].integrated;
 
 #ifdef USE_CUDA_GRAPH
-    auto graph = use_cuda_graph ? ggml_cuda_get_graph(*cuda_ctx, ggml_cuda_graph_get_key(cgraph)) : nullptr;
+    // the graph that graph_compute selected; a second lookup could sweep it away
+    auto graph = use_cuda_graph ? cuda_ctx->cur_graph : nullptr;
 #endif
 
 #if IK_PRINT_TIMING
