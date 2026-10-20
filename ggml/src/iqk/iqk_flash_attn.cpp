@@ -76,27 +76,15 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
             size += nstep_k*result_size;
             return size;
         }
-        int nstep_k = K->ne[1]/32;
-        if (nstep_k >= 4*nth) {
-            auto size_thread = (V->ne[0] + 16)*rk2*sizeof(float);
-            size += size_thread*nth;
-            return size;
+        // With nth >= rk2 the consumer can fall through to the chunked loop, which uses up to 4*nth slots.
+        int nstep_k = nth;
+        if (nth >= rk2) {
+            nstep_k = (K->ne[1] + 31)/32;
+            if (nstep_k > 4*nth) nstep_k = 4*nth;
+            if (nstep_k < nth) nstep_k = nth;
         }
-        int gcd_k   = simple_gcd(nstep_k, nth);
-        if (gcd_k >= 1) {
-            int nth_k = nth/gcd_k;
-            int nq_per_thread = (rk2 + nth_k - 1)/nth_k;
-            if (nq_per_thread > 1) {
-                auto size_thread = (V->ne[0] + 16)*nq_per_thread*sizeof(float);
-                size += size_thread*nth;
-                return size;
-            }
-        }
-        int rv2 = Q->ne[2] / V->ne[2];
-        if (Q->ne[1] == 1 && Q->ne[3] == 1 && rk2 > 1 && rk2 == rv2 && K->ne[1]*K->ne[2] >= 32*nth) {
-            auto result_size = (V->ne[0] + 16)*rk2*sizeof(float);
-            size += result_size*nth;
-        }
+        size_t result_size = (V->ne[0] + 16)*rk2*sizeof(float);
+        size += nstep_k*result_size;
         return size;
     }
     return size;
