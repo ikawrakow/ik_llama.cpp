@@ -40,6 +40,9 @@ struct llama_hparams {
     bool     swa_full_non_causal = false; // DSV4 vision: in a non-causal (image) span, window only clips older tokens
     uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
     uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head
+
+    uint32_t n_embd_head_k_mla = 0;
+    uint32_t n_embd_head_v_mla = 0;
     uint32_t n_embd_head_k_swa;
     uint32_t n_embd_head_v_swa;
     uint32_t n_expert = 0;
@@ -57,6 +60,8 @@ struct llama_hparams {
     uint32_t n_ff_exp           = 0;
     uint32_t n_ff_shexp         = 0;
     uint32_t n_expert_shared    = 0;
+    uint32_t n_expert_latent    = 0;
+    uint32_t attn_res_block_size = 0;
     // K2 Horizon MoVA
     uint32_t n_value_expert      = 0;
     uint32_t n_value_expert_used = 0;
@@ -110,6 +115,8 @@ struct llama_hparams {
     uint32_t ssm_n_group = 0;
     bool     kda_safe_gate = false;
     float    kda_gate_lower_bound = 0.0f;
+    float    situ_beta          = 0.0f;
+    float    situ_linear_beta   = 0.0f;
 
     // for hybrid state-space models (e.g. qwen3next)
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
@@ -296,6 +303,8 @@ struct llama_hparams {
         if (this->n_swa_pattern != other.n_swa_pattern) return false;
         if (this->n_embd_head_k_full != other.n_embd_head_k_full) return true;
         if (this->n_embd_head_v_full != other.n_embd_head_v_full) return true;
+        if (this->n_embd_head_k_mla != other.n_embd_head_k_mla) return true;
+        if (this->n_embd_head_v_mla != other.n_embd_head_v_mla) return true;
         if (this->n_expert      != other.n_expert)      return true;
         if (this->n_expert_used != other.n_expert_used) return true;
 
@@ -310,6 +319,8 @@ struct llama_hparams {
         if (this->n_ff_exp           != other.n_ff_exp)           return true;
         if (this->n_ff_shexp         != other.n_ff_shexp)         return true;
         if (this->n_expert_shared    != other.n_expert_shared)    return true;
+        if (this->n_expert_latent      != other.n_expert_latent)      return true;
+        if (this->attn_res_block_size  != other.attn_res_block_size)  return true;
         if (this->n_value_expert      != other.n_value_expert)      return true;
         if (this->n_value_expert_used != other.n_value_expert_used) return true;
 
@@ -335,6 +346,8 @@ struct llama_hparams {
         if (!is_float_close(this->f_norm_eps,            other.f_norm_eps,            EPSILON)) return true;
         if (!is_float_close(this->f_norm_rms_eps,        other.f_norm_rms_eps,        EPSILON)) return true;
         if (!is_float_close(this->kda_gate_lower_bound,  other.kda_gate_lower_bound,  EPSILON)) return true;
+        if (!is_float_close(this->situ_beta,             other.situ_beta,             EPSILON)) return true;
+        if (!is_float_close(this->situ_linear_beta,      other.situ_linear_beta,      EPSILON)) return true;
         if (!is_float_close(this->rope_attn_factor,      other.rope_attn_factor,      EPSILON)) return true;
         if (!is_float_close(this->rope_freq_base_train,  other.rope_freq_base_train,  EPSILON)) return true;
         if (!is_float_close(this->rope_freq_scale_train, other.rope_freq_scale_train, EPSILON)) return true;

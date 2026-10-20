@@ -2391,6 +2391,60 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_KIMI_K3,
+        {
+            { LLM_TENSOR_ATTN_GATE,         "blk.%d.attn_gate" },
+            { LLM_TENSOR_ATTN_K,            "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_KV_A_MQA,     "blk.%d.attn_kv_a_mqa" },
+            { LLM_TENSOR_ATTN_KV_A_NORM,    "blk.%d.attn_kv_a_norm" },
+            { LLM_TENSOR_ATTN_KV_B,         "blk.%d.attn_kv_b" },
+            { LLM_TENSOR_ATTN_K_B,          "blk.%d.attn_k_b" },
+            { LLM_TENSOR_ATTN_NORM,         "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_OUT,          "blk.%d.attn_output" },
+            { LLM_TENSOR_ATTN_Q,            "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_Q_A,          "blk.%d.attn_q_a" },
+            { LLM_TENSOR_ATTN_Q_A_NORM,     "blk.%d.attn_q_a_norm" },
+            { LLM_TENSOR_ATTN_Q_B,          "blk.%d.attn_q_b" },
+            { LLM_TENSOR_ATTN_RES_SCORE,    "blk.%d.attn_res_score" },
+            { LLM_TENSOR_ATTN_V,            "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_V_B,          "blk.%d.attn_v_b" },
+            { LLM_TENSOR_FFN_DOWN,          "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_DOWN_EXP,      "blk.%d.ffn_down.%d" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,     "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_DOWN_SHEXP,    "blk.%d.ffn_down_shexp" },
+            { LLM_TENSOR_FFN_EXP_PROBS_B,   "blk.%d.exp_probs_b" },
+            { LLM_TENSOR_FFN_GATE,          "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_GATE_EXP,      "blk.%d.ffn_gate.%d" },
+            { LLM_TENSOR_FFN_GATE_EXPS,     "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_GATE_INP,      "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_SHEXP,    "blk.%d.ffn_gate_shexp" },
+            { LLM_TENSOR_FFN_NORM,          "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_RES_SCORE,     "blk.%d.ffn_res_score" },
+            { LLM_TENSOR_FFN_ROUTED_DOWN,   "blk.%d.ffn_routed_down" },
+            { LLM_TENSOR_FFN_ROUTED_NORM,   "blk.%d.ffn_routed_norm" },
+            { LLM_TENSOR_FFN_ROUTED_UP,     "blk.%d.ffn_routed_up" },
+            { LLM_TENSOR_FFN_UP,            "blk.%d.ffn_up" },
+            { LLM_TENSOR_FFN_UP_EXP,        "blk.%d.ffn_up.%d" },
+            { LLM_TENSOR_FFN_UP_EXPS,       "blk.%d.ffn_up_exps" },
+            { LLM_TENSOR_FFN_UP_SHEXP,      "blk.%d.ffn_up_shexp" },
+            { LLM_TENSOR_OUTPUT,            "output" },
+            { LLM_TENSOR_OUTPUT_NORM,       "output_norm" },
+            { LLM_TENSOR_OUTPUT_RES_SCORE,  "output_res_score" },
+            { LLM_TENSOR_SSM_A,             "blk.%d.ssm_a" },
+            { LLM_TENSOR_SSM_A_NOSCAN,      "blk.%d.ssm_a" },
+            { LLM_TENSOR_SSM_BETA,          "blk.%d.ssm_beta" },
+            { LLM_TENSOR_SSM_CONV1D_K,      "blk.%d.ssm_conv1d_k" },
+            { LLM_TENSOR_SSM_CONV1D_Q,      "blk.%d.ssm_conv1d_q" },
+            { LLM_TENSOR_SSM_CONV1D_V,      "blk.%d.ssm_conv1d_v" },
+            { LLM_TENSOR_SSM_DT,            "blk.%d.ssm_dt" },
+            { LLM_TENSOR_SSM_F_A,           "blk.%d.ssm_f_a" },
+            { LLM_TENSOR_SSM_F_B,           "blk.%d.ssm_f_b" },
+            { LLM_TENSOR_SSM_G,             "blk.%d.ssm_g" },
+            { LLM_TENSOR_SSM_NORM,          "blk.%d.ssm_norm" },
+            { LLM_TENSOR_TOKEN_EMBD,        "token_embd" },
+        },
+    },
+    {
         LLM_ARCH_UNKNOWN,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -2878,6 +2932,15 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
             il < (int) hparams.n_layer - (int) hparams.nextn_predict_layers &&
             !hparams.swa_layers[il]) {
             size += ggml_row_size(idx_type_k, hparams.indexer_head_size) * kv_size;
+        }
+        return size;
+    }
+    if (arch == LLM_ARCH_KIMI_K3) {
+        const uint32_t k_rows = llama_kv_layer_rows(hparams, il, kv_size, swa_compress && supports_swa_compress(), n_ubatch,
+                                                    llama_kv_cache::get_padding(flash_attn));
+        size_t size = ggml_row_size(type_k, hparams.n_embd_head_k(il)) * hparams.n_head_kv(il) * k_rows;
+        if (mla_attn == 1 && !flash_attn) {
+            size += ggml_row_size(type_v, hparams.n_lora_kv*k_rows);
         }
         return size;
     }

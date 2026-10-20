@@ -8,7 +8,7 @@
 #include <limits>
 #include <map>
 
-#define LLAMA_MAX_EXPERTS 512  // Qwen3 Next
+#define LLAMA_MAX_EXPERTS 1024
 
 static const std::map<llama_rope_scaling_type, const char *> LLAMA_ROPE_SCALING_TYPES = {
     { LLAMA_ROPE_SCALING_TYPE_NONE,   "none"   },
@@ -2482,6 +2482,58 @@ void llm_load_hparams(
                     }
                     validate_dflash_hparams(hparams, model.arch);
                 }
+            } break;
+        case LLM_ARCH_KIMI_K3:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,          hparams.n_embd_head_k_mla);
+                ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,        hparams.n_embd_head_v_mla);
+                ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,             hparams.n_lora_q, false);
+                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,            hparams.n_lora_kv);
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,                   hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_KDA_HEAD_DIM,                      hparams.ssm_d_state);
+                ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND,              hparams.kda_gate_lower_bound, false);
+
+                uint32_t n_kda_head = 0;
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.recurrent_layer_arr[il] = hparams.n_head_kv_arr[il] == 0;
+                    if (hparams.recurrent_layer_arr[il]) {
+                        n_kda_head = hparams.n_head_arr[il];
+                    }
+                }
+
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner, false);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank, false);
+
+                if (hparams.ssm_dt_rank == 0) {
+                    hparams.ssm_dt_rank = n_kda_head;
+                }
+                hparams.ssm_n_group = n_kda_head;
+                if (hparams.ssm_d_inner == 0) {
+                    hparams.ssm_d_inner = hparams.ssm_d_state * hparams.ssm_dt_rank;
+                }
+                GGML_ASSERT(hparams.ssm_d_state > 0 && hparams.ssm_d_conv > 0);
+                GGML_ASSERT(hparams.ssm_d_inner % hparams.ssm_dt_rank == 0);
+
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,               hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
+                ml.get_key(LLM_KV_EXPERT_LATENT_LENGTH,              hparams.n_expert_latent, false);
+
+                ml.get_key(LLM_KV_ATTN_RES_BLOCK_SIZE,               hparams.attn_res_block_size);
+                ml.get_key(LLM_KV_ACTIVATION_SITU_BETA,              hparams.situ_beta);
+                ml.get_key(LLM_KV_ACTIVATION_SITU_LINEAR_BETA,       hparams.situ_linear_beta);
+
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    if (!hparams.recurrent_layer_arr[il]) {
+                        hparams.n_head_kv_arr[il] = 1;
+                    }
+                }
+
+                model.type = e_model::MODEL_UNKNOWN;
             } break;
         case LLM_ARCH_GLM5NEXT:
             {
