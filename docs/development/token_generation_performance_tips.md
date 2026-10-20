@@ -19,6 +19,43 @@ If you see these lines, then the GPU is being used.
 ## Verifying that the CPU is not oversaturated
 llama accepts a `-t N` (or `--threads N`) parameter. It's extremely important that this parameter is not too large. If your token generation is extremely slow, try setting this number to 1. If this significantly improves your token generation speed, then your CPU is being oversaturated and you need to explicitly set this parameter to the number of the physical CPU cores on your machine (even if you utilize a GPU). If in doubt, start with 1 and double the amount until you hit a performance bottleneck, then scale the number down.
 
+## Thermal throttling on laptops (external tools)
+
+On thermally constrained laptops, CPU inference can start at 25–30 t/s and
+drop to 15–18 t/s after 1–2 minutes when the package reaches 95–100 °C.
+This is thermal throttling, not an `ik_llama.cpp` bug. The engine does not
+change CPU frequency; use the OS tools below.
+
+Linux:
+
+```bash
+# show the current limits
+cpupower frequency-info
+
+# cap the P-cores used by --cpu-affinity (example: 0-7) at 2.6 GHz
+sudo cpupower -c 0-7 frequency-set -u 2600MHz
+
+# restore the hardware maximum (see frequency-info)
+sudo cpupower -c 0-7 frequency-set -u 4600MHz
+```
+
+The same can be done per CPU via
+`/sys/devices/system/cpu/cpuN/cpufreq/scaling_max_freq`. The cap is
+system-wide: it also affects other applications, and a crash or `SIGKILL`
+leaves it in place until reboot or reset.
+
+Measure before/after with `llama-bench -p 512 -n 512` and watch
+`turbostat --show PkgWatt,PkgTmp,Bzy_MHz`. Use `--cpu-affinity` so the cap
+and the worker threads target the same cores.
+
+Windows: set "Maximum processor state" to 99% in the power plan (disables
+the aggressive turbo), or use ThrottleStop/UXTU. macOS: there is no
+reliable user-space CPU frequency cap on Apple Silicon; limit threads or
+context instead.
+
+For automation, wrap these commands in a script or a systemd unit; the
+engine does not manage CPU frequency.
+
 # Example of runtime flags effect on inference speed benchmark
 These runs were tested on the following machine:
 GPU: A6000 (48GB VRAM)
