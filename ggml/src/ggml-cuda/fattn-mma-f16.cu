@@ -1,3 +1,4 @@
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 #include "fattn-mma-f16.cuh"
 #include "fattn-mma-f16-interface.cuh"
 
@@ -260,3 +261,14 @@ bool ggml_cuda_fattn_mma_f16_is_supported([[maybe_unused]] ggml_backend_cuda_con
     if (K->ne[0] != V->ne[0]) return false;
     return K->ne[0] == 64 || K->ne[0] == 80 || K->ne[0] == 96 || K->ne[0] == 112 || K->ne[0] == 128 || K->ne[0] == 192 || K->ne[0] == 256;
 }
+#else
+// HIP gfx900 stubs - MMA flash attention not supported
+#include "fattn-mma-f16-interface.cuh"
+void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    GGML_UNUSED(ctx); GGML_UNUSED(dst);
+}
+bool ggml_cuda_fattn_mma_f16_is_supported(ggml_backend_cuda_context & ctx, const ggml_tensor * dst) {
+    GGML_UNUSED(ctx); GGML_UNUSED(dst);
+    return false;
+}
+#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))

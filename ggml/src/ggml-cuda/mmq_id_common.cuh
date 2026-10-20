@@ -9,7 +9,9 @@
 #include <climits>
 #include <cstdint>
 
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 using namespace ggml_cuda_mma;
+#endif
 
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 #define MMQ_ITER_K 256
@@ -180,7 +182,9 @@ struct tile_x_sizes {
 #endif // defined(GGML_HIP_ROCWMMA_FATTN) && (defined(CDNA) || defined(RDNA3) || (defined(GGML_HIP_ROCWMMA_FATTN_GFX12) && defined(RDNA4)))
 
 #if defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
+#if defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__)
 #define AMD_MFMA_AVAILABLE
+#endif
 #endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
@@ -517,9 +521,13 @@ static constexpr __device__ int mmq_get_granularity_device(const int mmq_x) {
 static constexpr __device__ int mmq_get_granularity_device(const int mmq_x) {
     return mmq_x >= 48 ? 16 : 8;
 }
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
 static constexpr __device__ int mmq_get_granularity_device(const int /*mmq_x*/) {
     return 8;
+}
+#else
+static constexpr __device__ int mmq_get_granularity_device(const int /*mmq_x*/) {
+    return 8; // gfx900 fallback
 }
 #endif // AMD_MFMA_AVAILABLE
 
@@ -536,8 +544,10 @@ static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
 static constexpr __device__ int mmq_get_nwarps_device() {
 #if defined(AMD_MFMA_AVAILABLE)
     return 8;
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
     return 256/ggml_cuda_get_physical_warp_size();
+#else
+    return 256/64; // gfx900 warp size is 64
 #endif // AMD_MFMA_AVAILABLE
 }
 
@@ -1185,7 +1195,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
             }
         }
     }
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
     typedef tile<16, 8, int> tile_A;
     typedef tile< 8, 8, int> tile_B;
     typedef tile<16, 8, int> tile_C;
@@ -1349,7 +1359,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
             }
         }
     }
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
     typedef tile<16,  8, int> tile_A;
     typedef tile< 8,  8, int> tile_B;
     typedef tile<16,  8, int> tile_C;
@@ -1588,7 +1598,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
             }
         }
     }
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
     GGML_UNUSED(x); GGML_UNUSED(y); GGML_UNUSED(sum), GGML_UNUSED(k00);
     NO_DEVICE_CODE;
 #endif // AMD_MFMA_AVAILABLE
@@ -1905,7 +1915,7 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
             }
         }
     }
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
     GGML_UNUSED_VARS(x, y, sum, k00);
     NO_DEVICE_CODE;
 #endif // AMD_MFMA_AVAILABLE
@@ -2158,7 +2168,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         // H100 loses about 100 t/s with 'if' condition over '%'
         int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/2;
         if (i < mmq_y) {
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
         int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/2) % mmq_y;
         {
 #endif // defined(AMD_MFMA_AVAILABLE)
@@ -2314,7 +2324,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         // H100 loses about 100 t/s with 'if' condition over '%'
         int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/2;
         if (i < mmq_y) {
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
         int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/2) % mmq_y;
         {
 #endif // defined(AMD_MFMA_AVAILABLE)
@@ -2687,7 +2697,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
             }
         }
     }
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
     GGML_UNUSED_VARS(x, y, sum, k00);
     NO_DEVICE_CODE;
 #endif // AMD_MFMA_AVAILABLE
@@ -3417,9 +3427,13 @@ static __device__ __forceinline__ void mmq_write_back_mma_id(
     constexpr int tileC_IJ = mmq_get_granularity_device(0);
     typedef tile<tileC_IJ, tileC_IJ, int> tile_C;
     constexpr int rows_per_warp = granularity;
-#else
+#elif !defined(__HIP_PLATFORM_AMD__)
     typedef tile<16, 8, int> tile_C;
     constexpr int rows_per_warp = 2 * granularity;
+#else
+    // gfx900 fallback - no MMA support
+    constexpr int rows_per_warp = 2 * granularity;
+    struct tile_C { enum { I = 16, J = 8 }; };
 #endif // defined(AMD_MFMA_AVAILABLE)
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 

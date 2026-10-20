@@ -15,7 +15,9 @@ static __global__ void k_add(int nelem, const T * __restrict__ src, T * __restri
     int i = blockIdx.x*block_size + threadIdx.x;
     if (i >= nelem) return;
     if constexpr (std::is_same_v<T, nv_bfloat16>) {
-#if __CUDA_ARCH__ >= CC_AMPERE
+#if defined(__HIP_PLATFORM_AMD__)
+        dst[i] = __float2bfloat16(__bfloat162float(src[i]) + __bfloat162float(dst[i]));
+#elif __CUDA_ARCH__ >= CC_AMPERE
         dst[i] += src[i];
 #else
         dst[i] = __float2bfloat16((float)src[i] + (float)dst[i]);

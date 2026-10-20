@@ -8,7 +8,7 @@ static __global__ void norm_f32(const T * x, float * dst, const int ncols, const
     float2 mean_var = make_float2(0.f, 0.f);
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi = (float)x[row*ncols + col];
+        const float xi = ggml_hip_to_float(x[row*ncols + col]);
         mean_var.x += xi;
         mean_var.y += xi * xi;
     }
@@ -32,7 +32,7 @@ static __global__ void norm_f32(const T * x, float * dst, const int ncols, const
     const float inv_std = rsqrtf(var + eps);
 
     for (int col = tid; col < ncols; col += block_size) {
-        dst[row*ncols + col] = (T)(((float)x[row*ncols + col] - mean) * inv_std);
+        dst[row*ncols + col] = (T)((ggml_hip_to_float(x[row*ncols + col]) - mean) * inv_std);
     }
 }
 
@@ -53,7 +53,7 @@ static __global__ void fused_norm_f32(const T * x, const float * c, float * dst,
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
-            const float xi = (float)x[row*ncols + col];
+            const float xi = ggml_hip_to_float(x[row*ncols + col]);
             mean_var.x += xi;
             mean_var.y += xi * xi;
         }
@@ -85,7 +85,7 @@ static __global__ void fused_norm_f32(const T * x, const float * c, float * dst,
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
-            dst[row*ncols + col] = ((float)x[row*ncols + col] - mean) * inv_std * c[col];
+            dst[row*ncols + col] = (ggml_hip_to_float(x[row*ncols + col]) - mean) * inv_std * c[col];
         }
     }
 }
@@ -111,7 +111,11 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
 
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
+#ifdef GGML_HIP_WARP_SIZE
+        __shared__ float s_sum[GGML_HIP_WARP_SIZE];
+#else
         __shared__ float s_sum[32];
+#endif
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -133,7 +137,11 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
 
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
+#ifdef GGML_HIP_WARP_SIZE
+        __shared__ float s_sum[GGML_HIP_WARP_SIZE];
+#else
         __shared__ float s_sum[32];
+#endif
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -166,7 +174,11 @@ static __global__ void rms_norm_f32(const float * x, float * dst, const int ncol
     // sum up partial sums
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
+#ifdef GGML_HIP_WARP_SIZE
+        __shared__ float s_sum[GGML_HIP_WARP_SIZE];
+#else
         __shared__ float s_sum[32];
+#endif
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -199,7 +211,11 @@ static __global__ void l2_norm_f32(const float * x, float * dst, const int ncols
 
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
+#ifdef GGML_HIP_WARP_SIZE
+        __shared__ float s_sum[GGML_HIP_WARP_SIZE];
+#else
         __shared__ float s_sum[32];
+#endif
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -326,7 +342,7 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
-            const float xi = (float)x[row*ncols + col];
+            const float xi = ggml_hip_to_float(x[row*ncols + col]);
             tmp += xi * xi;
         }
     }
@@ -334,7 +350,11 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
     // sum up partial sums
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
+#ifdef GGML_HIP_WARP_SIZE
+        __shared__ float s_sum[GGML_HIP_WARP_SIZE];
+#else
         __shared__ float s_sum[32];
+#endif
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -359,7 +379,7 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
-            dst[row*ncols + col] = scale * y[col] * (float)x[row*ncols + col];
+            dst[row*ncols + col] = scale * y[col] * ggml_hip_to_float(x[row*ncols + col]);
         }
     }
 }
@@ -385,7 +405,7 @@ static __global__ void fused_grouped_rms_norm_f32(const src_t * x, const float *
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
-            const float xi = (float)x[row*ncols + col];
+            const float xi = ggml_hip_to_float(x[row*ncols + col]);
             tmp += xi * xi;
         }
     }
@@ -393,7 +413,11 @@ static __global__ void fused_grouped_rms_norm_f32(const src_t * x, const float *
     // sum up partial sums
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
+#ifdef GGML_HIP_WARP_SIZE
+        __shared__ float s_sum[GGML_HIP_WARP_SIZE];
+#else
         __shared__ float s_sum[32];
+#endif
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -420,7 +444,7 @@ static __global__ void fused_grouped_rms_norm_f32(const src_t * x, const float *
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
-            dst[row*ncols + col] = scale * y[col] * (float)x[row*ncols + col];
+            dst[row*ncols + col] = scale * y[col] * ggml_hip_to_float(x[row*ncols + col]);
         }
     }
 }
@@ -444,7 +468,7 @@ static __global__ void fused_rms_norm_f32_nc(
     float tmp = 0.0f; // partial sum for thread in warp
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi = (float)x[col];
+        const float xi = ggml_hip_to_float(x[col]);
         tmp += xi * xi;
     }
 
@@ -472,7 +496,7 @@ static __global__ void fused_rms_norm_f32_nc(
     const float scale = rsqrtf(mean + eps);
 
     for (int col = tid; col < ncols; col += block_size) {
-        dst[col] = scale * y[col] * (float)x[col];
+        dst[col] = scale * y[col] * ggml_hip_to_float(x[col]);
     }
 }
 
@@ -830,7 +854,11 @@ static __global__ void fused_add_rms_norm_f32(const float * a, const float * b, 
     // sum up partial sums
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
+#ifdef GGML_HIP_WARP_SIZE
+        __shared__ float s_sum[GGML_HIP_WARP_SIZE];
+#else
         __shared__ float s_sum[32];
+#endif
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -866,7 +894,11 @@ static __global__ void fused_add_add_rms_norm_f32(const float * a1, const float 
     // sum up partial sums
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
+#ifdef GGML_HIP_WARP_SIZE
+        __shared__ float s_sum[GGML_HIP_WARP_SIZE];
+#else
         __shared__ float s_sum[32];
+#endif
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -995,7 +1027,11 @@ static __global__ void fused_rms_rms_norm_f32(int ncols, int nrows1, int nrows2,
     // sum up partial sums
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
+#ifdef GGML_HIP_WARP_SIZE
+        __shared__ float s_sum[GGML_HIP_WARP_SIZE];
+#else
         __shared__ float s_sum[32];
+#endif
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -1070,8 +1106,8 @@ static __global__ void fused_rms_rms_add_f32(int ncols, int nrows, float * dst,
     float tmp1 = 0.0f, tmp2 = 0.0f;
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi1 = (float)x1_row[col];
-        const float xi2 = (float)x2_row[col];
+        const float xi1 = ggml_hip_to_float(x1_row[col]);
+        const float xi2 = ggml_hip_to_float(x2_row[col]);
         tmp1 += xi1 * xi1;
         tmp2 += xi2 * xi2;
     }
@@ -1101,7 +1137,7 @@ static __global__ void fused_rms_rms_add_f32(int ncols, int nrows, float * dst,
     dst += row*ncols;
 
     for (int col = tid; col < ncols; col += block_size) {
-        dst[col] = scale1 * c1[col] * (float)x1_row[col] + scale2 * c2[col] * (float)x2_row[col];
+        dst[col] = scale1 * c1[col] * ggml_hip_to_float(x1_row[col]) + scale2 * c2[col] * ggml_hip_to_float(x2_row[col]);
     }
 }
 
@@ -1172,7 +1208,7 @@ static __global__ void fused_rms_add_rms_f32(int ncols, float * dst1, float * ds
 
     float tmp = 0.0f;
     for (int col = tid; col < ncols; col += block_size) {
-        float xc = (float)x[col];
+        float xc = ggml_hip_to_float(x[col]);
         tmp += xc*xc;
     }
 
@@ -1191,7 +1227,7 @@ static __global__ void fused_rms_add_rms_f32(int ncols, float * dst1, float * ds
 
     tmp = 0.0f;
     for (int col = tid; col < ncols; col += block_size) {
-        float y = scale1 * c1[col] * (float)x[col] + a[col];
+        float y = scale1 * c1[col] * ggml_hip_to_float(x[col]) + a[col];
         //dst1[col] = y;
         tmp += y*y;
     }
@@ -1205,7 +1241,7 @@ static __global__ void fused_rms_add_rms_f32(int ncols, float * dst1, float * ds
     float scale2 = rsqrtf(tmp/ncols + eps2);
 
     for (int col = tid; col < ncols; col += block_size) {
-        float y   = scale1 * c1[col] * (float)x[col] + a[col];
+        float y   = scale1 * c1[col] * ggml_hip_to_float(x[col]) + a[col];
         dst2[col] = scale2 * c2[col] * y;
         dst1[col] = y;
     }
@@ -1273,7 +1309,7 @@ static __global__ void fused_rms_add_f32(int ncols, float * dst,
 
     float tmp = 0.0f;
     for (int col = tid; col < ncols; col += block_size) {
-        float xc = (float)x[col];
+        float xc = ggml_hip_to_float(x[col]);
         tmp += xc*xc;
     }
 
@@ -1291,7 +1327,7 @@ static __global__ void fused_rms_add_f32(int ncols, float * dst,
     float scale = rsqrtf(tmp/ncols + eps);
 
     for (int col = tid; col < ncols; col += block_size) {
-        dst[col] = scale * c[col] * (float)x[col] + a[col];
+        dst[col] = scale * c[col] * ggml_hip_to_float(x[col]) + a[col];
     }
 }
 
