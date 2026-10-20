@@ -2053,6 +2053,10 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_GATE_SHEXP,     "blk.%d.ffn_gate_shexp" },
             { LLM_TENSOR_FFN_DOWN_SHEXP,     "blk.%d.ffn_down_shexp" },
             { LLM_TENSOR_FFN_UP_SHEXP,       "blk.%d.ffn_up_shexp" },
+            { LLM_TENSOR_INDEXER_Q_PROJ,     "blk.%d.indexer.q_proj" },
+            { LLM_TENSOR_INDEXER_K_PROJ,     "blk.%d.indexer.k_proj" },
+            { LLM_TENSOR_INDEXER_Q_NORM,     "blk.%d.indexer.q_norm" },
+            { LLM_TENSOR_INDEXER_K_NORM,     "blk.%d.indexer.k_norm" },
         },
     },
     {
