@@ -49,6 +49,9 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const int32_t n_swa = KQV->op_params[4];
 
     if (dst->src[5]) {
+        if (ggml_cuda_flash_attn_ext_mma_new_sparse(ctx, dst)) {
+            return;
+        }
         if (ggml_cuda_dsa_attn_ext(ctx, dst)) {
             return;
         }
