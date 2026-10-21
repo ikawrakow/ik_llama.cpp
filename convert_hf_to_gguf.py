@@ -2390,7 +2390,7 @@ class FlintModel(Qwen2MoeModel):
             self.gguf_writer.add_expert_shared_count(shared_size // moe_size)
         else:
             self.gguf_writer.add_expert_shared_count(0)
-        self.gguf_writer.add_expert_weights_norm(True)
+        self.gguf_writer.add_expert_weights_norm(self.hparams.get("norm_topk_prob", True))
         self.gguf_writer.add_expert_weights_scale(1.0)
         score_func = self.hparams.get("router_score_function", "softmax")
         gating = {

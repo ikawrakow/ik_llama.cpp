@@ -2610,8 +2610,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<eos>"            // gemma4
                     || t.first == "<turn|>"          // gemma4
                     || t.first == "<|tool_response>" // gemma4
-                    || t.first == "<|user|>"         // flint
-                    || t.first == "<|observation|>"  // flint
+                    || (pre_type == LLAMA_VOCAB_PRE_TYPE_FLINT &&
+                        (t.first == "<|user|>" || t.first == "<|observation|>"))
                     || t.first == "<｜end▁of▁sentence｜>" // deepseek-ocr
                ) {
                 special_eog_ids.insert(t.second);
