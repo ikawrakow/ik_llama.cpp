@@ -2378,13 +2378,18 @@ class FlintModel(Qwen2MoeModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        dense = self.hparams["mlp_only_layers"]
+        dense = self.hparams.get("mlp_only_layers", [])
         if dense != list(range(len(dense))):
             raise ValueError("Flint dense layers must precede the MoE layers")
         self.gguf_writer.add_leading_dense_block_count(len(dense))
-        self.gguf_writer.add_expert_shared_count(
-            self.hparams["shared_expert_intermediate_size"] // self.hparams["moe_intermediate_size"]
-        )
+        shared_size = self.hparams.get("shared_expert_intermediate_size", 0)
+        moe_size    = self.hparams.get("moe_intermediate_size")
+        if shared_size:
+            if not moe_size:
+                raise ValueError("Flint shared expert without moe_intermediate_size")
+            self.gguf_writer.add_expert_shared_count(shared_size // moe_size)
+        else:
+            self.gguf_writer.add_expert_shared_count(0)
         self.gguf_writer.add_expert_weights_norm(True)
         self.gguf_writer.add_expert_weights_scale(1.0)
         score_func = self.hparams.get("router_score_function", "softmax")
@@ -2396,12 +2401,18 @@ class FlintModel(Qwen2MoeModel):
         if score_func not in gating:
             raise ValueError(f"Unsupported Flint router_score_function={score_func!r}")
         self.gguf_writer.add_expert_gating_func(gating[score_func])
-        self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
-        self.gguf_writer.add_sliding_window_pattern([
-            kind == "sliding_attention" for kind in self.hparams["layer_types"]
-        ])
+        sliding = self.hparams.get("sliding_window")
+        if sliding:
+            layer_types = self.hparams.get("layer_types")
+            if not layer_types:
+                raise ValueError("Flint sliding window without layer_types")
+            self.gguf_writer.add_sliding_window(sliding)
+            self.gguf_writer.add_sliding_window_pattern([
+                kind == "sliding_attention" for kind in layer_types
+            ])
+        no_rope = set(self.hparams.get("no_rope_layer_indices", []))
         self.gguf_writer.add_rope_pattern([
-            i not in self.hparams["no_rope_layer_indices"] for i in range(self.block_count)
+            i not in no_rope for i in range(self.block_count)
         ])
 
     def modify_tensors(self, data_torch, name, bid):

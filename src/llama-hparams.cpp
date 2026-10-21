@@ -646,9 +646,9 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa, false);
 
-                // fall back to the routed width when no shared FFN length is stored
+                // fall back to n_expert_shared routed-width experts when no shared FFN length is stored
                 if (hparams.n_ff_shexp == 0 && hparams.n_expert_shared > 0) {
-                    hparams.n_ff_shexp = hparams.n_ff_exp;
+                    hparams.n_ff_shexp = hparams.n_ff_exp * hparams.n_expert_shared;
                 }
 
                 if (hparams.n_swa > 0) {
