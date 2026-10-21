@@ -1682,6 +1682,16 @@ struct Trellis4Z {
         }
         return _mm512_packs_epi16(_mm512_packs_epi32(v[0], v[1]), _mm512_packs_epi32(v[2], v[3]));
     }
+    IQK_ALWAYS_INLINE inline __m512i next64u(__m512i seeds) const {
+        const auto mask = _mm512_set1_epi32(0x3f3f3f3f);
+        const auto ones = _mm512_set1_epi32(0x01010101);
+        const auto offset = _mm512_set1_epi32(2);
+        __m512i v[4];
+        for (int q = 0; q < 4; ++q) {
+            v[q] = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(_mm512_permutexvar_epi32(idx[q], seeds), k4), mask), ones);
+        }
+        return _mm512_packus_epi16(_mm512_packs_epi32(v[0], v[1]), _mm512_packs_epi32(v[2], v[3]));
+    }
 };
 
 struct IQ4KTSeeds {
@@ -1690,7 +1700,7 @@ struct IQ4KTSeeds {
                                 _mm512_setr_epi32(2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3),
                                 _mm512_setr_epi32(4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5),
                                 _mm512_setr_epi32(6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7)};
-    IQK_ALWAYS_INLINE inline __m512i make(const block_iq4_kt& x, __m512i shb, int c) const {
+    IQK_ALWAYS_INLINE inline __m512i index(const block_iq4_kt& x, __m512i shb, int c) const {
         const uint8_t * ql = (const uint8_t *)(x.qs + 8);
         const uint8_t * qh = ql + 64;
         auto q = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)(ql + 16*c)));
@@ -1698,8 +1708,11 @@ struct IQ4KTSeeds {
         h = _mm512_and_si512(c < 2 ? _mm512_slli_epi32(h, 8) : _mm512_slli_epi32(h, 4), _mm512_set1_epi32(0xf00));
         auto sh = _mm512_permutexvar_epi32(sh_perm[c], shb);
         auto hi = _mm512_slli_epi32(_mm512_and_si512(_mm512_srlv_epi32(sh, sh_shift), _mm512_set1_epi32(7)), 12);
-        auto off = _mm512_add_epi32(_mm512_slli_epi32(_mm512_and_si512(sh, _mm512_set1_epi32(1)), 15), _mm512_set1_epi32(4096));
-        return _mm512_add_epi32(_mm512_or_si512(_mm512_or_si512(q, h), hi), off);
+        auto off = _mm512_slli_epi32(_mm512_and_si512(sh, _mm512_set1_epi32(1)), 15);
+        return _mm512_or_si512(_mm512_or_si512(_mm512_or_si512(q, h), hi), off);
+    }
+    IQK_ALWAYS_INLINE inline __m512i make(const block_iq4_kt& x, __m512i shb, int c) const {
+        return _mm512_add_epi32(index(x, shb, c), _mm512_set1_epi32(4096));
     }
 };
 
@@ -1752,7 +1765,6 @@ void mul_mat_iq4_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& 
     __m512 acc[nrc_y];
     __m512i xv[4];
     __m512 scales[4];
-    __mmask64 sm[4];
 
     for (int ix = 0; ix < nrc_x; ++ix) {
         const float * dptr = (const float *)((const char*)vx + ix*bx);
@@ -1766,22 +1778,19 @@ void mul_mat_iq4_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& 
             _mm_prefetch(pf, _MM_HINT_T2); _mm_prefetch(pf + 64, _MM_HINT_T2);
             auto vshb = _mm256_loadu_si256((const __m256i *)x[i].qs);
             auto ls = _mm256_sub_epi32(_mm256_srli_epi32(_mm256_and_si256(vshb, _mm256_set1_epi32(0xff)), 1), _mm256_set1_epi32(64));
-            auto dls = _mm512_castps256_ps512(_mm256_mul_ps(d, _mm256_cvtepi32_ps(ls)));
+            auto dls8 = _mm256_mul_ps(d, _mm256_cvtepi32_ps(ls));
+            auto dls = _mm512_castps256_ps512(dls8);
             auto shb = _mm512_castsi256_si512(vshb);
-            for (int k = 0; k < 4; ++k) {
-                xv[k] = trellis.next64s(maker.make(x[i], shb, k));
-                sm[k] = _mm512_movepi8_mask(xv[k]);
-                xv[k] = _mm512_abs_epi8(xv[k]);
-                scales[k] = _mm512_permutexvar_ps(scale_perm[k], dls);
-            }
+            for (int k = 0; k < 4; ++k) xv[k] = trellis.next64u(maker.make(x[i], shb, k));
+            for (int k = 0; k < 4; ++k) scales[k] = _mm512_permutexvar_ps(scale_perm[k], dls);
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto dy = _mm512_set1_ps(y[iy][i].d);
+                auto sumy = _mm256_madd_epi16(_mm256_loadu_si256((const __m256i *)y[iy][i].bsums), _mm256_set1_epi16(1));
+                auto sum = _mm512_zextps256_ps512(_mm256_mul_ps(dls8, _mm256_mul_ps(_mm256_set1_ps(-128.f), _mm256_cvtepi32_ps(sumy))));
                 for (int k = 0; k < 4; ++k) {
-                    auto yv = _mm512_loadu_si512((const __m512i *)y[iy][i].qs + k);
-                    yv = _mm512_mask_sub_epi8(yv, sm[k], _mm512_setzero_si512(), yv);
-                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xv[k], yv);
-                    acc[iy] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), _mm512_mul_ps(scales[k], dy), acc[iy]);
+                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xv[k], _mm512_loadu_si512((const __m512i *)y[iy][i].qs + k));
+                    sum = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), scales[k], sum);
                 }
+                acc[iy] = _mm512_fmadd_ps(sum, _mm512_set1_ps(y[iy][i].d), acc[iy]);
             }
         }
 
