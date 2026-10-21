@@ -1141,7 +1141,6 @@ token_probabilities get_token_probabilities(llama_context* ctx, int idx, llama_t
             sampled_token_found = true;
         }
     }
-    for (int i = n_sorted; i < n_vocab; ++i) cum_sum += expf(sorted[i].first - max_l);
 
     float inv_cum_sum = 1 / cum_sum;
     for (int i = 0; i < n_sorted; ++i) cur[i].p *= inv_cum_sum;
