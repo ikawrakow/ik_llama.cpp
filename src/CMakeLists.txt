@@ -134,6 +134,7 @@ add_library(llama
             graphs/build_ernie45.cpp
             graphs/build_hunyuan.cpp
             graphs/build_mimo2.cpp
+            graphs/build_flint.cpp
             graphs/build_openai.cpp
             graphs/build_bailingmoe2.cpp
             graphs/build_bailingmoe3.cpp

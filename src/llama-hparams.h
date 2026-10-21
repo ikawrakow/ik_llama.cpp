@@ -268,6 +268,7 @@ struct llama_hparams {
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
     std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> rope_pattern;
 
     std::array<float, LLAMA_MAX_LAYERS> swiglu_limits;
     std::array<float, LLAMA_MAX_LAYERS> swiglu_limits_shared;
@@ -310,6 +311,8 @@ struct llama_hparams {
         if (this->n_ff_exp           != other.n_ff_exp)           return true;
         if (this->n_ff_shexp         != other.n_ff_shexp)         return true;
         if (this->n_expert_shared    != other.n_expert_shared)    return true;
+        if (this->rope_pattern       != other.rope_pattern)       return true;
+        if (this->swa_layers         != other.swa_layers)         return true;
         if (this->n_value_expert      != other.n_value_expert)      return true;
         if (this->n_value_expert_used != other.n_value_expert_used) return true;
 
@@ -537,6 +540,8 @@ struct llama_hparams {
         // Regular comparison using the provided absolute tolerance
         return std::fabs(b - a) <= abs_tol;
     }
+
+    bool has_rope(uint32_t il) const { return rope_pattern[il] > 0; }
 
     uint32_t rope_n_rot(uint32_t il) const {
         const uint32_t v = rope_dim_per_layer[il];

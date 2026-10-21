@@ -457,6 +457,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_SINKS: (
             "model.layers.{bid}.self_attn.attention_sink_bias",                # MiMo DFlash
+            "model.layers.{bid}.self_attn.softmax_offset",                     # flint
         ),
 
         MODEL_TENSOR.DFLASH_ATTN_CONV_BASE: (
