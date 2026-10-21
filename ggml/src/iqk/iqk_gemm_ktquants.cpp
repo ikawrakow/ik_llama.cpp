@@ -1751,6 +1751,9 @@ void mul_mat_iq4_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& 
 
     Trellis4Z trellis;
     IQ4KTSeeds maker;
+#ifdef GGML_USE_I32GATHER
+    const uint64_t * table = nrc_y <= 2 ? kt8_value_table<2>() : nullptr;
+#endif
 
     const block_q8_K * y[nrc_y];
     for (int iy = 0; iy < nrc_y; ++iy) {
@@ -1781,7 +1784,17 @@ void mul_mat_iq4_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& 
             auto dls8 = _mm256_mul_ps(d, _mm256_cvtepi32_ps(ls));
             auto dls = _mm512_castps256_ps512(dls8);
             auto shb = _mm512_castsi256_si512(vshb);
-            for (int k = 0; k < 4; ++k) xv[k] = trellis.next64u(maker.make(x[i], shb, k));
+#ifdef GGML_USE_I32GATHER
+            if constexpr (nrc_y <= 2) {
+                for (int k = 0; k < 2; ++k) {
+                    xv[k + 2] = _mm512_i32gather_epi32(maker.index(x[i], shb, k + 2), (const int *)table, 8);
+                    xv[k] = trellis.next64u(maker.make(x[i], shb, k));
+                }
+            } else
+#endif
+            {
+                for (int k = 0; k < 4; ++k) xv[k] = trellis.next64u(maker.make(x[i], shb, k));
+            }
             for (int k = 0; k < 4; ++k) scales[k] = _mm512_permutexvar_ps(scale_perm[k], dls);
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto sumy = _mm256_madd_epi16(_mm256_loadu_si256((const __m256i *)y[iy][i].bsums), _mm256_set1_epi16(1));
