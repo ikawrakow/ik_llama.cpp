@@ -7879,7 +7879,8 @@ static int llama_decode_internal(
         // extract logits
         {
             const bool dflash_skip_logits = (llm_arch_is_dflash_family(lctx.model.arch)
-                && !lctx.dflash.draft_tokens.empty());
+                && !lctx.dflash.draft_tokens.empty()
+                && !lctx.dflash.want_dspark_logits);
             if (dflash_skip_logits) {
                 res = nullptr;
             }
@@ -13416,6 +13417,13 @@ float * llama_get_logits_ith(struct llama_context * ctx, int32_t i) {
 #endif
         return nullptr;
     }
+}
+
+void llama_set_dflash_want_logits(struct llama_context * ctx, bool want) {
+    if (ctx == nullptr) {
+        return;
+    }
+    ctx->dflash.want_dspark_logits = want;
 }
 
 llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i) {
