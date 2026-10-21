@@ -25,6 +25,7 @@ enum llm_ffn_op_type {
     LLM_FFN_RELU_SQR,
     LLM_FFN_SWIGLU,
     LLM_FFN_SWIGLU_OAI,
+    LLM_FFN_SITU,
 };
 
 enum llm_ffn_gate_type {
@@ -436,6 +437,7 @@ struct llm_build_context {
 
     ggml_cgraph * build_bailingmoe2();
     ggml_cgraph * build_bailingmoe3();
+    ggml_cgraph * build_kimi_k3();
     ggml_cgraph * build_glm5next();
 
     ggml_cgraph * build_glm5next_mtp();
@@ -481,6 +483,9 @@ struct llm_build_context {
           const llama_batch & batch,
          struct ggml_tensor * tok_embd,
          const llm_build_cb & cb);
+
+    static ggml_tensor * llm_build_situ(ggml_context * ctx, const llama_hparams & hparams,
+            ggml_tensor * gate, ggml_tensor * up);
 
     static ggml_tensor * llm_build_norm(ggml_context * ctx, ggml_tensor * cur,
          const llama_hparams & hparams,

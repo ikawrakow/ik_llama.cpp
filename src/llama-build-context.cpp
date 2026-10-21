@@ -1261,6 +1261,23 @@ static ggml_tensor * llm_do_split_post_norm(ggml_context * ctx, ggml_tensor * cu
     return cur;
 }
 
+ggml_tensor * llm_build_context::llm_build_situ(ggml_context * ctx, const llama_hparams & hparams,
+        ggml_tensor * gate, ggml_tensor * up) {
+    const float beta  = hparams.situ_beta;
+    const float lbeta = hparams.situ_linear_beta;
+
+    GGML_ASSERT(beta > 0.0f && "kimi-k3.activation.situ_beta must be > 0");
+
+    ggml_tensor * res = ggml_softcap(ctx, gate, 1.0f / beta, beta);
+    res = ggml_fused_mul_unary(ctx, gate, res, GGML_UNARY_OP_SIGMOID);
+
+    if (lbeta > 0.0f) {
+        up = ggml_softcap(ctx, up, 1.0f / lbeta, lbeta);
+    }
+
+    return ggml_mul(ctx, res, up);
+}
+
 ggml_tensor * llm_build_context::llm_build_ffn(
         ggml_context * ctx,
        llama_context & lctx,
@@ -1497,6 +1514,11 @@ ggml_tensor * llm_build_context::llm_build_ffn(
 
                 cur = ggml_sqr(ctx, cur);
                 cb(cur, "ffn_sqr(relu)", il);
+            } break;
+        case LLM_FFN_SITU:
+            {
+                GGML_ABORT("%s: LLM_FFN_SITU is not supported by llm_build_ffn",
+                         __func__);
             } break;
         case LLM_FFN_SWIGLU:
             {
@@ -1777,6 +1799,9 @@ llm_expert_gating_func_type   gating_op,
             *((float *)(par->op_params + 1)) = lctx.model.swiglu_limit(il, false);
         } else if (type_op == LLM_FFN_SWIGLU_OAI) {
             par = ggml_swiglu_oai(ctx, gate, up, 1.702f, 7.0f);
+        } else if (type_op == LLM_FFN_SITU) {
+            par = llm_build_situ(ctx, lctx.model.hparams, gate, up);
+            cb(par, "ffn_moe_situ", il);
         } else {
             GGML_ABORT("fatal error");
         }
@@ -1829,6 +1854,9 @@ llm_expert_gating_func_type   gating_op,
             constexpr float alpha = 1.702f;
             constexpr float limit = 7.0f;
             par = ggml_swiglu_oai(ctx, gate, up, alpha, limit);
+        } else if (type_op == LLM_FFN_SITU) {
+            par = llm_build_situ(ctx, lctx.model.hparams, gate, up);
+            cb(par, "ffn_moe_situ", il);
         }
         else {
             GGML_ABORT("fatal error");
@@ -3227,6 +3255,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_BAILINGMOE3:
             {
                 result = llm.build_bailingmoe3();
+            } break;
+        case LLM_ARCH_KIMI_K3:
+            {
+                result = llm.build_kimi_k3();
             } break;
         case LLM_ARCH_GLM5NEXT:
             {
