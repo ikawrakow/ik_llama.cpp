@@ -292,7 +292,7 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     ggml_cuda_pool_alloc<float> kqv32(ctx.pool(), kqv_size);
     ggml_cuda_pool_alloc<half> mask16(ctx.pool(), mask_size);
     ggml_cuda_pool_alloc<half> k16(ctx.pool(), k_cache_size);
-    ggml_cuda_pool_alloc<float> inv_sum(ctx.pool(), max_rows);
+    ggml_cuda_pool_alloc<float> inv_sum(ctx.pool(), max_rows*Q->ne[2]);
     ggml_cuda_pool_alloc<half> v16(ctx.pool());
     size_t v_offset = 0;
     if (is_k_view) {
