@@ -128,7 +128,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         max_rows = std::min<int>(max_rows, q->ne[2]);
         int nstep = (q->ne[2] + max_rows - 1)/max_rows;
 
-        ggml_cuda_pool_alloc<half>  kq(ctx.pool(), k->ne[1]*q->ne[1]*max_rows);
+        ggml_cuda_pool_alloc<float> kq(ctx.pool(), k->ne[1]*q->ne[1]*max_rows);
         ggml_cuda_pool_alloc<float> score(ctx.pool(), int64_t(n_kv)*max_rows);
         ggml_cuda_pool_alloc<int>   sorted(ctx.pool(), int64_t(n_kv)*max_rows);
         ggml_cuda_pool_alloc<half>  q_f16(ctx.pool(), q->ne[0]*q->ne[1]*max_rows);
@@ -147,8 +147,8 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         auto to_fp16_cuda = ggml_get_to_fp16_cuda(q->type);
         GGML_ASSERT(to_fp16_cuda);
 
-        const half alpha = 1.0f;
-        const half beta = 0.0f;
+        const float alpha = 1.0f;
+        const float beta = 0.0f;
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
 
@@ -165,8 +165,8 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
                     &alpha, k_data,       CUDA_R_16F, k->ne[0],
                             q_f16.get(),  CUDA_R_16F, q->ne[0],
-                    &beta,  kq.get(),     CUDA_R_16F, k->ne[1],
-                    CUBLAS_COMPUTE_16F,
+                    &beta,  kq.get(),     CUDA_R_32F, k->ne[1],
+                    CUBLAS_COMPUTE_32F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
             if (c) {
