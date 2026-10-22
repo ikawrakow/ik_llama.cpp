@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -140,6 +141,18 @@ common_ngram_cache make_repeated_sequence_cache(const llama_tokens & sequence, i
     return result;
 }
 
+common_ngram_cache make_follower_cache(
+        const llama_tokens & key,
+        const std::vector<std::pair<llama_token, int32_t>> & followers) {
+    common_ngram_cache result;
+    common_ngram_cache_part part;
+    for (const auto & [token, count] : followers) {
+        part.emplace(token, count);
+    }
+    result.emplace(common_ngram(key.data(), static_cast<int>(key.size())), std::move(part));
+    return result;
+}
+
 bool test_short_histories_and_growing_draft() {
     common_ngram_cache empty_context;
     common_ngram_cache empty_dynamic;
@@ -199,6 +212,71 @@ bool test_short_histories_and_growing_draft() {
             growing_dynamic, growing_static);
     return require(growing.size() >= 2 && growing[0] == 52 && growing[1] == 53,
             "the available key length grows with proposals during one draft call");
+}
+
+bool test_reference_drafting() {
+    const llama_tokens history = {70, 71};
+    common_ngram_cache empty_context;
+    common_ngram_cache empty_dynamic;
+    common_ngram_cache empty_static;
+
+    const auto empty_result = draft_from_history(history, 2, empty_context,
+            empty_dynamic, empty_static, 2, 2);
+    if (!require(empty_result.empty(), "empty caches and absent static entries fall back without a proposal")) {
+        return false;
+    }
+
+    auto context = make_follower_cache(history, {{72, 4}});
+    auto dynamic = make_follower_cache(history, {{73, 5}});
+    auto statik = make_follower_cache(history, {{74, 6}});
+    const auto context_before = context;
+    const auto dynamic_before = dynamic;
+    const auto static_before = statik;
+
+    const auto context_winner = draft_from_history(history, 1, context, dynamic,
+            statik, 2, 2);
+    const auto dynamic_winner = draft_from_history(history, 1, empty_context,
+            dynamic, empty_static, 2, 2);
+    const auto static_winner = draft_from_history(history, 1, empty_context,
+            empty_dynamic, statik, 2, 2);
+    if (!require(context_winner == llama_tokens{72} && dynamic_winner == llama_tokens{73} &&
+                 static_winner == llama_tokens{74},
+                 "context, dynamic, and static paths retain independent unique winners")) {
+        return false;
+    }
+
+    // Context does not meet its 50% confidence threshold. The existing static
+    // fallback must still win after primary selection rejects it.
+    auto low_confidence = make_follower_cache(history, {{80, 1}, {81, 1}, {82, 1}});
+    const auto fallback = draft_from_history(history, 1, low_confidence,
+            empty_dynamic, statik, 2, 2);
+    if (!require(fallback == llama_tokens{74},
+                 "low-confidence context continues to the established static fallback")) {
+        return false;
+    }
+
+    bool repeated_unique = true;
+    for (int i = 0; i < 8; ++i) {
+        repeated_unique &= draft_from_history(history, 1, context, dynamic,
+                statik, 2, 2) == llama_tokens{72};
+    }
+    if (!require(repeated_unique && same_cache(context, context_before) &&
+                 same_cache(dynamic, dynamic_before) && same_cache(statik, static_before),
+                 "repeated calls preserve unique output and do not mutate any cache")) {
+        return false;
+    }
+
+    auto tied = make_follower_cache(history, {{90, 1}, {91, 1}});
+    const auto tie_winner = draft_from_history(history, 1, tied,
+            empty_dynamic, empty_static, 2, 2);
+    if (!require(tie_winner.size() == 1 &&
+                 (tie_winner[0] == 90 || tie_winner[0] == 91) &&
+                 same_cache(tied, make_follower_cache(history, {{90, 1}, {91, 1}})),
+                 "tied confidence accepts either valid winner without changing counts")) {
+        return false;
+    }
+    std::cout << "tie_winner=" << tie_winner[0] << " valid_set=90,91\n";
+    return true;
 }
 
 bool test_draft_budgets() {
@@ -445,11 +523,12 @@ int main(int argc, char ** argv) {
     bool ok = true;
     ok &= test_incremental_updates();
     ok &= test_short_histories_and_growing_draft();
+    ok &= test_reference_drafting();
     ok &= test_draft_budgets();
     ok &= test_lookup_path_plumbing();
     if (!ok) {
         return 1;
     }
-    std::cout << "PASS: helper incremental, short-history, budget, and CLI/path checks\n";
+    std::cout << "PASS: helper incremental, short-history, budget, no-copy selection, and CLI/path checks\n";
     return 0;
 }
