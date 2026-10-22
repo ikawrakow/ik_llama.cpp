@@ -376,15 +376,10 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(k_conv, "k_conv_normed", il);
 
     if (rda_delta) {
-        // RDA (Raon Delta Attention) uses erase = sigmoid(beta) and write = sigmoid(beta + delta).
-        // The fused delta-net kernel takes a single beta and applies sigmoid(beta). Since
-        //   logsigmoid(beta + delta) - logsigmoid(beta) = log(write / erase),
-        // scaling V by write/erase turns the standard update
-        //   S <- S (I - erase k k^T) + erase * (V * write/erase) k^T
-        // into the exact RDA update
-        //   S <- S (I - erase k k^T) + write V k^T.
-        // This mirrors the reference implementation in modeling_raon1_mini.py; no separate
-        // erase/write kernel is needed.
+        // RDA: beta is a raw logit; the fused kernel applies sigmoid(beta).
+        // write/erase = exp(logsigmoid(beta+delta) - logsigmoid(beta)), so scaling V
+        // gives S' = S(I - erase k k^T) + write v k^T exactly, without a second kernel.
+        // Same factorization as the HF reference implementation.
         auto beta_v  = ggml_reshape_4d(ctx0, beta,      1, num_v_heads, n_seq_tokens, n_seqs);
         auto delta_v = ggml_reshape_4d(ctx0, rda_delta, 1, num_v_heads, n_seq_tokens, n_seqs);
         auto erase = ggml_softplus(ctx0, ggml_neg(ctx0, beta_v));
