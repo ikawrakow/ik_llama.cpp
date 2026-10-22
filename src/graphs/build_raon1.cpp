@@ -5,8 +5,7 @@
 
 #include <cmath>
 
-// Raon-1 mini: hybrid 18x RDA + 7x NoPE gated MLA, 4-stream mHC (Helmert chart),
-// 128 routed experts (top-6) + 1 shared expert, SiTU-GLU.
+// Raon-1 mini: 18x RDA + 7x NoPE gated MLA, 4-stream Helmert mHC, MoE/SiTU-GLU.
 
 static ggml_tensor * raon1_build_hc_pre(
         llm_build_context & llm,
@@ -53,7 +52,7 @@ static ggml_tensor * raon1_build_hc_pre(
     cb(pre,  "hc_pre",  il);
     cb(post, "hc_post", il);
 
-    // result[e,t] = sum_s pre[s,t] * x[e,s,t] — one batched mat-vec per token.
+    // result[e,t] = sum_s pre[s,t] * x[e,s,t]
     ggml_tensor * pre3d = ggml_reshape_3d(ctx0, pre, hc, 1, nt);
     ggml_tensor * xh    = ggml_cont(ctx0, ggml_permute(ctx0, x, 1, 0, 2, 3)); // [hc, n_embd, nt]
     ggml_tensor * result = ggml_cont_2d(ctx0, ggml_mul_mat(ctx0, pre3d, xh), n_embd, nt);
@@ -75,13 +74,12 @@ static ggml_tensor * raon1_build_hc_post(
     const int64_t hc     = hparams.dsv4_hc_mult;
     const int64_t nt     = x->ne[2];
 
-    // out[dst,e,t] = sum_src comb[dst,src,t] * x[e,src,t] + post[dst,t] * branch[e,t].
-    // This is a batched hc x hc GEMM followed by a broadcasted rank-1 update.
+    // Batched hc x hc GEMM plus the post/branch rank-1 update.
     ggml_tensor * comb_t = ggml_cont(ctx0, ggml_permute(ctx0, comb, 1, 0, 2, 3)); // [src, dst, nt]
     ggml_tensor * xh     = ggml_cont(ctx0, ggml_permute(ctx0, x,    1, 0, 2, 3)); // [src, n_embd, nt]
     ggml_tensor * result = ggml_mul_mat(ctx0, comb_t, xh);                        // [dst, n_embd, nt]
 
-    // post[dst,t] * branch[e,t] is a batched rank-1 outer product: K=1 GEMM.
+    // post[dst,t] * branch[e,t] is a K=1 GEMM.
     ggml_tensor * post1   = ggml_reshape_3d(ctx0, post,   1, hc,     nt);
     ggml_tensor * branch1 = ggml_reshape_3d(ctx0, branch, 1, n_embd, nt);
     ggml_tensor * post_term = ggml_mul_mat(ctx0, post1, branch1);                 // [hc, n_embd, nt]
@@ -129,8 +127,7 @@ static ggml_tensor * raon1_mla_attention(
     auto Qcur_nope = ggml_mul_mat(ctx0, layer.wk_b, q_nope); // [kv_lora, n_tokens, n_head]
     auto Qcur = Qcur_nope;
     if (n_extra > 0) {
-        // Raon-1 keeps 64 unrotated key/query channels (NoPE): they are real
-        // extra channels, not a RoPE slice, so they must be concatenated.
+        // Raon-1's 64 NoPE channels are real extra K/Q channels.
         auto q_extra = ggml_view_3d(ctx0, q, n_extra, n_tokens, n_head, q->nb[1], q->nb[2], n_nope*q->nb[0]);
         Qcur = ggml_concat(ctx0, Qcur_nope, q_extra, 0);      // [kv_lora + n_extra, n_tokens, n_head]
     }
