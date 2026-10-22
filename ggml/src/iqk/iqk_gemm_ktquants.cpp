@@ -1248,8 +1248,10 @@ void mul_mat_iq3_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& 
 #ifdef GGML_USE_I32GATHER
             if constexpr (nrc_y <= 2) {
                 auto seeds = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql)), offset);
+                xv[1] = kt8_lookup((const uint16_t *)x[i].ql + 8, table);
+                xv[2] = kt8_lookup((const uint16_t *)x[i].ql + 16, table);
                 xv[0] = trellis.next64(seeds, 0);
-                for (int k = 1; k < 4; ++k) xv[k] = kt8_lookup((const uint16_t *)x[i].ql + 8*k, table);
+                xv[3] = kt8_lookup((const uint16_t *)x[i].ql + 24, table);
             } else
 #else
             if constexpr (nrc_y == 1) {
