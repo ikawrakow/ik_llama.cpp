@@ -225,6 +225,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     bool has_buft_overrides = false;
 
     std::unordered_set<ggml_tensor *> split_tensors;
+    std::vector<ggml_tensor *> overridden_split_tensors;
 
     std::vector<std::pair<std::regex, ggml_backend_buffer_type_t>> overrides;
 
@@ -503,11 +504,14 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
 
 ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne,
         int flags, ggml_context ** actual_context) {
+    bool split_requested = ctx == split_ctx;
     ctx = get_context_for_tensor(ctx, name);
     if (actual_context) *actual_context = ctx;
     auto tensor = ml.create_tensor(ctx, name, ne, flags);
     if (tensor && ctx == split_ctx) {
         split_tensors.insert(tensor);
+    } else if (tensor && split_requested) {
+        overridden_split_tensors.push_back(tensor);
     }
     return tensor;
 }
@@ -6489,7 +6493,19 @@ bool create_tensors_helper::create_tensors() {
                     layer, hparams, cur_splits, mem_used, ctx_split, il);
             }
 
+            auto check_ffn_override = [&] (std::initializer_list<ggml_tensor *> ffn) {
+                std::string moved, kept;
+                for (auto t : ffn) {
+                    (split_tensors.find(t) == split_tensors.end() ? moved : kept) += std::string(" ") + t->name;
+                }
+                if (!moved.empty() && !kept.empty()) {
+                    throw std::runtime_error(format("split mode graph: layer %d has%s overridden but not%s. "
+                                "Override up, gate and down of a layer together (or use --n-cpu-moe for experts)", il, moved.c_str(), kept.c_str()));
+                }
+            };
+
             if (layer.ffn_down && layer.ffn_up && layer.ffn_gate) {
+                check_ffn_override({layer.ffn_up, layer.ffn_gate, layer.ffn_down});
                 bool use_split = split_tensors.find(layer.ffn_down) != split_tensors.end() &&
                                  split_tensors.find(layer.ffn_gate) != split_tensors.end() &&
                                  split_tensors.find(layer.ffn_up)   != split_tensors.end();
@@ -6509,6 +6525,11 @@ bool create_tensors_helper::create_tensors() {
 
             std::vector<int> ffn_split;
             if (layer.ffn_down_exps && ((layer.ffn_up_exps && layer.ffn_gate_exps) || layer.ffn_up_gate_exps)) {
+                if (layer.ffn_up_gate_exps) {
+                    check_ffn_override({layer.ffn_up_gate_exps, layer.ffn_down_exps});
+                } else {
+                    check_ffn_override({layer.ffn_up_exps, layer.ffn_gate_exps, layer.ffn_down_exps});
+                }
                 bool has_up_gate = split_tensors.find(layer.ffn_gate_exps) != split_tensors.end() && split_tensors.find(layer.ffn_up_exps) != split_tensors.end();
                 has_up_gate |= split_tensors.find(layer.ffn_up_gate_exps) != split_tensors.end();
                 bool use_split = split_tensors.find(layer.ffn_down_exps) != split_tensors.end() && has_up_gate;
@@ -6551,9 +6572,14 @@ bool create_tensors_helper::create_tensors() {
             }
 
             if (layer.ffn_down_shexp && layer.ffn_up_shexp && layer.ffn_gate_shexp) {
+                check_ffn_override({layer.ffn_up_shexp, layer.ffn_gate_shexp, layer.ffn_down_shexp});
                 bool use_split = split_tensors.find(layer.ffn_down_shexp) != split_tensors.end() &&
                                  split_tensors.find(layer.ffn_gate_shexp) != split_tensors.end() &&
                                  split_tensors.find(layer.ffn_up_shexp)   != split_tensors.end();
+                if (!use_split && !ffn_split.empty() &&
+                    std::find(overridden_split_tensors.begin(), overridden_split_tensors.end(), layer.ffn_down_shexp) != overridden_split_tensors.end()) {
+                    throw std::runtime_error(format("split mode graph: layer %d has the shared experts overridden but not the routed experts", il));
+                }
                 if (use_split) {
                     int ffn_granularity = 16;
                     if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
@@ -6619,6 +6645,13 @@ bool create_tensors_helper::create_tensors() {
 
             if (layer.out_scale) {
                 prepare_split_tensors(-1, ctx_split, layer.out_scale, layer.split_out_scale, std::vector<int>(model.splits.size(), 1), mem_used);
+            }
+        }
+
+        for (auto t : overridden_split_tensors) {
+            if (t->extra) {
+                throw std::runtime_error(format("split mode graph: %s cannot be overridden. "
+                            "Override only whole up/gate/down groups, or use --n-cpu-moe or -ngl", t->name));
             }
         }
 
