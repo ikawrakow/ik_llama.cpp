@@ -7573,6 +7573,7 @@ class Raon1Model(Model):
         self.gguf_writer.add_hyper_connection_count(self._with_default(hp, "raon_mhc_streams", 4))
         self.gguf_writer.add_hyper_connection_epsilon(self._with_default(hp, "raon_mhc_selector_eps", 1e-5))
         self.gguf_writer.add_hyper_connection_magnitude(self._with_default(hp, "raon_mhc_post_factor", 2.0))
+        self.gguf_writer.add_file_type(self.ftype)
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int):
         if ".hc_" in new_name and not new_name.endswith("_fn.weight"):
