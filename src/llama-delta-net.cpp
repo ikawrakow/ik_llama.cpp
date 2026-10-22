@@ -376,10 +376,8 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(k_conv, "k_conv_normed", il);
 
     if (rda_delta) {
-        // RDA: beta is a raw logit; the fused kernel applies sigmoid(beta).
-        // write/erase = exp(logsigmoid(beta+delta) - logsigmoid(beta)), so scaling V
-        // gives S' = S(I - erase k k^T) + write v k^T exactly, without a second kernel.
-        // Same factorization as the HF reference implementation.
+        // RDA: beta is raw; the kernel sigmoids it. V *= write/erase gives
+        // S' = S(I - erase k k^T) + write v k^T exactly.
         auto beta_v  = ggml_reshape_4d(ctx0, beta,      1, num_v_heads, n_seq_tokens, n_seqs);
         auto delta_v = ggml_reshape_4d(ctx0, rda_delta, 1, num_v_heads, n_seq_tokens, n_seqs);
         auto erase = ggml_softplus(ctx0, ggml_neg(ctx0, beta_v));
