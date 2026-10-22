@@ -313,6 +313,14 @@ static ggml_tensor * build_glm5next_mla_attention(
     if (lctx.cparams.flash_attn) {
         kqv_cmpr = ggml_flash_attn_ext(ctx0, Qcur, K_cache, K_cache, attn_mask,
                 kq_scale, hparams.f_max_alibi_bias, 0.f);
+        if (top_k) {
+            int n_selected_padded = GGML_PAD(top_k->ne[0], 256);
+            if (n_selected_padded < attn_mask->ne[0]) {
+                auto selected = ggml_mask_to_index(ctx0, attn_mask, n_selected_padded);
+                cb(selected, "mask_to_idx", il);
+                kqv_cmpr->src[5] = selected;
+            }
+        }
         if (K_cache->ne[1] < 256) {
             ggml_flash_attn_ext_set_prec(kqv_cmpr, GGML_PREC_F32);
         }
