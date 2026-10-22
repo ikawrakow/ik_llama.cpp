@@ -40,6 +40,8 @@ static std::pair<ggml_tensor *, ggml_tensor *> build_kda_beta_gate(llama_context
 
     auto beta = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_beta, input);
     beta = ggml_reshape_4d(ctx0, beta, n_head, 1, n_tok, 1);
+    // Raw logits: ggml_delta_net applies sigmoid(beta) internally. RDA needs the raw
+    // logits here to form softplus(-beta) / softplus(-(beta + delta)).
     cb(beta, "beta", il);
 
     auto raw = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_f_a, input);
