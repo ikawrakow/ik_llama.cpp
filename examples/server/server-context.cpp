@@ -4611,7 +4611,7 @@ void server_context::speculative_decoding_accept() {
                         common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok)),
                         0.0f,
                         { } });
-                    rewind_context(slot, slot.n_past);
+                    //rewind_context(slot, slot.n_past);
                 }
                 slot.banned_n = banned_n;
             }

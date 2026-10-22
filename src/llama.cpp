@@ -903,7 +903,7 @@ llama_context::~llama_context() {
     }
     kv_self.ckpt.release();
     for (auto & it : kv_self.ckpt_rewind_pool) {
-        it.release();
+        it->release();
     }
     kv_self.ckpt_rewind_map.clear();
     free_dflash_kv_cache_tensors();
