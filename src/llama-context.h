@@ -524,6 +524,7 @@ struct llama_context {
         input_state inputs;
         int32_t visible_cross_ctx = 0;
         bool dspark = false;
+        bool want_dspark_logits = false;
 
         std::vector<llama_token> draft_tokens;
         struct ggml_tensor * draft_tokens_tensor = nullptr;
