@@ -12,12 +12,16 @@ def out(line=""):
 
 def normalization_tables():
     out(f"// Canonical normalization tables: Unicode {unicodedata.unidata_version}.")
-    out("const std::unordered_map<uint32_t, uint8_t> unicode_combining_class = {")
-    for cpt in range(0x110000):
-        if value := unicodedata.combining(chr(cpt)):
-            out(f"{{0x{cpt:06X}, {value}}},")
-    out("};\n")
-    out("const std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> unicode_decomposition = {")
+    combining = [(cpt, value) for cpt in range(0x110000)
+                 if (value := unicodedata.combining(chr(cpt)))]
+    out("const unicode_cpt_value unicode_combining_class[] = {")
+    for cpt, value in combining:
+        out(f"{{0x{cpt:06X}, {value}}},")
+    out("};")
+    out("const size_t unicode_combining_class_count = "
+        "sizeof(unicode_combining_class) / sizeof(unicode_combining_class[0]);\n")
+
+    decompositions = []
     compositions = []
     for cpt in range(0x110000):
         if 0xAC00 <= cpt < 0xAC00 + 11172:
@@ -28,14 +32,22 @@ def normalization_tables():
         parts = [int(part, 16) for part in raw.split()]
         assert 1 <= len(parts) <= 2
         first, second = parts[0], parts[1] if len(parts) == 2 else 0
-        out(f"{{0x{cpt:06X}, {{0x{first:06X}, 0x{second:06X}}}}},")
+        decompositions.append((cpt, first, second))
         if second and unicodedata.normalize("NFC", chr(first) + chr(second)) == chr(cpt):
-            compositions.append((first, second, cpt))
-    out("};\n")
-    out("const std::unordered_map<uint64_t, uint32_t> unicode_composition = {")
-    for first, second, cpt in compositions:
-        out(f"{{0x{((first << 32) | second):016X}ULL, 0x{cpt:06X}}},")
+            compositions.append(((first << 32) | second, cpt))
+    out("const unicode_decomp_entry unicode_decomposition[] = {")
+    for cpt, first, second in decompositions:
+        out(f"{{0x{cpt:06X}, 0x{first:06X}, 0x{second:06X}}},")
     out("};")
+    out("const size_t unicode_decomposition_count = "
+        "sizeof(unicode_decomposition) / sizeof(unicode_decomposition[0]);\n")
+
+    out("const unicode_comp_entry unicode_composition[] = {")
+    for key, cpt in sorted(compositions):
+        out(f"{{0x{key:016X}ULL, 0x{cpt:06X}}},")
+    out("};")
+    out("const size_t unicode_composition_count = "
+        "sizeof(unicode_composition) / sizeof(unicode_composition[0]);")
 
 
 # Generate only canonical tables, without downloading the UCD data.

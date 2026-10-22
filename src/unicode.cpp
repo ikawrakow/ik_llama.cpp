@@ -1150,8 +1150,10 @@ std::vector<uint32_t> unicode_cpts_normalize_nfd(const std::vector<uint32_t> & c
 }
 
 static uint8_t unicode_canonical_class(uint32_t cpt) {
-    const auto it = unicode_combining_class.find(cpt);
-    return it == unicode_combining_class.end() ? 0 : it->second;
+    const auto * end = unicode_combining_class + unicode_combining_class_count;
+    const auto it = std::lower_bound(unicode_combining_class, end, cpt,
+            [](const unicode_cpt_value & e, uint32_t v) { return e.cpt < v; });
+    return it != end && it->cpt == cpt ? (uint8_t) it->value : 0;
 }
 
 static void unicode_canonical_decompose(uint32_t cpt, std::vector<uint32_t> & result, std::vector<uint32_t> & pending) {
@@ -1169,15 +1171,17 @@ static void unicode_canonical_decompose(uint32_t cpt, std::vector<uint32_t> & re
             }
             continue;
         }
-        const auto it = unicode_decomposition.find(cpt);
-        if (it == unicode_decomposition.end()) {
+        const auto * end = unicode_decomposition + unicode_decomposition_count;
+        const auto it = std::lower_bound(unicode_decomposition, end, cpt,
+                [](const unicode_decomp_entry & e, uint32_t v) { return e.cpt < v; });
+        if (it == end || it->cpt != cpt) {
             result.push_back(cpt);
             continue;
         }
-        if (it->second.second) {
-            pending.push_back(it->second.second);
+        if (it->second) {
+            pending.push_back(it->second);
         }
-        pending.push_back(it->second.first);
+        pending.push_back(it->first);
     }
 }
 
@@ -1188,8 +1192,11 @@ static uint32_t unicode_canonical_compose(uint32_t first, uint32_t second) {
     if (first >= 0xAC00 && first < 0xAC00 + 11172 && (first - 0xAC00) % 28 == 0 && second > 0x11A7 && second < 0x11A7 + 28) {
         return first + second - 0x11A7;
     }
-    const auto it = unicode_composition.find((uint64_t(first) << 32) | second);
-    return it == unicode_composition.end() ? 0 : it->second;
+    const uint64_t key = (uint64_t(first) << 32) | second;
+    const auto * end = unicode_composition + unicode_composition_count;
+    const auto it = std::lower_bound(unicode_composition, end, key,
+            [](const unicode_comp_entry & e, uint64_t k) { return e.key < k; });
+    return it != end && it->key == key ? it->value : 0;
 }
 
 std::vector<uint32_t> unicode_cpts_normalize_nfc(const std::vector<uint32_t> & cpts) {
