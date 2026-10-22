@@ -2343,12 +2343,11 @@ llama_kv_cache::gpu_checkpoint & llama_kv_cache::llama_get_ckpt(llama_ckpt_data 
 
 bool  llama_kv_cache::llama_ckpt_mode_equal(llama_ckpt_data ckpt_type, int mode) const {
     if (ckpt_type.type == LLAMA_CHECKPOINT_REWIND) {
-        return false;
-        //if (!ckpt_rewind_map.contains(ckpt_type.pos)) {
-        //    return false;
-        //}
-        //const auto & ckpt1 = ckpt_rewind_map[ckpt_type.pos];
-        //return ckpt1.selected_spec_mode== mode;
+        if (!ckpt_rewind_map.contains(ckpt_type.pos)) {
+            return mode==LLAMA_SPEC_CKPT_NONE;
+        }
+        const auto * ckpt1 = ckpt_rewind_map.at(ckpt_type.pos);
+        return ckpt1->selected_spec_mode== mode;
     }
     return ckpt.selected_spec_mode == mode;
 }
