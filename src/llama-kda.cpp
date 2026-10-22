@@ -153,12 +153,18 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
                                  id < (int) kv_self.ckpt.per_step_conv[il].size()
                                ? kv_self.ckpt.per_step_conv[il][id] : nullptr;
 
+            ggml_tensor * rda_delta = nullptr;
+            if (layer.ssm_rda) {
+                rda_delta = llm_build_context::llm_build_lora_mm(lctx, ctx0, split(layer.ssm_rda), cur);
+                rda_delta = ggml_reshape_4d(ctx0, rda_delta, n_head, 1, n_tok, 1);
+            }
+
             const uint32_t qnext_state_slots = split_s_l->splits[id]->ne[1];
             auto output = build_qkv(ctx0, split_s_l->splits[id], conv, qkv_mixed,
                     inp_s_seq_qnext, beta, log_decay,
                     head_dim, n_head, head_dim, n_head, hparams.ssm_d_conv,
                     state_seq_id_local, qnext_state_slots, reset_state_local,
-                    hparams.f_norm_rms_eps, 1, il_cb, cb, gf, per_step_ckpt, per_step_conv, nullptr);
+                    hparams.f_norm_rms_eps, 1, il_cb, cb, gf, per_step_ckpt, per_step_conv, rda_delta);
 
             auto gated_output = build_kda_gated_output(lctx, ctx0, split(layer.ssm_norm), ssm_out, output, z,
                     head_dim, n_head, n_tok, il_cb, cb);
