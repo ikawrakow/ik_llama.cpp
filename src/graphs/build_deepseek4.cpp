@@ -827,7 +827,7 @@ static ggml_tensor * build_top_k_mask(
         kq_mask = ggml_cont(ctx0, kq_mask);
     }
     if (top_k->ne[0] <= kq_mask->ne[0] && top_k->ne[1] <= kq_mask->ne[1] && top_k->ne[2] == kq_mask->ne[2] && top_k->ne[3] == kq_mask->ne[3]) {
-        return ggml_indexer_mask(ctx0, kq_mask, top_k);
+        return ggml_indexer_mask(ctx0, kq_mask, top_k, 0.0f);
     }
     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
     //ggml_tensor * kq_mask_top_k = ggml_blend(ctx0, kq_mask_all, top_k, 0.0f);

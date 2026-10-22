@@ -420,7 +420,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
                 GGML_UNARY_OP_RELU, width);
         cb(fused, "qsa_top_k", il);
         ggml_build_forward_expand(gf, fused);
-        ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, fused);
+        ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, fused, 0.0f);
         cb(mask, "qsa_mask", il);
         *top_k_out = fused;
         return mask;
@@ -447,7 +447,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
     ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, expanded, width));
     cb(top_k, "qsa_top_k", il);
 
-    ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, top_k);
+    ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, top_k, 0.0f);
     cb(mask, "qsa_mask", il);
     *top_k_out = top_k;
 

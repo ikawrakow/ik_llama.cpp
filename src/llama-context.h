@@ -74,6 +74,11 @@ struct llama_kv_cell {
 };
 
 // ring-buffer of cached KV data
+// STEP5 official-semantics CSA compression: true when the graph builder needs the
+// persistent per-token indexer-z cache (kz_l). Must be readable from llama_kv_cache_init() and
+// llama_model::cache_size(); defined in graphs/build_step5.cpp next to ik_csa_mode().
+bool llama_step5_csa_z_cache();
+
 struct llama_kv_cache {
     // the FA kernels require padding to avoid extra runtime boundary checks
     static uint32_t get_padding(bool flash_attn) { return flash_attn ? 256u : 32u; }
@@ -142,6 +147,14 @@ struct llama_kv_cache {
     // Pooled block keys for Qwen sparse attention: [indexer_head_size, kv_size/compress_ratio],
     // already normalized and rotated. Empty unless the model scores blocks.
     std::vector<struct ggml_tensor *> kp_l;
+
+    // STEP5 CSA z cache: RAW z_proj per cached cell, one per full-attn layer,
+    // [indexer_head_size, kv_size] in idx_type_k -- same shape/type discipline as kr_l. z is the
+    // per-dimension softmax LOGIT of the official region compression (kernel.py:283): it is a
+    // projection of the token's hidden state, so -- unlike k -- it cannot be recomputed from the
+    // key cache at read-back and must be cached alongside it. No norm, no RoPE, no Hadamard.
+    // Empty unless llama_step5_csa_z_cache().
+    std::vector<struct ggml_tensor *> kz_l;
 
     // When true, the delta_net graph builder will enable per-step SSM state saves
     bool save_per_step_ssm = false;
@@ -691,6 +704,8 @@ struct llama_context {
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
+    struct ggml_tensor * inp_kv_pos = nullptr;   // I32 [n_kv] cached-cell positions (STEP5 indexer read-back RoPE; llama_set_inputs fill from kv_self.cells)
+    struct ggml_tensor * inp_step5_cell_blk = nullptr; // I32 [n_kv] cell -> CSA block map (slot-aligned i/B; fused indexer topk expand; llama_set_inputs fill)
     struct ggml_tensor * inp_kpool_cells     = nullptr; // I32 [kpool*n_pool] cell index of each pool member (pool b, member j at [b*kpool+j])
     struct ggml_tensor * inp_kpool_bias      = nullptr; // F32 [n_pool, n_tokens] 0 if pool complete & visible to query, else -inf
     struct ggml_tensor * inp_kpool_tail      = nullptr; // I32 [kpool-1, n_tokens] trailing incomplete pool cells (null when kpool==1)
@@ -768,6 +783,10 @@ struct llama_context {
     // uninitialized -> wrong block-max-pool/top-k -> degraded/NaN sparse-FA decode). Register the
     // kr_l cpy per layer here and patch its offset in update_cache_copies(), exactly like K/V.
     std::vector<CacheCopy> dsa_cache_copies;
+    // STEP5 kz_l (z cache) write cpy per layer -- second registered cpy alongside dsa_cache_copies
+    // (the CacheCopy struct holds ONE cpy per layer, and full-attn STEP5 layers register both a
+    // kr_l and a kz_l write).
+    std::vector<CacheCopy> dsa_z_cache_copies;
     std::vector<CacheCopy> openpangu_cache_copies;
     std::vector<CacheCopy> openpangu_cache_copies_mtp;
 

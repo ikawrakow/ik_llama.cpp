@@ -397,7 +397,12 @@ struct llm_build_context {
     // Build the additive sparse causal mask from the full score ranking + the base causal KQ_mask.
     ggml_tensor * build_deepseek2_dsa_sparse_mask(
             ggml_tensor * sorted,   // [n_kv, n_tokens] (I32) full descending argsort of scores
-            ggml_tensor * KQ_mask); // F32 causal mask [n_kv, n_tokens_pad]
+            ggml_tensor * KQ_mask,  // F32 causal mask [n_kv, n_tokens_pad]
+            // kept-slot-count override; -1 = hparams.indexer_top_k / cparams.dsa_top_k as before
+            int64_t n_top_k_override = -1,
+            // optional caller-owned {1, n_kv, n_tokens} F32 leaf reused across per-layer calls
+            // (see the base_leaf note in the impl — compute-buffer leaf-pinning workaround)
+            ggml_tensor * base_leaf = nullptr);
 
     // Adapt the (F32, unpadded) sparse mask to the shape/dtype ggml_flash_attn_ext requires on this
     // fork: F16, contiguous, ne[1] padded to GGML_KQ_MASK_PAD (== the dense KQ_mask's padded shape).
@@ -453,11 +458,29 @@ struct llm_build_context {
 
     ggml_cgraph * build_laguna();
 
-    ggml_cgraph * build_step35();
+    ggml_cgraph * build_step5();
 
     ggml_cgraph * build_k2horizon();
 
-    ggml_tensor * build_step35_mtp(
+    // Indexer KV plumbing: proxy-key cache write +
+    // dsa_cache_copies graph-reuse registration for STEP5 full-attn layers.
+    void build_step5_indexer_kv_write(ggml_cgraph * gf, int il, ggml_tensor * inpL);
+    // STEP5 proxy forward (q/z/w proj, q_norm rmsnorm) + indexer-key read-back scoring.
+    // Keys stay RAW in kr_l; the pe/nope RoPE split (rope_dim = indexer_rope_dim) is
+    // applied at read-back (q at inp_pos, cached k at inp_kv_pos).
+    // Returns the causal-seeded indexer score {n_kv, n_tokens} (F32) for the selection
+    // path, or nullptr on layers without an indexer (SWA / MTP tail).
+    // fused_mask_out (optional): when the fused path is active (IK_SPARSE=1 + cparams.fused_idx_topk
+    // + no tap capture + block-grain + backend support), the function instead builds the pooled
+    // block keys -> ggml_indexer_topk (in-kernel relu(q.k)*w sum + causal seed + descending topk)
+    // -> ggml_indexer_mask (topk cells unmasked, rest -INF cliff (hard selection), += dense mask) chain and
+    // stores the final attention mask in *fused_mask_out, returning nullptr (no decomposed score
+    // tensor is materialized). kept >= n_kv short-circuits to exact-dense (both outputs null).
+    ggml_tensor * build_step5_indexer_score(ggml_cgraph * gf, int il, ggml_tensor * inpL,
+            ggml_tensor * inp_pos, ggml_tensor * KQ_mask, ggml_tensor * band01,
+            ggml_tensor * band_neg, ggml_tensor ** fused_mask_out = nullptr);
+
+    ggml_tensor * build_step5_mtp(
             const llama_layer & mtp_layer,
             ggml_tensor * hidden_states_from_main_model,
             ggml_cgraph * gf,

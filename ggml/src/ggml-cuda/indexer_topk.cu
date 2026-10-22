@@ -1,3 +1,5 @@
+#include <cstring>
+
 #include "indexer_topk.cuh"
 #include "mmq.cuh"
 #include "quantize.cuh"
@@ -272,7 +274,21 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                        (const float *)q_data, q->ne[0],
                     &beta,      kq.get(),     k->ne[1]));
         }
-        if (m->type == GGML_TYPE_F32) {
+        // With a cell_idx map (c), k holds POOLED BLOCK rows: kq columns are blocks, cells gather
+        // their block's kq column (k_fused_relu_mul_sum_rows_3) and the sort/copy run over n_kv
+        // cells -- mirroring the F16/Q8_0 branch above. Without c, k is already cell-grain.
+        const int ncols_sort = c ? n_kv : k->ne[1];
+        if (c) {
+            int nblocks = (ncols_sort + k_block_size - 1)/k_block_size;
+            dim3 grid(nrows, nblocks, 1);
+            if (m->type == GGML_TYPE_F32) {
+                k_fused_relu_mul_sum_rows_3<<<grid, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const float *)m_data,
+                        (const int *)c->data, score.get(), ncols_sort, k->ne[1], q->ne[1], m->nb[1]);
+            } else {
+                k_fused_relu_mul_sum_rows_3<<<grid, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const half  *)m_data,
+                        (const int *)c->data, score.get(), ncols_sort, k->ne[1], q->ne[1], m->nb[1]);
+            }
+        } else if (m->type == GGML_TYPE_F32) {
             k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const float *)m_data,
                     score.get(), k->ne[1], q->ne[1], m->nb[1]);
         } else {
@@ -281,11 +297,11 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         }
         CUDA_CHECK(cudaGetLastError());
 
-        argsort_f32_i32_cuda_cub(ctx.pool(), score.get(), sorted.get(), k->ne[1], nrows, GGML_SORT_ORDER_DESC, ctx.stream());
+        argsort_f32_i32_cuda_cub(ctx.pool(), score.get(), sorted.get(), ncols_sort, nrows, GGML_SORT_ORDER_DESC, ctx.stream());
         CUDA_CHECK(cudaGetLastError());
 
         k_copy_topk<<<nrows, k_block_size, 0, ctx.stream()>>>(sorted.get(), (int *)((char *)dst->data + first*dst->nb[1]),
-                k->ne[1], dst->ne[0]);
+                ncols_sort, dst->ne[0]);
         CUDA_CHECK(cudaGetLastError());
     }
 
@@ -296,21 +312,25 @@ static __global__ void k_indexer_mask(int ne0, int ne1, int ne2, int ntopk, int 
         size_t nb01, size_t nb02, size_t nb03,
         size_t nb11, size_t nb12, size_t nb13,
         size_t nb1,  size_t nb2,  size_t nb3,
-        const mask_t * mask, const int * idx, mask_t * dst) {
+        float pen, const mask_t * mask, const int * idx, const float * __restrict__ force, mask_t * dst) {
     int i1 = blockIdx.x;
     int i3 = i1 / (ne1*ne2); i1 -= i3*ne1*ne2;
     int i2 = i1 / (ne1);     i1 -= i2*ne1;
 
     auto m = (const mask_t *)((const char *)mask + i1*nb01 + i2*nb02 + i3*nb03);
     auto i = (const int *)((const char *)idx + i1*nb11 + i2*nb12 + i3*nb13);
+    // own-region force-visible map (nullptr = off): F32 contiguous, same {n_kv, n_tok} shape.
+    auto fv = force ? force + (size_t(i3)*ne1*ne2 + i2*ne1 + i1)*ne0 : nullptr;
     auto d = (mask_t *)((char *)dst + i1*nb1 + i2*nb2 + i3*nb3);
 
+    // pen <= 0 -> -INF cliff (hard); pen > 0 -> soft penalty -pen. The dense mask added on
+    // top still forces -INF on future/padding cells either way (-pen + -INF == -INF).
     mask_t inf, zero;
     if constexpr (std::is_same_v<mask_t, half>) {
-        inf  = __float2half(-INFINITY);
+        inf  = __float2half(pen > 0.0f ? -pen : -INFINITY);
         zero = __float2half(0.0f);
     } else {
-        inf  = -INFINITY;
+        inf  = pen > 0.0f ? -pen : -INFINITY;
         zero = 0.0f;
     }
 
@@ -318,6 +338,13 @@ static __global__ void k_indexer_mask(int ne0, int ne1, int ne2, int ntopk, int 
         for (int j = threadIdx.x; j < ne0;   j += blockDim.x) d[j] = inf;
         __syncthreads();
         for (int j = threadIdx.x; j < ntopk; j += blockDim.x) d[i[j]] = zero;
+        // force-append: unmask force cells AFTER the topk unmask, BEFORE the dense mask
+        // add (own-band cells are causal-visible by construction, so the add is a no-op on
+        // them). Writes only zero -- the same value the topk loop stores -- so no barrier is
+        // needed between the two unmask loops.
+        if (fv) {
+            for (int j = threadIdx.x; j < ne0; j += blockDim.x) if (fv[j] > 0.5f) d[j] = zero;
+        }
         __syncthreads();
         for (int j = threadIdx.x; j < ne0;   j += blockDim.x) d[j] += m[j];
     } else {
@@ -338,18 +365,27 @@ void ggml_cuda_op_indexer_mask(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
     int nrows = ggml_nrows(dst);
 
+    float pen;
+    memcpy(&pen, &dst->op_params[0], sizeof(float));
+
+    const float * force = nullptr;
+    if (dst->src[2]) {
+        GGML_ASSERT(dst->src[2]->type == GGML_TYPE_F32 && ggml_is_contiguous(dst->src[2]));
+        force = (const float *) dst->src[2]->data;
+    }
+
     if (dst->type == GGML_TYPE_F16) {
         k_indexer_mask<<<nrows, 256, 0, ctx.stream()>>>(dst->ne[0], dst->ne[1], dst->ne[2], topk->ne[0], topk->ne[1],
                 mask->nb[1], mask->nb[2], mask->nb[3],
                 topk->nb[1], topk->nb[2], topk->nb[3],
                 dst->nb[1],  dst->nb[2],  dst->nb[3],
-                (const half *)mask->data, (const int *)topk->data, (half *)dst->data);
+                pen, (const half *)mask->data, (const int *)topk->data, force, (half *)dst->data);
     } else {
         k_indexer_mask<<<nrows, 256, 0, ctx.stream()>>>(dst->ne[0], dst->ne[1], dst->ne[2], topk->ne[0], topk->ne[1],
                 mask->nb[1], mask->nb[2], mask->nb[3],
                 topk->nb[1], topk->nb[2], topk->nb[3],
                 dst->nb[1],  dst->nb[2],  dst->nb[3],
-                (const float *)mask->data, (const int *)topk->data, (float *)dst->data);
+                pen, (const float *)mask->data, (const int *)topk->data, force, (float *)dst->data);
     }
 
 }

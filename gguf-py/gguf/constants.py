@@ -300,6 +300,8 @@ class MODEL_ARCH(IntEnum):
     SMOLLM3      = auto()
     SEED_OSS     = auto()
     LAGUNA       = auto()
+    STEP5        = auto()
+    STEP35       = auto()
     LFM2         = auto()
     LFM2MOE      = auto()
     MAPLE        = auto()
@@ -552,6 +554,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.SMOLLM3:        "smollm3",
     MODEL_ARCH.SEED_OSS:       "seed_oss",
     MODEL_ARCH.LAGUNA:         "laguna",
+    MODEL_ARCH.STEP5:          "step5",
+    MODEL_ARCH.STEP35:         "step35",
     MODEL_ARCH.LFM2:           "lfm2",
     MODEL_ARCH.LFM2MOE:        "lfm2moe",
     MODEL_ARCH.MAPLE:          "maple",
@@ -2030,8 +2034,41 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
+    MODEL_ARCH.STEP5: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
     # TODO
 }
+# STEP35 (Step-3.5/3.7-Flash family) shares the STEP5 tensor set
+MODEL_TENSORS[MODEL_ARCH.STEP35] = MODEL_TENSORS[MODEL_ARCH.STEP5]
 
 MODEL_TENSORS[MODEL_ARCH.DEEPSEEK41] = MODEL_TENSORS[MODEL_ARCH.DEEPSEEK4]
 
