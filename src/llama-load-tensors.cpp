@@ -83,6 +83,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_qwen3_moe_tensors(const LLM_TN & tn);
 
+    bool create_flint_tensors(const LLM_TN & tn);
+
     bool create_mellum_tensors(const LLM_TN & tn);
 
     bool create_qwen3next_tensors(const LLM_TN & tn);
@@ -1689,6 +1691,69 @@ bool create_tensors_helper::create_maple_tensors(const LLM_TN & tn) {
 
         use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
     }
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_flint_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    create_embd_output(tn, n_embd, n_vocab, true);
+
+    const int64_t n_ff_exp   = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+    const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff_exp;
+
+    for (int i = 0; i < n_layer; ++i) {
+        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i);
+        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i);
+        const uint32_t n_head       = hparams.n_head(i);
+
+        ggml_context * ctx_layer = ctx_for_layer(i);
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+
+        auto & layer = model.layers[i];
+
+        layer.attn_norm  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM,  "weight", i), {n_embd});
+        layer.attn_sinks = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        // q/k/v + optional biases
+        use_mmap_buffer &= !merge_qkv(tn, i, 0);
+        layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q, "bias", i), {n_embd_k_gqa},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K, "bias", i), {n_embd_k_gqa},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V, "bias", i), {n_embd_v_gqa},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * n_head, n_embd});
+
+        layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k});
+        layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
+
+        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
+        layer.ffn_norm = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+
+        if (static_cast<uint32_t>(i) < hparams.n_layer_dense_lead) {
+            create_std_ffn(i, tn, layer, n_ff, n_embd, ffn_ctx);
+        } else {
+            layer.ffn_gate_inp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
+
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff_exp);
+
+            layer.ffn_exp_probs_b = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+
+            // optional shared expert
+            if (hparams.n_expert_shared > 0) {
+                layer.ffn_gate_inp_shexp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", i), {n_embd},
+                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                layer.ffn_up_shexp   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_shexp});
+                layer.ffn_gate_shexp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp});
+                layer.ffn_down_shexp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd});
+            }
+        }
+    }
+
     return use_mmap_buffer;
 }
 
@@ -5975,6 +6040,8 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_QWEN3MOE:
         case LLM_ARCH_QWEN3VLMOE:
             use_mmap_buffer = create_qwen3_moe_tensors(tn); break;
+        case LLM_ARCH_FLINT:
+            use_mmap_buffer = create_flint_tensors(tn); break;
         case LLM_ARCH_MELLUM:
             use_mmap_buffer = create_mellum_tensors(tn); break;
         case LLM_ARCH_LFM2:

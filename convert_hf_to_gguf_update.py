@@ -78,6 +78,7 @@ models = [
     {"name": "refact",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/smallcloudai/Refact-1_6-base", },
     {"name": "command-r",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/CohereForAI/c4ai-command-r-v01", },
     {"name": "qwen2",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen1.5-7B", },
+    {"name": "flint",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/RecursiveSI/flint-preview", "chkhsh": "d5420e601e979078c670bc503d9ac411c311fa76b76a76267c31e0d6ba816637", },
     {"name": "qwen35",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen3.5-9B-Instruct", "chkhsh": "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4", },
     {"name": "qwen35",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen3.5-27B", "chkhsh": "99cc61242f7106804ce24fdf3a6451e4a55251078dffd5453c806e11b2310db3", },
     {"name": "qwen35",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/z-lab/Qwen3.5-27B-DFlash", "chkhsh": "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f", },

@@ -741,6 +741,9 @@ class Model:
         if chkhsh == "ccc2ef013c104be7bae2965776d611e1d7a8a2a9c547dd93a682c9a9fc80352e":
             # ref: https://huggingface.co/openai/gpt-oss-20b
             res = "gpt-4o"
+        if chkhsh == "d5420e601e979078c670bc503d9ac411c311fa76b76a76267c31e0d6ba816637":
+            # ref: https://huggingface.co/RecursiveSI/flint-preview
+            res = "flint"
         if res is None:
             logger.warning("\n")
             logger.warning("**************************************************************************************")
@@ -2367,6 +2370,59 @@ class Qwen3Model(Qwen2Model):
 @Model.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+
+@Model.register("FlintForCausalLM")
+class FlintModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.FLINT
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        dense = self.hparams.get("mlp_only_layers", [])
+        if dense != list(range(len(dense))):
+            raise ValueError("Flint dense layers must precede the MoE layers")
+        self.gguf_writer.add_leading_dense_block_count(len(dense))
+        shared_size = self.hparams.get("shared_expert_intermediate_size", 0)
+        moe_size    = self.hparams.get("moe_intermediate_size")
+        if shared_size:
+            if not moe_size:
+                raise ValueError("Flint shared expert without moe_intermediate_size")
+            self.gguf_writer.add_expert_shared_count(shared_size // moe_size)
+        else:
+            self.gguf_writer.add_expert_shared_count(0)
+        self.gguf_writer.add_expert_weights_norm(self.hparams.get("norm_topk_prob", True))
+        self.gguf_writer.add_expert_weights_scale(1.0)
+        score_func = self.hparams.get("router_score_function", "softmax")
+        gating = {
+            "softmax":      gguf.ExpertGatingFuncType.SOFTMAX,
+            "sigmoid":      gguf.ExpertGatingFuncType.SIGMOID,
+            "sqrtsoftplus": gguf.ExpertGatingFuncType.SQRTSOFTPLUS,
+        }
+        if score_func not in gating:
+            raise ValueError(f"Unsupported Flint router_score_function={score_func!r}")
+        self.gguf_writer.add_expert_gating_func(gating[score_func])
+        sliding = self.hparams.get("sliding_window")
+        if sliding:
+            layer_types = self.hparams.get("layer_types")
+            if not layer_types:
+                raise ValueError("Flint sliding window without layer_types")
+            self.gguf_writer.add_sliding_window(sliding)
+            self.gguf_writer.add_sliding_window_pattern([
+                kind == "sliding_attention" for kind in layer_types
+            ])
+        no_rope = set(self.hparams.get("no_rope_layer_indices", []))
+        self.gguf_writer.add_rope_pattern([
+            i not in no_rope for i in range(self.block_count)
+        ])
+
+    def modify_tensors(self, data_torch, name, bid):
+        if name.endswith(".softmax_offset"):
+            name += ".weight"
+        if name.endswith(".gate.expert_bias"):
+            if not self.hparams.get("router_expert_bias", False):
+                return
+            name += ".bias"
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @Model.register("DFlashDraftModel")

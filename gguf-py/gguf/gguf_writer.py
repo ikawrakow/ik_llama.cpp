@@ -739,6 +739,9 @@ class GGUFWriter:
     def add_sliding_window_pattern(self, value: Sequence[bool]) -> None:
         self.add_array(Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch), value)
 
+    def add_rope_pattern(self, value: Sequence[bool]) -> None:
+        self.add_array(Keys.Attention.ROPE_PATTERN.format(arch=self.arch), value)
+
     def add_swiglu_clamp_exp(self, values: Sequence[float]) -> None:
         self.add_array(Keys.LLM.SWIGLU_CLAMP_EXP.format(arch=self.arch), values)
 
