@@ -362,7 +362,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
     const int64_t n_target_features = hparams.dflash_n_target_features;
-    const bool is_dflash2 = model.arch == LLM_ARCH_DFLASH2;
+    const bool is_dflash2 = model.arch == LLM_ARCH_DFLASH2 || hparams.dflash_selector_rank > 0;
     const int64_t ctx_len = lctx.dflash.visible_cross_ctx > 0
             ? (int64_t) lctx.dflash.visible_cross_ctx
             : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
