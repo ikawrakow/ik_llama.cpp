@@ -1207,11 +1207,7 @@ void mul_mat_iq3_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& 
     const int nt = (n%QK_K)/32;
 
     Trellis3Z trellis;
-#ifdef GGML_USE_I32GATHER
     const uint64_t * table = nrc_y <= 2 ? kt8_value_table<1>() : nullptr;
-#else
-    const uint64_t * table = nrc_y == 1 ? kt8_value_table<1>() : nullptr;
-#endif
 
     const block_q8_K * y[nrc_y];
     for (int iy = 0; iy < nrc_y; ++iy) {
@@ -1254,7 +1250,7 @@ void mul_mat_iq3_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& 
                 xv[3] = kt8_lookup((const uint16_t *)x[i].ql + 24, table);
             } else
 #else
-            if constexpr (nrc_y == 1) {
+            if constexpr (nrc_y <= 2) {
                 auto seeds = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql)), offset);
                 xv[0] = trellis.next64(seeds, 0);
                 xv[1] = trellis.next64(seeds, 1);
@@ -1330,11 +1326,7 @@ void mul_mat_iq2_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& 
     const int nt = (n%QK_K)/32;
 
     Trellis3Z trellis;
-#ifdef GGML_USE_I32GATHER
     const uint64_t * table = nrc_y <= 2 ? kt8_value_table<2>() : nullptr;
-#else
-    const uint64_t * table = nrc_y == 1 ? kt8_value_table<2>() : nullptr;
-#endif
 
     const block_q8_K * y[nrc_y];
     for (int iy = 0; iy < nrc_y; ++iy) {
@@ -1374,7 +1366,7 @@ void mul_mat_iq2_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& 
                 for (int k = 1; k < 4; ++k) xv[k] = kt8_lookup((const uint16_t *)x[i].ql + 8*k, table);
             } else
 #else
-            if constexpr (nrc_y == 1) {
+            if constexpr (nrc_y <= 2) {
                 auto seeds = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql)), offset);
                 xv[0] = trellis.next64u(seeds, 0);
                 xv[1] = trellis.next64u(seeds, 1);
