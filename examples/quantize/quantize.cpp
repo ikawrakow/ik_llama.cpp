@@ -323,11 +323,16 @@ static int prepare_imatrix(const std::string & imatrix_file,
 
 static ggml_type parse_ggml_type(const char * arg) {
     ggml_type result = GGML_TYPE_COUNT;
+    std::string arg_lower{arg};
+    for (auto & c : arg_lower) c = std::tolower(c);
     for (int j = 0; j < GGML_TYPE_COUNT; ++j) {
         auto type = ggml_type(j);
         const auto * name = ggml_type_name(type);
-        if (name && strcmp(arg, name) == 0) {
-            result = type; break;
+        if (name) {
+            if (strcmp(arg, name) == 0) return type;
+            std::string name_lower{name};
+            for (auto & c : name_lower) c = std::tolower(c);
+            if (name_lower == arg_lower) return type;
         }
     }
     return result;
