@@ -56,10 +56,7 @@ struct common_ngram_hash_function {
     }
 };
 
-// token -> number of times token has been seen. Sorted iteration makes lookup
-// logarithmic and keeps the compact follower representation in key order.
-// Insertion can invalidate iterators/references at or after the insertion point;
-// callers must not retain them across emplace().
+// Insertion may invalidate iterators/references, including all on reallocation.
 class common_ngram_cache_part {
 public:
     using value_type = std::pair<llama_token, int32_t>;
@@ -86,14 +83,36 @@ public:
         return it != entries.end() && it->first == token ? it : entries.end();
     }
 
-    // Match unordered_map::emplace's insert-if-absent behavior. In particular,
-    // loading a legacy file with a duplicate follower preserves its first count.
+    // Duplicate serialized followers retain their first count.
     std::pair<iterator, bool> emplace(llama_token token, int32_t count) {
         const auto it = lower_bound(token);
         if (it != entries.end() && it->first == token) {
             return {it, false};
         }
         return {entries.insert(it, value_type{token, count}), true};
+    }
+
+    static common_ngram_cache_part from_unsorted(container_type values) {
+        if (values.size() > 1) {
+            std::stable_sort(values.begin(), values.end(),
+                    [](const value_type & left, const value_type & right) {
+                        return left.first < right.first;
+                    });
+            const auto unique_end = std::unique(values.begin(), values.end(),
+                    [](const value_type & left, const value_type & right) {
+                        return left.first == right.first;
+                    });
+            values.erase(unique_end, values.end());
+        }
+
+        if (values.capacity() - values.size() > values.size()) {
+            container_type compact(values.begin(), values.end());
+            values.swap(compact);
+        }
+
+        common_ngram_cache_part part;
+        part.entries = std::move(values);
+        return part;
     }
 
 private:

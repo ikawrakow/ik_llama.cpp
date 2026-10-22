@@ -889,7 +889,7 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
     common_ngram_cache ngram_cache_dynamic;
     common_ngram_cache ngram_cache_static;
 
-    llama_tokens context_tokens; // token history represented by ngram_cache_context
+    llama_tokens context_tokens;
 
     common_speculative_state_ngram_cache(
             const enum common_speculative_type type,
@@ -938,9 +938,7 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
         }
         inp.push_back(id_last);
 
-        // The cache updater needs the full sequence so new n-grams can cross
-        // the previous/new-token boundary. Rebuild if the target context was
-        // shortened, shifted, or otherwise rewritten during this request.
+        // Keep the full sequence for cross-boundary n-grams, rebuild after shrink/shift/rewrite.
         const bool extends_context = inp.size() >= context_tokens.size() &&
             std::equal(context_tokens.begin(), context_tokens.end(), inp.begin());
         if (!extends_context) {

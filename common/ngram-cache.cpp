@@ -155,8 +155,7 @@ void common_ngram_cache_draft(
         llama_token drafted_token = LLAMA_TOKEN_NULL;
         const size_t n_available = inp.size() + draft.size() - 1;
 
-        // A draft iteration can only form keys from tokens already present in
-        // the input plus previously proposed tokens (excluding the carry slot).
+        // Only input and prior proposals are history, the carry slot is not.
         const int ngram_max_available = std::min(ngram_max,
                 static_cast<int>(std::min<size_t>(n_available, LLAMA_NGRAM_MAX)));
 
@@ -246,7 +245,7 @@ common_ngram_cache common_ngram_cache_load(const std::string & filename) {
         GGML_ASSERT(!hashmap_file.eof());
         GGML_ASSERT(hashmap_file.read(ntokensc, sizeof(int32_t)));
         GGML_ASSERT(ntokens > 0);
-        common_ngram_cache_part token_counts;
+        common_ngram_cache_part::container_type token_counts;
 
         for (int i = 0; i < ntokens; ++i) {
             GGML_ASSERT(!hashmap_file.eof());
@@ -254,10 +253,10 @@ common_ngram_cache common_ngram_cache_load(const std::string & filename) {
             GGML_ASSERT(!hashmap_file.eof());
             GGML_ASSERT(hashmap_file.read(countc, sizeof(int32_t)));
             GGML_ASSERT(count > 0);
-            token_counts.emplace(token, count);
+            token_counts.emplace_back(token, count);
         }
 
-        ngram_cache.emplace(ngram, token_counts);
+        ngram_cache.emplace(ngram, common_ngram_cache_part::from_unsorted(std::move(token_counts)));
     }
     GGML_ASSERT(hashmap_file.eof());
 

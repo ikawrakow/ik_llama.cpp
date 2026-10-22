@@ -881,8 +881,6 @@ static bool is_autoy(const std::string & value) {
 static void common_speculative_finalize_stages(gpt_params & params) {
     auto & spec = params.speculative;
 
-    // The CLI parser stores these legacy-compatible options on gpt_params,
-    // while speculative stages consume the nested fields.
     if (!params.lookup_cache_static.empty()) {
         spec.lookup_cache_static = params.lookup_cache_static;
     }
