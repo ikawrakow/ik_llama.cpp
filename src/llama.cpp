@@ -7418,7 +7418,7 @@ static int llama_decode_internal(
     const auto & hparams = model.hparams;
     const auto & cparams = lctx.cparams;
 
-    llama_begin_dflash_capture_batch(&lctx, (int32_t) n_tokens_all);
+    llama_begin_dflash_capture_batch(&lctx, (int32_t) n_tokens_all, true);
 
     GGML_ASSERT((!batch_all.token && batch_all.embd) || (batch_all.token && !batch_all.embd)); // NOLINT
 
@@ -7810,6 +7810,10 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
+        if (lctx.dflash.capture) {
+            llama_begin_dflash_capture_batch(&lctx, lctx.dsv41_replay.active
+                    ? (int32_t) lctx.dsv41_replay.keep : (int32_t) n_tokens, false);
+        }
         //fprintf(stderr, "%s: setting inputs\n", __func__);
         llama_set_inputs(lctx, u_batch);
 #if IK_PRINT_TIMING == 1
@@ -8961,6 +8965,7 @@ struct llama_context_params llama_context_default_params() {
         /*.dsa                         =*/ false,
         /*.fused_idx_topk              =*/ true,
         /*.swa_compress                =*/ false,
+        /*.dsv41_replay_keep           =*/ 0,
         /*.dsv4_legacy_state           =*/ false,
         /*.dsa_top_k                   =*/ -1,
         /*.min_experts                 =*/ -1,
@@ -9480,6 +9485,21 @@ struct llama_context * llama_init_from_model(
     cparams.dsa              = params.dsa;
     cparams.fused_idx_topk   = params.fused_idx_topk;
     cparams.swa_compress     = params.swa_compress;
+    cparams.dsv41_replay_keep = params.dsv41_replay_keep;
+    if (cparams.dsv41_replay_keep > 0) {
+        if (model->arch != LLM_ARCH_DEEPSEEK41) {
+            LLAMA_LOG_WARN("%s: --dsv41-replay-keep is only implemented for DeepSeek-V4.1; ignoring\n", __func__);
+            cparams.dsv41_replay_keep = 0;
+        } else if (!cparams.swa_compress) {
+            LLAMA_LOG_WARN("%s: --dsv41-replay-keep requires --swa-compress; ignoring\n", __func__);
+            cparams.dsv41_replay_keep = 0;
+        } else if (cparams.dsv41_replay_keep < (int) hparams.n_swa + 6) {
+            const int min_keep = (int) hparams.n_swa + 6;
+            LLAMA_LOG_WARN("%s: --dsv41-replay-keep %d is below n_swa + 6 (%d); using %d\n", __func__,
+                    cparams.dsv41_replay_keep, min_keep, min_keep);
+            cparams.dsv41_replay_keep = min_keep;
+        }
+    }
     cparams.dsv4_legacy_state = params.dsv4_legacy_state;
     cparams.dsa_top_k        = params.dsa_top_k;
 

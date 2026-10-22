@@ -191,12 +191,15 @@ struct llama_hparams {
     std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_index_key_source = {};
     std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_topk_source      = {};
 
+    int32_t dsv41_replay_boundary = -1;   // first decoder layer: first KV source whose ratio differs from the previous one, -1 if none
+
     int32_t  dsv4_candidate_source_layer = -1;
     uint32_t dsv4_candidate_block_size   = 0;
     uint32_t dsv4_candidate_topk_blocks  = 0;
     bool dsv41_is_kv_source   (uint32_t il) const { return dsv4_shared_streams && dsv41_kv_source[il]        == (int32_t) il; }
     bool dsv41_owns_index_k   (uint32_t il) const { return dsv4_shared_streams && dsv41_index_key_source[il] == (int32_t) il; }
     bool dsv41_is_index_source(uint32_t il) const { return dsv4_shared_streams && dsv41_topk_source[il]      == (int32_t) il; }
+    bool dsv41_has_replay_segment() const { return dsv41_replay_boundary > 0 && dsv41_replay_boundary < (int32_t) n_layer; }
 
     // DeepSeek-V4.1 engram: n-gram keyed tables added into the stream at a few layers
     uint32_t engram_n_head         = 0;
