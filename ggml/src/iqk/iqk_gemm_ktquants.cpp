@@ -1097,6 +1097,866 @@ void mul_mat_iq3_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     }
 }
 
+#ifdef HAVE_FANCY_SIMD
+struct Trellis3Z {
+    using T = Trellis3<true, true>;
+    const __m512i klo = _mm512_setr_epi32(T::ka, T::ka1, T::ka2, T::ka3, T::ka, T::ka1, T::ka2, T::ka3,
+                                          T::ka, T::ka1, T::ka2, T::ka3, T::ka, T::ka1, T::ka2, T::ka3);
+    const __m512i khi = _mm512_setr_epi32(T::ka4, T::ka5, T::ka6, T::ka7, T::ka4, T::ka5, T::ka6, T::ka7,
+                                          T::ka4, T::ka5, T::ka6, T::ka7, T::ka4, T::ka5, T::ka6, T::ka7);
+    const __m512i idx_a[2] = {_mm512_setr_epi32(0, 0, 0, 0, 2, 2, 2, 2,  4,  4,  4,  4,  6,  6,  6,  6),
+                              _mm512_setr_epi32(8, 8, 8, 8, 10, 10, 10, 10, 12, 12, 12, 12, 14, 14, 14, 14)};
+    const __m512i idx_c[2] = {_mm512_setr_epi32(1, 1, 1, 1, 3, 3, 3, 3,  5,  5,  5,  5,  7,  7,  7,  7),
+                              _mm512_setr_epi32(9, 9, 9, 9, 11, 11, 11, 11, 13, 13, 13, 13, 15, 15, 15, 15)};
+    IQK_ALWAYS_INLINE inline __m512i next64(__m512i seeds, int half) const {
+        const auto mask = _mm512_set1_epi32(0x3f3f3f3f);
+        const auto ones = _mm512_set1_epi32(0x01010101);
+        const auto offset = _mm512_set1_epi32(-126);
+        auto a = _mm512_permutexvar_epi32(idx_a[half], seeds);
+        auto c = _mm512_permutexvar_epi32(idx_c[half], seeds);
+        auto A = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(a, klo), mask), ones);
+        auto B = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(a, khi), mask), ones);
+        auto C = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(c, klo), mask), ones);
+        auto D = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(c, khi), mask), ones);
+        return _mm512_abs_epi8(_mm512_packs_epi16(_mm512_packs_epi32(A, B), _mm512_packs_epi32(C, D)));
+    }
+    IQK_ALWAYS_INLINE inline __m512i next64s(__m512i seeds, int half) const {
+        const auto mask = _mm512_set1_epi32(0x3f3f3f3f);
+        const auto ones = _mm512_set1_epi32(0x01010101);
+        const auto offset = _mm512_set1_epi32(-126);
+        auto a = _mm512_permutexvar_epi32(idx_a[half], seeds);
+        auto c = _mm512_permutexvar_epi32(idx_c[half], seeds);
+        auto A = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(a, klo), mask), ones);
+        auto B = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(a, khi), mask), ones);
+        auto C = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(c, klo), mask), ones);
+        auto D = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(c, khi), mask), ones);
+        return _mm512_packs_epi16(_mm512_packs_epi32(A, B), _mm512_packs_epi32(C, D));
+    }
+    IQK_ALWAYS_INLINE inline __m512i next64u(__m512i seeds, int half) const {
+        const auto mask = _mm512_set1_epi32(0x3f3f3f3f);
+        const auto ones = _mm512_set1_epi32(0x01010101);
+        const auto offset = _mm512_set1_epi32(2);
+        auto a = _mm512_permutexvar_epi32(idx_a[half], seeds);
+        auto c = _mm512_permutexvar_epi32(idx_c[half], seeds);
+        auto A = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(a, klo), mask), ones);
+        auto B = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(a, khi), mask), ones);
+        auto C = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(c, klo), mask), ones);
+        auto D = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(c, khi), mask), ones);
+        return _mm512_packus_epi16(_mm512_packs_epi32(A, B), _mm512_packs_epi32(C, D));
+    }
+};
+
+struct IQ3KTTail {
+    const uint8_t * tail;
+    int nt;
+    __m512i seeds[2];
+    IQK_ALWAYS_INLINE IQ3KTTail(const block_iq3_kt * x, int nb, int nt_) : tail((const uint8_t *)(x + nb)), nt(nt_) {
+        const int ns = 4*nt;
+        const __mmask16 m0 = ns >= 16 ? __mmask16(0xffff) : __mmask16((1u << ns) - 1);
+        const __mmask16 m1 = ns <= 16 ? __mmask16(0) : __mmask16((1u << (ns - 16)) - 1);
+        const auto offset = _mm512_set1_epi32(4096);
+        seeds[0] = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_maskz_loadu_epi16(m0, tail +  0)), offset);
+        seeds[1] = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_maskz_loadu_epi16(m1, tail + 32)), offset);
+    }
+    int nchunk() const { return (nt + 1)/2; }
+    IQK_ALWAYS_INLINE __m512i values(const Trellis3Z& trellis, int c) const { return trellis.next64(seeds[c >> 1], c & 1); }
+    IQK_ALWAYS_INLINE __mmask64 signs(int c) const {
+        uint64_t s = 0;
+        std::memcpy(&s, tail + 8*nt + 8*c, 2*c + 1 < nt ? 8 : 4);
+        return _cvtu64_mask64(s);
+    }
+    IQK_ALWAYS_INLINE __mmask64 valid(int c) const { return 2*c + 1 < nt ? ~__mmask64(0) : __mmask64(0xffffffff); }
+    int scale(int ib) const { return ib < nt ? (tail[12*nt + ib/2] >> 4*(ib & 1)) & 0xf : 0; }
+};
+
+template <int mode>
+const uint64_t * kt8_value_table() {
+    static const uint64_t * table = [] {
+        constexpr size_t kSize = 2*1024*1024;
+        auto t = static_cast<uint64_t *>(::operator new(kSize, std::align_val_t{kSize}));
+        for (uint32_t q = 0; q < 65536; ++q) {
+            uint64_t e = 0;
+            uint32_t v = q + 4096;
+            for (int j = 0; j < 8; ++j) {
+                v *= Trellis3<true, true>::ka;
+                uint32_t m = v & 0x3f3f3f3f;
+                int s = int(m & 0xff) + int((m >> 8) & 0xff) + int((m >> 16) & 0xff) + int(m >> 24) - 126;
+                e |= uint64_t(uint8_t(mode == 2 ? s + 128 : mode == 1 && s < 0 ? -s : s)) << 8*j;
+            }
+            t[q] = e;
+        }
+        return (const uint64_t *)t;
+    }();
+    return table;
+}
+
+static inline __m512i kt8_lookup(const uint16_t * q, const uint64_t * table) {
+#ifdef GGML_USE_I32GATHER
+    return _mm512_i64gather_epi64(_mm512_cvtepu16_epi64(_mm_loadu_si128((const __m128i *)q)), (const long long *)table, 8);
+#else
+    auto lo = _mm256_setr_epi64x(table[q[0]], table[q[1]], table[q[2]], table[q[3]]);
+    auto hi = _mm256_setr_epi64x(table[q[4]], table[q[5]], table[q[6]], table[q[7]]);
+    return _mm512_inserti64x4(_mm512_castsi256_si512(lo), hi, 1);
+#endif
+}
+
+template <int nrc_y>
+void mul_mat_iq3_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    const int nb = n/QK_K;
+    const int nt = (n%QK_K)/32;
+
+    Trellis3Z trellis;
+#ifdef GGML_USE_I32GATHER
+    const uint64_t * table = nrc_y <= 2 ? kt8_value_table<1>() : nullptr;
+#else
+    const uint64_t * table = nrc_y == 1 ? kt8_value_table<1>() : nullptr;
+#endif
+
+    const block_q8_K * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        y[iy] = (const block_q8_K *)info.src1_row(iy);
+    }
+
+    auto shifts = _mm_set_epi32(0, 0, 4, 0);
+    auto offset = _mm512_set1_epi32(4096);
+    __m512i sign_test[4], scale_perm[4];
+    for (int k = 0; k < 4; ++k) {
+        sign_test[k] = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_set1_epi8(1 << 2*k)), _mm256_set1_epi8(1 << (2*k+1)), 1);
+        scale_perm[k] = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_set1_epi32(2*k)), _mm256_set1_epi32(2*k+1), 1);
+    }
+
+    __m512 acc[nrc_y];
+    __m512i xv[4];
+    __m512 scales[4];
+    __mmask64 sm[4];
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        auto d = _mm256_set1_ps(dptr[0] * 1.01f);
+        const block_iq3_kt * x = (const block_iq3_kt *)(dptr + 1);
+
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm512_setzero_ps();
+
+        for (int i = 0; i < nb; ++i) {
+            const char * pf = (const char *)(x + i) + 512;
+            _mm_prefetch(pf, _MM_HINT_T2); _mm_prefetch(pf + 64, _MM_HINT_T2);
+            auto s8 = _mm_set1_epi32(*(const uint32_t *)x[i].scales);
+            s8 = _mm_and_si128(_mm_srlv_epi32(s8, shifts), _mm_set1_epi8(0xf));
+            auto dls = _mm512_castps256_ps512(_mm256_mul_ps(d, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(s8))));
+            auto qh = _mm512_broadcast_i64x4(_mm256_loadu_si256((const __m256i *)x[i].qh));
+#ifdef GGML_USE_I32GATHER
+            if constexpr (nrc_y <= 2) {
+                auto seeds = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql)), offset);
+                xv[1] = kt8_lookup((const uint16_t *)x[i].ql + 8, table);
+                xv[2] = kt8_lookup((const uint16_t *)x[i].ql + 16, table);
+                xv[0] = trellis.next64(seeds, 0);
+                xv[3] = kt8_lookup((const uint16_t *)x[i].ql + 24, table);
+            } else
+#else
+            if constexpr (nrc_y == 1) {
+                auto seeds = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql)), offset);
+                xv[0] = trellis.next64(seeds, 0);
+                xv[1] = trellis.next64(seeds, 1);
+                for (int k = 2; k < 4; ++k) xv[k] = kt8_lookup((const uint16_t *)x[i].ql + 8*k, table);
+            } else
+#endif
+            {
+                auto seeds_l = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql + 0)), offset);
+                auto seeds_h = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql + 1)), offset);
+                for (int k = 0; k < 4; ++k) xv[k] = trellis.next64(k < 2 ? seeds_l : seeds_h, k & 1);
+            }
+            for (int k = 0; k < 4; ++k) {
+                sm[k] = _mm512_test_epi8_mask(qh, sign_test[k]);
+                scales[k] = _mm512_permutexvar_ps(scale_perm[k], dls);
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto dy = _mm512_set1_ps(y[iy][i].d);
+                for (int k = 0; k < 4; ++k) {
+                    auto yv = _mm512_loadu_si512((const __m512i *)y[iy][i].qs + k);
+                    yv = _mm512_mask_sub_epi8(yv, sm[k], _mm512_setzero_si512(), yv);
+                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xv[k], yv);
+                    acc[iy] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), _mm512_mul_ps(scales[k], dy), acc[iy]);
+                }
+            }
+        }
+
+        if (nt > 0) {
+            IQ3KTTail t(x, nb, nt);
+            union { __m256 vec; float val[8]; } lst;
+            for (int ib = 0; ib < 8; ++ib) lst.val[ib] = t.scale(ib);
+            auto dls = _mm512_castps256_ps512(_mm256_mul_ps(d, lst.vec));
+            for (int c = 0; c < t.nchunk(); ++c) {
+                auto xt = t.values(trellis, c);
+                auto st = t.signs(c);
+                auto sc = _mm512_permutexvar_ps(scale_perm[c], dls);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto yv = _mm512_maskz_loadu_epi8(t.valid(c), (const __m512i *)y[iy][nb].qs + c);
+                    yv = _mm512_mask_sub_epi8(yv, st, _mm512_setzero_si512(), yv);
+                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xt, yv);
+                    acc[iy] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), _mm512_mul_ps(sc, _mm512_set1_ps(y[iy][nb].d)), acc[iy]);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, _mm512_reduce_add_ps(acc[iy]));
+        }
+    }
+}
+
+struct IQ2KTTail {
+    const uint8_t * scales;
+    int nt;
+    __m512i seeds[2];
+    IQK_ALWAYS_INLINE IQ2KTTail(const block_iq2_kt * x, int nb, int nt_) : scales((const uint8_t *)(x + nb)), nt(nt_) {
+        const int ns = 4*nt;
+        const __mmask16 m0 = ns >= 16 ? __mmask16(0xffff) : __mmask16((1u << ns) - 1);
+        const __mmask16 m1 = ns <= 16 ? __mmask16(0) : __mmask16((1u << (ns - 16)) - 1);
+        const auto offset = _mm512_set1_epi32(4096);
+        seeds[0] = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_maskz_loadu_epi16(m0, scales +  4)), offset);
+        seeds[1] = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_maskz_loadu_epi16(m1, scales + 36)), offset);
+    }
+    int nchunk() const { return (nt + 1)/2; }
+    IQK_ALWAYS_INLINE __m512i values(const Trellis3Z& trellis, int c) const { return trellis.next64s(seeds[c >> 1], c & 1); }
+    IQK_ALWAYS_INLINE __mmask64 valid(int c) const { return 2*c + 1 < nt ? ~__mmask64(0) : __mmask64(0xffffffff); }
+    int scale(int ib) const { return ib < nt ? iq4k_values[(scales[ib%4] >> 4*(ib/4)) & 0xf] : 0; }
+};
+
+template <int nrc_y>
+void mul_mat_iq2_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    const int nb = n/QK_K;
+    const int nt = (n%QK_K)/32;
+
+    Trellis3Z trellis;
+#ifdef GGML_USE_I32GATHER
+    const uint64_t * table = nrc_y <= 2 ? kt8_value_table<2>() : nullptr;
+#else
+    const uint64_t * table = nrc_y == 1 ? kt8_value_table<2>() : nullptr;
+#endif
+
+    const block_q8_K * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        y[iy] = (const block_q8_K *)info.src1_row(iy);
+    }
+
+    auto shifts = _mm_set_epi32(0, 0, 4, 0);
+    auto values = _mm_loadu_si128((const __m128i *)iq4k_values);
+    auto offset = _mm512_set1_epi32(4096);
+    __m512i scale_perm[4];
+    for (int k = 0; k < 4; ++k) {
+        scale_perm[k] = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_set1_epi32(2*k)), _mm256_set1_epi32(2*k+1), 1);
+    }
+
+    __m512 acc[nrc_y];
+    __m512i xv[4];
+    __m512 scales[4];
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        auto d = _mm256_set1_ps(dptr[0] * 1.05f);
+        const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
+
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm512_setzero_ps();
+
+        for (int i = 0; i < nb; ++i) {
+            const char * pf = (const char *)(x + i) + 512;
+            _mm_prefetch(pf, _MM_HINT_T2); _mm_prefetch(pf + 64, _MM_HINT_T2);
+            auto s8 = _mm_set1_epi32(*(const uint32_t *)x[i].scales);
+            s8 = _mm_shuffle_epi8(values, _mm_and_si128(_mm_srlv_epi32(s8, shifts), _mm_set1_epi8(0xf)));
+            auto dls8 = _mm256_mul_ps(d, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(s8)));
+            auto dls = _mm512_castps256_ps512(dls8);
+#ifdef GGML_USE_I32GATHER
+            if constexpr (nrc_y <= 2) {
+                auto seeds = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql)), offset);
+                xv[0] = trellis.next64u(seeds, 0);
+                for (int k = 1; k < 4; ++k) xv[k] = kt8_lookup((const uint16_t *)x[i].ql + 8*k, table);
+            } else
+#else
+            if constexpr (nrc_y == 1) {
+                auto seeds = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql)), offset);
+                xv[0] = trellis.next64u(seeds, 0);
+                xv[1] = trellis.next64u(seeds, 1);
+                for (int k = 2; k < 4; ++k) xv[k] = kt8_lookup((const uint16_t *)x[i].ql + 8*k, table);
+            } else
+#endif
+            {
+                auto seeds_l = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql + 0)), offset);
+                auto seeds_h = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)x[i].ql + 1)), offset);
+                for (int k = 0; k < 4; ++k) xv[k] = trellis.next64u(k < 2 ? seeds_l : seeds_h, k & 1);
+            }
+            for (int k = 0; k < 4; ++k) scales[k] = _mm512_permutexvar_ps(scale_perm[k], dls);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto sumy = _mm256_madd_epi16(_mm256_loadu_si256((const __m256i *)y[iy][i].bsums), _mm256_set1_epi16(1));
+                auto sum = _mm512_zextps256_ps512(_mm256_mul_ps(dls8, _mm256_mul_ps(_mm256_set1_ps(-128.f), _mm256_cvtepi32_ps(sumy))));
+                for (int k = 0; k < 4; ++k) {
+                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xv[k], _mm512_loadu_si512((const __m512i *)y[iy][i].qs + k));
+                    sum = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), scales[k], sum);
+                }
+                acc[iy] = _mm512_fmadd_ps(sum, _mm512_set1_ps(y[iy][i].d), acc[iy]);
+            }
+        }
+
+        if (nt > 0) {
+            IQ2KTTail t(x, nb, nt);
+            union { __m256 vec; float val[8]; } lst;
+            for (int ib = 0; ib < 8; ++ib) lst.val[ib] = t.scale(ib);
+            auto dls = _mm512_castps256_ps512(_mm256_mul_ps(d, lst.vec));
+            for (int c = 0; c < t.nchunk(); ++c) {
+                auto v  = t.values(trellis, c);
+                auto st = _mm512_movepi8_mask(v);
+                auto xt = _mm512_abs_epi8(v);
+                auto sc = _mm512_permutexvar_ps(scale_perm[c], dls);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto yv = _mm512_maskz_loadu_epi8(t.valid(c), (const __m512i *)y[iy][nb].qs + c);
+                    yv = _mm512_mask_sub_epi8(yv, st, _mm512_setzero_si512(), yv);
+                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xt, yv);
+                    acc[iy] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), _mm512_mul_ps(sc, _mm512_set1_ps(y[iy][nb].d)), acc[iy]);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, _mm512_reduce_add_ps(acc[iy]));
+        }
+    }
+}
+
+struct IQ1KTSeeds {
+    const __m512i sh_perm = _mm512_set_epi16(7, 7, 7, 7, 6, 6, 6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0);
+    const __m512i sh_bits = _mm512_set1_epi64(0x0080004000200010);
+    IQK_ALWAYS_INLINE inline __m512i indices(const uint8_t * sh, __m256i ql, __m128i qh) const {
+        auto qh16 = _mm256_cvtepu8_epi16(qh);
+        auto hi = _mm512_and_si512(_mm512_inserti64x4(_mm512_castsi256_si512(_mm256_slli_epi16(qh16, 8)), _mm256_slli_epi16(qh16, 4), 1),
+                                   _mm512_set1_epi16(0xf00));
+        auto idx = _mm512_or_si512(_mm512_cvtepu8_epi16(ql), hi);
+#ifdef __BMI2__
+        uint64_t sh64; std::memcpy(&sh64, sh, 8);
+        auto b13 = _cvtu32_mask32(uint32_t(_pext_u64(sh64, 0xf0f0f0f0f0f0f0f0ull)));
+#else
+        auto b13 = _mm512_test_epi16_mask(_mm512_permutexvar_epi16(sh_perm, _mm512_castsi128_si512(_mm_cvtepu8_epi16(_mm_loadl_epi64((const __m128i *)sh)))), sh_bits);
+#endif
+        return _mm512_mask_add_epi16(idx, b13, idx, _mm512_set1_epi16(0x1000));
+    }
+    IQK_ALWAYS_INLINE inline void make(const uint8_t * sh, __m256i ql, __m128i qh, __m512i & seeds_l, __m512i & seeds_h) const {
+        const auto offset = _mm512_set1_epi32(4096);
+        auto idx = indices(sh, ql, qh);
+        seeds_l = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm512_castsi512_si256(idx)), offset);
+        seeds_h = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm512_extracti64x4_epi64(idx, 1)), offset);
+    }
+};
+
+struct IQ1KTTail {
+    const uint8_t * sh;
+    int nt;
+    __m512i seeds[2];
+    IQK_ALWAYS_INLINE IQ1KTTail(const block_iq1_kt * x, int nb, int nt_, const IQ1KTSeeds& maker) : sh((const uint8_t *)(x + nb)), nt(nt_) {
+        const uint8_t * ql = sh + QK_K/32;
+        const uint8_t * qh = ql + 4*nt;
+        const int nqh = std::min(4*nt, 16);
+        auto vql = _mm256_maskz_loadu_epi8(__mmask32(nt == 8 ? 0xffffffffu : (1u << 4*nt) - 1), ql);
+        auto vqh = _mm_maskz_loadu_epi8(__mmask16(nqh == 16 ? 0xffff : (1u << nqh) - 1), qh);
+        maker.make(sh, vql, vqh, seeds[0], seeds[1]);
+    }
+    int nchunk() const { return (nt + 1)/2; }
+    IQK_ALWAYS_INLINE __m512i values(const Trellis3Z& trellis, int c) const { return trellis.next64s(seeds[c >> 1], c & 1); }
+    IQK_ALWAYS_INLINE __mmask64 valid(int c) const { return 2*c + 1 < nt ? ~__mmask64(0) : __mmask64(0xffffffff); }
+    int scale(int ib) const { return ib < nt ? iq4k_values[sh[ib] & 0xf] : 0; }
+};
+
+template <int nrc_y>
+void mul_mat_iq1_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    const int nb = n/QK_K;
+    const int nt = (n%QK_K)/32;
+
+    Trellis3Z trellis;
+    IQ1KTSeeds maker;
+#ifdef GGML_USE_I32GATHER
+    const uint64_t * table = nrc_y <= 2 ? kt8_value_table<2>() : nullptr;
+#endif
+
+    const block_q8_K * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        y[iy] = (const block_q8_K *)info.src1_row(iy);
+    }
+
+    auto values = _mm_loadu_si128((const __m128i *)iq4k_values);
+    __m512i scale_perm[4];
+    for (int k = 0; k < 4; ++k) {
+        scale_perm[k] = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_set1_epi32(2*k)), _mm256_set1_epi32(2*k+1), 1);
+    }
+
+    __m512 acc[nrc_y];
+    __m512i xv[4];
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        auto d = _mm256_set1_ps(dptr[0]);
+        const block_iq1_kt * x = (const block_iq1_kt *)(dptr + 1);
+
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm512_setzero_ps();
+
+        for (int i = 0; i < nb; ++i) {
+            const char * pf = (const char *)(x + i) + 512;
+            _mm_prefetch(pf, _MM_HINT_T2);
+            auto sh = _mm_loadl_epi64((const __m128i *)x[i].sh);
+            auto s8 = _mm_shuffle_epi8(values, _mm_and_si128(sh, _mm_set1_epi8(0xf)));
+            auto dls8 = _mm256_mul_ps(d, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(s8)));
+            auto dls = _mm512_castps256_ps512(dls8);
+#ifdef GGML_USE_I32GATHER
+            if constexpr (nrc_y <= 2) {
+                auto idx = maker.indices(x[i].sh, _mm256_loadu_si256((const __m256i *)x[i].ql), _mm_loadu_si128((const __m128i *)x[i].qh));
+                xv[0] = trellis.next64u(_mm512_add_epi32(_mm512_cvtepu16_epi32(_mm512_castsi512_si256(idx)), _mm512_set1_epi32(4096)), 0);
+                xv[1] = _mm512_i64gather_epi64(_mm512_cvtepu16_epi64(_mm512_extracti32x4_epi32(idx, 1)), (const long long *)table, 8);
+                xv[2] = _mm512_i64gather_epi64(_mm512_cvtepu16_epi64(_mm512_extracti32x4_epi32(idx, 2)), (const long long *)table, 8);
+                xv[3] = _mm512_i64gather_epi64(_mm512_cvtepu16_epi64(_mm512_extracti32x4_epi32(idx, 3)), (const long long *)table, 8);
+            } else
+#endif
+            {
+                __m512i seeds_l, seeds_h;
+                maker.make(x[i].sh, _mm256_loadu_si256((const __m256i *)x[i].ql), _mm_loadu_si128((const __m128i *)x[i].qh), seeds_l, seeds_h);
+                for (int k = 0; k < 4; ++k) xv[k] = trellis.next64u(k < 2 ? seeds_l : seeds_h, k & 1);
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto sumy = _mm256_madd_epi16(_mm256_loadu_si256((const __m256i *)y[iy][i].bsums), _mm256_set1_epi16(1));
+                auto sum = _mm512_zextps256_ps512(_mm256_mul_ps(dls8, _mm256_mul_ps(_mm256_set1_ps(-128.f), _mm256_cvtepi32_ps(sumy))));
+                for (int k = 0; k < 4; ++k) {
+                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xv[k], _mm512_loadu_si512((const __m512i *)y[iy][i].qs + k));
+                    sum = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), _mm512_permutexvar_ps(scale_perm[k], dls), sum);
+                }
+                acc[iy] = _mm512_fmadd_ps(sum, _mm512_set1_ps(y[iy][i].d), acc[iy]);
+            }
+        }
+
+        if (nt > 0) {
+            IQ1KTTail t(x, nb, nt, maker);
+            union { __m256 vec; float val[8]; } lst;
+            for (int ib = 0; ib < 8; ++ib) lst.val[ib] = t.scale(ib);
+            auto dls = _mm512_castps256_ps512(_mm256_mul_ps(d, lst.vec));
+            for (int c = 0; c < t.nchunk(); ++c) {
+                auto v  = t.values(trellis, c);
+                auto st = _mm512_movepi8_mask(v);
+                auto xt = _mm512_abs_epi8(v);
+                auto sc = _mm512_permutexvar_ps(scale_perm[c], dls);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto yv = _mm512_maskz_loadu_epi8(t.valid(c), (const __m512i *)y[iy][nb].qs + c);
+                    yv = _mm512_mask_sub_epi8(yv, st, _mm512_setzero_si512(), yv);
+                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xt, yv);
+                    acc[iy] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), _mm512_mul_ps(sc, _mm512_set1_ps(y[iy][nb].d)), acc[iy]);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, _mm512_reduce_add_ps(acc[iy]));
+        }
+    }
+}
+
+void iqk_convert_iq1_kt_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    GGML_ASSERT(nrc_x%16 == 0);
+    const int nb = n/QK_K;
+    const int nt = (n%QK_K)/32;
+
+    Trellis3Z trellis;
+    IQ1KTSeeds maker;
+
+    const block_iq1_kt * x16[16];
+    float drow[16];
+    union { __m256i vec; int16_t val[16]; } ls;
+    __m512i values[4];
+
+    block_q8_k_r16 * y = (block_q8_k_r16 *)vy;
+
+    Q8KRowRepacker<16, 32> rp;
+
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        for (int k = 0; k < 16; ++k) {
+            const float * dptr = (const float *)((const char *)vx + (ix + k)*bx);
+            drow[k] = dptr[0];
+            x16[k] = (const block_iq1_kt *)(dptr + 1);
+        }
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 16; ++k) {
+                const block_iq1_kt& xb = x16[k][i];
+                __m512i seeds_l, seeds_h;
+                maker.make(xb.sh, _mm256_loadu_si256((const __m256i *)xb.ql),
+                           _mm_loadu_si128((const __m128i *)xb.qh), seeds_l, seeds_h);
+                for (int j = 0; j < 4; ++j) values[j] = trellis.next64s(j < 2 ? seeds_l : seeds_h, j & 1);
+                for (int ib = 0; ib < 8; ++ib) ls.val[2*ib+0] = ls.val[2*ib+1] = iq4k_values[xb.sh[ib] & 0xf];
+                rp.row(k, drow[k], 1.f/127, (const __m256i *)values, ls.val, y[i].d, y[i].qs);
+            }
+            rp.flush(y[i].d, y[i].qs);
+        }
+        y += nb;
+        if (nt > 0) {
+            __m512i tail_qs[QK_K/4];
+            for (int k = 0; k < 16; ++k) {
+                IQ1KTTail t(x16[k], nb, nt, maker);
+                for (int c = 0; c < 4; ++c) {
+                    values[c] = c < t.nchunk() ? _mm512_maskz_mov_epi8(t.valid(c), t.values(trellis, c)) : _mm512_setzero_si512();
+                }
+                for (int ib = 0; ib < 8; ++ib) ls.val[2*ib+0] = ls.val[2*ib+1] = t.scale(ib);
+                rp.row(k, drow[k], 1.f/127, (const __m256i *)values, ls.val, y->d, y->qs);
+            }
+            rp.flush(y->d, (int8_t *)tail_qs);
+            std::memcpy(y->qs, tail_qs, 16*32*nt);
+            y = (block_q8_k_r16 *)((char *)y + 16*sizeof(float) + 16*32*nt);
+        }
+    }
+}
+
+void iqk_convert_iq2_kt_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    GGML_ASSERT(nrc_x%16 == 0);
+    const int nb = n/QK_K;
+    const int nt = (n%QK_K)/32;
+
+    Trellis3Z trellis;
+
+    auto offset = _mm512_set1_epi32(4096);
+
+    const block_iq2_kt * x16[16];
+    float drow[16];
+    union { __m256i vec; int16_t val[16]; } ls;
+    __m512i values[4];
+
+    block_q8_k_r16 * y = (block_q8_k_r16 *)vy;
+
+    Q8KRowRepacker<16, 32> rp;
+
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        for (int k = 0; k < 16; ++k) {
+            const float * dptr = (const float *)((const char *)vx + (ix + k)*bx);
+            drow[k] = dptr[0] * 1.05f;
+            x16[k] = (const block_iq2_kt *)(dptr + 1);
+        }
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 16; ++k) {
+                const block_iq2_kt& xb = x16[k][i];
+                auto seeds_l = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)xb.ql + 0)), offset);
+                auto seeds_h = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)xb.ql + 1)), offset);
+                for (int j = 0; j < 4; ++j) values[j] = trellis.next64s(j < 2 ? seeds_l : seeds_h, j & 1);
+                for (int ib = 0; ib < 4; ++ib) {
+                    ls.val[2*ib+0] = ls.val[2*ib+1] = iq4k_values[xb.scales[ib] & 0xf];
+                    ls.val[2*ib+8] = ls.val[2*ib+9] = iq4k_values[xb.scales[ib] >> 4];
+                }
+                rp.row(k, drow[k], 1.f/127, (const __m256i *)values, ls.val, y[i].d, y[i].qs);
+            }
+            rp.flush(y[i].d, y[i].qs);
+        }
+        y += nb;
+        if (nt > 0) {
+            __m512i tail_qs[QK_K/4];
+            for (int k = 0; k < 16; ++k) {
+                IQ2KTTail t(x16[k], nb, nt);
+                for (int c = 0; c < 4; ++c) {
+                    values[c] = c < t.nchunk() ? _mm512_maskz_mov_epi8(t.valid(c), t.values(trellis, c)) : _mm512_setzero_si512();
+                }
+                for (int ib = 0; ib < 8; ++ib) ls.val[2*ib+0] = ls.val[2*ib+1] = t.scale(ib);
+                rp.row(k, drow[k], 1.f/127, (const __m256i *)values, ls.val, y->d, y->qs);
+            }
+            rp.flush(y->d, (int8_t *)tail_qs);
+            std::memcpy(y->qs, tail_qs, 16*32*nt);
+            y = (block_q8_k_r16 *)((char *)y + 16*sizeof(float) + 16*32*nt);
+        }
+    }
+}
+
+struct Trellis4Z {
+    using T = Trellis3<false, false>;
+    const __m512i k4 = _mm512_setr_epi32(T::ka, T::ka1, T::ka2, T::ka3, T::ka, T::ka1, T::ka2, T::ka3,
+                                         T::ka, T::ka1, T::ka2, T::ka3, T::ka, T::ka1, T::ka2, T::ka3);
+    const __m512i idx[4] = {_mm512_setr_epi32(0, 0, 0, 0, 4, 4, 4, 4,  8,  8,  8,  8, 12, 12, 12, 12),
+                            _mm512_setr_epi32(1, 1, 1, 1, 5, 5, 5, 5,  9,  9,  9,  9, 13, 13, 13, 13),
+                            _mm512_setr_epi32(2, 2, 2, 2, 6, 6, 6, 6, 10, 10, 10, 10, 14, 14, 14, 14),
+                            _mm512_setr_epi32(3, 3, 3, 3, 7, 7, 7, 7, 11, 11, 11, 11, 15, 15, 15, 15)};
+    IQK_ALWAYS_INLINE inline __m512i next64s(__m512i seeds) const {
+        const auto mask = _mm512_set1_epi32(0x3f3f3f3f);
+        const auto ones = _mm512_set1_epi32(0x01010101);
+        const auto offset = _mm512_set1_epi32(-126);
+        __m512i v[4];
+        for (int q = 0; q < 4; ++q) {
+            v[q] = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(_mm512_permutexvar_epi32(idx[q], seeds), k4), mask), ones);
+        }
+        return _mm512_packs_epi16(_mm512_packs_epi32(v[0], v[1]), _mm512_packs_epi32(v[2], v[3]));
+    }
+    IQK_ALWAYS_INLINE inline __m512i next64u(__m512i seeds) const {
+        const auto mask = _mm512_set1_epi32(0x3f3f3f3f);
+        const auto ones = _mm512_set1_epi32(0x01010101);
+        const auto offset = _mm512_set1_epi32(2);
+        __m512i v[4];
+        for (int q = 0; q < 4; ++q) {
+            v[q] = _mm512_dpbusd_epi32(offset, _mm512_and_si512(_mm512_mullo_epi32(_mm512_permutexvar_epi32(idx[q], seeds), k4), mask), ones);
+        }
+        return _mm512_packus_epi16(_mm512_packs_epi32(v[0], v[1]), _mm512_packs_epi32(v[2], v[3]));
+    }
+};
+
+struct IQ4KTSeeds {
+    const __m512i sh_shift = _mm512_setr_epi32(8, 11, 14, 17, 20, 23, 26, 29, 8, 11, 14, 17, 20, 23, 26, 29);
+    const __m512i sh_perm[4] = {_mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1),
+                                _mm512_setr_epi32(2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3),
+                                _mm512_setr_epi32(4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5),
+                                _mm512_setr_epi32(6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7)};
+    IQK_ALWAYS_INLINE inline __m512i index(const block_iq4_kt& x, __m512i shb, int c) const {
+        const uint8_t * ql = (const uint8_t *)(x.qs + 8);
+        const uint8_t * qh = ql + 64;
+        auto q = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)(ql + 16*c)));
+        auto h = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)(qh + 16*(c%2))));
+        h = _mm512_and_si512(c < 2 ? _mm512_slli_epi32(h, 8) : _mm512_slli_epi32(h, 4), _mm512_set1_epi32(0xf00));
+        auto sh = _mm512_permutexvar_epi32(sh_perm[c], shb);
+        auto hi = _mm512_slli_epi32(_mm512_and_si512(_mm512_srlv_epi32(sh, sh_shift), _mm512_set1_epi32(7)), 12);
+        auto off = _mm512_slli_epi32(_mm512_and_si512(sh, _mm512_set1_epi32(1)), 15);
+        return _mm512_or_si512(_mm512_or_si512(_mm512_or_si512(q, h), hi), off);
+    }
+    IQK_ALWAYS_INLINE inline __m512i make(const block_iq4_kt& x, __m512i shb, int c) const {
+        return _mm512_add_epi32(index(x, shb, c), _mm512_set1_epi32(4096));
+    }
+};
+
+struct IQ4KTTail {
+    const uint8_t * tail;
+    int nt;
+    IQK_ALWAYS_INLINE IQ4KTTail(const block_iq4_kt * x, int nb, int nt_) : tail((const uint8_t *)(x + nb)), nt(nt_) {}
+    int nchunk() const { return (nt + 1)/2; }
+    IQK_ALWAYS_INLINE __m512i seeds(int c) const {
+        union { __m512i vec; uint32_t val[16]; } s;
+        for (int l = 0; l < 16; ++l) {
+            const int ib = 2*c + l/8, ig = l%8;
+            if (ib >= nt) { s.val[l] = 4096; continue; }
+            const uint8_t * b = tail + 16*ib;
+            uint32_t sh; std::memcpy(&sh, b, 4);
+            const uint8_t * ql = b + 4;
+            const uint8_t * qh = b + 12;
+            uint32_t idx = ql[ig] | (((qh[ig/2] >> 4*(ig & 1)) & 0xf) << 8) | (((sh >> (8 + 3*ig)) & 7) << 12);
+            s.val[l] = idx + (sh & 1 ? 32768 + 4096 : 4096);
+        }
+        return s.vec;
+    }
+    IQK_ALWAYS_INLINE __mmask64 valid(int c) const { return 2*c + 1 < nt ? ~__mmask64(0) : __mmask64(0xffffffff); }
+    int scale(int ib) const {
+        if (ib >= nt) return 0;
+        uint32_t sh; std::memcpy(&sh, tail + 16*ib, 4);
+        return int((sh & 0xff) >> 1) - 64;
+    }
+};
+
+template <int nrc_y>
+void mul_mat_iq4_kt_q8_k_zmm(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    const int nb = n/QK_K;
+    const int nt = (n%QK_K)/32;
+
+    Trellis4Z trellis;
+    IQ4KTSeeds maker;
+#ifdef GGML_USE_I32GATHER
+    const uint64_t * table = nrc_y <= 2 ? kt8_value_table<2>() : nullptr;
+#endif
+
+    const block_q8_K * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        y[iy] = (const block_q8_K *)info.src1_row(iy);
+    }
+
+    __m512i scale_perm[4];
+    for (int k = 0; k < 4; ++k) {
+        scale_perm[k] = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_set1_epi32(2*k)), _mm256_set1_epi32(2*k+1), 1);
+    }
+
+    __m512 acc[nrc_y];
+    __m512i xv[4];
+    __m512 scales[4];
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        auto d = _mm256_set1_ps(dptr[0]);
+        const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 1);
+
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm512_setzero_ps();
+
+        for (int i = 0; i < nb; ++i) {
+            const char * pf = (const char *)(x + i) + 512;
+            _mm_prefetch(pf, _MM_HINT_T2); _mm_prefetch(pf + 64, _MM_HINT_T2);
+            auto vshb = _mm256_loadu_si256((const __m256i *)x[i].qs);
+            auto ls = _mm256_sub_epi32(_mm256_srli_epi32(_mm256_and_si256(vshb, _mm256_set1_epi32(0xff)), 1), _mm256_set1_epi32(64));
+            auto dls8 = _mm256_mul_ps(d, _mm256_cvtepi32_ps(ls));
+            auto dls = _mm512_castps256_ps512(dls8);
+            auto shb = _mm512_castsi256_si512(vshb);
+#ifdef GGML_USE_I32GATHER
+            if constexpr (nrc_y <= 2) {
+                for (int k = 0; k < 2; ++k) {
+                    xv[k + 2] = _mm512_i32gather_epi32(maker.index(x[i], shb, k + 2), (const int *)table, 8);
+                    xv[k] = trellis.next64u(maker.make(x[i], shb, k));
+                }
+            } else
+#endif
+            {
+                for (int k = 0; k < 4; ++k) xv[k] = trellis.next64u(maker.make(x[i], shb, k));
+            }
+            for (int k = 0; k < 4; ++k) scales[k] = _mm512_permutexvar_ps(scale_perm[k], dls);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto sumy = _mm256_madd_epi16(_mm256_loadu_si256((const __m256i *)y[iy][i].bsums), _mm256_set1_epi16(1));
+                auto sum = _mm512_zextps256_ps512(_mm256_mul_ps(dls8, _mm256_mul_ps(_mm256_set1_ps(-128.f), _mm256_cvtepi32_ps(sumy))));
+                for (int k = 0; k < 4; ++k) {
+                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xv[k], _mm512_loadu_si512((const __m512i *)y[iy][i].qs + k));
+                    sum = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), scales[k], sum);
+                }
+                acc[iy] = _mm512_fmadd_ps(sum, _mm512_set1_ps(y[iy][i].d), acc[iy]);
+            }
+        }
+
+        if (nt > 0) {
+            IQ4KTTail t(x, nb, nt);
+            union { __m256 vec; float val[8]; } lst;
+            for (int ib = 0; ib < 8; ++ib) lst.val[ib] = t.scale(ib);
+            auto dls = _mm512_castps256_ps512(_mm256_mul_ps(d, lst.vec));
+            for (int c = 0; c < t.nchunk(); ++c) {
+                auto v  = trellis.next64s(t.seeds(c));
+                auto st = _mm512_movepi8_mask(v);
+                auto xt = _mm512_abs_epi8(v);
+                auto sc = _mm512_permutexvar_ps(scale_perm[c], dls);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto yv = _mm512_maskz_loadu_epi8(t.valid(c), (const __m512i *)y[iy][nb].qs + c);
+                    yv = _mm512_mask_sub_epi8(yv, st, _mm512_setzero_si512(), yv);
+                    auto dot = _mm512_dpbusd_epi32(_mm512_setzero_si512(), xt, yv);
+                    acc[iy] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(dot), _mm512_mul_ps(sc, _mm512_set1_ps(y[iy][nb].d)), acc[iy]);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, _mm512_reduce_add_ps(acc[iy]));
+        }
+    }
+}
+
+void iqk_convert_iq4_kt_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    GGML_ASSERT(nrc_x%16 == 0);
+    const int nb = n/QK_K;
+    const int nt = (n%QK_K)/32;
+
+    Trellis4Z trellis;
+    IQ4KTSeeds maker;
+
+    const block_iq4_kt * x16[16];
+    float drow[16];
+    union { __m256i vec; int16_t val[16]; } ls;
+    __m512i values[4];
+
+    block_q8_k_r16 * y = (block_q8_k_r16 *)vy;
+
+    Q8KRowRepacker<16, 32> rp;
+
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        for (int k = 0; k < 16; ++k) {
+            const float * dptr = (const float *)((const char *)vx + (ix + k)*bx);
+            drow[k] = dptr[0];
+            x16[k] = (const block_iq4_kt *)(dptr + 1);
+        }
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 16; ++k) {
+                const block_iq4_kt& xb = x16[k][i];
+                auto shb = _mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)xb.qs));
+                for (int j = 0; j < 4; ++j) values[j] = trellis.next64s(maker.make(xb, shb, j));
+                for (int ib = 0; ib < 8; ++ib) ls.val[2*ib+0] = ls.val[2*ib+1] = int((xb.qs[ib] & 0xff) >> 1) - 64;
+                rp.row(k, drow[k], 1.f/127, (const __m256i *)values, ls.val, y[i].d, y[i].qs);
+            }
+            rp.flush(y[i].d, y[i].qs);
+        }
+        y += nb;
+        if (nt > 0) {
+            __m512i tail_qs[QK_K/4];
+            for (int k = 0; k < 16; ++k) {
+                IQ4KTTail t(x16[k], nb, nt);
+                for (int c = 0; c < 4; ++c) {
+                    values[c] = c < t.nchunk() ? _mm512_maskz_mov_epi8(t.valid(c), trellis.next64s(t.seeds(c))) : _mm512_setzero_si512();
+                }
+                for (int ib = 0; ib < 8; ++ib) ls.val[2*ib+0] = ls.val[2*ib+1] = t.scale(ib);
+                rp.row(k, drow[k], 1.f/127, (const __m256i *)values, ls.val, y->d, y->qs);
+            }
+            rp.flush(y->d, (int8_t *)tail_qs);
+            std::memcpy(y->qs, tail_qs, 16*32*nt);
+            y = (block_q8_k_r16 *)((char *)y + 16*sizeof(float) + 16*32*nt);
+        }
+    }
+}
+
+void iqk_convert_iq3_kt_q8_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    GGML_ASSERT(nrc_x%16 == 0);
+    const int nb = n/QK_K;
+    const int nt = (n%QK_K)/32;
+
+    Trellis3Z trellis;
+
+    auto offset = _mm512_set1_epi32(4096);
+    __m512i sign_test[4];
+    for (int k = 0; k < 4; ++k) {
+        sign_test[k] = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_set1_epi8(1 << 2*k)), _mm256_set1_epi8(1 << (2*k+1)), 1);
+    }
+
+    const block_iq3_kt * x16[16];
+    float drow[16];
+    union { __m256i vec; int16_t val[16]; } ls;
+    __m512i values[4];
+
+    block_q8_k_r16 * y = (block_q8_k_r16 *)vy;
+
+    Q8KRowRepacker<16, 32> rp;
+
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        for (int k = 0; k < 16; ++k) {
+            const float * dptr = (const float *)((const char *)vx + (ix + k)*bx);
+            drow[k] = dptr[0] * 1.01f;
+            x16[k] = (const block_iq3_kt *)(dptr + 1);
+        }
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 16; ++k) {
+                const block_iq3_kt& xb = x16[k][i];
+                auto seeds_l = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)xb.ql + 0)), offset);
+                auto seeds_h = _mm512_add_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)xb.ql + 1)), offset);
+                auto qh = _mm512_broadcast_i64x4(_mm256_loadu_si256((const __m256i *)xb.qh));
+                for (int j = 0; j < 4; ++j) {
+                    auto v = trellis.next64(j < 2 ? seeds_l : seeds_h, j & 1);
+                    values[j] = _mm512_mask_sub_epi8(v, _mm512_test_epi8_mask(qh, sign_test[j]), _mm512_setzero_si512(), v);
+                }
+                for (int ib = 0; ib < 4; ++ib) {
+                    ls.val[2*ib+0] = ls.val[2*ib+1] = xb.scales[ib] & 0xf;
+                    ls.val[2*ib+8] = ls.val[2*ib+9] = xb.scales[ib] >> 4;
+                }
+                rp.row(k, drow[k], 1.f/127, (const __m256i *)values, ls.val, y[i].d, y[i].qs);
+            }
+            rp.flush(y[i].d, y[i].qs);
+        }
+        y += nb;
+        if (nt > 0) {
+            __m512i tail_qs[QK_K/4];
+            for (int k = 0; k < 16; ++k) {
+                IQ3KTTail t(x16[k], nb, nt);
+                for (int c = 0; c < 4; ++c) {
+                    auto v = _mm512_setzero_si512();
+                    if (c < t.nchunk()) {
+                        v = _mm512_maskz_mov_epi8(t.valid(c), t.values(trellis, c));
+                        v = _mm512_mask_sub_epi8(v, t.signs(c), _mm512_setzero_si512(), v);
+                    }
+                    values[c] = v;
+                }
+                for (int ib = 0; ib < 8; ++ib) ls.val[2*ib+0] = ls.val[2*ib+1] = t.scale(ib);
+                rp.row(k, drow[k], 1.f/127, (const __m256i *)values, ls.val, y->d, y->qs);
+            }
+            rp.flush(y->d, (int8_t *)tail_qs);
+            std::memcpy(y->qs, tail_qs, 16*32*nt);
+            y = (block_q8_k_r16 *)((char *)y + 16*sizeof(float) + 16*32*nt);
+        }
+    }
+}
+#endif
+
 inline __m256 abs_ps(__m256 vals) {
     // Clear sign-bit of all the 32-bit floats in vals
     __m256 sign_bit = _mm256_set1_ps(-0.0f);
@@ -1563,6 +2423,12 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     func16 = nullptr;
 
     if (typeA == GGML_TYPE_IQ1_KT) {
+#ifdef HAVE_FANCY_SIMD
+        if (typeB == GGML_TYPE_Q8_K) {
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq1_kt_q8_k_zmm, kernels);
+            return true;
+        }
+#endif
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq1_kt_q8_2_x4_T, kernels);
 #ifdef HAVE_FANCY_SIMD
@@ -1574,6 +2440,12 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     }
 
     if (typeA == GGML_TYPE_IQ2_KT) {
+#ifdef HAVE_FANCY_SIMD
+        if (typeB == GGML_TYPE_Q8_K) {
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq2_kt_q8_k_zmm, kernels);
+            return true;
+        }
+#endif
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq2_kt_q8_2_x4_T, kernels);
 #ifdef HAVE_FANCY_SIMD
@@ -1585,6 +2457,12 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     }
 
     if (typeA == GGML_TYPE_IQ3_KT) {
+#ifdef HAVE_FANCY_SIMD
+        if (typeB == GGML_TYPE_Q8_K) {
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq3_kt_q8_k_zmm, kernels);
+            return true;
+        }
+#endif
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq3_kt_q8_2_x4_T, kernels);
 #ifdef HAVE_FANCY_SIMD
@@ -1596,6 +2474,12 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     }
 
     if (typeA == GGML_TYPE_IQ4_KT) {
+#ifdef HAVE_FANCY_SIMD
+        if (typeB == GGML_TYPE_Q8_K) {
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq4_kt_q8_k_zmm, kernels);
+            return true;
+        }
+#endif
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq4_kt_q8_2_x4_T, kernels);
 #ifdef HAVE_FANCY_SIMD
@@ -1630,10 +2514,17 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
 
 bool iqk_dequantize_ktquants(int type, int n, const void * vx, size_t bx, void * y, [[maybe_unused]] size_t stride_y, int nrc_x) {
     switch (type) {
+#ifdef HAVE_FANCY_SIMD
+        case GGML_TYPE_IQ1_KT: iqk_convert_iq1_kt_q8_k_r16(n, vx, bx, y, nrc_x); break;
+        case GGML_TYPE_IQ2_KT: iqk_convert_iq2_kt_q8_k_r16(n, vx, bx, y, nrc_x); break;
+        case GGML_TYPE_IQ3_KT: iqk_convert_iq3_kt_q8_k_r16(n, vx, bx, y, nrc_x); break;
+        case GGML_TYPE_IQ4_KT: iqk_convert_iq4_kt_q8_k_r16(n, vx, bx, y, nrc_x); break;
+#else
         case GGML_TYPE_IQ1_KT: iqk_dequantize_iq1_kt_q80_r8(n, vx, bx, y, nrc_x); break;
         case GGML_TYPE_IQ2_KT: iqk_dequantize_iq2_kt_q80_r8(n, vx, bx, y, nrc_x); break;
         case GGML_TYPE_IQ3_KT: iqk_dequantize_iq3_kt_q80_r8(n, vx, bx, y, nrc_x); break;
         case GGML_TYPE_IQ4_KT: iqk_dequantize_iq4_kt_q80_r8(n, vx, bx, y, nrc_x); break;
+#endif
         default: return false;
     }
     return true;
