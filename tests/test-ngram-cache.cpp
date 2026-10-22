@@ -3,8 +3,10 @@
 #include "speculative.h"
 
 #include <array>
+#include <fstream>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,8 +27,89 @@ bool same_cache(const common_ngram_cache & lhs, const common_ngram_cache & rhs) 
     }
     for (const auto & [ngram, followers] : lhs) {
         const auto it = rhs.find(ngram);
-        if (it == rhs.end() || it->second != followers) {
+        if (it == rhs.end() || it->second.size() != followers.size()) {
             return false;
+        }
+        for (const auto & [token, count] : followers) {
+            const auto follower = it->second.find(token);
+            if (follower == it->second.end() || follower->second != count) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool same_part(const common_ngram_cache_part & lhs, const std::map<llama_token, int32_t> & rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    auto expected = rhs.begin();
+    for (const auto & entry : lhs) {
+        if (expected == rhs.end() || entry.first != expected->first || entry.second != expected->second) {
+            return false;
+        }
+        ++expected;
+    }
+    return expected == rhs.end();
+}
+
+bool test_sorted_follower_part() {
+    const std::vector<std::vector<llama_token>> orders = {
+        {1, 2, 3, 4, 5},
+        {5, 4, 3, 2, 1},
+        {3, 1, 5, 2, 4},
+    };
+    for (const auto & order : orders) {
+        common_ngram_cache_part part;
+        std::map<llama_token, int32_t> reference;
+        for (llama_token token : order) {
+            const auto [it, inserted] = part.emplace(token, token * 10);
+            reference.emplace(token, token * 10);
+            if (!require(inserted && it->first == token, "new follower insertion succeeds")) return false;
+        }
+        for (llama_token token : order) {
+            const auto [it, inserted] = part.emplace(token, -1);
+            if (!require(!inserted && it->second == token * 10,
+                        "duplicate insertion preserves the original follower count")) return false;
+        }
+        if (!require(same_part(part, reference), "followers remain sorted and unique for every insertion order")) {
+            return false;
+        }
+        for (llama_token token = 0; token <= 6; ++token) {
+            const auto actual = part.find(token);
+            const auto expected = reference.find(token);
+            if (!require((actual == part.end()) == (expected == reference.end()) &&
+                         (actual == part.end() || actual->second == expected->second),
+                         "binary-search find agrees with ordered reference for hits and misses")) return false;
+        }
+    }
+
+    common_ngram_cache_part empty;
+    if (!require(empty.empty() && empty.find(0) == empty.end(), "empty follower part lookup")) return false;
+    empty.emplace(7, 70);
+    if (!require(empty.size() == 1 && empty.begin()->first == 7 && empty.find(7)->second == 70,
+                 "singleton follower part lookup")) return false;
+
+    // Exercise logarithmic-search boundary positions and mixed fanout sizes.
+    for (int size : {2, 3, 8, 31, 127, 513}) {
+        common_ngram_cache_part part;
+        std::map<llama_token, int32_t> reference;
+        for (int i = size - 1; i >= 0; --i) {
+            const llama_token token = 1000 + i * 3;
+            part.emplace(token, i + 1);
+            reference.emplace(token, i + 1);
+        }
+        part.emplace(999, 9);                     // insert at front
+        reference.emplace(999, 9);
+        part.emplace(1000 + size * 3, 10);       // insert at end
+        reference.emplace(1000 + size * 3, 10);
+        if (!require(same_part(part, reference), "fanout insertion at either end matches reference")) return false;
+        for (llama_token token = 998; token <= 1000 + size * 3 + 1; ++token) {
+            const auto actual = part.find(token);
+            const auto expected = reference.find(token);
+            if (!require((actual == part.end()) == (expected == reference.end()),
+                         "fanout hit/miss positions match trusted reference")) return false;
         }
     }
     return true;
@@ -193,7 +276,7 @@ bool test_short_histories_and_growing_draft() {
     const common_ngram threshold_key(threshold_corpus.data(), 2);
     const auto threshold_part = threshold_context.find(threshold_key);
     if (!require(threshold_part != threshold_context.end() && threshold_part->second.size() == 2 &&
-                 threshold_part->second.at(42) == 2 && threshold_part->second.at(43) == 2,
+                 threshold_part->second.find(42)->second == 2 && threshold_part->second.find(43)->second == 2,
                  "threshold fixture contains the intended 2/4 follower distribution")) {
         return false;
     }
@@ -276,6 +359,22 @@ bool test_reference_drafting() {
         return false;
     }
     std::cout << "tie_winner=" << tie_winner[0] << " valid_set=90,91\n";
+
+    // Equal weighted scores retain the first key encountered. O2's sorted
+    // iteration therefore visits 10 before 20; the second key is deliberately
+    // arranged so the first winner reaches a valid next 3-gram proposal.
+    const llama_tokens tied_key = {1, 2};
+    auto tied_primary = make_follower_cache(tied_key, {{10, 2}, {20, 1}});
+    auto tied_static = make_follower_cache(tied_key, {{10, 1}, {20, 2}});
+    const llama_tokens next_key = {1, 2, 10};
+    auto tied_context = make_follower_cache(next_key, {{11, 1}});
+    auto tied_depth = draft_from_history({1, 2}, 2, tied_context,
+            tied_primary, tied_static);
+    if (!require(tied_depth == llama_tokens{10, 11},
+                 "sorted tie order deterministically selects the lower token and its valid next key")) {
+        return false;
+    }
+    std::cout << "tie_confidence_depth=2 sorted_winner=10 alternative=20\n";
     return true;
 }
 
@@ -509,6 +608,70 @@ bool test_lookup_path_plumbing() {
     return ok;
 }
 
+bool write_legacy_unsorted_cache(const std::filesystem::path & path) {
+    const llama_tokens key_tokens = {44, 22};
+    const common_ngram key(key_tokens.data(), static_cast<int>(key_tokens.size()));
+    const int32_t count = 4;
+    const std::array<std::pair<llama_token, int32_t>, 4> followers = {{{9, 2}, {3, 5}, {7, 1}, {3, 99}}};
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char *>(&key), sizeof(key));
+    out.write(reinterpret_cast<const char *>(&count), sizeof(count));
+    for (const auto & [token, value] : followers) {
+        out.write(reinterpret_cast<const char *>(&token), sizeof(token));
+        out.write(reinterpret_cast<const char *>(&value), sizeof(value));
+    }
+    return static_cast<bool>(out);
+}
+
+bool test_merge_and_legacy_serialization() {
+    const auto dir = std::filesystem::temp_directory_path() /
+            ("ik-ngram-vector-io-" + std::to_string(ggml_time_us()));
+    if (!std::filesystem::create_directory(dir)) {
+        return require(false, "create exclusive vector serialization test directory");
+    }
+    const auto old_path = dir / "old-unsorted.cache";
+    const auto roundtrip_path = dir / "roundtrip.cache";
+    bool ok = write_legacy_unsorted_cache(old_path);
+    ok &= require(ok, "write legacy unsorted follower sequence with a duplicate token");
+
+    if (ok) {
+        auto loaded = common_ngram_cache_load(old_path.string());
+        const llama_tokens key_tokens = {44, 22};
+        const auto part = loaded.find(common_ngram(key_tokens.data(), 2));
+        ok &= require(part != loaded.end() && part->second.size() == 3 &&
+                      part->second.find(3)->second == 5 && part->second.find(7)->second == 1 &&
+                      part->second.find(9)->second == 2,
+                      "legacy unsorted records load sorted; duplicate emplace retains the first count");
+        common_ngram_cache_save(loaded, roundtrip_path.string());
+        auto roundtrip = common_ngram_cache_load(roundtrip_path.string());
+        ok &= require(same_cache(loaded, roundtrip), "save/load roundtrip retains exact logical contents");
+    }
+
+    const llama_tokens shared_key_tokens = {1, 2};
+    const llama_tokens disjoint_key_tokens = {8, 9};
+    auto target = make_follower_cache(shared_key_tokens, {{4, 2}, {8, 1}});
+    auto source = make_follower_cache(shared_key_tokens, {{4, 3}, {6, 5}});
+    source.emplace(common_ngram(disjoint_key_tokens.data(), 2), common_ngram_cache_part{});
+    source.find(common_ngram(disjoint_key_tokens.data(), 2))->second.emplace(11, 7);
+    const auto logical_source_before = source;
+    common_ngram_cache_merge(target, source);
+    const auto merged = target.find(common_ngram(shared_key_tokens.data(), 2));
+    ok &= require(merged != target.end() && merged->second.size() == 3 &&
+                  merged->second.find(4)->second == 5 && merged->second.find(6)->second == 5 &&
+                  merged->second.find(8)->second == 1,
+                  "merge accumulates overlaps and inserts unseen followers");
+    const auto disjoint = target.find(common_ngram(disjoint_key_tokens.data(), 2));
+    ok &= require(disjoint != target.end() && disjoint->second.find(11)->second == 7,
+                  "merge copies a disjoint n-gram part");
+    ok &= require(same_cache(source, logical_source_before),
+                  "merge leaves its source logical contents unchanged");
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    ok &= require(!ec, "remove only the serialization test-owned directory");
+    return ok;
+}
+
 } // namespace
 
 int main(int argc, char ** argv) {
@@ -521,14 +684,16 @@ int main(int argc, char ** argv) {
     }
 
     bool ok = true;
+    ok &= test_sorted_follower_part();
     ok &= test_incremental_updates();
     ok &= test_short_histories_and_growing_draft();
     ok &= test_reference_drafting();
     ok &= test_draft_budgets();
     ok &= test_lookup_path_plumbing();
+    ok &= test_merge_and_legacy_serialization();
     if (!ok) {
         return 1;
     }
-    std::cout << "PASS: helper incremental, short-history, budget, no-copy selection, and CLI/path checks\n";
+    std::cout << "PASS: sorted follower parts, update/merge/legacy serialization, short-history, budget, drafting and CLI/path checks\n";
     return 0;
 }

@@ -2,8 +2,10 @@
 
 #include "llama.h"
 
+#include <algorithm>
 #include <unordered_map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #define LLAMA_NGRAM_MIN    1
@@ -54,8 +56,63 @@ struct common_ngram_hash_function {
     }
 };
 
-// token -> number of times token has been seen
-typedef std::unordered_map<llama_token, int32_t> common_ngram_cache_part;
+// token -> number of times token has been seen. Sorted iteration makes lookup
+// logarithmic and keeps the compact follower representation in key order.
+// Insertion can invalidate iterators/references at or after the insertion point;
+// callers must not retain them across emplace().
+class common_ngram_cache_part {
+public:
+    using value_type = std::pair<llama_token, int32_t>;
+    using container_type = std::vector<value_type>;
+    using iterator = container_type::iterator;
+    using const_iterator = container_type::const_iterator;
+
+    iterator begin() { return entries.begin(); }
+    const_iterator begin() const { return entries.begin(); }
+    const_iterator cbegin() const { return entries.cbegin(); }
+    iterator end() { return entries.end(); }
+    const_iterator end() const { return entries.end(); }
+    const_iterator cend() const { return entries.cend(); }
+    size_t size() const { return entries.size(); }
+    bool empty() const { return entries.empty(); }
+
+    iterator find(llama_token token) {
+        const auto it = lower_bound(token);
+        return it != entries.end() && it->first == token ? it : entries.end();
+    }
+
+    const_iterator find(llama_token token) const {
+        const auto it = lower_bound(token);
+        return it != entries.end() && it->first == token ? it : entries.end();
+    }
+
+    // Match unordered_map::emplace's insert-if-absent behavior. In particular,
+    // loading a legacy file with a duplicate follower preserves its first count.
+    std::pair<iterator, bool> emplace(llama_token token, int32_t count) {
+        const auto it = lower_bound(token);
+        if (it != entries.end() && it->first == token) {
+            return {it, false};
+        }
+        return {entries.insert(it, value_type{token, count}), true};
+    }
+
+private:
+    iterator lower_bound(llama_token token) {
+        return std::lower_bound(entries.begin(), entries.end(), token,
+                [](const value_type & entry, llama_token value) {
+                    return entry.first < value;
+                });
+    }
+
+    const_iterator lower_bound(llama_token token) const {
+        return std::lower_bound(entries.begin(), entries.end(), token,
+                [](const value_type & entry, llama_token value) {
+                    return entry.first < value;
+                });
+    }
+
+    container_type entries;
+};
 
 // n-gram -> empirical distribution of following tokens
 typedef std::unordered_map<common_ngram, common_ngram_cache_part, common_ngram_hash_function> common_ngram_cache;
