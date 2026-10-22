@@ -1475,8 +1475,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             {
                 const auto & hp = lctx.model.hparams;
                 auto situ = [&](ggml_tensor * x, float beta) {
-                    auto t = ggml_tanh(ctx, ggml_scale(ctx, x, 1.0f/beta));
-                    return ggml_scale(ctx, ggml_mul(ctx, t, ggml_sigmoid(ctx, x)), beta);
+                    return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
                 };
                 cur = ggml_mul(ctx, situ(cur, hp.situ_beta), situ(tmp, hp.situ_linear_beta));
                 type_gate = LLM_FFN_SEQ;
@@ -1797,8 +1796,7 @@ llm_expert_gating_func_type   gating_op,
         } else if (type_op == LLM_FFN_SITU) {
             const auto & hp = lctx.model.hparams;
             auto situ = [&](ggml_tensor * x, float beta) {
-                auto t = ggml_tanh(ctx, ggml_scale(ctx, x, 1.0f/beta));
-                return ggml_scale(ctx, ggml_mul(ctx, t, ggml_sigmoid(ctx, x)), beta);
+                return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
             };
             par = ggml_mul(ctx, situ(gate, hp.situ_beta), situ(up, hp.situ_linear_beta));
         } else {
@@ -1856,8 +1854,7 @@ llm_expert_gating_func_type   gating_op,
         } else if (type_op == LLM_FFN_SITU) {
             const auto & hp = lctx.model.hparams;
             auto situ = [&](ggml_tensor * x, float beta) {
-                auto t = ggml_tanh(ctx, ggml_scale(ctx, x, 1.0f/beta));
-                return ggml_scale(ctx, ggml_mul(ctx, t, ggml_sigmoid(ctx, x)), beta);
+                return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
             };
             par = ggml_mul(ctx, situ(gate, hp.situ_beta), situ(up, hp.situ_linear_beta));
         }
