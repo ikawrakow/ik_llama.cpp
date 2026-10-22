@@ -500,8 +500,12 @@ template <ggml_type type>
 static void mul_mat_vec_q_cuda(const mmvq_args & args, cudaStream_t stream) {
     int nwarps = 1;
     int id = ggml_cuda_get_device();
-    if (args.ne2 < 2 && ggml_cuda_info().devices[id].cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
+    const int cc = ggml_cuda_info().devices[id].cc;
+    if (args.ne2 < 2 && cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
         nwarps = args.ncols_y <= 4 ? 4 : 2;
+        if (args.ncols_y == 1 && ((type == GGML_TYPE_Q2_K && cc < CC_TURING) || (type == GGML_TYPE_Q3_K && cc < CC_AMPERE))) {
+            nwarps = 2;
+        }
     }
     switch (nwarps) {
         case 1:
