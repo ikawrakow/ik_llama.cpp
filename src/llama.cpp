@@ -14408,7 +14408,7 @@ void llama_sample_softmax(struct llama_context * ctx, llama_token_data_array * c
 }
 
 void llama_sample_dist(struct llama_context * ctx, llama_token_data_array * candidates) {
-    llama_sample_softmax_impl(ctx ? &ctx->sampling : nullptr, candidates,  /* normalize */ false);
+    llama_sample_softmax_impl(ctx ? &ctx->sampling : nullptr, candidates,  /* normalize */ true);
 
 }
 void llama_sample_top_k(struct llama_context * ctx, llama_token_data_array * candidates, int32_t k, size_t min_keep) {
