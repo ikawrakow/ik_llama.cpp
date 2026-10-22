@@ -91,7 +91,7 @@ add_library(llama
             graphs/build_seedoss.cpp
             graphs/build_laguna.cpp
             graphs/build_k2horizon.cpp
-            graphs/build_step35.cpp
+            graphs/build_step5.cpp
             graphs/build_qwen.cpp
             graphs/build_qwen2.cpp
             graphs/build_qwen3.cpp

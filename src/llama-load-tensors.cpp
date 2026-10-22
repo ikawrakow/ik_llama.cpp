@@ -185,7 +185,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_seedoss_tensors(const LLM_TN & tn);
 
-    bool create_step35_tensors(const LLM_TN & tn);
+    bool create_step5_tensors(const LLM_TN & tn);
 
     llama_model_loader & ml;
     llama_model        & model;
@@ -1350,7 +1350,7 @@ bool create_tensors_helper::create_seedoss_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_step5_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -1363,7 +1363,7 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
                           ml.get_tensor_meta("blk.0.attn_norm.weight") == nullptr;
     const int trunk_flags = mtp_only
         ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
-    // STEP35 supports per-layer partial RoPE dims; rope factors are stored as a single shared tensor
+    // STEP5 supports per-layer partial RoPE dims; rope factors are stored as a single shared tensor
     // ("rope_freqs.weight") and ggml uses only the first (n_rot_l/2) entries per layer.
     uint32_t n_rot_max = 0;
     for (int i = 0; i < n_layer; ++i) {
@@ -1410,7 +1410,7 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
         const std::string attn_gate_name = tn(LLM_TENSOR_ATTN_GATE, "weight", i);
         int64_t n_attn_gate = n_head_l;
         if (model.arch == LLM_ARCH_LAGUNA) {
-            // Step35-style models normally use a head-wise attention gate. Laguna
+            // Step5-style models normally use a head-wise attention gate. Laguna
             // XS.2 keeps that layout, but M.1 gates every attention output element,
             // so infer the width from GGUF metadata instead of baking in a model size.
             const ggml_tensor * meta = ml.get_tensor_meta(attn_gate_name.c_str());
@@ -1459,6 +1459,39 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
                     tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), {n_embd, n_vocab}, optional_layer_flags);
             layer.nextn.shared_head_norm = create_tensor(ctx_split,
                     tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), {n_embd}, optional_layer_flags);
+        }
+
+        // Step-5 sparse-GQA indexer tensors (full-attention layers only; SWA layers
+        // and dense fallback GGUFs carry none). Contract names: blk.{i}.indexer.
+        // {q,k,z,w,q_norm,k_norm}.weight / .k_norm.bias / .ssmax_s. Shapes mirror HF
+        // sparse_config (proxy_dim=256 / 16 indexer q heads / 1 shared k head,
+        // ssmax_s granularity q_head = one scale per attention q head).
+        // Loaded eagerly (not skip-accounted) so the sparse graph can consume them;
+        // the dense fallback graph still never references them.
+        if (hparams.indexer_n_head > 0 && hparams.indexer_head_size > 0 &&
+                ml.get_tensor_meta(tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i).c_str()) != nullptr) {
+            const int64_t idx_head   = hparams.indexer_head_size; // proxy_dim (sparse_config.proxy_dim)
+            const int64_t idx_n_head = hparams.indexer_n_head;    // sparse_config.sparse_indexer_num_heads
+            const int idx_flags = optional_layer_flags;
+            // Indexer weights must NOT live in the split buffer (same rule as the kr_l/kp_l
+            // caches, llama.cpp llama_kv_cache_init comment): split-buffer tensors
+            // carry a dummy base pointer (0x1000 + offset; real per-device storage hangs off
+            // ->extra, which these tensors never get wired to -- there is no
+            // prepare_split_tensors call for them and build_step5.cpp consumes them raw via
+            // ggml_mul_mat). Under -sm graph the first indexer mul_mat would dereference the dummy
+            // base and fault at the first full-attention layer's indexer op.
+            // Allocate them in the layer's regular device buffer instead: the scheduler pins the
+            // indexer ops to that device and moves inputs across the split itself. Single-GPU /
+            // non-split runs pass the same ctx and are unaffected.
+            ggml_context * ctx_idx = ctx_for_layer(i);
+            layer.indexer_q        = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), {n_embd, idx_head * idx_n_head}, idx_flags);
+            layer.indexer_k        = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), {n_embd, idx_head}, idx_flags);
+            layer.indexer_z        = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_Z, "weight", i), {n_embd, idx_head}, idx_flags);
+            layer.indexer_w        = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_W, "weight", i), {n_embd, idx_n_head}, idx_flags);
+            layer.indexer_q_norm   = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), {idx_head}, idx_flags);
+            layer.indexer_k_norm   = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), {idx_head}, idx_flags);
+            layer.indexer_k_norm_b = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_K_NORM, "bias", i), {idx_head}, idx_flags);
+            layer.indexer_ssmax_s  = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_SSMAX_S, i), {n_head_l}, idx_flags);
         }
     }
     return use_mmap_buffer;
@@ -6275,10 +6308,11 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_mimo2_tensors(tn); break;
         case LLM_ARCH_SEED_OSS:
             use_mmap_buffer = create_seedoss_tensors(tn); break;
+        case LLM_ARCH_STEP5:
         case LLM_ARCH_STEP35:
-            use_mmap_buffer = create_step35_tensors(tn); break;
+            use_mmap_buffer = create_step5_tensors(tn); break;
         case LLM_ARCH_LAGUNA:
-            use_mmap_buffer = create_step35_tensors(tn); break;
+            use_mmap_buffer = create_step5_tensors(tn); break;
         default:
             throw std::runtime_error("unknown architecture");
     }

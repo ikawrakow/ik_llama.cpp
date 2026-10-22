@@ -627,6 +627,10 @@ class Model:
         if chkhsh == "8aeee3860c56296a157a1fe2fad249ec40aa59b1bb5709f4ade11c4e6fe652ed":
             # ref: https://huggingface.co/tiiuae/falcon-7b
             res = "falcon"
+        if chkhsh == "5841594bd6a8eeecd7207aeec6570831cc97ffaeba51e908bdaf560113177bae":
+            # ref: Step-5-Preview (StepFun); pre-tokenizer regexes are identical
+            # to DeepSeek-V3 (digit split + CJK split + main split)
+            res = "deepseek-v3"
         if chkhsh == "0876d13b50744004aa9aeae05e7b0647eac9d801b5ba4668afc01e709c15e19f":
             # ref: https://huggingface.co/BAAI/bge-small-en-v1.5
             res = "bert-bge"
@@ -7111,6 +7115,172 @@ class LagunaModel(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@Model.register("Step5ForCausalLM")
+@Model.register("Step5ForConditionalGeneration")
+@Model.register("MMGPTStepRoboticsForCausalLM")
+class Step5Model(Model):
+    # Step-5-Preview text model. Sparse-GQA indexer tensors (sparse_indexer_*,
+    # ssmax_s) are kept for the sparse-attention path; the vision tower goes to
+    # a separate mmproj GGUF.
+    model_arch = gguf.MODEL_ARCH.STEP5
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # multimodal wrapper: merge text_config over the top-level config
+        tc = self.hparams.get("text_config")
+        if isinstance(tc, dict):
+            self.hparams = {**self.hparams, **tc}
+        # num_hidden_layers (92) counts only the trunk; the MTP/nextn layers are
+        # real blocks in the GGUF (blk.92..blk.94).
+        nextn = int(self.hparams.get("num_nextn_predict_layers", 0) or 0)
+        self.block_count = int(self.hparams["num_hidden_layers"]) + nextn
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
+        # This checkpoint ships redundant physical copies: stray shards not in
+        # the index (model-mtp3-00001.safetensors) and trunk-layer copies inside
+        # other shards (layer 92 in model-00024). The index's weight_map is
+        # authoritative, so skip any tensor whose canonical copy lives in a
+        # different shard.
+        index_path = self.dir_model / "model.safetensors.index.json"
+        if not index_path.is_file():
+            yield from super().get_tensors()
+            return
+        with open(index_path, "r", encoding="utf-8") as f:
+            weight_map: dict[str, str] = json.load(f).get("weight_map") or {}
+        for part_name in self.part_names:
+            logger.info(f"gguf: loading model part '{part_name}'")
+            from safetensors import safe_open
+            with safe_open(self.dir_model / part_name, framework="pt", device="cpu") as model_part:
+                for name in model_part.keys():
+                    if weight_map.get(name, part_name) != part_name:
+                        continue
+                    data = model_part.get_slice(name)
+                    yield name, LazyTorchTensor.from_safetensors_slice(data)
+
+    def find_hparam(self, keys: Iterable[str], optional: bool = False) -> Any:
+        # base __init__ resolves block_count before we can merge text_config
+        key = next((k for k in keys if k in self.hparams), None)
+        if key is not None:
+            return self.hparams[key]
+        tc = self.hparams.get("text_config")
+        if isinstance(tc, dict):
+            key = next((k for k in keys if k in tc), None)
+            if key is not None:
+                return tc[key]
+        if optional:
+            return None
+        raise KeyError(f"could not find any of: {keys}")
+
+    def set_gguf_parameters(self):
+        hparams = self.hparams
+        arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
+        n_layers = int(hparams["num_hidden_layers"])
+        nextn = int(hparams.get("num_nextn_predict_layers", 0) or 0)
+        n_head = int(hparams["num_attention_heads"])
+        n_kv = int(hparams["num_attention_groups"])
+        head_dim = int(hparams["head_dim"])
+
+        self.gguf_writer.add_context_length(int(hparams["max_position_embeddings"]))
+        self.gguf_writer.add_embedding_length(int(hparams["hidden_size"]))
+        self.gguf_writer.add_block_count(self.block_count)
+        self.gguf_writer.add_vocab_size(int(hparams["vocab_size"]))
+        self.gguf_writer.add_feed_forward_length(int(hparams["intermediate_size"]))
+        self.gguf_writer.add_head_count(n_head)
+        self.gguf_writer.add_head_count_kv(n_kv)
+        self.gguf_writer.add_key_length(head_dim)
+        self.gguf_writer.add_value_length(head_dim)
+        self.gguf_writer.add_layer_norm_rms_eps(float(hparams["rms_norm_eps"]))
+        self.gguf_writer.add_file_type(self.ftype)
+
+        # sliding-window attention: layer_types has one entry per block (incl. MTP)
+        layer_types = hparams["layer_types"]
+        assert len(layer_types) == self.block_count
+        self.gguf_writer.add_sliding_window(int(hparams["sliding_window"]))
+        self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in layer_types])
+
+        # RoPE: per-layer theta (sliding 10k / full 10M). Partial rotary factors:
+        # full_attention layers rotate only head_dim/3 (64 of 192 dims), sliding
+        # layers rotate the full head. The llama3 rope_scaling in the config is a
+        # no-op (factor 1.0), so no rope factor tensors are needed.
+        rope_theta = hparams["rope_theta"]
+        assert len(rope_theta) == self.block_count
+        prf = hparams.get("partial_rotary_factors") or [1.0] * self.block_count
+        assert len(prf) == self.block_count
+        rope_dims = [round(head_dim * float(f)) for f in prf]
+        assert set(rope_dims) == {head_dim, head_dim // 3}
+        self.gguf_writer.add_rope_dimension_count(head_dim // 3)
+        self.gguf_writer.add_array(f"{arch}.rope.dimension_count_per_layer", rope_dims)
+        self.gguf_writer.add_rope_freq_base(float(max(rope_theta)))
+        self.gguf_writer.add_array(f"{arch}.rope.freq_base_per_layer", [float(t) for t in rope_theta])
+        # 0x1 = apply rope scaling to full-attention layers only (yarn_only_types)
+        self.gguf_writer.add_uint32(f"{arch}.rope.scaling.apply_mask", 1)
+
+        # MoE
+        self.gguf_writer.add_expert_count(int(hparams["moe_num_experts"]))
+        self.gguf_writer.add_expert_used_count(int(hparams["num_experts_per_tok"]))
+        self.gguf_writer.add_expert_feed_forward_length(int(hparams["moe_intermediate_size"]))
+        self.gguf_writer.add_expert_shared_feed_forward_length(int(hparams["share_expert_dim"]))
+        self.gguf_writer.add_expert_weights_scale(float(hparams["moe_router_scaling_factor"]))
+        self.gguf_writer.add_expert_weights_norm(bool(hparams["norm_expert_weight"]))
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        # MTP + swiglu clamps (arrays span trunk + MTP blocks)
+        self.gguf_writer.add_nextn_predict_layers(nextn)
+        self.gguf_writer.add_array(f"{arch}.swiglu_limits", [float(v) for v in hparams["swiglu_limits"]])
+        self.gguf_writer.add_array(f"{arch}.swiglu_limits_shared", [float(v) for v in hparams["swiglu_limits_shared"]])
+
+        # Sparse-config KVs: mirror official text_config.sparse_config verbatim
+        # (documentation for loaders/tools; the C++ hparams read the same facts
+        # from dedicated KVs). Presence of these marks a Step-5 sparse GGUF.
+        sc = (self.hparams.get("text_config") or self.hparams).get("sparse_config") or {}
+        if sc:
+            p = f"{arch}.sparse."
+            self.gguf_writer.add_bool(p + "enabled", bool(sc.get("enabled", True)))
+            self.gguf_writer.add_string(p + "attention_impl", sc.get("attention_impl", "sparse_gqa"))
+            self.gguf_writer.add_array(p + "apply_to_layer_types", sc.get("apply_to_layer_types", ["full_attention"]))
+            self.gguf_writer.add_uint32(p + "region_block_size", int(sc.get("region_block_size", 8)))
+            self.gguf_writer.add_uint32(p + "topk", int(sc.get("topk", 512)))
+            self.gguf_writer.add_uint32(p + "proxy_dim", int(sc.get("proxy_dim", 256)))
+            self.gguf_writer.add_uint32(p + "num_provider_groups", int(sc.get("num_provider_groups", 4)))
+            self.gguf_writer.add_string(p + "compression_method", sc.get("compression_method", "csa_block_compress"))
+            p += "indexer."
+            self.gguf_writer.add_uint32(p + "num_heads", int(sc.get("sparse_indexer_num_heads", 16)))
+            self.gguf_writer.add_uint32(p + "num_k_heads", int(sc.get("sparse_indexer_num_k_heads", 1)))
+            self.gguf_writer.add_uint32(p + "rope_dim", int(sc.get("sparse_indexer_rope_dim", 32)))
+            self.gguf_writer.add_bool(p + "use_rope", bool(sc.get("sparse_indexer_use_rope", True)))
+            self.gguf_writer.add_string(p + "q_norm_type", sc.get("sparse_indexer_q_norm_type", "rmsnorm"))
+            self.gguf_writer.add_string(p + "k_norm_type", sc.get("sparse_indexer_k_norm_type", "layernorm"))
+            self.gguf_writer.add_string(p + "csa_z_norm_type", sc.get("sparse_indexer_csa_z_norm_type", "none"))
+            self.gguf_writer.add_string(p + "softmax_variant", sc.get("sparse_indexer_softmax_variant", "ssmax"))
+            self.gguf_writer.add_string(p + "ssmax_s_granularity", sc.get("sparse_indexer_ssmax_s_granularity", "q_head"))
+
+        template_file = self.dir_model / "chat_template.jinja"
+        if template_file.is_file():
+            self.gguf_writer.add_chat_template(template_file.read_text(encoding="utf-8"))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Sparse-GQA indexer tensors are kept in the GGUF under blk.{b}.indexer.*
+        # names so the loader can wire them into the sparse-attention path.
+        m = re.match(r"model\.layers\.(\d+)\.self_attn\.(sparse_indexer_[a-z_]+|ssmax_s)(?:\.(weight|bias))?$", name)
+        if m:
+            part = m.group(2).replace("sparse_indexer_", "")
+            suffix = f".{m.group(3)}" if m.group(3) else ""
+            tensors = [(f"blk.{m.group(1)}.indexer.{part}{suffix}", data_torch)]
+            # indexer q_norm is a zero-centered RMSNorm in the checkpoint but the
+            # engine computes x·(w+1); k_norm is a plain LayerNorm and passes as-is.
+            if part == "q_norm":
+                tensors = [(n, d + 1.0) for n, d in tensors]
+            return tensors
+        # Vision belongs in a separate mmproj GGUF, not the text master.
+        if name.startswith(("vision_model.", "vit")):
+            return []
+        if name.endswith("moe.router_bias"):
+            # suffix-less tensor; the C++ loader asks for blk.{b}.exp_probs_b.bias
+            assert bid is not None
+            return [(f"blk.{bid}.exp_probs_b.bias", data_torch)]
+        return [(self.map_tensor_name(name), data_torch)]
+
 @Model.register("Lfm2ForCausalLM", "LFM2ForCausalLM")
 class LFM2Model(Model):
     """Converter for Liquid AI's dense LFM2 hybrid shortconv/GQA models."""
@@ -7272,6 +7442,17 @@ class LFM2MoeModel(LFM2Model):
             experts = [k for d in self._experts for k in d.keys()]
             if experts:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@Model.register("Step3p5ForCausalLM")              # Step-3.5-Flash (HF model_type step3p5)
+@Model.register("Step3p7ForConditionalGeneration") # Step-3.7-Flash
+@Model.register("Step4ForCausalLM")                # older Step-3.5-Preview checkpoints
+class Step35Model(Step5Model):
+    # Ecosystem Step-3.5/3.7-Flash family -> GGUF arch "step35" (LLM_ARCH_STEP35).
+    # Same family graph as STEP5 (build_step5); Flash GGUFs carry no sparse_config /
+    # indexer tensors, so the loader runs them dense. Step-5-Preview itself stays on
+    # STEP5 ("step5") via Step5Model above.
+    model_arch = gguf.MODEL_ARCH.STEP35
 
 
 ###### CONVERSION LOGIC ######

@@ -83,6 +83,7 @@ enum llm_arch {
     LLM_ARCH_MISTRAL3,
     LLM_ARCH_MIMO2,
     LLM_ARCH_SEED_OSS,
+    LLM_ARCH_STEP5,
     LLM_ARCH_STEP35,
     LLM_ARCH_LAGUNA,
     LLM_ARCH_GLM_DSA,
@@ -566,6 +567,12 @@ enum llm_tensor {
     LLM_TENSOR_SHORTCONV_INPROJ,
     LLM_TENSOR_SHORTCONV_OUTPROJ,
 
+    // Step-5 sparse-GQA indexer extras (STEP5); q/k/q_norm/k_norm reuse the
+    // LLM_TENSOR_INDEXER_*_PROJ/_NORM enums with per-arch name mappings
+    LLM_TENSOR_INDEXER_Z,
+    LLM_TENSOR_INDEXER_W,
+    LLM_TENSOR_INDEXER_SSMAX_S,
+
     LLM_TENSOR_UNKNOWN,
 };
 
@@ -583,4 +590,11 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
 
 static inline bool llm_arch_is_dsv4(llm_arch arch) {
     return arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41;
+}
+
+// Step-5 family: STEP5 (Step-5-Preview, sparse-GQA indexer GGUFs) + STEP35
+// (ecosystem Step-3.5/3.7-Flash GGUFs, arch string "step35"; same family graph,
+// no indexer tensors). Both run build_step5().
+static inline bool llm_arch_is_step5(llm_arch arch) {
+    return arch == LLM_ARCH_STEP5 || arch == LLM_ARCH_STEP35;
 }
