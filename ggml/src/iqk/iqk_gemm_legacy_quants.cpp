@@ -2085,7 +2085,7 @@ struct DequantIQ4KS {
 };
 
 struct DequantIQ5KS {
-    using type = block_iq5_ks;
+    using type = block_iq5_ks_r16;
     DequantIQ5KS() {
         for (int i = 0; i < 2; ++i) {
             auto val = _mm_loadu_si128((const __m128i *)iq5nl_values + i);
