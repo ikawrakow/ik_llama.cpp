@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,3 +19,8 @@ extern const std::unordered_set<uint32_t> unicode_set_whitespace;
 extern const std::initializer_list<std::pair<uint32_t, uint32_t>> unicode_map_lowercase;
 extern const std::initializer_list<std::pair<uint32_t, uint32_t>> unicode_map_uppercase;
 extern const std::vector<range_nfd> unicode_ranges_nfd;
+
+// canonical normalization tables (used by the Raon-1 tokenizer)
+extern const std::unordered_map<uint32_t, uint8_t> unicode_combining_class;
+extern const std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> unicode_decomposition;
+extern const std::unordered_map<uint64_t, uint32_t> unicode_composition;

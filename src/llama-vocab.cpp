@@ -581,7 +581,16 @@ struct llm_tokenizer_bpe_session {
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-        const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        // Raon-1's HF tokenizer applies an NFC normalizer before pre-tokenization.
+        const bool normalize_nfc = vocab.get_pre_type() == LLAMA_VOCAB_PRE_TYPE_RAON;
+        std::string normalized;
+        if (normalize_nfc) {
+            for (const uint32_t cpt : unicode_cpts_normalize_nfc(unicode_cpts_from_utf8(text))) {
+                normalized += unicode_cpt_to_utf8(cpt);
+            }
+        }
+        const auto word_collection = unicode_regex_split(normalize_nfc ? normalized : text,
+                tokenizer.regex_exprs, tokenizer.byte_encode);
 
         symbols_final.clear();
         auto tok_pre = vocab.get_pre_type();
