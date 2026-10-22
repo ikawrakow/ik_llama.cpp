@@ -102,6 +102,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LFM2,            "lfm2"         },
     { LLM_ARCH_LFM2MOE,         "lfm2moe"      },
     { LLM_ARCH_MAPLE,           "maple"        },
+    { LLM_ARCH_RAON1,           "raon1"        },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
@@ -145,6 +146,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_EMBEDDING_LENGTH_PER_LAYER,        "%s.embedding_length_per_layer_input"  },
     { LLM_KV_BLOCK_COUNT,                       "%s.block_count"                       },
     { LLM_KV_LEADING_DENSE_BLOCK_COUNT,         "%s.leading_dense_block_count"         },
+    { LLM_KV_ACTIVATION_SITU_BETA,              "%s.activation.situ_beta"              },
+    { LLM_KV_ACTIVATION_SITU_LINEAR_BETA,       "%s.activation.situ_linear_beta"       },
     { LLM_KV_FEED_FORWARD_LENGTH,               "%s.feed_forward_length"               },
     { LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        "%s.expert_feed_forward_length"        },
     { LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, "%s.expert_shared_feed_forward_length" },
@@ -203,6 +206,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_VALUE_LENGTH,           "%s.attention.value_length"           },
     { LLM_KV_ATTENTION_LAYERNORM_EPS,          "%s.attention.layer_norm_epsilon"     },
     { LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      "%s.attention.layer_norm_rms_epsilon" },
+    { LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,    "%s.attention.latent_norm_rms_epsilon" },
     { LLM_KV_ATTENTION_CAUSAL,                 "%s.attention.causal"                 },
     { LLM_KV_ATTENTION_Q_LORA_RANK,            "%s.attention.q_lora_rank"            },
     { LLM_KV_ATTENTION_KV_LORA_RANK,           "%s.attention.kv_lora_rank"           },
@@ -232,8 +236,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_HYPER_CONNECTION_COUNT,               "%s.hyper_connection.count"               },
     { LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, "%s.hyper_connection.sinkhorn_iterations" },
-    { LLM_KV_HYPER_CONNECTION_EPSILON,             "%s.hyper_connection.epsilon"             },
-    { LLM_KV_HYPER_CONNECTION_LOW_RANK,            "%s.hyper_connection.low_rank"            },
+    { LLM_KV_HYPER_CONNECTION_EPSILON,          "%s.hyper_connection.epsilon"          },
+    { LLM_KV_HYPER_CONNECTION_MAGNITUDE,        "%s.hyper_connection.magnitude"        },
+    { LLM_KV_HYPER_CONNECTION_LOW_RANK,         "%s.hyper_connection.low_rank"         },
 
     { LLM_KV_PLE_LAYERS,                       "%s.ple.layers"                      },
     { LLM_KV_PLE_NGRAM_SIZE,                   "%s.ple.ngram_size"                  },
@@ -384,6 +389,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_GLM5NEXT:
     case LLM_ARCH_LFM2:
     case LLM_ARCH_LFM2MOE:
+    case LLM_ARCH_RAON1:
         return true;
     default:
         return false;

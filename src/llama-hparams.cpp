@@ -927,6 +927,60 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_RAON1:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,    hparams.n_embd_head_k_mla_impl);
+                ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,  hparams.n_embd_head_v_mla_impl);
+                ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,       hparams.n_lora_q);
+                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,      hparams.n_lora_kv);
+                ml.get_key(LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS, hparams.f_norm_rms_eps_latent);
+
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,             hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,              hparams.ssm_d_inner, false);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,              hparams.ssm_d_state, false);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK,          hparams.ssm_dt_rank_f, false);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,             hparams.ssm_n_group, false);
+                ml.get_key(LLM_KV_KDA_HEAD_DIM,                hparams.ssm_d_state, false);
+                ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND,        hparams.kda_gate_lower_bound, false);
+
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared, false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead, false);
+
+                ml.get_key(LLM_KV_ACTIVATION_SITU_BETA,        hparams.situ_beta, false);
+                ml.get_key(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, hparams.situ_linear_beta, false);
+
+                ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,      hparams.dsv4_hc_mult, false);
+                ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,    hparams.dsv4_hc_eps, false);
+                ml.get_key(LLM_KV_HYPER_CONNECTION_MAGNITUDE,  hparams.hc_magnitude, false);
+
+                if (hparams.ssm_d_state == 0) {
+                    hparams.ssm_d_state = 128;
+                }
+                if (hparams.ssm_d_inner == 0) {
+                    hparams.ssm_d_inner = hparams.n_head() * hparams.ssm_d_state;
+                }
+                if (hparams.ssm_n_group == 0) {
+                    hparams.ssm_n_group = hparams.n_head();
+                }
+                hparams.ssm_dt_rank = hparams.n_head();
+                if (hparams.ssm_dt_rank_f == 0) {
+                    hparams.ssm_dt_rank_f = hparams.ssm_d_state;
+                }
+                if (hparams.n_ff_shexp == 0) {
+                    hparams.n_ff_shexp = hparams.n_ff_exp;
+                }
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    hparams.recurrent_layer_arr[i] = hparams.n_head_kv(i) == 0;
+                }
+
+                model.type = e_model::MODEL_UNKNOWN;
+            } break;
         case LLM_ARCH_QWEN35MOE:
             {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
@@ -2087,7 +2141,11 @@ void llm_load_hparams(
                         throw std::runtime_error("dflash2: target_layers must use one-based IDs");
                     }
                 }
-                hparams.dflash_n_target_features = hparams.n_embd * hparams.dflash_n_target_layers;
+                uint32_t target_hidden_size = 0;
+                ml.get_key("dflash.target_hidden_size", target_hidden_size, false);
+                hparams.dflash_n_target_features = target_hidden_size > 0
+                        ? target_hidden_size * hparams.dflash_n_target_layers
+                        : hparams.n_embd * hparams.dflash_n_target_layers;
                 if (hparams.dflash_selector_top_k == 0 ||
                         hparams.n_embd < hparams.dflash_selector_top_k * (hparams.dflash_selector_top_k + 1)) {
                     throw std::runtime_error("dflash2: hidden size is too small for selector top-k lattice");
@@ -2121,6 +2179,12 @@ void llm_load_hparams(
                 if (dflash_dense) {
                     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                     ml.get_key("dflash.block_size", hparams.dflash_block_size);
+                    ml.get_key("dflash.conv_kernel_size", hparams.dflash_conv_kernel_size, false);
+                    ml.get_key("dflash.conv_group_size",  hparams.dflash_conv_group_size, false);
+                    ml.get_key("dflash.selector_rank",    hparams.dflash_selector_rank, false);
+                    ml.get_key("dflash.selector_top_k",   hparams.dflash_selector_top_k, false);
+                    uint32_t target_hidden_size = 0;
+                    ml.get_key("dflash.target_hidden_size", target_hidden_size, false);
                     ml.get_key(LLM_KV_TOKENIZER_MASK_ID, hparams.dflash_mask_token_id);
                     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false);
@@ -2131,6 +2195,10 @@ void llm_load_hparams(
                         throw std::runtime_error("dflash: fc.weight must have shape [n_target_features, embedding_length]");
                     }
                     hparams.dflash_n_target_features = (uint32_t) fc->ne[0];
+                    if (target_hidden_size > 0 &&
+                            hparams.dflash_n_target_features != target_hidden_size * hparams.dflash_n_target_layers) {
+                        throw std::runtime_error("dflash: target_hidden_size does not match fc.weight");
+                    }
                     hparams.dflash_backbone_rotary_base = hparams.rope_freq_base_train;
                     hparams.dflash_laguna = false;
 
