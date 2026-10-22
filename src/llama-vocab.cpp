@@ -581,7 +581,16 @@ struct llm_tokenizer_bpe_session {
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-        const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        // Raon-1's HF tokenizer applies an NFC normalizer before pre-tokenization.
+        const bool normalize_nfc = vocab.get_normalize_nfc();
+        std::string normalized;
+        if (normalize_nfc) {
+            for (const uint32_t cpt : unicode_cpts_normalize_nfc(unicode_cpts_from_utf8(text))) {
+                normalized += unicode_cpt_to_utf8(cpt);
+            }
+        }
+        const auto word_collection = unicode_regex_split(normalize_nfc ? normalized : text,
+                tokenizer.regex_exprs, tokenizer.byte_encode);
 
         symbols_final.clear();
         auto tok_pre = vocab.get_pre_type();
@@ -1638,6 +1647,8 @@ struct llama_vocab::impl {
     enum llama_vocab_type     type     = LLAMA_VOCAB_TYPE_SPM;
     enum llama_vocab_pre_type pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
 
+    bool normalize_nfc = false; // tokenizer declares an NFC normalizer
+
     int max_token_len = 0; // used for optimizing longest token search
 
     // default LLaMA special tokens
@@ -1773,6 +1784,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     {
         ml.get_key(LLM_KV_TOKENIZER_MODEL, tokenizer_model);
         ml.get_key(LLM_KV_TOKENIZER_PRE,   tokenizer_pre, false);
+        ml.get_key(LLM_KV_TOKENIZER_NORMALIZER_NFC, normalize_nfc, false);
 
         ml.get_key(LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT, n_token_types, false);
 
@@ -3588,6 +3600,10 @@ enum llama_vocab_type llama_vocab::get_type() const {
 
 enum llama_vocab_pre_type llama_vocab::get_pre_type() const {
     return pimpl->pre_type;
+}
+
+bool llama_vocab::get_normalize_nfc() const {
+    return pimpl->normalize_nfc;
 }
 
 uint32_t llama_vocab::n_tokens() const {

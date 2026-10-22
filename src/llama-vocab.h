@@ -85,6 +85,7 @@ struct llama_vocab {
 
     enum llama_vocab_type     get_type()     const;
     enum llama_vocab_pre_type get_pre_type() const;
+    bool                      get_normalize_nfc() const;
 
     uint32_t n_tokens() const;
     uint32_t n_token_types() const;
