@@ -124,20 +124,28 @@ static ggml_tensor * raon1_mla_attention(
     q = ggml_reshape_3d(ctx0, q, head_k, n_head, n_tokens);
     q = ggml_permute(ctx0, q, 0, 2, 1, 3); // [head_k, n_tokens, n_head]
 
-    auto q_nope  = ggml_view_3d(ctx0, q, n_nope, n_tokens, n_head, q->nb[1], q->nb[2], 0);
-    auto q_extra = ggml_view_3d(ctx0, q, n_extra, n_tokens, n_head, q->nb[1], q->nb[2], n_nope*q->nb[0]);
+    auto q_nope = ggml_view_3d(ctx0, q, n_nope, n_tokens, n_head, q->nb[1], q->nb[2], 0);
 
     auto Qcur_nope = ggml_mul_mat(ctx0, layer.wk_b, q_nope); // [kv_lora, n_tokens, n_head]
-    auto Qcur = ggml_concat(ctx0, Qcur_nope, q_extra, 0);    // [kv_lora + n_extra, n_tokens, n_head]
+    auto Qcur = Qcur_nope;
+    if (n_extra > 0) {
+        // Raon-1 keeps 64 unrotated key/query channels (NoPE): they are real
+        // extra channels, not a RoPE slice, so they must be concatenated.
+        auto q_extra = ggml_view_3d(ctx0, q, n_extra, n_tokens, n_head, q->nb[1], q->nb[2], n_nope*q->nb[0]);
+        Qcur = ggml_concat(ctx0, Qcur_nope, q_extra, 0);      // [kv_lora + n_extra, n_tokens, n_head]
+    }
     cb(Qcur, "Qcur", il);
 
     auto kv = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);      // [kv_lora + n_extra, n_tokens]
     auto latent = ggml_view_2d(ctx0, kv, kv_lora, n_tokens, kv->nb[1], 0);
-    auto extra  = ggml_view_2d(ctx0, kv, n_extra,  n_tokens, kv->nb[1], kv_lora*kv->nb[0]);
     latent = llm_build_context::llm_build_norm(ctx0, latent, hparams, layer.attn_kv_a_norm,
             nullptr, LLM_NORM_RMS, cb, il);
 
-    auto k_row = ggml_concat(ctx0, latent, extra, 0);         // [kv_lora + n_extra, n_tokens]
+    auto k_row = latent;
+    if (n_extra > 0) {
+        auto extra = ggml_view_2d(ctx0, kv, n_extra, n_tokens, kv->nb[1], kv_lora*kv->nb[0]);
+        k_row = ggml_concat(ctx0, latent, extra, 0);          // [kv_lora + n_extra, n_tokens]
+    }
 
     const auto row_size = ggml_row_size(kv_self.k_l[il]->type, kv_lora + n_extra);
     auto k_cache_write = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora + n_extra, n_tokens,
