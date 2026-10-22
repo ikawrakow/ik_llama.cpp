@@ -53,13 +53,10 @@ static ggml_tensor * raon1_build_hc_pre(
     cb(pre,  "hc_pre",  il);
     cb(post, "hc_post", il);
 
-    ggml_tensor * result = nullptr;
-    for (int64_t i = 0; i < hc; ++i) {
-        ggml_tensor * xi = ggml_view_2d(ctx0, x, n_embd, nt, x->nb[2], i*x->nb[1]);
-        ggml_tensor * wi = ggml_view_2d(ctx0, pre, 1, nt, pre->nb[1], i*pre->nb[0]);
-        ggml_tensor * term = ggml_mul(ctx0, xi, wi);
-        result = result ? ggml_add(ctx0, result, term) : term;
-    }
+    // result[e,t] = sum_s pre[s,t] * x[e,s,t] — one batched mat-vec per token.
+    ggml_tensor * pre3d = ggml_reshape_3d(ctx0, pre, hc, 1, nt);
+    ggml_tensor * xh    = ggml_cont(ctx0, ggml_permute(ctx0, x, 1, 0, 2, 3)); // [hc, n_embd, nt]
+    ggml_tensor * result = ggml_cont_2d(ctx0, ggml_mul_mat(ctx0, pre3d, xh), n_embd, nt);
 
     *pre_out  = pre;
     *post_out = post;
@@ -78,21 +75,19 @@ static ggml_tensor * raon1_build_hc_post(
     const int64_t hc     = hparams.dsv4_hc_mult;
     const int64_t nt     = x->ne[2];
 
-    ggml_tensor * result = nullptr;
-    for (int64_t dst = 0; dst < hc; ++dst) {
-        ggml_tensor * sum = nullptr;
-        for (int64_t src = 0; src < hc; ++src) {
-            ggml_tensor * xi = ggml_view_2d(ctx0, x, n_embd, nt, x->nb[2], src*x->nb[1]);
-            ggml_tensor * wi = ggml_view_2d(ctx0, comb, 1, nt, comb->nb[2],
-                    dst*comb->nb[0] + src*comb->nb[1]);
-            ggml_tensor * term = ggml_mul(ctx0, xi, wi);
-            sum = sum ? ggml_add(ctx0, sum, term) : term;
-        }
-        ggml_tensor * wi = ggml_view_2d(ctx0, post, 1, nt, post->nb[1], dst*post->nb[0]);
-        sum = ggml_add(ctx0, sum, ggml_mul(ctx0, branch, wi));
-        sum = ggml_reshape_3d(ctx0, sum, n_embd, 1, nt);
-        result = result ? ggml_concat(ctx0, result, sum, 1) : sum;
-    }
+    // out[dst,e,t] = sum_src comb[dst,src,t] * x[e,src,t] + post[dst,t] * branch[e,t].
+    // This is a batched hc x hc GEMM followed by a broadcasted rank-1 update.
+    ggml_tensor * comb_t = ggml_cont(ctx0, ggml_permute(ctx0, comb, 1, 0, 2, 3)); // [src, dst, nt]
+    ggml_tensor * xh     = ggml_cont(ctx0, ggml_permute(ctx0, x,    1, 0, 2, 3)); // [src, n_embd, nt]
+    ggml_tensor * result = ggml_mul_mat(ctx0, comb_t, xh);                        // [dst, n_embd, nt]
+
+    // post[dst,t] * branch[e,t] is a batched rank-1 outer product: K=1 GEMM.
+    ggml_tensor * post1   = ggml_reshape_3d(ctx0, post,   1, hc,     nt);
+    ggml_tensor * branch1 = ggml_reshape_3d(ctx0, branch, 1, n_embd, nt);
+    ggml_tensor * post_term = ggml_mul_mat(ctx0, post1, branch1);                 // [hc, n_embd, nt]
+    result = ggml_add(ctx0, result, post_term);
+    result = ggml_cont(ctx0, ggml_permute(ctx0, result, 1, 0, 2, 3));             // [n_embd, hc, nt]
+
     cb(result, "hc_post_out", il);
     return result;
 }
