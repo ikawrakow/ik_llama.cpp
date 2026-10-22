@@ -4762,7 +4762,6 @@ inline int32_t check_ban_phrase(server_slot& slot) {
 
 static inline void create_rewind_checkpoint(server_slot & slot) {
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
-        int32_t pos = slot.token_buffer.size();
         llama_rewind_ckpt_save(slot.ctx, { LLAMA_CHECKPOINT_REWIND, slot.n_past }, slot.id, slot.n_buffer);
     }
 }

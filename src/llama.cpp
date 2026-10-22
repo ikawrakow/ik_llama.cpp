@@ -905,10 +905,6 @@ llama_context::~llama_context() {
     for (auto & it : kv_self.ckpt_rewind_pool) {
         it.release();
     }
-    //for (auto & it : kv_self.ckpt_rewind_map) {
-    //    auto & ckpt = *it.second;
-    //    ckpt.release();
-    //}
     kv_self.ckpt_rewind_map.clear();
     free_dflash_kv_cache_tensors();
     free_dsv4_cache_tensors();
@@ -2321,6 +2317,40 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched, llama_ckpt_d
 void llama_kv_cache::checkpoint_delete(llama_ckpt_data ckpt_type) {
     auto & ckpt = llama_get_ckpt(ckpt_type);
     ckpt.saved = false;
+}
+
+llama_kv_cache::gpu_checkpoint & llama_kv_cache::llama_get_ckpt(llama_ckpt_data ckpt_type) {
+    if (ckpt_type.type == LLAMA_CHECKPOINT_REWIND) {
+        if (!ckpt_rewind_map.contains(ckpt_type.pos)) {
+            bool found = false;
+            for (auto & saved_ckpt : ckpt_rewind_pool) {
+                // reuse ckpt pool
+                if (!saved_ckpt->saved && !saved_ckpt->dsv4_shadow_saved) {
+                    ckpt_rewind_map[ckpt_type.pos] = saved_ckpt.get();
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                ckpt_rewind_pool.push_back(std::make_unique<gpu_checkpoint>());
+                ckpt_rewind_map[ckpt_type.pos] = ckpt_rewind_pool.back().get();
+            }
+        }
+        return *ckpt_rewind_map[ckpt_type.pos];
+    }
+    return ckpt;
+}
+
+bool  llama_kv_cache::llama_ckpt_mode_equal(llama_ckpt_data ckpt_type, int mode) const {
+    if (ckpt_type.type == LLAMA_CHECKPOINT_REWIND) {
+        return false;
+        //if (!ckpt_rewind_map.contains(ckpt_type.pos)) {
+        //    return false;
+        //}
+        //const auto & ckpt1 = ckpt_rewind_map[ckpt_type.pos];
+        //return ckpt1.selected_spec_mode== mode;
+    }
+    return ckpt.selected_spec_mode == mode;
 }
 
 bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
