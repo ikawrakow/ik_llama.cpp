@@ -245,6 +245,8 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         k_data = k_f32.get();
     }
 
+    CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+
     for (int istep = 0; istep < nstep; ++istep) {
         int first = istep*max_rows;
         int last  = std::min(first + max_rows, int(q->ne[2]));
@@ -261,16 +263,16 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
             ggml_cuda_op_mul_mat_q(ctx, k->type, args);
             CUDA_CHECK(cudaGetLastError());
         } else {
-            // I wonder if it makes sense to use CUBLAS. If we did simple dot products we could fuse the
-            // relu, mul, sum_rows all in one kernel, avoiding the k*q intermediate result.
             const float alpha = 1.0f;
             const float beta = 0.0f;
-            CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
-            CUBLAS_CHECK(cublasSgemm(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
+            CUBLAS_CHECK(cublasGemmEx(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
-                    &alpha,     k_data,                k_ld,
-                       (const float *)q_data, q->ne[0],
-                    &beta,      kq.get(),     k->ne[1]));
+                    &alpha, k_data,       CUDA_R_32F, k_ld,
+                        (const float *)q_data,  CUDA_R_32F, q->ne[0],
+                    &beta,  kq.get(),     CUDA_R_32F, k->ne[1],
+                    //CUBLAS_COMPUTE_32F_FAST_TF32, // This makes no difference on the RTX-3090, so commenting out for now
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         }
         if (m->type == GGML_TYPE_F32) {
             k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const float *)m_data,
