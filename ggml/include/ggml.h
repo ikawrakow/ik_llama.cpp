@@ -728,6 +728,7 @@ extern "C" {
         GGML_OP_MASK_TO_IDX,
         GGML_OP_LATENT_ATTN,
         GGML_OP_DS4_COMP,
+        GGML_OP_CSA_COMPRESS,
 
         GGML_OP_COUNT,
     };
@@ -752,6 +753,7 @@ extern "C" {
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_SOFTPLUS,
         GGML_UNARY_OP_SQRT_SOFTPLUS,
+        GGML_UNARY_OP_ROUND_E4M3,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -1258,6 +1260,13 @@ extern "C" {
             struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_sqrt_softplus(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    // Step-5: official e4m3 activation round (kernel.py:501) -- F32 -> BF16 (RNE) ->
+    // E4M3FN (RN, satfinite) widened back to F32; applied to the indexer q/k before the
+    // score matmul. F32 in/out so it composes with the rest of the F32 graph.
+    GGML_API struct ggml_tensor * ggml_round_e4m3(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
@@ -2390,7 +2399,8 @@ extern "C" {
     };
 
     enum ggml_scale_flag {
-        GGML_SCALE_FLAG_ALIGN_CORNERS = (1 << 8)
+        GGML_SCALE_FLAG_ALIGN_CORNERS = (1 << 8),
+        GGML_SCALE_FLAG_ANTIALIAS     = (1 << 9),
     };
 
     // nearest interpolate
@@ -2468,10 +2478,30 @@ extern "C" {
             struct ggml_tensor  * b,
             float                 c);
 
+    // pen <= 0: hard cliff -- non-topk cells get -INF before the dense mask is added.
+    // pen  > 0: soft penalty -- non-topk cells get -pen instead (the dense mask still forces
+    //            -INF on future/padding cells; visible non-selected keys keep their true
+    //            attention-logit ordering, just shifted by pen).
     GGML_API struct ggml_tensor * ggml_indexer_mask(
             struct ggml_context * ctx,
             struct ggml_tensor  * mask,
-            struct ggml_tensor  * topk);
+            struct ggml_tensor  * topk,
+            float                 pen);
+
+    // Step-5 own-region force-append: same as ggml_indexer_mask, plus cells where force
+    // > 0.5 are unmasked (written 0, same value the topk loop stores) in addition to the
+    // topk indices -- official semantics: the query token's own region is EXCLUDED from top-k
+    // competition (a -BIG band added graph-side to the topk's causal seed) and FORCE-APPENDED
+    // after selection (kernel.py _append_current_region_kernel). force: F32 tensor with the
+    // mask's {n_kv, n_tok} layout (row i matches topk column i), built graph-side from the
+    // dense causal mask (own cell = max visible cell of the column); NULL = plain
+    // ggml_indexer_mask behavior.
+    GGML_API struct ggml_tensor * ggml_indexer_mask_own(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk,
+            struct ggml_tensor  * force,
+            float                 pen);
 
 
     // sort rows
@@ -2701,6 +2731,32 @@ extern "C" {
             struct ggml_tensor  * blk_idx,
             enum ggml_unary_op    op,
             int                   n_top_k);
+
+    // Step-5 CSA region compress (fused): per-(region, dim) softmax(z)-weighted mean of the
+    // proxy keys over each region's tokens -- the official semantics of
+    // _official/inference/kernel.py:_csa_compress_regions_kernel, one (region, head) program
+    // there, one (region, dim) thread here (the softmax/sum axis is the region's tokens only;
+    // never across heads/regions/dims).
+    //
+    //   z   : [head_size, n_kv] (F16 or F32) raw per-dim softmax logits z_td from the kz_l cache
+    //   k   : [head_size, n_kv, 1] F32 proxy keys (post-rope indexer_k_b)
+    //   vis : [n_kv, 1] F32 0/1 slot validity (padded cells get z - 1e30 pre-softmax, so their
+    //         weight is exp(-1e30 - max) == 0; partial blocks still summarize)
+    //   B   : region size (HF region_block_size = 8); requires n_kv % B == 0 (slot-aligned
+    //         blocks, enforced upstream)
+    //   round_e4m3 : 0 = plain F32 summary, 1 = the official double round
+    //         F32 -> BF16 (RNE) -> E4M3 (RN, satfinite) widened back to F32 (kernel.py:345 --
+    //         the E4M3 bytes are what selection consumes; widening to F32 is byte-equivalent
+    //         to the reference's E4M3 -> bf16 widen before the score matmul, kernel.py:2136)
+    //
+    // Output: [head_size, n_kv/B] F32, out[d, b] = summary of block b at dim d.
+    GGML_API struct ggml_tensor * ggml_csa_compress(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * z,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * vis,
+            int                   B,
+            int                   round_e4m3);
 
     // Sinkhorn normalization of a flat [S*S, T] batch of S x S matrices into
     // doubly-stochastic form: softmax over columns, then column normalization,

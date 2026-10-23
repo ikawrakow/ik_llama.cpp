@@ -22,6 +22,7 @@
 #include <sstream>
 #include <cstdlib>
 #include <cerrno>
+#include <unistd.h>
 #include <chrono>
 #include <string>
 
@@ -312,6 +313,13 @@ static void process_logits(std::ostream& out, int n_vocab, const float * logits,
         w.join();
     }
     out.write((const char *)log_probs.data(), (size_t)n_token*nv*sizeof(uint16_t));
+    if (!out) {
+        fprintf(stderr, "%s: FATAL: failed writing %zu log-prob bytes to logits file (stream fail/bad state, errno=%d: %s). "
+                "Continuing would silently drop every subsequent write — aborting now so the truncation point is exact.\n",
+                __func__, (size_t)n_token*nv*sizeof(uint16_t), errno, strerror(errno));
+        fflush(stderr);
+        exit(1);
+    }
 }
 
 struct kl_divergence_result {
@@ -584,16 +592,27 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     const bool add_bos = llama_should_add_bos_token(llama_get_model(ctx));
     GGML_ASSERT(llama_add_eos_token(llama_get_model(ctx)) != 1);
 
-    std::ofstream logits_stream;
+    std::fstream logits_stream;
+    bool     logits_resume      = false;
+    uint32_t stored_n_ctx       = 0;
+    int      stored_n_vocab     = 0;
+    int      stored_n_chunk     = 0;
+    int      logits_skip        = 0; // chunks already complete on disk (resume)
     if (!params.logits_file.empty()) {
-        logits_stream.open(params.logits_file.c_str(), std::ios::binary);
-        if (!logits_stream.is_open()) {
-            fprintf(stderr, "%s: failed to open %s for writing\n", __func__, params.logits_file.c_str());
-            return {};
-        }
         fprintf(stderr, "%s: saving all logits to %s\n", __func__, params.logits_file.c_str());
-        logits_stream.write("_logits_", 8);
-        logits_stream.write(reinterpret_cast<const char *>(&n_ctx), sizeof(n_ctx));
+        std::ifstream probe(params.logits_file.c_str(), std::ios::binary);
+        if (probe.is_open()) {
+            char check[9]; check[8] = 0;
+            probe.read(check, 8);
+            probe.read((char *)&stored_n_ctx,   sizeof(stored_n_ctx));
+            probe.read((char *)&stored_n_vocab, sizeof(stored_n_vocab));
+            probe.read((char *)&stored_n_chunk, sizeof(stored_n_chunk));
+            logits_resume = !probe.fail() && strncmp(check, "_logits_", 8) == 0;
+            if (!logits_resume) {
+                fprintf(stderr, "%s: warning: %s exists but is not a valid logits file; it will be overwritten\n",
+                        __func__, params.logits_file.c_str());
+            }
+        }
     }
 
     auto tim1 = std::chrono::high_resolution_clock::now();
@@ -646,10 +665,56 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
 
     std::vector<uint16_t> log_probs;
     if (!params.logits_file.empty()) {
-        logits_stream.write((const char *)&n_vocab, sizeof(n_vocab));
-        logits_stream.write((const char *)&n_chunk, sizeof(n_chunk));
-        logits_stream.write((const char *)tokens.data(), (size_t)n_chunk*n_ctx*sizeof(tokens[0]));
         const int nv = 2*((n_vocab + 1)/2) + 4;
+        const size_t per_chunk = (size_t)(n_ctx - 1 - n_ctx/2) * nv * sizeof(uint16_t);
+        if (logits_resume) {
+            if (stored_n_ctx != (uint32_t)n_ctx || stored_n_vocab != n_vocab || stored_n_chunk != n_chunk) {
+                fprintf(stderr, "%s: error: %s header mismatch (ctx %u vs %d, vocab %d vs %d, chunks %d vs %d); remove the file or point --save-all-logits at a new name\n",
+                        __func__, params.logits_file.c_str(), stored_n_ctx, n_ctx, stored_n_vocab, n_vocab, stored_n_chunk, n_chunk);
+                exit(1);
+            }
+            logits_stream.open(params.logits_file.c_str(), std::ios::in | std::ios::out | std::ios::binary);
+            if (!logits_stream.is_open()) {
+                fprintf(stderr, "%s: failed to reopen %s for append\n", __func__, params.logits_file.c_str());
+                return {};
+            }
+            logits_stream.seekg(0, std::ios::end);
+            const size_t header_bytes = 8 + sizeof(uint32_t) + 2*sizeof(int) + (size_t)n_chunk*n_ctx*sizeof(tokens[0]);
+            const size_t fsize = (size_t)logits_stream.tellg();
+            const size_t n_have = fsize > header_bytes ? (fsize - header_bytes) / per_chunk : 0;
+            // resume at a group boundary; any partial trailing group is discarded
+            logits_skip = int(n_have / n_seq) * n_seq;
+            const size_t valid_bytes = header_bytes + (size_t)logits_skip * per_chunk;
+            if (valid_bytes != fsize) {
+                fprintf(stderr, "%s: warning: truncating %zu partial trailing bytes from %s\n",
+                        __func__, fsize - valid_bytes, params.logits_file.c_str());
+                if (truncate(params.logits_file.c_str(), (off_t)valid_bytes) != 0) {
+                    fprintf(stderr, "%s: error: truncate failed: %s\n", __func__, strerror(errno));
+                    exit(1);
+                }
+                logits_stream.close();
+                logits_stream.open(params.logits_file.c_str(), std::ios::in | std::ios::out | std::ios::binary);
+            }
+            logits_stream.seekp(valid_bytes);
+            logits_stream.flush();
+            fprintf(stderr, "%s: RESUME: %d chunks already on disk, skipping ahead to chunk %d\n",
+                    __func__, logits_skip, logits_skip + 1);
+        } else {
+            logits_stream.open(params.logits_file.c_str(), std::ios::out | std::ios::trunc | std::ios::binary);
+            if (!logits_stream.is_open()) {
+                fprintf(stderr, "%s: failed to open %s for writing\n", __func__, params.logits_file.c_str());
+                return {};
+            }
+            logits_stream.write("_logits_", 8);
+            logits_stream.write((const char *)&n_ctx, sizeof(n_ctx));
+            logits_stream.write((const char *)&n_vocab, sizeof(n_vocab));
+            logits_stream.write((const char *)&n_chunk, sizeof(n_chunk));
+            logits_stream.write((const char *)tokens.data(), (size_t)n_chunk*n_ctx*sizeof(tokens[0]));
+        }
+        if (!logits_stream) {
+            fprintf(stderr, "%s: error: logits stream in failed state after setup\n", __func__);
+            exit(1);
+        }
         log_probs.resize((size_t)n_ctx * nv);
     }
 
@@ -674,6 +739,10 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
         const int n_seq_batch = std::min(n_seq, n_chunk - i);
 
         const auto t_start = std::chrono::high_resolution_clock::now();
+
+        if (i < logits_skip) {
+            continue; // already on disk from a previous run (resume)
+        }
 
         // clear the KV cache
         llama_kv_cache_clear(ctx);
@@ -755,6 +824,7 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
             count += n_ctx - first - 1;
 
             // perplexity is e^(average negative log-likelihood)
+            if (count > 0) { // resumed/skipped chunks contribute nothing yet
             if (params.ppl_output_type == 0) {
                 printf("[%d]%.4lf,", i + seq + 1, std::exp(nll / count));
             } else {
@@ -762,6 +832,9 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
                 double av2 = nll2/count - av*av;
                 if (av2 > 0) av2 = sqrt(av2/(count-1));
                 printf("%8d  %.4lf  %4lf  %4lf\n", i*n_ctx, std::exp(nll / count), av, av2);
+            }
+            } else {
+                printf("[%d]--,");
             }
         }
         fflush(stdout);
@@ -776,9 +849,31 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     nll2 -= nll * nll;
     if (nll2 > 0) {
         nll2 = sqrt(nll2/(count-1));
-        printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n", n_chunk, n_ctx, ppl, nll2*ppl);
+        printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n",
+               count/(n_ctx - first - 1), n_ctx, ppl, nll2*ppl);
+        if (logits_skip > 0) {
+            printf("(resumed run: PPL printed here covers chunks %d-%d only, not a full-run PPL)\n",
+                   logits_skip + 1, n_chunk);
+        }
     } else {
         printf("Unexpected negative standard deviation of log(prob)\n");
+    }
+
+    if (!params.logits_file.empty()) {
+        logits_stream.flush();
+        logits_stream.seekg(0, std::ios::end);
+        const int nv2 = 2*((n_vocab + 1)/2) + 4;
+        const size_t per_chunk2 = (size_t)(n_ctx - 1 - n_ctx/2) * nv2 * sizeof(uint16_t);
+        const size_t header_bytes2 = 8 + sizeof(uint32_t) + 2*sizeof(int) + (size_t)n_chunk*n_ctx*sizeof(tokens[0]);
+        const size_t fsize2 = (size_t)logits_stream.tellg();
+        const size_t expect2 = header_bytes2 + (size_t)n_chunk * per_chunk2;
+        const int n_have2 = fsize2 > header_bytes2 ? int((fsize2 - header_bytes2)/per_chunk2) : 0;
+        if (fsize2 == expect2) {
+            fprintf(stderr, "%s: logits file COMPLETE: %zu bytes, %d/%d chunks\n", __func__, fsize2, n_chunk, n_chunk);
+        } else {
+            fprintf(stderr, "%s: logits file INCOMPLETE: %zu bytes, %d/%d chunks (expected %zu) -- DO NOT USE AS A KL-DIVERGENCE BASE\n",
+                    __func__, fsize2, n_have2, n_chunk, expect2);
+        }
     }
 
     llama_batch_free(batch);

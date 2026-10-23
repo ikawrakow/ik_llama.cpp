@@ -740,7 +740,7 @@ extern "C" {
     // Returns true if the model is a Gemma 4 MTP assistant (external frozen-KV speculative drafter)
     LLAMA_API bool llama_model_is_gemma4_mtp_assistant(const struct llama_model * model);
 
-    LLAMA_API bool llama_model_is_step35(const struct llama_model * model);
+    LLAMA_API bool llama_model_is_step5(const struct llama_model * model);
 
     LLAMA_API bool llama_model_is_qwen35_family(const struct llama_model * model);
 
@@ -923,6 +923,16 @@ extern "C" {
                     llama_seq_id   seq_id,
                        llama_pos   p0,
                        llama_pos   p1);
+
+    // Hard-clear the sequence and anchor the compacted SWA window so the next write lands
+    // at `pos` (pos_base_swa := pos, live := 0). For --swa-compress caches that must rejoin
+    // a sequence mid-stream after their old rows were compacted away (e.g. a speculative
+    // companion context whose main cache rewound below the companion's rewind floor).
+    // Non-compacted caches behave like llama_kv_cache_seq_rm(ctx, seq_id, -1, -1).
+    LLAMA_API bool llama_kv_cache_seq_swa_rebase(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id,
+                       llama_pos   pos);
 
     // Copy all tokens that belong to the specified sequence to another sequence
     // Note that this does not allocate extra KV cache memory - it simply assigns the tokens to the new sequence
@@ -1672,7 +1682,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
 
     LLAMA_API uint32_t llama_model_mtp_feature_width(const struct llama_model * model);
 
-    LLAMA_API bool llama_model_step35_has_nextn_weights(const struct llama_model * model);
+    LLAMA_API bool llama_model_step5_has_nextn_weights(const struct llama_model * model);
 
     // Set which, if any, MTP operation the context will use
     LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);

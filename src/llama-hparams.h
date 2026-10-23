@@ -146,6 +146,9 @@ struct llama_hparams {
     uint32_t indexer_top_k      = 0;
     // k-pool indexer: tokens per compressed key cell (GGUF attention.indexer.kpool); 0 = plain per-token DSA (as in GLM-5.2)
     uint32_t indexer_block_size = 0;
+    // Step-5 sparse-GQA indexer extras (STEP5): mirrors the HF sparse_config fields
+    uint32_t indexer_rope_dim  = 0; // sparse_config.sparse_indexer_rope_dim (32)
+    uint32_t indexer_csa_block = 0; // sparse_config.region_block_size (8): CSA block-compress
     // GLM-5.2 IndexShare: per-layer full/shared indexer map. "full" layers compute their own lightning-
     // indexer top-k; "shared" layers reuse the previous full layer's top-k. Populated from GGUF
     // indexer_types metadata if present, else derived from the GLM-5.2 config rule at load time.

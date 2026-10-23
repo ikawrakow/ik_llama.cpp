@@ -7,6 +7,19 @@
 
 #include "unary.cuh"
 
+#include <cuda_fp8.h>
+
+// Step-5: official e4m3 activation round (kernel.py:501) -- same double round as the
+// csa_compress store epilogue (csa_compress.cu:csa_round_bf16_e4m3).
+static __device__ __forceinline__ float op_round_e4m3(float x) {
+    const __nv_bfloat16 bf = __float2bfloat16_rn(x);
+    const __nv_fp8_storage_t fp8 = __nv_cvt_bfloat16raw_to_fp8(
+            __nv_bfloat16_raw(__bfloat16_as_ushort(bf)), __NV_SATFINITE, __NV_E4M3);
+    __nv_fp8_e4m3 q;
+    q.__x = fp8;
+    return (float) q;
+}
+
 static __global__ void gelu_f32(const float * x, float * dst, const int k) {
     const float GELU_COEF_A    = 0.044715f;
     const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
@@ -952,6 +965,10 @@ void ggml_cuda_op_scaled_softplus(ggml_backend_cuda_context & ctx, ggml_tensor *
 
 void ggml_cuda_op_sqrt_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_sqrt_softplus>(ctx, dst);
+}
+
+void ggml_cuda_op_round_e4m3(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_round_e4m3>(ctx, dst);
 }
 
 // === gated ops

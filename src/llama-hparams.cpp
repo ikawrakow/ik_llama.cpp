@@ -1951,12 +1951,20 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_STEP5:
         case LLM_ARCH_STEP35:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                // Step-5 sparse-GQA indexer k_norm is a (non-RMS) LayerNorm built via LLM_NORM,
+                // which uses hparams.f_norm_eps in ggml_norm(). The GGUF only carries the RMS eps,
+                // so f_norm_eps stays 0 and CPU ggml_norm aborts (GGML_ASSERT(eps > 0)). On CUDA
+                // the kernel does not assert (eps=0 is numerically tolerable), so this only bites
+                // the CPU path. Mirror the RMS eps so the indexer LayerNorm gets a valid epsilon
+                // on all backends (same precedent as the GLM-DSA/DeepSeek4 case above).
+                if (hparams.f_norm_eps <= 0.0f) hparams.f_norm_eps = hparams.f_norm_rms_eps;
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
                 if (hparams.nextn_predict_layers > hparams.n_layer) {
-                    throw std::runtime_error(format("step35.nextn_predict_layers (%u) exceeds block_count (%u)",
+                    throw std::runtime_error(format("step5.nextn_predict_layers (%u) exceeds block_count (%u)",
                             hparams.nextn_predict_layers, hparams.n_layer));
                 }
                 hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
@@ -1967,7 +1975,7 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
-                // Step35 uses sigmoid gating by default (if not set in GGUF)
+                // Step5 uses sigmoid gating by default (if not set in GGUF)
                 if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {
                     hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
                 }
@@ -1975,8 +1983,12 @@ void llm_load_hparams(
                 bool have_rfb_train_swa = ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
                 ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
                 if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER, hparams.rope_dim_per_layer, hparams.n_layer, false)) {
+                    // Mainline-style files: rope.dimension_count = full-attn rotary,
+                    // rope.dimension_count_swa = SWA-layer rotary (Step-5: 64 / 192).
+                    uint32_t n_rot_swa_file = hparams.n_rot;
+                    ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT_SWA, n_rot_swa_file, false);
                     for (int i = 0; i < hparams.n_layer; ++i) {
-                        hparams.rope_dim_per_layer[i] = hparams.swa_layers[i] ? hparams.n_rot : hparams.n_rot/2;
+                        hparams.rope_dim_per_layer[i] = hparams.swa_layers[i] ? n_rot_swa_file : hparams.n_rot;
                     }
                 }
                 // The following two parameters: one of the two versions must be present in the GGUF
@@ -1986,7 +1998,7 @@ void llm_load_hparams(
                 if (!ml.get_key_or_arr(LLM_KV_SWIGLU_LIMITS_SHARED, hparams.swiglu_limits_shared, hparams.n_layer, false)) {
                      ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,   hparams.swiglu_limits_shared, hparams.n_layer, true);
                 }
-                // Optional: Step35-only gating for applying rope scaling (HF: yarn_only_types).
+                // Optional: Step5-only gating for applying rope scaling (HF: yarn_only_types).
                 // Default is 3 (apply on all layers) if the key is absent.
                 //ml.get_key(format("%s.rope.scaling.apply_mask", ml.get_arch_name().c_str()),
                 //    hparams.rope_scaling_apply_mask, false);
@@ -1998,6 +2010,36 @@ void llm_load_hparams(
                 hparams.has_rope_freq_base_per_layer = ml.get_key_or_arr(LLM_KV_ROPE_FREQ_BASE_PER_LAYER,
                     hparams.rope_freq_base_per_layer, hparams.n_layer, false);
                 GGML_ASSERT(hparams.has_rope_freq_base_per_layer || have_rfb_train_swa);
+                // Step-5 sparse-GQA indexer (full-attn layers). The converter carries
+                // the tensors but emits no indexer GGUF keys, so derive proxy_dim /
+                // indexer head count from tensor shapes and mirror the HF
+                // sparse_config constants (topk, CSA block size, indexer rope dim).
+                // Absent on dense fallback files (stale Q8_0, mini) -> stays zeroed.
+                {
+                    int il_full = -1;
+                    for (uint32_t il = 0; il < hparams.n_layer_kv_from_start; ++il) {
+                        if (!hparams.swa_layers[il] &&
+                                ml.get_tensor_meta(format("blk.%u.indexer.q.weight", il).c_str()) != nullptr) {
+                            il_full = (int) il;
+                            break;
+                        }
+                    }
+                    if (il_full >= 0) {
+                        const auto * q_norm_meta = ml.get_tensor_meta(format("blk.%d.indexer.q_norm.weight", il_full).c_str());
+                        const auto * w_meta      = ml.get_tensor_meta(format("blk.%d.indexer.w.weight", il_full).c_str());
+                        GGML_ASSERT(q_norm_meta && w_meta);
+                        hparams.indexer_head_size = q_norm_meta->ne[0]; // proxy_dim (256)
+                        hparams.indexer_n_head    = w_meta->ne[1];      // 16 indexer q heads
+                        hparams.indexer_top_k     = 512;                // HF sparse_config.topk
+                        hparams.indexer_rope_dim  = 32;                 // HF sparse_config.sparse_indexer_rope_dim
+                        hparams.indexer_csa_block = 8;                  // HF sparse_config.region_block_size
+                        for (uint32_t il = 0; il < hparams.n_layer_kv_from_start; ++il) {
+                            // full-attn layers carry indexer weights and compute their own top-k
+                            hparams.indexer_is_full[il] = !hparams.swa_layers[il] &&
+                                ml.get_tensor_meta(format("blk.%u.indexer.q.weight", il).c_str()) != nullptr;
+                        }
+                    }
+                }
             } break;
         case LLM_ARCH_LAGUNA:
             {
