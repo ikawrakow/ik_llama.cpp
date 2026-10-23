@@ -121,6 +121,7 @@ struct server_slot {
 
     llama_pos checkpoint_pos = -1;
     bool do_checkpoint = false;
+    bool do_rewind_chekpoint = false;
     bool image_just_processed = false;
 
     // sampling

@@ -574,7 +574,7 @@ void server_slot::reset() {
     ga_i = 0;
     n_past_se = 0;
     chat_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
-
+    llama_rewind_ckpt_discard(ctx, {LLAMA_CHECKPOINT_REWIND, -1}, id);
     logit_bias.clear();
     token_buffer.clear();
     rewind_count = 0;
@@ -585,10 +585,10 @@ void server_slot::reset() {
     checkpoint_pos = -1;
     image_just_processed = false;
     do_checkpoint = false;
+    do_rewind_chekpoint = false;
     if (spec != nullptr) {
         common_speculative_clear_sequence(spec, id);
     }
-
     positional_bans.clear();
     ban_phrases.clear();
     ban_regex.clear();
@@ -1893,15 +1893,6 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
          llama_kv_cache_is_compacted(slot.ctx));
 
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
-        if (slot.n_buffer != 0 && params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
-            params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
-            params_base.speculative.stages.clear();
-            params_base.has_mtp = false;
-            llama_spec_ckpt_discard(slot.ctx);
-            LLAMA_LOG_WARN("banned strings cannot be used together with speculative decoding with recurrent model, speculative decoding will be disabled.\n");
-        }
-    }
-    if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
             LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
@@ -2205,6 +2196,7 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
         clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
         slot.checkpoint_pos = -1;
         slot.do_checkpoint = false;
+        slot.do_rewind_chekpoint = false;
         if (slot.ctx_sampling != nullptr) {
             common_sampler_reset(slot.ctx_sampling);
         }
@@ -4395,7 +4387,12 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         slot.do_checkpoint = true;
                         break;
                     }
-
+                    if (slot.n_prompt_tokens - slot.n_past_prompt == 1) {
+                        if (slot.n_buffer > 0 && llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+                            slot.do_rewind_chekpoint = true;
+                            break;
+                        }
+                    }
                 }
                 slot.prompt_batch_i0 = prompt_batch_i0;
                 slot.prompt_batch_i1 = batch.n_tokens;
@@ -4763,6 +4760,13 @@ inline int32_t check_ban_phrase(server_slot& slot) {
     return -1;
 }
 
+static inline void create_rewind_checkpoint(server_slot & slot) {
+    if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+        llama_rewind_ckpt_save(slot.ctx, { LLAMA_CHECKPOINT_REWIND, slot.n_past }, slot.id, slot.n_buffer);
+    }
+}
+
+
 void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.rewind_count++;
 
@@ -4817,7 +4821,7 @@ void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
 
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
         auto n_past = slot.cache_tokens.pos_next(slot.n_past);
-        auto result = llama_spec_ckpt_restore(slot.ctx, slot.id, n_past, 0); // restore recurrent layers
+        auto result = llama_spec_ckpt_restore(slot.ctx, { LLAMA_CHECKPOINT_REWIND, n_past }, slot.id, n_past, 0); // restore recurrent layers
         if (!result) {
             LLAMA_LOG_ERROR("--- Restoring checkpoint for string ban failed. \n");
         }
@@ -4854,9 +4858,9 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     }
 
     bool allow_rewind = true;
-    if (slot.n_decoded==1 && llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+    if (slot.n_decoded==1) {
         // take a snapshat before generation
-        llama_rewind_ckpt_save(slot.ctx, slot.id, slot.n_buffer);
+        create_rewind_checkpoint(slot);
     }
     if (ban_pos >= 0) {
         if (slot.rewind_count_max == -1) {
@@ -4895,13 +4899,15 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
             // send 1 token from the front (FIFO)
             send_token_results(slot.token_buffer, slot, 1);
         }
+        create_rewind_checkpoint(slot);
         if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
-            llama_rewind_ckpt_save(slot.ctx, slot.id, slot.n_buffer);
+            llama_rewind_ckpt_discard(slot.ctx, { LLAMA_CHECKPOINT_REWIND,  slot.n_past - (int32_t)slot.n_buffer }, slot.id);
         }
     }
     else {
         // buffer the result, wait for more tokens to validate string
         slot.sampled = result.tok;
+        create_rewind_checkpoint(slot);
     }
 }
 
@@ -4923,6 +4929,7 @@ void server_context::update_allowlist_state(server_slot& slot) {
         pos = slot.generated_text.find(kw, pos + 1);
     }
 }
+
 
 void server_context::process_batch_tokens(int32_t & n_batch) {
     for (int32_t i = 0; i < batch.n_tokens; i += n_batch) {
@@ -5019,8 +5026,12 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 if (slot.command == SLOT_COMMAND_LOAD_PROMPT) {
                     if (slot.do_checkpoint) {
                         create_checkpoint(slot, true);
+                       
                     } else {
                         create_checkpoint_at_interval(slot);
+                    }
+                    if (slot.do_rewind_chekpoint) {
+                        create_rewind_checkpoint(slot);
                     }
                 }
                 continue; // continue loop of slots
@@ -5106,6 +5117,13 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 // create checkpoint after prompt processing ends
                 if (params_base.ctx_checkpoints_tolerance<=0 && params_base.do_checkpoint) {
                     create_checkpoint(slot, true);
+                    //if (llama_model_has_recurrent(llama_get_model(slot.ctx)) && slot.n_buffer > 0) {
+                    //    // take a snapshat before generation
+                    //    auto n_past = slot.cache_tokens.pos_next(slot.n_past);
+                    //    int32_t pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
+                    //    LLAMA_LOG_DEBUG("n_past:%d, pos_max: %d\n", slot.n_past, pos_max);
+                    //    llama_rewind_ckpt_save(slot.ctx, { LLAMA_CHECKPOINT_REWIND, pos_max }, slot.id, slot.n_buffer);
+                    //}
                 }
             }
 
