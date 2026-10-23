@@ -2208,6 +2208,7 @@ class GGMLQuantizationType(IntEnum):
     IQ4_KS_R4 = 344
     IQ4_KS_R16= 345
     IQ3_KS_R16= 346
+    IQ5_KS_R16= 347
     IQ5_KS_R4 = 352
     Q8_KV_R8  = 398
     Q8_K_R8   = 399
@@ -2309,6 +2310,9 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ5_K_R4      = 341 #except 1d tensors
     MOSTLY_IQ4_KS_R4     = 345 #except 1d tensors
     MOSTLY_IQ5_KS_R4     = 350 #except 1d tensors
+    MOSTLY_IQ4_KS_R16    = 351 #except 1d tensors
+    MOSTLY_IQ3_KS_R16    = 352 #except 1d tensors
+    MOSTLY_IQ5_KS_R16    = 353 #except 1d tensors
     MOSTLY_Q8_KV_R8      = 398 #except 1d tensors
     MOSTLY_Q8_K_R8       = 399 #except 1d tensors
 
@@ -2450,6 +2454,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ5_KS_R4   : ( 256,  168),
     GGMLQuantizationType.IQ3_KS_R16  : (  32,   13),
     GGMLQuantizationType.IQ4_KS_R16  : (  32,   17),
+    GGMLQuantizationType.IQ5_KS_R16  : (  32,   21),
     GGMLQuantizationType.Q8_KV_R8    : (  32,   32),
     GGMLQuantizationType.Q8_K_R8     : ( 256,  258),
 }
@@ -2479,6 +2484,7 @@ GGML_ROW_META_SIZES: dict[GGMLQuantizationType, int] = {
     GGMLQuantizationType.Q8_K16      : 20,
     GGMLQuantizationType.IQ3_KS_R16  :  4,
     GGMLQuantizationType.IQ4_KS_R16  :  4,
+    GGMLQuantizationType.IQ5_KS_R16  :  4,
 }
 
 
