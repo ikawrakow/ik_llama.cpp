@@ -933,6 +933,7 @@ struct ggml_backend_cuda_context {
     bool  fabsum = false;      // opt-in: bound the fp16 accumulation error in the tile FA kernel
 #ifdef USE_CUDA_GRAPH
     bool use_cuda_graph = true;
+    int  max_graphs = 0;
 
     ggml_cuda_graph * cur_graph = nullptr;
 

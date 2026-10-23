@@ -268,6 +268,10 @@ struct common_params_speculative {
 
     llama_context_params cparams_dft; // these are the parameters for the draft llama_context
 
+    // storage for the pointers in cparams_dft
+    std::string cuda_params;
+    std::vector<std::pair<int,int>> offload_policy;
+
     // draft affinity from --draft-params; empty = inherit the target
     std::vector<int32_t> cpu_affinity;
     bool cpu_affinity_configured = false; // a draft affinity was requested
