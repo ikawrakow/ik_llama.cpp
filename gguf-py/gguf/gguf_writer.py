@@ -962,6 +962,30 @@ class GGUFWriter:
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
 
+    def add_kda_head_dim(self, value: int) -> None:
+        self.add_uint32(f"{self.arch}.kda.head_dim", value)
+
+    def add_kda_gate_lower_bound(self, value: float) -> None:
+        self.add_float32(f"{self.arch}.kda.gate_lower_bound", value)
+
+    def add_latent_norm_rms_eps(self, value: float) -> None:
+        self.add_float32(f"{self.arch}.attention.latent_norm_rms_epsilon", value)
+
+    def add_activation_situ_beta(self, value: float) -> None:
+        self.add_float32(f"{self.arch}.activation.situ_beta", value)
+
+    def add_activation_situ_linear_beta(self, value: float) -> None:
+        self.add_float32(f"{self.arch}.activation.situ_linear_beta", value)
+
+    def add_hyper_connection_count(self, value: int) -> None:
+        self.add_uint32(f"{self.arch}.hyper_connection.count", value)
+
+    def add_hyper_connection_epsilon(self, value: float) -> None:
+        self.add_float32(f"{self.arch}.hyper_connection.epsilon", value)
+
+    def add_hyper_connection_magnitude(self, value: float) -> None:
+        self.add_float32(f"{self.arch}.hyper_connection.magnitude", value)
+
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
 

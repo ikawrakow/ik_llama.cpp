@@ -63,6 +63,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_K2_HORIZON      = 52,
     LLAMA_VOCAB_PRE_TYPE_MINICPM5        = 53,
     LLAMA_VOCAB_PRE_TYPE_FLINT           = 54,
+    LLAMA_VOCAB_PRE_TYPE_RAON            = 55,
 };
 
 struct LLM_KV;

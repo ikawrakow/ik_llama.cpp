@@ -20,6 +20,7 @@ using llm_build_cb = std::function<void(struct ggml_tensor * cur, const char * n
 
 enum llm_ffn_op_type {
     LLM_FFN_SILU,
+    LLM_FFN_SITU,
     LLM_FFN_GELU,
     LLM_FFN_RELU,
     LLM_FFN_RELU_SQR,
@@ -437,6 +438,7 @@ struct llm_build_context {
     ggml_cgraph * build_bailingmoe2();
     ggml_cgraph * build_bailingmoe3();
     ggml_cgraph * build_glm5next();
+    ggml_cgraph * build_raon1();
 
     ggml_cgraph * build_glm5next_mtp();
 

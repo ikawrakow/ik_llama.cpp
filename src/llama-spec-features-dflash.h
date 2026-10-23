@@ -84,6 +84,7 @@ int32_t llama_model_dflash_block_size(const struct llama_model * model);
 int32_t llama_model_dflash_mask_token_id(const struct llama_model * model);
 int32_t llama_model_dflash_n_target_layers(const struct llama_model * model);
 int32_t llama_model_dflash_n_target_features(const struct llama_model * model);
+int32_t llama_model_dflash_target_streams(const struct llama_model * model);
 int32_t llama_model_dflash_target_layer_ids(const struct llama_model * model, int32_t * layer_ids, int32_t capacity);
 int32_t llama_model_dflash_target_mask_token_id(const struct llama_model * model);
 bool llama_model_dflash_has_dspark_head(const struct llama_model * model);

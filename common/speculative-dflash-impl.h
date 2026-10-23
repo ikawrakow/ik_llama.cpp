@@ -195,8 +195,11 @@ struct common_speculative_state_dflash : public common_speculative_state {
         const int32_t target_vocab_size = llama_vocab_n_tokens(vocab_tgt);
         const int32_t target_hidden_size = llama_model_n_embd(model_tgt);
         const int32_t draft_hidden_size = llama_model_n_embd(model_dft);
+        const int32_t target_streams = llama_model_dflash_target_streams(model_tgt);
         const int32_t target_mask_token_id = llama_model_dflash_target_mask_token_id(model_tgt);
-        const int32_t expected_n_target_features = target_hidden_size > 0 ? target_hidden_size * n_target_layers : 0;
+        const int32_t expected_n_target_features = target_hidden_size > 0
+                ? target_hidden_size * target_streams * n_target_layers
+                : 0;
 
         if (target_mask_token_id != (int32_t) LLAMA_TOKEN_NULL && mask_token_id != target_mask_token_id) {
             LOG_ERR("%s: DFlash mask token mismatch (draft=%d target=%d)\n",
