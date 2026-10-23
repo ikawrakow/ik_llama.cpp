@@ -1650,7 +1650,7 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
             throw std::runtime_error("n_expert_used must be > 0 for QWEN3MOE");
         }
 
-        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, 0, ffn_ctx);
 
     }
     return use_mmap_buffer;
