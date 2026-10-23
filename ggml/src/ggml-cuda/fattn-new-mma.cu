@@ -674,7 +674,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     typedef fattn_mma_f16_config<DKQ, DV> c;
 
 #ifdef CP_ASYNC_AVAILABLE
-    constexpr int nstages = c::nstages_target;
+    constexpr int nstages = use_sparse ? 1 : c::nstages_target;
 #else
     constexpr int nstages = 0;
 #endif // CP_ASYNC_AVAILABLE
@@ -932,7 +932,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             for (int col = 0; col < cols_per_thread; ++col) {
                 const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale[col], KQ_max_scale[col]);
 #pragma unroll
-                for (int i = 0; i < DV/tile_C_VKQ_16::J; ++i) {
+                for (int i = 0; i < (DV/2)/tile_C_VKQ_16::J; ++i) {
 #pragma unroll
                     for (int l0 = 0; l0 < tile_C_VKQ_16::ne; l0 += 2) {
                         VKQ_C_16[i*ntiles/2 + col/2].x[l0 + col % 2] *= KQ_max_scale_h2;
@@ -1068,7 +1068,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     typedef fattn_mma_f16_config<DKQ, DV> c;
 
 #ifdef CP_ASYNC_AVAILABLE
-    constexpr int nstages = c::nstages_target;
+    constexpr int nstages = use_sparse ? 1 : c::nstages_target;
 #else
     constexpr int nstages = 0;
 #endif // CP_ASYNC_AVAILABLE
@@ -1255,7 +1255,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             for (int col = 0; col < cols_per_thread; ++col) {
                 const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale[col], KQ_max_scale[col]);
 #pragma unroll
-                for (int i = 0; i < DV/tile_C_VKQ_16::J; ++i) {
+                for (int i = 0; i < (DV/2)/tile_C_VKQ_16::J; ++i) {
 #pragma unroll
                     for (int l0 = 0; l0 < tile_C_VKQ_16::ne; l0 += 2) {
                         VKQ_C_16[i*ntiles/2 + col/2].x[l0 + col % 2] *= KQ_max_scale_h2;
@@ -2144,7 +2144,8 @@ static void launch_fattn_new_mma(
 }
 
 
-template <int DKQ, int DV, int ncols1, int ncols2, bool use_sparse = false>
+template <int DKQ, int DV, int ncols1, int ncols2, bool use_sparse = false,
+          bool is_mla = (DKQ == 576 && DV == 512) || (DKQ == 320 && DV == 256)>
 static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV = dst;
     const int id = ggml_cuda_get_device();
@@ -2152,7 +2153,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ct
 
     typedef fattn_mma_f16_config<DKQ, DV> c;
 
-    const int nstages = cp_async_available(cc) ? c::nstages_target : 0;
+    const int nstages = cp_async_available(cc) ? (use_sparse ? 1 : c::nstages_target) : 0;
 
     constexpr int ncols         = ncols1 * ncols2;
     //constexpr int ntiles        = DKQ == 512 ? 2 : ncols <= 8 && DKQ < 576 ? 1 : 2; // Number of tiles per warp.
@@ -2161,9 +2162,6 @@ static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ct
     constexpr int nwarps_max_x  = (ncols + cols_per_warp - 1) / cols_per_warp;
     constexpr int nwarps_max_y  = c::nbatch_fa / tile_A::I;
     constexpr int nwarps        = nwarps_max_x*nwarps_max_y <= c::nwarps_max ? nwarps_max_x*nwarps_max_y : c::nwarps_max;
-
-    // the sparse path runs only when V is K
-    constexpr bool is_mla = use_sparse || (DKQ == 576 && DV == 512) || (DKQ == 320 && DV == 256);
 
     const int nbatch_K2      = c::get_nbatch_K2_host     (cc, ncols);
     const int nbatch_V2      = c::get_nbatch_K2_host     (cc, ncols);
@@ -2466,7 +2464,16 @@ bool ggml_cuda_flash_attn_ext_mma_new_sparse(ggml_backend_cuda_context & ctx, gg
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
-    if (!new_mma_available(cc) || Q->ne[1] < 8 || Q->ne[0] != 512 || V->data != K->data) {
+    if (!new_mma_available(cc) || Q->ne[1] < 8) {
+        return false;
+    }
+
+    if (Q->ne[0] == 256 && V->ne[0] == 256) {
+        ggml_cuda_flash_attn_ext_mma_f16_case<256, 256, 1, 16, true, false>(ctx, dst);
+        return true;
+    }
+
+    if (Q->ne[0] != 512 || V->ne[0] != 512 || V->data != K->data) {
         return false;
     }
 
@@ -2475,6 +2482,6 @@ bool ggml_cuda_flash_attn_ext_mma_new_sparse(ggml_backend_cuda_context & ctx, gg
         return false;
     }
 
-    ggml_cuda_flash_attn_ext_mma_f16_case<512, 512, 1, 16, true>(ctx, dst);
+    ggml_cuda_flash_attn_ext_mma_f16_case<512, 512, 1, 16, true, true>(ctx, dst);
     return true;
 }
