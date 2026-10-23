@@ -707,6 +707,7 @@ struct llama_context {
         struct ggml_tensor * win_cells  = nullptr; // I32 [ratio*n_win]   member cells of those blocks
         struct ggml_tensor * win_pos    = nullptr; // I32 [4*n_win]       mrope position of those blocks
         struct ggml_tensor * head_w     = nullptr; // F32 [n_idx_h, n_tokens] all ones; the head sum is unweighted
+        struct ggml_tensor * cut_mask   = nullptr;
     };
     std::vector<qsa_input> inp_qsa;
 

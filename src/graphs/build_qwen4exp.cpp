@@ -345,6 +345,10 @@ static ggml_tensor * qwen4exp_qsa_mask(
             ggml_set_input(t);
             ggml_build_forward_expand(gf, t);
         }
+        auto causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
+        auto cut_mask = ggml_add(ctx0, causal, inp->bias);
+        cb(cut_mask, "qsa_cut_mask", il);
+        inp->cut_mask = cut_mask;
     }
 
     ggml_tensor * k_all = ggml_view_2d(ctx0, kr_cache, idx_dim, n_kv,
@@ -399,23 +403,13 @@ static ggml_tensor * qwen4exp_qsa_mask(
             bctx.ext_factor, bctx.attn_factor, bctx.beta_fast, bctx.beta_slow);
     cb(q, "qsa_q", il);
 
-    // causality and sequence membership come from KQ_mask rather than being rebuilt on the
-    // host; inp->bias carries only what is specific to the block cut
-    ggml_tensor * causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
-    if (causal->type != GGML_TYPE_F32) {
-        causal = ggml_cast(ctx0, causal, GGML_TYPE_F32);
-    }
-    ggml_tensor * cut_mask = ggml_add(ctx0, inp->bias, causal);
-    cb(cut_mask, "qsa_cut_mask", il);
+    auto cut_mask = inp->cut_mask;
+    GGML_ASSERT(cut_mask);
 
     // top-k selects cells, not blocks: every cell carries its own block's pooled key, so the
     // causal mask can still drop cells inside a selected block. The op scores and sorts
     // internally, so the n_kv by n_tokens score matrix is never materialized.
     if (lctx.cparams.fused_idx_topk) {
-        //ggml_tensor * k_cells = ggml_get_rows_ext(ctx0, pooled, inp->cell_blk, true, false);
-        //k_cells = ggml_reshape_3d(ctx0, k_cells, idx_dim, n_kv, 1);
-        //ggml_tensor * fused = ggml_indexer_topk(ctx0, k_cells, q, inp->head_w, cut_mask,
-        //        GGML_UNARY_OP_RELU, width);
         ggml_tensor * fused = ggml_indexer_topk(ctx0, pooled, q, inp->head_w, cut_mask, inp->cell_blk,
                 GGML_UNARY_OP_RELU, width);
         cb(fused, "qsa_top_k", il);
