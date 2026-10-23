@@ -263,17 +263,24 @@ static __device__ void k_fused_mul_mat_vec_q(
             float r;
             if (unary_op == GGML_UNARY_OP_SWIGLU_OAI && !bias_u) {
                 constexpr float alpha = 1.702f;
-                constexpr float limit = 7.0f;
-                g = fminf(g, limit);
-                u = fmaxf(fminf(u, limit), -limit);
-                r = g / (1.0f + expf(-g * alpha)) * (1.0f + u);
+                constexpr float oai_limit = 7.0f;
+                g = fminf(g, oai_limit);
+                u = fmaxf(fminf(u, oai_limit), -oai_limit);
+                g = g / (1.0f + expf(-g * alpha));
+                if (limit > 1e-6f) {
+                    g = fminf(g, limit);
+                }
+                r = g * (1.0f + u);
             } else {
             switch (unary_op) {
                 case GGML_UNARY_OP_SILU:
                     {
                         g = g/(1 + expf(-g));
-                        g = min(g, limit);
-                        r = max(-limit, min(limit, u))*g;
+                        if (limit > 1e-6f) {
+                            g = fminf(g, limit);
+                            u = fmaxf(-limit, fminf(limit, u));
+                        }
+                        r = u*g;
                     }break;
                 case GGML_UNARY_OP_RELU: r = fmaxf(g, 0.0f) * u; break;
                 case GGML_UNARY_OP_GELU: {
@@ -305,7 +312,8 @@ __launch_bounds__(nwarps*WARP_SIZE, 1)
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 static __global__ void mul_mat_vec_q(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
-    const char * __restrict__ ids_data, const void * __restrict__ bias,
+    const char * __restrict__ ids_data, const char * __restrict__ activation_map_data,
+    const void * __restrict__ bias,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst,
     const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, const int64_t bias_nb1) {
 
@@ -324,7 +332,8 @@ static __global__ void mul_mat_vec_q(
         return;
     }
     const char * cx = (const char *)vx + i02*nb02;
-    const char * cy = (const char *)vy + i2*nb12;
+    const int activation = activation_map_data ? *(const int *)(activation_map_data + i2*sizeof(int)) : i2;
+    const char * cy = (const char *)vy + activation*nb12;
     const float * b = (const float *)(bias ? ids_data ? (const char *)bias + i02*bias_nb1 : bias : nullptr);
     k_mul_mat_vec_q<type, ncols_y, nwarps>(cx, cy, b, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
@@ -337,6 +346,7 @@ __launch_bounds__(nwarps*WARP_SIZE, 1)
 static __global__ void fused_mul_mat_vec_q(
     const void * __restrict__ vup, const void * __restrict__ vgate,
     const void * __restrict__ vy, float * __restrict__ dst, const char * __restrict__ ids_data,
+    const char * __restrict__ activation_map_data,
     const void * __restrict__ bias_u, const void * __restrict__ bias_g, const uint64_t bias_nb1,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst,
     const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, ggml_unary_op unary_op, float limit) {
@@ -351,7 +361,8 @@ static __global__ void fused_mul_mat_vec_q(
     const char * cx_g = (const char *)vgate + i02*nb02;
     const float * cx_u_b = bias_u ? (const float *)((const char *)bias_u + i02*bias_nb1) : nullptr;
     const float * cx_g_b = bias_g ? (const float *)((const char *)bias_g + i02*bias_nb1) : nullptr;
-    const char * cy = (const char *)vy + i2*nb12;
+    const int activation = activation_map_data ? *(const int *)(activation_map_data + i2*sizeof(int)) : i2;
+    const char * cy = (const char *)vy + activation*nb12;
     k_fused_mul_mat_vec_q<type, ncols_y, nwarps>(cx_u, cx_g, cx_u_b, cx_g_b, cy, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst,
             unary_op, limit);
 }
@@ -380,49 +391,49 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
     switch (args.ncols_y) {
         case 1:
             fused_mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                    args.dst, args.ids_data, args.activation_map_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
                     args.unary_op, args.limit);
             break;
         case 2:
             fused_mul_mat_vec_q<type, 2, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                    args.dst, args.ids_data, args.activation_map_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
                     args.unary_op, args.limit);
             break;
         case 3:
             fused_mul_mat_vec_q<type, 3, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                    args.dst, args.ids_data, args.activation_map_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
                     args.unary_op, args.limit);
             break;
         case 4:
             fused_mul_mat_vec_q<type, 4, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                    args.dst, args.ids_data, args.activation_map_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
                     args.unary_op, args.limit);
             break;
         case 5:
             fused_mul_mat_vec_q<type, 5, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                    args.dst, args.ids_data, args.activation_map_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
                     args.unary_op, args.limit);
             break;
         case 6:
             fused_mul_mat_vec_q<type, 6, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                    args.dst, args.ids_data, args.activation_map_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
                     args.unary_op, args.limit);
             break;
         case 7:
             fused_mul_mat_vec_q<type, 7, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                    args.dst, args.ids_data, args.activation_map_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
                     args.unary_op, args.limit);
             break;
         case 8:
             fused_mul_mat_vec_q<type, 8, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
+                    args.dst, args.ids_data, args.activation_map_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
                     args.unary_op, args.limit);
             break;
@@ -433,35 +444,35 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
     } else {
     switch (args.ncols_y) {
         case 1:
-            mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+            mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.activation_map_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
             break;
         case 2:
-            mul_mat_vec_q<type, 2, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+            mul_mat_vec_q<type, 2, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.activation_map_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
             break;
         case 3:
-            mul_mat_vec_q<type, 3, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+            mul_mat_vec_q<type, 3, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.activation_map_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
             break;
         case 4:
-            mul_mat_vec_q<type, 4, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+            mul_mat_vec_q<type, 4, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.activation_map_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
             break;
         case 5:
-            mul_mat_vec_q<type, 5, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+            mul_mat_vec_q<type, 5, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.activation_map_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
             break;
         case 6:
-            mul_mat_vec_q<type, 6, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+            mul_mat_vec_q<type, 6, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.activation_map_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
             break;
         case 7:
-            mul_mat_vec_q<type, 7, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+            mul_mat_vec_q<type, 7, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.activation_map_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
             break;
         case 8:
-            mul_mat_vec_q<type, 8, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+            mul_mat_vec_q<type, 8, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.activation_map_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
             break;
         // 9-12 columns are only used on sm_60, so instantiate these kernels only when it is a compiled arch
@@ -541,4 +552,3 @@ extern void mul_mat_vec_iq4_nl_q8_1_cuda(const mmvq_args & args, cudaStream_t st
 extern void mul_mat_vec_mxfp4_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_iq4_xs_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_iq3_s_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
-

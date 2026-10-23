@@ -13,6 +13,7 @@
 #include "ggml.h"
 #include "ggml-aarch64.h"
 #include "ggml-moe-prefetch.h"
+#include "ggml-moe-provider.h"
 #include "iqk/iqk_quantize.h"
 #include "iqk/iqk_cpu_ops.h"
 #if GGML_USE_IQK_MULMAT
@@ -3054,6 +3055,16 @@ struct ggml_context_container {
     struct ggml_context context;
 };
 
+struct ggml_moe_provider_state {
+    void * request;
+    uint8_t gpu_rows[GGML_MOE_PROVIDER_MAX_ROWS];
+    uint8_t cpu_rows[GGML_MOE_PROVIDER_MAX_ROWS];
+    size_t n_rows;
+    bool begun;
+    bool dispatched;
+    bool recompute;
+};
+
 struct ggml_compute_state_shared {
     const struct ggml_cgraph * cgraph;
     const struct ggml_cplan * cplan;
@@ -3071,6 +3082,9 @@ struct ggml_compute_state_shared {
     atomic_int current_chunk; // currently processing chunk during mul_mat, shared between all the threads
 
     enum ggml_status ec;
+
+    const struct ggml_moe_provider * moe_provider;
+    struct ggml_moe_provider_state moe_state;
 };
 
 struct ggml_compute_state {
@@ -18623,9 +18637,10 @@ static int ggml_compute_forward_mul_mat(
 
 // ggml_compute_forward_mul_mat_id
 
-static void ggml_compute_forward_mul_mat_id(
+static void ggml_compute_forward_mul_mat_id_impl(
         const struct ggml_compute_params * params,
-              struct ggml_tensor * dst) {
+              struct ggml_tensor * dst,
+        const uint8_t * cpu_rows) {
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -18717,15 +18732,25 @@ static void ggml_compute_forward_mul_mat_id(
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
 
         // group rows by src0 matrix
-        for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
-            for (int id = 0; id < n_ids; ++id) {
-                const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
-
-                if (i02 < 0 || i02 >= n_as) continue;
-                //assert(i02 >= 0 && i02 < n_as);
-
-                MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
-                matrix_row_counts[i02] += 1;
+        if (cpu_rows == NULL) {
+            for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+                for (int id = 0; id < n_ids; ++id) {
+                    const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+                    if (i02 < 0 || i02 >= n_as) continue;
+                    //assert(i02 >= 0 && i02 < n_as);
+                    MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
+                    matrix_row_counts[i02] += 1;
+                }
+            }
+        } else {
+            for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+                for (int id = 0; id < n_ids; ++id) {
+                    if (!cpu_rows[(size_t)iid1*n_ids + id]) continue;
+                    const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+                    if (i02 < 0 || i02 >= n_as) continue;
+                    MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
+                    matrix_row_counts[i02] += 1;
+                }
             }
         }
     }
@@ -18941,10 +18966,107 @@ IQK_MulMat_Not_Available:;
 #undef MMID_MATRIX_ROW
 }
 
-#if GGML_USE_IQK_MULMAT
-static void ggml_compute_forward_mul_mat_id_up_gate(
+typedef void (*ggml_compute_moe_rows_fn)(const struct ggml_compute_params *, struct ggml_tensor *, const uint8_t *);
+
+static bool ggml_compute_moe_provider_eligible(
+        const struct ggml_moe_provider * provider,
+        const struct ggml_tensor * ids) {
+    if (!provider || !provider->begin || !provider->plan || !provider->dispatch ||
+        !provider->collect || !provider->end || !ids || ids->type != GGML_TYPE_I32) {
+        return false;
+    }
+
+    const size_t n_selected = (size_t) ids->ne[0];
+    const size_t n_tokens = (size_t) ids->ne[1];
+    return n_selected > 0 && n_selected <= GGML_MOE_PROVIDER_MAX_ROWS &&
+           n_tokens > 0 && n_tokens <= GGML_MOE_PROVIDER_MAX_BATCH &&
+           n_tokens <= GGML_MOE_PROVIDER_MAX_ROWS / n_selected;
+}
+
+static void ggml_compute_forward_moe_with_provider(
         const struct ggml_compute_params * params,
-              struct ggml_tensor * dst) {
+              struct ggml_tensor * dst,
+        const struct ggml_tensor * ids,
+              int64_t n_experts,
+              ggml_compute_moe_rows_fn compute_rows) {
+    const struct ggml_moe_provider * provider = params->shared->moe_provider;
+    GGML_ASSERT(ggml_compute_moe_provider_eligible(provider, ids));
+
+    struct ggml_moe_provider_state * state = &params->shared->moe_state;
+
+    if (params->ith == 0) {
+        // The graph node-boundary barrier makes retained state safe to reuse here.
+        memset(state, 0, sizeof(*state));
+        const size_t n_ids = (size_t) ids->ne[0];
+        state->n_rows = n_ids * (size_t) ids->ne[1];
+        if (provider->begin(provider->user_data, dst, &state->request)) {
+            state->begun = true;
+            if (provider->plan(provider->user_data, state->request, dst, state->gpu_rows, state->n_rows)) {
+                size_t n_gpu_rows = 0;
+                for (int64_t token = 0; token < ids->ne[1]; ++token) {
+                    for (int64_t selection = 0; selection < ids->ne[0]; ++selection) {
+                        const size_t row = (size_t) token*n_ids + (size_t) selection;
+                        const int32_t expert = *(const int32_t *) ((const char *) ids->data + token*ids->nb[1] + selection*ids->nb[0]);
+                        if (expert < 0 || expert >= n_experts) {
+                            state->gpu_rows[row] = 0;
+                        }
+                        n_gpu_rows += state->gpu_rows[row] != 0;
+                    }
+                }
+                if (n_gpu_rows > 0 && provider->dispatch(provider->user_data, state->request, dst, state->gpu_rows, state->n_rows)) {
+                    state->dispatched = true;
+                    for (size_t row = 0; row < state->n_rows; ++row) {
+                        state->cpu_rows[row] = state->gpu_rows[row] == 0;
+                    }
+                } else if (n_gpu_rows > 0) {
+                    memset(state->gpu_rows, 0, state->n_rows);
+                }
+            }
+        }
+    }
+
+    ggml_barrier(params->shared);
+
+    if (!state->dispatched) {
+        compute_rows(params, dst, NULL);
+        if (params->ith == 0) {
+            if (state->begun) {
+                provider->end(provider->user_data, state->request);
+            }
+        }
+        return;
+    }
+
+    compute_rows(params, dst, state->cpu_rows);
+
+    ggml_barrier(params->shared);
+
+    if (params->ith == 0 && !provider->collect(provider->user_data, state->request, dst, state->gpu_rows, state->n_rows)) {
+        state->recompute = true;
+        for (size_t row = 0; row < state->n_rows; ++row) {
+            state->cpu_rows[row] = state->gpu_rows[row] != 0;
+        }
+    }
+
+    ggml_barrier(params->shared);
+
+    if (state->recompute) {
+        compute_rows(params, dst, state->cpu_rows);
+    }
+
+    ggml_barrier(params->shared);
+
+    if (params->ith == 0) {
+        provider->end(provider->user_data, state->request);
+        memset(state, 0, sizeof(*state));
+    }
+}
+
+#if GGML_USE_IQK_MULMAT
+static void ggml_compute_forward_mul_mat_id_up_gate_impl(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst,
+        const uint8_t * cpu_rows) {
 
     GGML_ASSERT(!dst->src[1] || dst->src[0]->type == dst->src[1]->type);
     GGML_ASSERT(!dst->src[1] || ggml_are_same_shape(dst->src[0], dst->src[1]));
@@ -19046,15 +19168,25 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
 
         // group rows by src0 matrix
-        for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
-            for (int id = 0; id < n_ids; ++id) {
-                const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
-
-                if (i02 < 0 || i02 >= n_as) continue;
-                //assert(i02 >= 0 && i02 < n_as);
-
-                MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
-                matrix_row_counts[i02] += 1;
+        if (cpu_rows == NULL) {
+            for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+                for (int id = 0; id < n_ids; ++id) {
+                    const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+                    if (i02 < 0 || i02 >= n_as) continue;
+                    //assert(i02 >= 0 && i02 < n_as);
+                    MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
+                    matrix_row_counts[i02] += 1;
+                }
+            }
+        } else {
+            for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+                for (int id = 0; id < n_ids; ++id) {
+                    if (!cpu_rows[(size_t)iid1*n_ids + id]) continue;
+                    const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+                    if (i02 < 0 || i02 >= n_as) continue;
+                    MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
+                    matrix_row_counts[i02] += 1;
+                }
             }
         }
     }
@@ -27089,11 +27221,23 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
-                ggml_compute_forward_mul_mat_id(params, tensor);
+                if (params->shared->moe_provider &&
+                    ggml_compute_moe_provider_eligible(params->shared->moe_provider, tensor->src[2])) {
+                    ggml_compute_forward_moe_with_provider(params, tensor, tensor->src[2],
+                            tensor->src[0]->ne[2], ggml_compute_forward_mul_mat_id_impl);
+                } else {
+                    ggml_compute_forward_mul_mat_id_impl(params, tensor, NULL);
+                }
             } break;
         case GGML_OP_MOE_FUSED_UP_GATE:
             {
-                ggml_compute_forward_mul_mat_id_up_gate(params, tensor);
+                if (params->shared->moe_provider &&
+                    ggml_compute_moe_provider_eligible(params->shared->moe_provider, tensor->src[3])) {
+                    ggml_compute_forward_moe_with_provider(params, tensor, tensor->src[3],
+                            tensor->src[0]->ne[2], ggml_compute_forward_mul_mat_id_up_gate_impl);
+                } else {
+                    ggml_compute_forward_mul_mat_id_up_gate_impl(params, tensor, NULL);
+                }
             } break;
         case GGML_OP_FUSED_UP_GATE:
             {
@@ -29439,10 +29583,9 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                 {
                     cur = 0;
                     const struct ggml_tensor * src0 = node->src[0];
-                    const struct ggml_tensor * src1 = node->src[1];
                     const struct ggml_tensor * src2 = node->src[2];
                     const enum ggml_type vec_dot_type = type_traits[src0->type].vec_dot_type;
-                    if (src1 && src1->type != vec_dot_type) {
+                    if (src2->type != vec_dot_type) {
                         cur += ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
                     }
                     const int n_as = src0->ne[2];
@@ -29648,7 +29791,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     return 0;
 }
 
-enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cplan * cplan) {
+static enum ggml_status ggml_graph_compute_impl(
+        struct ggml_cgraph * cgraph,
+        struct ggml_cplan * cplan,
+        const struct ggml_moe_provider * moe_provider) {
     GGML_ASSERT(cplan);
     GGML_ASSERT(cplan->n_threads > 0);
     GGML_ASSERT(cplan->work_size == 0 || cplan->work_data != NULL);
@@ -29674,6 +29820,8 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         /*.abort_callback_data     =*/ NULL,
         /*.current_chunk           =*/ 0,
         /*.ec                      =*/ GGML_STATUS_SUCCESS,
+        /*.moe_provider            =*/ moe_provider,
+        /*.moe_state               =*/ { 0 },
     };
 
 #ifdef GGML_USE_OPENMP
@@ -29750,6 +29898,17 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 #endif
 
     return state_shared.ec;
+}
+
+enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cplan * cplan) {
+    return ggml_graph_compute_impl(cgraph, cplan, NULL);
+}
+
+enum ggml_status ggml_graph_compute_with_moe_provider(
+        struct ggml_cgraph * cgraph,
+        struct ggml_cplan * cplan,
+        const struct ggml_moe_provider * provider) {
+    return ggml_graph_compute_impl(cgraph, cplan, provider);
 }
 
 enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {

@@ -1706,7 +1706,7 @@ llm_expert_gating_func_type   gating_op,
     ggml_tensor * cached_up = nullptr;
     ggml_tensor * cached_gate = nullptr;
     ggml_tensor * cached_down = nullptr;
-    if (lctx.moe_cache && lctx.lora_adapters.empty()) {
+    if (lctx.moe_cache && lctx.lora_adapters.empty() && !lctx.cparams.moe_cache_async) {
         ggml_tensor * slot_map = lctx.moe_cache->get_slot_map(il, n_tokens, n_expert_used);
         cached_up_gate = lctx.moe_cache->get_experts(up_gate_exps);
         cached_up = lctx.moe_cache->get_experts(up_exps);

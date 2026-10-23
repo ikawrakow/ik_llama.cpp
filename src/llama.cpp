@@ -35,6 +35,7 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-backend-impl.h"
 
 #include <cmath>
 
@@ -918,6 +919,19 @@ llama_context::~llama_context() {
         if (*it == this) {
             all_contexts.erase(it);
             break;
+        }
+    }
+}
+
+void llama_context::install_moe_cache_execution() {
+    if (!sched) return;
+    if (moe_cache && cparams.moe_cache_async) {
+        ggml_backend_sched_set_copy_callback(sched, nullptr, nullptr);
+        ggml_backend_sched_set_moe_provider(sched, moe_cache->provider());
+    } else {
+        ggml_backend_sched_set_moe_provider(sched, nullptr);
+        if (moe_cache) {
+            ggml_backend_sched_set_copy_callback(sched, llama_context::sched_copy_moe_cache, this);
         }
     }
 }
@@ -8892,6 +8906,7 @@ struct llama_context_params llama_context_default_params() {
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
+        /*.moe_cache_async             =*/ false,
         /*.idx_type_k                  =*/ GGML_TYPE_F16,
         /*.type_reduce                 =*/ GGML_TYPE_F16,
         /*.type_graph_attn             =*/ GGML_TYPE_F16,
@@ -9279,6 +9294,11 @@ struct llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    if (params.moe_cache_async && params.moe_cache_size == 0) {
+        LLAMA_LOG_ERROR("%s: --moe-cache-async requires a nonzero --moe-cache-mib budget\n", __func__);
+        return nullptr;
+    }
+
     if (params.moe_cache_size > 0) {
         if (model->fit) {
             LLAMA_LOG_ERROR("%s: MoE cache cannot be combined with --fit because fit does not reserve context-time cache memory\n", __func__);
@@ -9475,6 +9495,7 @@ struct llama_context * llama_init_from_model(
     cparams.cuda_params      = params.cuda_params;
     cparams.mtp              = params.mtp;
     cparams.moe_cache_size   = params.moe_cache_size;
+    cparams.moe_cache_async = params.moe_cache_async;
     cparams.worst_graph_tokens = params.worst_case_tokens;
     cparams.dflash_query_capacity = params.dflash_query_capacity;
 
@@ -9997,8 +10018,11 @@ struct llama_context * llama_init_from_model(
             if (cparams.moe_cache_size > 0) {
                 try {
                     ctx->moe_cache = std::make_unique<llama_moe_cache>(*model, ctx->backends, backend_buft,
-                            cparams.moe_cache_size);
-                    ggml_backend_sched_set_copy_callback(ctx->sched, llama_context::sched_copy_moe_cache, ctx);
+                            cparams.moe_cache_size, cparams.moe_cache_async);
+                    if (cparams.moe_cache_async && !ctx->moe_cache->has_eligible_layers()) {
+                        throw std::runtime_error("asynchronous MoE cache requires host-resident eligible expert weights");
+                    }
+                    ctx->install_moe_cache_execution();
                 } catch (const std::exception & e) {
                     LLAMA_LOG_ERROR("%s: failed to initialize MoE cache: %s\n", __func__, e.what());
                     llama_free(ctx);
@@ -10026,10 +10050,10 @@ struct llama_context * llama_init_from_model(
             {
                 if (pipeline_parallel) {
                     LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
+                    ggml_backend_sched_free(ctx->sched);
+                    ctx->sched = nullptr;
                     ctx->sched = ggml_backend_sched_new(ctx->backends.data(), backend_buft.data(), ctx->backends.size(), max_nodes, false);
-                    if (ctx->moe_cache) {
-                        ggml_backend_sched_set_copy_callback(ctx->sched, llama_context::sched_copy_moe_cache, ctx);
-                    }
+                    ctx->install_moe_cache_execution();
                     gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
                 }
                 if (!gf_success) {
