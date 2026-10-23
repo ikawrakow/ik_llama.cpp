@@ -612,6 +612,9 @@ class Model:
         if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
             # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B
             res = "lfm2"
+        if chkhsh == "ffdae2f611dc6903980be2fbb108467cb97376d7d03cd332bb7e2602f87fa1f1":
+            # ref: https://huggingface.co/KRAFTON/Raon-1-mini-preview
+            res = "raon"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
