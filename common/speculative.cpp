@@ -882,7 +882,6 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 };
 
 struct common_speculative_state_ngram_cache : public common_speculative_state {
-    uint16_t n_draft;
     bool save_dynamic;
     bool save_static;
 
@@ -890,17 +889,15 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
     common_ngram_cache ngram_cache_dynamic;
     common_ngram_cache ngram_cache_static;
 
-    size_t cache_size = 0; // number of tokens in n-gram cache
+    llama_tokens context_tokens;
 
     common_speculative_state_ngram_cache(
             const enum common_speculative_type type,
             const std::string & path_static,
             const std::string & path_dynamic,
-            uint16_t            n_draft,
             bool                save_dynamic,
             bool                save_static)
         : common_speculative_state(type)
-        , n_draft(n_draft)
         , save_dynamic(save_dynamic)
         , save_static(save_static)
     {
@@ -925,6 +922,8 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 
     void begin(const llama_tokens & prompt) override {
         GGML_UNUSED(prompt);
+        ngram_cache_context.clear();
+        context_tokens.clear();
     }
 
     void draft(
@@ -932,22 +931,6 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
-        GGML_UNUSED(params);
-
-        if (cache_size < prompt_tgt.size() + 1) {
-            llama_tokens tokens_new;
-            tokens_new.reserve(prompt_tgt.size() + 1 - cache_size);
-            for (size_t j = cache_size; j < prompt_tgt.size(); ++j) {
-                tokens_new.push_back(prompt_tgt[j]);
-            }
-            tokens_new.push_back(id_last); // add the last token
-
-            // Update context ngram cache with new prompt_tgt:
-            common_ngram_cache_update(ngram_cache_context, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX,
-                    tokens_new, tokens_new.size(), false);
-            cache_size = prompt_tgt.size() + 1;
-        }
-
         llama_tokens inp;
         inp.reserve(prompt_tgt.size() + 1);
         for (size_t j = 0; j < prompt_tgt.size(); ++j) {
@@ -955,9 +938,24 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
         }
         inp.push_back(id_last);
 
+        // Keep the full sequence for cross-boundary n-grams, rebuild after shrink/shift/rewrite.
+        const bool extends_context = inp.size() >= context_tokens.size() &&
+            std::equal(context_tokens.begin(), context_tokens.end(), inp.begin());
+        if (!extends_context) {
+            ngram_cache_context.clear();
+            context_tokens.clear();
+        }
+
+        const size_t nnew = inp.size() - context_tokens.size();
+        if (nnew > 0) {
+            common_ngram_cache_update(ngram_cache_context, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX,
+                    inp, static_cast<int>(nnew), false);
+            context_tokens = inp;
+        }
+
         result.push_back(id_last);
 
-        common_ngram_cache_draft(inp, result, n_draft, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX,
+        common_ngram_cache_draft(inp, result, params.n_max, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX,
                 ngram_cache_context,
                 ngram_cache_dynamic,
                 ngram_cache_static);
@@ -1196,13 +1194,11 @@ static common_ngram_map get_common_ngram_map(const common_speculative_config & c
 static common_speculative_state_ngram_cache create_state_ngram_cache(
         const std::string & path_static, const std::string & path_dynamic,
         const common_speculative_config & config) {
-    uint16_t n_draft = 8; // TODO get from config?
-
     // TODO bool param in common/common.h to set save_static/save_dynamic?
     bool save_static = false;
     bool save_dynamic = false;
 
-    common_speculative_state_ngram_cache state(config.type, path_static, path_dynamic, n_draft, save_static, save_dynamic);
+    common_speculative_state_ngram_cache state(config.type, path_static, path_dynamic, save_dynamic, save_static);
 
     return state;
 }

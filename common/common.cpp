@@ -881,6 +881,13 @@ static bool is_autoy(const std::string & value) {
 static void common_speculative_finalize_stages(gpt_params & params) {
     auto & spec = params.speculative;
 
+    if (!params.lookup_cache_static.empty()) {
+        spec.lookup_cache_static = params.lookup_cache_static;
+    }
+    if (!params.lookup_cache_dynamic.empty()) {
+        spec.lookup_cache_dynamic = params.lookup_cache_dynamic;
+    }
+
     if (!spec.stages.empty()) {
         const auto resolved = spec.get_resolved_stages();
         if (resolved.size() != spec.stages.size()) {
