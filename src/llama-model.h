@@ -611,6 +611,7 @@ struct llama_model {
     int max_gpu = 0; // max. number of GPUs to use per layer for aplit mode "graph"
     int n_gpu_layers;
 
+    bool split_output_tensor = false; // force split output tensor in split mode graph
     bool mtp; // use mtp if is supported by the Model
     bool swa_compress = false; // value the cache-size fit was computed with
     bool fit = false;
