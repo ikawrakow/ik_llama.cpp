@@ -33,7 +33,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool merge_qkv(const LLM_TN & tn, int i, int bias, bool ignore_attn_scale = false);
 
-    bool merge_up_gate_exps(const LLM_TN & tn, int i, int bias);
+    bool merge_up_gate_exps(const LLM_TN & tn, int i, int bias, ggml_context * ffn_ctx = nullptr);
 
     bool create_std_ffn_exps(int64_t n_embd, const LLM_TN & tn, int i, int flags = 0, int n_ff_exps_input = 0,
             ggml_context * ffn_ctx = nullptr);
@@ -5610,8 +5610,11 @@ bool create_tensors_helper::create_spark2_5_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bias) {
+bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bias, ggml_context * ffn_ctx) {
     ggml_context * ctx_split = ctx_for_layer_split(i);
+    if (!ffn_ctx) {
+        ffn_ctx = ctx_split;
+    }
 
     auto & layer = model.layers[i];
 
@@ -5626,8 +5629,8 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
         return false;
     }
 
-    auto u_ctx = get_context_for_tensor(ctx_split, u_name);
-    auto g_ctx = get_context_for_tensor(ctx_split, g_name);
+    auto u_ctx = get_context_for_tensor(ffn_ctx, u_name);
+    auto g_ctx = get_context_for_tensor(ffn_ctx, g_name);
 
     if (u_ctx != g_ctx) {
         LLAMA_LOG_INFO("%s: not merging because of context\n", __func__);
@@ -5701,7 +5704,7 @@ bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & t
     if (ug_meta) {
         layer.ffn_up_gate_exps = create_tensor(ffn_ctx, ug_name, {  n_embd, 2*n_ff_exp, n_expert}, flags);
     } else {
-        merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
+        merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0, ffn_ctx);
         if (!merged) {
             layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
             layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
@@ -5724,7 +5727,7 @@ bool create_tensors_helper::create_std_ffn_exps_from_meta(const LLM_TN & tn, int
     if (ug_meta) {
         layer.ffn_up_gate_exps = create_tensor(ffn_ctx, ug_name, {  ug_meta->ne[0], ug_meta->ne[1], ug_meta->ne[2]}, flags);
     } else {
-        merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
+        merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0, ffn_ctx);
         if (!merged) {
             auto u_name = tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i);
             auto g_name = tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i);
