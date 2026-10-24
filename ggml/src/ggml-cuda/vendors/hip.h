@@ -196,6 +196,12 @@ static __device__ __forceinline__ int __vsub4(const int a, const int b) {
     return result_low_7bits ^ should_flip_high_1bit;
 }
 
+static __device__ __forceinline__ unsigned int __vsub2(const unsigned int a, const unsigned int b) {
+    const unsigned int lo = (a - b) & 0x0000ffffu;
+    const unsigned int hi = ((a & 0xffff0000u) - (b & 0xffff0000u)) & 0xffff0000u;
+    return hi | lo;
+}
+
 static __device__ __forceinline__ unsigned int __vcmpeq4(unsigned int a, unsigned int b) {
     const uint8x4_t& va = reinterpret_cast<const uint8x4_t&>(a);
     const uint8x4_t& vb = reinterpret_cast<const uint8x4_t&>(b);
