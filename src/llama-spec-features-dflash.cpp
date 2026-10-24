@@ -662,7 +662,7 @@ void llama_clear_dflash_capture(struct llama_context * ctx) {
     }
 }
 
-void llama_begin_dflash_capture_batch(struct llama_context * ctx, int32_t expected_rows) {
+void llama_begin_dflash_capture_batch(struct llama_context * ctx, int32_t expected_rows, bool new_batch) {
     if (ctx == nullptr || !ctx->dflash.capture) {
         return;
     }
@@ -672,7 +672,9 @@ void llama_begin_dflash_capture_batch(struct llama_context * ctx, int32_t expect
         llama_synchronize(ctx);
         capture.readback_pending = false;
     }
-    capture.capture_batch_id++;
+    if (new_batch) {
+        capture.capture_batch_id++;
+    }
     capture.row_count = 0;
     capture.row_width = 0;
     capture.expected_rows = expected_rows;
