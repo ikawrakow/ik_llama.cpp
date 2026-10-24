@@ -1650,7 +1650,7 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
             throw std::runtime_error("n_expert_used must be > 0 for QWEN3MOE");
         }
 
-        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, 0, ffn_ctx);
 
     }
     return use_mmap_buffer;
@@ -1742,7 +1742,7 @@ bool create_tensors_helper::create_flint_tensors(const LLM_TN & tn) {
         } else {
             layer.ffn_gate_inp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
 
-            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff_exp);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff_exp, ffn_ctx);
 
             layer.ffn_exp_probs_b = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert},
                     llama_model_loader::TENSOR_NOT_REQUIRED);
