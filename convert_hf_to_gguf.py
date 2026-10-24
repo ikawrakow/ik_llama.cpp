@@ -6512,6 +6512,11 @@ class MiniMaxM3Model(Model):
     def load_hparams(dir_model: Path) -> dict[str, Any]:
         return Model.load_text_hparams(dir_model)
 
+    def set_vocab(self):
+        super().set_vocab()
+        # the HF tokenizer normalizes with NFC before pre-tokenization
+        self.gguf_writer.add_bool("tokenizer.ggml.normalizer.nfc", True)
+
     def set_gguf_parameters(self):
         # the base writes intermediate_size as feed_forward_length, which only the leading dense layers use
         n_ff_exp = self.hparams["intermediate_size"]
