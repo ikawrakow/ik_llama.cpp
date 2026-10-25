@@ -6517,6 +6517,12 @@ class MiniMaxM3Model(Model):
         # the HF tokenizer normalizes with NFC before pre-tokenization
         self.gguf_writer.add_bool("tokenizer.ggml.normalizer.nfc", True)
 
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        # the indexer projections are exact in BF16; F16 is not, and lower types change the selected blocks
+        if n_dims > 1 and ".indexer." in new_name and self.ftype != gguf.LlamaFileType.ALL_F32:
+            return gguf.GGMLQuantizationType.BF16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
     def set_gguf_parameters(self):
         # the base writes intermediate_size as feed_forward_length, which only the leading dense layers use
         n_ff_exp = self.hparams["intermediate_size"]
