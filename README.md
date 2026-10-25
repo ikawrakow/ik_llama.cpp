@@ -4,13 +4,13 @@
 
 ## TL;DR
 
-This repository started as a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) in June of 2024 and was last synced with upstream in August of 2024. Compared to mainline `llama.cpp`, it offers additional SOTA quantization types and, in many cases, better performance. Various features related to LLM inference appeared here first before becoming available in llama.cpp. MLA, quant repacking, fused delta-net (known in `llama.cpp as "Gated Delta Net" - GDN), tensor parallel, MTP, DFlash, to just name a few.
+This repository started as a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) in June of 2024 and was last synced with upstream in August of 2024. Compared to mainline `llama.cpp`, it offers additional SOTA quantization types and, in many cases, better performance. Various features related to LLM inference appeared here first before becoming available in llama.cpp. MLA, quant repacking, fused delta-net (known in `llama.cpp as "Gated Delta Net" - GDN), tensor parallel, MTP, DFlash, to just name a few. As of late 2026 the fork has diverged substantially from upstream; see [Latest News](#latest-news) for current model support, quantization types and kernel work.
 
 >[!IMPORTANT]
->If you are running hybrid CPU/GPU inference for MoE models with all or some experts left on the CPU, **do not use -rtr** unless you know what you are doing. The `-rtr` option causes all tensors left in RAM to be repacked to row-interleaved format while loading the model. As not all quantization types have a CUDA implementation, this will result in matrix multiplications with these tensors to be **always done on the CPU**, even when it would have been much better to offload the computation to the GPU, typically resulting in lower prompt processing speed. Most notably, k-quants (`K2_K, Q3_K, Q4_K, Q5_K, Q6_K`) do not have CUDA row-interleaved implementation.
+>If you are running hybrid CPU/GPU inference for MoE models with all or some experts left on the CPU, **do not use -rtr** unless you know what you are doing. The `-rtr` option causes all tensors left in RAM to be repacked to row-interleaved format while loading the model. As not all quantization types have a CUDA implementation, this will result in matrix multiplications with these tensors to be **always done on the CPU**, even when it would have been much better to offload the computation to the GPU, typically resulting in lower prompt processing speed. Most notably, k-quants (`Q2_K, Q3_K, Q4_K, Q5_K, Q6_K`) do not have CUDA row-interleaved implementation.
 
 >[!NOTE]
->The only fully functional and performant compute backends are CPU (`AVX2` or better, `ARM_NEON` or better) and CUDA (Turing or newer, but there has been recent progress on bringing Pascal and Volta up to speed, see [here](docs/pascal-volta.md) for more details) 
+>The only fully functional and performant compute backends are CPU (`AVX2` or better, `ARM_NEON` or better) and CUDA (Turing or newer; Pascal and Volta are functional, but some flash-attention steps fall back to the CPU, see [here](docs/pascal-volta.md) for details) 
 >Please do not enter issues related to ROCm, Vulkan, Metal, old Nvidia GPUs, `AVX` CPUs, etc. They will not get resolved unless you roll up your sleeves and help bring your favorite backend up to speed. With the current regular contributors this project simply does not have the bandwidth to work on all backends available in `llama.cpp`.
  
 >[!IMPORTANT]
@@ -60,8 +60,8 @@ cmake -B build -DGGML_NATIVE=ON -DGGML_CUDA=ON
 
 cmake --build build --config Release -j$(nproc)
 ```
-### Step-by-step instructions for a case of a successful Windows build
-https://github.com/ikawrakow/ik_llama.cpp/blob/main/docs/build.md
+### Windows build
+For step-by-step instructions for a successful Windows build, see [docs/build.md](docs/build.md).
 
 ### Run
 
@@ -77,7 +77,7 @@ Start the server with one of the commands (CPU or GPU):
 ./build/bin/llama-server --model /my_local_files/gguf/Qwen_Qwen3-0.6B-IQ4_NL.gguf --ctx-size 4096 -ngl 999
 ```
 
-That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser and start chatting, or use the available API endpoins in your program/harness.
+That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser and start chatting, or use the available API endpoints in your program/harness.
 
 ### Run in Docker or Podman
 
@@ -91,6 +91,10 @@ docker pull ghcr.io/ikawrakow/ik-llama-cpp:cpu-full
 docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu12-swap
 docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu12-server
 docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu12-full
+
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu13-swap
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu13-server
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu13-full
 ```
 
 Check [Step by step guide](./docker/README.md) for image customization and other details.
@@ -102,7 +106,60 @@ Check [Step by step guide](./docker/README.md) for image customization and other
 
 ### Model Support
 
-LlaMA-3-Nemotron [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377), Qwen3 [PR 355](https://github.com/ikawrakow/ik_llama.cpp/pull/355), GLM-4 [PR 344](https://github.com/ikawrakow/ik_llama.cpp/pull/344), Command-A [PR 341](https://github.com/ikawrakow/ik_llama.cpp/pull/341), bitnet-b1.58-2B-4T [PR 337](https://github.com/ikawrakow/ik_llama.cpp/pull/337), LLaMA-4 [PR 321](https://github.com/ikawrakow/ik_llama.cpp/pull/321), Gemma3 [PR 276](https://github.com/ikawrakow/ik_llama.cpp/pull/276),  DeepSeek-V3 [PR 176](https://github.com/ikawrakow/ik_llama.cpp/pull/176), Kimi-2 [PR 609](https://github.com/ikawrakow/ik_llama.cpp/pull/609), dots.llm1 [PR 573](https://github.com/ikawrakow/ik_llama.cpp/pull/573), Hunyuan [PR 565](https://github.com/ikawrakow/ik_llama.cpp/pull/565), GLM-4.5 [PR 668](https://github.com/ikawrakow/ik_llama.cpp/pull/668) (4.5/4.6/4.7/AIR), Ernie 4.5 MOE and 0.3B [PR 759](https://github.com/ikawrakow/ik_llama.cpp/pull/759), grok-2 [PR 782](https://github.com/ikawrakow/ik_llama.cpp/pull/782), Ling/Ring (Bailing-MoE2) [PR 833](https://github.com/ikawrakow/ik_llama.cpp/pull/833), Qwen3-VL [PR 883](https://github.com/ikawrakow/ik_llama.cpp/pull/883), SmolLM3 [PR 934](https://github.com/ikawrakow/ik_llama.cpp/pull/934), GigaChat3 [PR 995](https://github.com/ikawrakow/ik_llama.cpp/pull/995), ministral3 [PR 1030](https://github.com/ikawrakow/ik_llama.cpp/pull/1030), Mimo-V2-Flash [PR 1096](https://github.com/ikawrakow/ik_llama.cpp/pull/1096), GLM-4.7-Flash [PR 1168](https://github.com/ikawrakow/ik_llama.cpp/pull/1168), Seed-OSS [PR 1218](https://github.com/ikawrakow/ik_llama.cpp/pull/1218), Step-3.5-Flash [PR 1231](https://github.com/ikawrakow/ik_llama.cpp/pull/1231), GLM-5 [PR 1268](https://github.com/ikawrakow/ik_llama.cpp/pull/1268), Qwen3-Next [PR 1266](https://github.com/ikawrakow/ik_llama.cpp/pull/1266), Qwen3.5-MoE [PR 1288](https://github.com/ikawrakow/ik_llama.cpp/pull/1288) and dense Qwen-3.5 [1326](https://github.com/ikawrakow/ik_llama.cpp/pull/1326), Mistral 4 [PR 1450](https://github.com/ikawrakow/ik_llama.cpp/pull/1450), Bonsai 1-bit [PR 1570](https://github.com/ikawrakow/ik_llama.cpp/pull/1570), Gemma4 [PR 1581](https://github.com/ikawrakow/ik_llama.cpp/pull/1581) including assistant, Mimo-2.5 [PR 1723](https://github.com/ikawrakow/ik_llama.cpp/pull/1723), JetBrains Mellum2 [PR 1919](https://github.com/ikawrakow/ik_llama.cpp/pull/1919), Poolside Laguna XS.2 [PR 1911](https://github.com/ikawrakow/ik_llama.cpp/pull/1911), Cohere2-MoE North Mini Code [PR 1945](https://github.com/ikawrakow/ik_llama.cpp/pull/1945), MiniMax-M3 [PR 1963](https://github.com/ikawrakow/ik_llama.cpp/pull/1963), Laguna M.1 [PR 2003](https://github.com/ikawrakow/ik_llama.cpp/pull/2003), OpenPangu [#2065](https://github.com/ikawrakow/ik_llama.cpp/pull/2065), DeepSeek-V4 [PR 2165](https://github.com/ikawrakow/ik_llama.cpp/pull/2165), Muse-Glimmer [PR 2293](https://github.com/ikawrakow/ik_llama.cpp/pull/2293), Ling-3.0 [PR 2295](https://github.com/ikawrakow/ik_llama.cpp/pull/2295) with vision [PR 2609](https://github.com/ikawrakow/ik_llama.cpp/pull/2609), DSpark [PR 2304](https://github.com/ikawrakow/ik_llama.cpp/pull/2304), Qwen-3.8-Flash-Next [PR 2365](https://github.com/ikawrakow/ik_llama.cpp/pull/2365), GLM-5.3-Flash [PR 2376](https://github.com/ikawrakow/ik_llama.cpp/pull/2376), DeepSeek-V4-Flash-Vision-Exp [PR 2431](https://github.com/ikawrakow/ik_llama.cpp/pull/2431), K2-Horizon [PR 2435](https://github.com/ikawrakow/ik_llama.cpp/pull/2435) and [PR 2466](https://github.com/ikawrakow/ik_llama.cpp/pull/2466), LFM2.5 [PR 2382](https://github.com/ikawrakow/ik_llama.cpp/pull/2382) and LFM2-MoE [PR 2530](https://github.com/ikawrakow/ik_llama.cpp/pull/2530), MiniCPM5 [PR 2447](https://github.com/ikawrakow/ik_llama.cpp/pull/2447), DeepSeek-V4.1 [PR 2455](https://github.com/ikawrakow/ik_llama.cpp/pull/2455) with vision [PR 2545](https://github.com/ikawrakow/ik_llama.cpp/pull/2545), Nanbeige 4.2 [PR 2590](https://github.com/ikawrakow/ik_llama.cpp/pull/2590)
+- Granite / GraniteMoE [PR 102](https://github.com/ikawrakow/ik_llama.cpp/pull/102)
+- Cohere2 [PR 341](https://github.com/ikawrakow/ik_llama.cpp/pull/341)
+- LLaMA-3-Nemotron [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377)
+- Qwen3 [PR 355](https://github.com/ikawrakow/ik_llama.cpp/pull/355)
+- GLM-4 [PR 344](https://github.com/ikawrakow/ik_llama.cpp/pull/344)
+- Command-A [PR 341](https://github.com/ikawrakow/ik_llama.cpp/pull/341)
+- bitnet-b1.58-2B-4T [PR 337](https://github.com/ikawrakow/ik_llama.cpp/pull/337)
+- LLaMA-4 [PR 321](https://github.com/ikawrakow/ik_llama.cpp/pull/321)
+- Gemma3 [PR 276](https://github.com/ikawrakow/ik_llama.cpp/pull/276)
+- DeepSeek-V3 [PR 176](https://github.com/ikawrakow/ik_llama.cpp/pull/176)
+- Kimi-2 [PR 609](https://github.com/ikawrakow/ik_llama.cpp/pull/609)
+- dots.llm1 [PR 573](https://github.com/ikawrakow/ik_llama.cpp/pull/573)
+- Hunyuan [PR 565](https://github.com/ikawrakow/ik_llama.cpp/pull/565)
+- GLM-4.5 [PR 668](https://github.com/ikawrakow/ik_llama.cpp/pull/668) (4.5/4.6/4.7/AIR)
+- Ernie 4.5 MOE and 0.3B [PR 759](https://github.com/ikawrakow/ik_llama.cpp/pull/759)
+- grok-2 [PR 782](https://github.com/ikawrakow/ik_llama.cpp/pull/782)
+- Ling/Ring (Bailing-MoE2) [PR 833](https://github.com/ikawrakow/ik_llama.cpp/pull/833)
+- Qwen3-VL [PR 883](https://github.com/ikawrakow/ik_llama.cpp/pull/883)
+- SmolLM3 [PR 934](https://github.com/ikawrakow/ik_llama.cpp/pull/934)
+- GigaChat3 [PR 995](https://github.com/ikawrakow/ik_llama.cpp/pull/995)
+- ministral3 [PR 1030](https://github.com/ikawrakow/ik_llama.cpp/pull/1030)
+- Mimo-V2-Flash [PR 1096](https://github.com/ikawrakow/ik_llama.cpp/pull/1096)
+- GLM-4.7-Flash [PR 1168](https://github.com/ikawrakow/ik_llama.cpp/pull/1168)
+- Seed-OSS [PR 1218](https://github.com/ikawrakow/ik_llama.cpp/pull/1218)
+- Step-3.5-Flash [PR 1231](https://github.com/ikawrakow/ik_llama.cpp/pull/1231)
+- GLM-5 [PR 1268](https://github.com/ikawrakow/ik_llama.cpp/pull/1268)
+- Qwen3-Next [PR 1266](https://github.com/ikawrakow/ik_llama.cpp/pull/1266)
+- Qwen3.5-MoE [PR 1288](https://github.com/ikawrakow/ik_llama.cpp/pull/1288) and dense Qwen-3.5 [PR 1326](https://github.com/ikawrakow/ik_llama.cpp/pull/1326)
+- Mistral 4 [PR 1450](https://github.com/ikawrakow/ik_llama.cpp/pull/1450)
+- Bonsai 1-bit [PR 1570](https://github.com/ikawrakow/ik_llama.cpp/pull/1570)
+- Gemma4 [PR 1581](https://github.com/ikawrakow/ik_llama.cpp/pull/1581), including assistant
+- Mimo-2.5 [PR 1723](https://github.com/ikawrakow/ik_llama.cpp/pull/1723)
+- JetBrains Mellum2 [PR 1919](https://github.com/ikawrakow/ik_llama.cpp/pull/1919)
+- Poolside Laguna XS.2 [PR 1911](https://github.com/ikawrakow/ik_llama.cpp/pull/1911)
+- Cohere2-MoE North Mini Code [PR 1945](https://github.com/ikawrakow/ik_llama.cpp/pull/1945)
+- MiniMax-M3 [PR 1963](https://github.com/ikawrakow/ik_llama.cpp/pull/1963), with vision [PR 2086](https://github.com/ikawrakow/ik_llama.cpp/pull/2086)
+- Laguna M.1 [PR 2003](https://github.com/ikawrakow/ik_llama.cpp/pull/2003)
+- OpenPangu [PR 2065](https://github.com/ikawrakow/ik_llama.cpp/pull/2065)
+- Laguna XS 2.1 (DFlash draft) [PR 2124](https://github.com/ikawrakow/ik_llama.cpp/pull/2124)
+- DeepSeek-V4 [PR 2165](https://github.com/ikawrakow/ik_llama.cpp/pull/2165)
+- Muse-Glimmer [PR 2293](https://github.com/ikawrakow/ik_llama.cpp/pull/2293)
+- Ling-3.0 [PR 2295](https://github.com/ikawrakow/ik_llama.cpp/pull/2295), with vision [PR 2609](https://github.com/ikawrakow/ik_llama.cpp/pull/2609)
+- DSpark [PR 2304](https://github.com/ikawrakow/ik_llama.cpp/pull/2304)
+- Qwen-3.8-Flash-Next [PR 2365](https://github.com/ikawrakow/ik_llama.cpp/pull/2365)
+- GLM-5.3-Flash [PR 2376](https://github.com/ikawrakow/ik_llama.cpp/pull/2376)
+- DeepSeek-V4-Flash-Vision-Exp [PR 2431](https://github.com/ikawrakow/ik_llama.cpp/pull/2431)
+- K2-Horizon [PR 2435](https://github.com/ikawrakow/ik_llama.cpp/pull/2435) and [PR 2466](https://github.com/ikawrakow/ik_llama.cpp/pull/2466)
+- LFM2.5 [PR 2382](https://github.com/ikawrakow/ik_llama.cpp/pull/2382) and LFM2-MoE [PR 2530](https://github.com/ikawrakow/ik_llama.cpp/pull/2530)
+- MiniCPM5 [PR 2447](https://github.com/ikawrakow/ik_llama.cpp/pull/2447)
+- DeepSeek-V4.1 [PR 2455](https://github.com/ikawrakow/ik_llama.cpp/pull/2455), with vision [PR 2545](https://github.com/ikawrakow/ik_llama.cpp/pull/2545)
+- Nanbeige 4.2 [PR 2590](https://github.com/ikawrakow/ik_llama.cpp/pull/2590)
+- Ternary Bonsai 2 [PR 2550](https://github.com/ikawrakow/ik_llama.cpp/pull/2550)
+- Maple [PR 2694](https://github.com/ikawrakow/ik_llama.cpp/pull/2694)
+- Flint [PR 2725](https://github.com/ikawrakow/ik_llama.cpp/pull/2725)
 
 ### Quantization
 
@@ -118,7 +175,7 @@ Information can be found in [Discussion 8](https://github.com/ikawrakow/ik_llama
 
 Initial implementations (Zen4, AVX2, NEON): `IQ5_KS_R4` [PR 426](https://github.com/ikawrakow/ik_llama.cpp/pull/426), `IQ5_KS` [PR 422](https://github.com/ikawrakow/ik_llama.cpp/pull/422), `IQ4_KS_R4` [PR 150](https://github.com/ikawrakow/ik_llama.cpp/pull/150), `IQ5_K_R4` [PR 149](https://github.com/ikawrakow/ik_llama.cpp/pull/149), `IQ2_K_R4` [PR 146](https://github.com/ikawrakow/ik_llama.cpp/pull/146), `IQ3_K_R4` [PR 145](https://github.com/ikawrakow/ik_llama.cpp/pull/145), `IQ4_K_R4` [PR 138](https://github.com/ikawrakow/ik_llama.cpp/pull/138), `IQ4_KSS` [PR 89](https://github.com/ikawrakow/ik_llama.cpp/pull/89), `IQ2_KS` [PR 85](https://github.com/ikawrakow/ik_llama.cpp/pull/85), `IQ4_KS` [PR 83](https://github.com/ikawrakow/ik_llama.cpp/pull/83), `IQ6_K` [PR 14](https://github.com/ikawrakow/ik_llama.cpp/pull/14), `IQ2_K, IQ3_K and IQ5_K` [PR 7](https://github.com/ikawrakow/ik_llama.cpp/pull/7), `IQ4_K` [PR 6](https://github.com/ikawrakow/ik_llama.cpp/pull/6)
 
-Cuda implementations:  `IQ4_KS_R4` and `IQ5_KS_R4` [PR 493](https://github.com/ikawrakow/ik_llama.cpp/pull/493), `IQ1_S_R4` [PR 492](https://github.com/ikawrakow/ik_llama.cpp/pull/492), `IQ1_M_R4` [PR 494](https://github.com/ikawrakow/ik_llama.cpp/pull/494). `IQ4_KS_R4` and `IQ5_KS_R4` [PR 462](https://github.com/ikawrakow/ik_llama.cpp/pull/462), `IQ2_K_R4`, `IQ3_K_R4`, `IQ4_K_R4`, `IQ5_K_R4` [PR 461](https://github.com/ikawrakow/ik_llama.cpp/pull/461), `IQ4_K, IQ5_K, IQ6_K` [PR 417](https://github.com/ikawrakow/ik_llama.cpp/pull/417), `IQ2_KS, IQ2_K, IQ3_K` [PR 418](https://github.com/ikawrakow/ik_llama.cpp/pull/417)
+Cuda implementations:  `IQ4_KS_R4` and `IQ5_KS_R4` [PR 493](https://github.com/ikawrakow/ik_llama.cpp/pull/493), `IQ1_S_R4` [PR 492](https://github.com/ikawrakow/ik_llama.cpp/pull/492), `IQ1_M_R4` [PR 494](https://github.com/ikawrakow/ik_llama.cpp/pull/494). `IQ4_KS_R4` and `IQ5_KS_R4` [PR 462](https://github.com/ikawrakow/ik_llama.cpp/pull/462), `IQ2_K_R4`, `IQ3_K_R4`, `IQ4_K_R4`, `IQ5_K_R4` [PR 461](https://github.com/ikawrakow/ik_llama.cpp/pull/461), `IQ4_K, IQ5_K, IQ6_K` [PR 417](https://github.com/ikawrakow/ik_llama.cpp/pull/417), `IQ2_KS, IQ2_K, IQ3_K` [PR 418](https://github.com/ikawrakow/ik_llama.cpp/pull/418)
 
 `IQ2_KL` is a more recent addition in [PR 602](https://github.com/ikawrakow/ik_llama.cpp/pull/602)
 
@@ -126,13 +183,19 @@ Cuda implementations:  `IQ4_KS_R4` and `IQ5_KS_R4` [PR 493](https://github.com/i
 
 `IQ3_KS_R16` 16-row interleaved `IQ3_KS` [PR 2622](https://github.com/ikawrakow/ik_llama.cpp/pull/2622)
 
+`IQ5_KS_R16` 16-row interleaved `IQ5_KS` [PR 2703](https://github.com/ikawrakow/ik_llama.cpp/pull/2703)
+
 ##### Bitnet, Bonsai, Ternary
 
 `IQ1_BN`, `IQ2_BN` [PR 44](https://github.com/ikawrakow/ik_llama.cpp/pull/44)
 
 `Q1_0_G128_R8` [PR 2541](https://github.com/ikawrakow/ik_llama.cpp/pull/2541)
 
+`Q2_0` [PR 2659](https://github.com/ikawrakow/ik_llama.cpp/pull/2659)
+
 `PQ2_0` / `PTQ1_0` (Prism ternary) and 8-row interleaved `PQ2_0_R8` / `PTQ1_0_R8` [PR 2550](https://github.com/ikawrakow/ik_llama.cpp/pull/2550)
+
+Cuda implementations: `Q2_0` and `PQ2_0` [PR 2691](https://github.com/ikawrakow/ik_llama.cpp/pull/2691) [PR 2747](https://github.com/ikawrakow/ik_llama.cpp/pull/2747). `PTQ1_0` and the `_R8` variants are currently CPU-only.
 
 ##### Hadamard transforms for K-cache
 
@@ -155,7 +218,7 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 #### Quantization performance improvements 
 
 * Much faster CPU prompt processing for all non-interleaved quants. Initial idea in [PR 515](https://github.com/ikawrakow/ik_llama.cpp/pull/515) and [PR 531](https://github.com/ikawrakow/ik_llama.cpp/pull/531), with many follow up PRs to apply to all quantization types for the 3 supported CPU platforms.
-* All quantization types now have quantized matrix multiplication CUDA kernels, see [PR 557](https://github.com/ikawrakow/ik_llama.cpp/pull/515) and several others
+* All quantization types now have quantized matrix multiplication CUDA kernels, see [PR 557](https://github.com/ikawrakow/ik_llama.cpp/pull/557) and several others
 * Faster CPU prompt processing for Trellis quants and MoE models. [PR 488](https://github.com/ikawrakow/ik_llama.cpp/pull/488)
 * Trellis quants: faster CPU prompt processing [PR 482](https://github.com/ikawrakow/ik_llama.cpp/pull/482).
 * Minor (~2%) `iq2_ks` TG performance improvement on CUDA [PR 468](https://github.com/ikawrakow/ik_llama.cpp/pull/468)
@@ -185,6 +248,10 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 * jinja template support [PR 677](https://github.com/ikawrakow/ik_llama.cpp/pull/677)
 * Webui: New Features for Conversations, Settings, and Chat Messages [PR 618](https://github.com/ikawrakow/ik_llama.cpp/pull/618), MCP [PR 1904](https://github.com/ikawrakow/ik_llama.cpp/pull/1904)
 * On-demand tensor reload [PR 1989](https://github.com/ikawrakow/ik_llama.cpp/pull/1989)
+* MoE cache [PR 2644](https://github.com/ikawrakow/ik_llama.cpp/pull/2644)
+* Multi-GPU CUDA quantization [PR 2674](https://github.com/ikawrakow/ik_llama.cpp/pull/2674), with on-GPU encoding for more quantization types [PR 2671](https://github.com/ikawrakow/ik_llama.cpp/pull/2671) [PR 2682](https://github.com/ikawrakow/ik_llama.cpp/pull/2682)
+* `-cuda max-graphs=N` [PR 2715](https://github.com/ikawrakow/ik_llama.cpp/pull/2715)
+* Unicode NFC normalization for tokenizers [PR 2735](https://github.com/ikawrakow/ik_llama.cpp/pull/2735)
 * Dynamic control vector management endpoints [PR 1223](https://github.com/ikawrakow/ik_llama.cpp/pull/1223)
 * Legacy quants conversion schemes in `convert_hf_to_gguf.py` [PR 449](https://github.com/ikawrakow/ik_llama.cpp/pull/449), `Q6_0` in [PR 483](https://github.com/ikawrakow/ik_llama.cpp/pull/483)
 * Adaptive-P Sampler [PR 1100](https://github.com/ikawrakow/ik_llama.cpp/pull/1100) implemented as designed by it's author; supported on Webui
@@ -208,8 +275,30 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 
 ### Performance improvements
 
-* Better GPU offload strategy for MoE models when using hybrid HPU/CPU inference, see [PR 520](https://github.com/ikawrakow/ik_llama.cpp/pull/520)
-* Much faster rng sampling [PR 1187](https://github.com/ikawrakow/ik_llama.cpp/pull/1187)
+* October 25 2026: Faster `rms_norm` for `Qwen3.8-Flash-Next` [PR 2752](https://github.com/ikawrakow/ik_llama.cpp/pull/2752)
+* October 23 2026: Sparse FA for `qwen4exp` QSA prefill [PR 2738](https://github.com/ikawrakow/ik_llama.cpp/pull/2738)
+* October 22 2026: 🚀 Improved `pp`/`tg` performance for KT quants with AVX-512 [PR 2724](https://github.com/ikawrakow/ik_llama.cpp/pull/2724)
+* October 22 2026: Sparse FA for `glm5next` DSA attention [PR 2723](https://github.com/ikawrakow/ik_llama.cpp/pull/2723)
+* October 21 2026: Sparse FA for `DeepSeek-V4` compressed layers [PR 2714](https://github.com/ikawrakow/ik_llama.cpp/pull/2714)
+* October 20 2026: AVX-512 kernels for `IQ1_S`/`IQ1_M` token generation [PR 2705](https://github.com/ikawrakow/ik_llama.cpp/pull/2705)
+* October 12 2026: Better `IQ3_XXS_R4` TG performance on AVX-512+VNNI CPUs [PR 2633](https://github.com/ikawrakow/ik_llama.cpp/pull/2633)
+* September 24 2026: Grouped `fused_rms_norm` [PR 2514](https://github.com/ikawrakow/ik_llama.cpp/pull/2514)
+* September 17 2026: Faster `Q4_0_R8` and `MXFP4_R8` on AVX-512 VNNI CPUs [PR 2465](https://github.com/ikawrakow/ik_llama.cpp/pull/2465), faster `Q4_0_R8` GEMM on vanilla AVX2 CPUs [PR 2472](https://github.com/ikawrakow/ik_llama.cpp/pull/2472)
+* August 28 2026: Faster `Qwen3.8-Flash-Next` TG on CUDA [PR 2373](https://github.com/ikawrakow/ik_llama.cpp/pull/2373)
+* August 8 2026: Indexer top-k optimization [PR 2274](https://github.com/ikawrakow/ik_llama.cpp/pull/2274)
+* July 30 2026: Faster long-context TG for `DeepSeek-V4` [PR 2201](https://github.com/ikawrakow/ik_llama.cpp/pull/2201)
+* July 25 2026: `DeepSeek-V4` optimizations [PR 2169](https://github.com/ikawrakow/ik_llama.cpp/pull/2169)
+* July 12 2026: Much better long-context PP for `GLM-DSA` on CUDA [PR 2109](https://github.com/ikawrakow/ik_llama.cpp/pull/2109)
+* July 6 2026: Much better long-context PP for `GLM-DSA` on the CPU [PR 2074](https://github.com/ikawrakow/ik_llama.cpp/pull/2074)
+* April 13 2026: Fused `rms_norm` + add [PR 1627](https://github.com/ikawrakow/ik_llama.cpp/pull/1627)
+* February 18 2026: Better CPU performance for `Qwen3-Next` [PR 1283](https://github.com/ikawrakow/ik_llama.cpp/pull/1283)
+* January 28 2026: Much faster long-context TG for `GLM-4.5/4.6/4.7/AIR` [PR 1193](https://github.com/ikawrakow/ik_llama.cpp/pull/1193) and `MiniMax-M2` [PR 1194](https://github.com/ikawrakow/ik_llama.cpp/pull/1194)
+* January 25 2026: Much faster rng sampling [PR 1187](https://github.com/ikawrakow/ik_llama.cpp/pull/1187)
+* December 24 2025: Fused norm [PR 1086](https://github.com/ikawrakow/ik_llama.cpp/pull/1086)
+* December 16 2025: Much better TG speed with split mode "graph" [PR 1067](https://github.com/ikawrakow/ik_llama.cpp/pull/1067)
+* November 5 2025: Much better CPU TG performance at long context for `GLM-4.5` [PR 899](https://github.com/ikawrakow/ik_llama.cpp/pull/899)
+* October 13 2025: Attention mask tweaks for better long-context performance [PR 825](https://github.com/ikawrakow/ik_llama.cpp/pull/825)
+* June 12 2025: Better GPU offload strategy for MoE models when using hybrid HPU/CPU inference, see [PR 520](https://github.com/ikawrakow/ik_llama.cpp/pull/520)
 * May 13 2025: Better CPU FA performance for DeepSeek-Lite. [PR 410](https://github.com/ikawrakow/ik_llama.cpp/pull/410)
 * May 11 2025: Slightly faster flash attention for DeepSeek models on CUDA, along with extending compatibility to Touring or newer GPUs. [PR 408](https://github.com/ikawrakow/ik_llama.cpp/pull/408)
 * May 4 2025: Significant token generation performance improvement on CUDA with Flash Attention for GQA models. For details and benchmarks. [PR 370](https://github.com/ikawrakow/ik_llama.cpp/pull/370) 
@@ -223,6 +312,14 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 
 ### Flash-MLA
 
+* October 20 2026: Reserve the MLA flash-attention work buffer for every consumer branch [PR 2710](https://github.com/ikawrakow/ik_llama.cpp/pull/2710)
+* September 21 2026: Allocate the derived MLA weights with the backend's padded size [PR 2493](https://github.com/ikawrakow/ik_llama.cpp/pull/2493)
+* July 6 2026: 🚀 MLA flash-attention decode on Pascal GPUs (`vec_f32` K=576/V=512), including `Q8_0` KV cache [PR 2079](https://github.com/ikawrakow/ik_llama.cpp/pull/2079)
+* June 25 2026: Fix MLA flash-attention vector decode for asymmetric K/V head sizes on CUDA [PR 2031](https://github.com/ikawrakow/ik_llama.cpp/pull/2031)
+* May 21 2026: Fused `dequant_hadamard` op for MLA tensor-parallel (`-khad`) [PR 1852](https://github.com/ikawrakow/ik_llama.cpp/pull/1852)
+* May 20 2026: MLA tensor-parallel prompt-processing optimization [PR 1841](https://github.com/ikawrakow/ik_llama.cpp/pull/1841)
+* April 16 2026: Allow all supported quantization types for FlashMLA on the CPU [PR 1641](https://github.com/ikawrakow/ik_llama.cpp/pull/1641)
+* November 10 2025: DeepSeek FA optimizations [PR 929](https://github.com/ikawrakow/ik_llama.cpp/pull/929)
 * May 7 2025: 🚀 FlashMLA-3 for DeepSeek models on CUDA. [PR 386](https://github.com/ikawrakow/ik_llama.cpp/pull/386). Caveat: Ampere or newer Nvidia GPU required
 * March 21 2025: 🚀 FlashMLA-3: fastest CPU-only inference for DeepSeek models [PR 273](https://github.com/ikawrakow/ik_llama.cpp/pull/273)
 * March 17 2025: 🚀 FlashMLA-2 performance improvements [PR 253](https://github.com/ikawrakow/ik_llama.cpp/pull/253)
@@ -237,12 +334,23 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 
 ### Fixes
 
-* Fix bug in MMVQ kernel [PR 446](https://github.com/ikawrakow/ik_llama.cpp/pull/446)
-* Fix AVX2 implementation of `IQ4_K, IQ4_KS, IQ5_K, IQ6_K` [PR 427](https://github.com/ikawrakow/ik_llama.cpp/pull/427) 
-* Fix standard attention on the CPU [PR 421](https://github.com/ikawrakow/ik_llama.cpp/pull/421) 
-* Fix imatrix calculation for MLA models [PR 411](https://github.com/ikawrakow/ik_llama.cpp/pull/411)
-* Fix new CUDA FA on Touring [PR 413](https://github.com/ikawrakow/ik_llama.cpp/pull/413)
-* Fix SER. CPU: [PR 415](https://github.com/ikawrakow/ik_llama.cpp/pull/415) CUDA: [PR 416](https://github.com/ikawrakow/ik_llama.cpp/pull/416)
+* October 22 2026: Fix `IQ5_KS_R16` AVX-512+VNNI GEMM [PR 2731](https://github.com/ikawrakow/ik_llama.cpp/pull/2731)
+* October 18 2026: CUDA: fix double-counted KV block in the new MMA FA [PR 2698](https://github.com/ikawrakow/ik_llama.cpp/pull/2698)
+* October 14 2026: Fix `--prefetch-experts` being a no-op for CPU-only graphs [PR 2667](https://github.com/ikawrakow/ik_llama.cpp/pull/2667)
+* October 13 2026: Fix AVX2 GEMM for `IQ4_XS`, `IQ4_KSS`, `IQ5_KS` [PR 2664](https://github.com/ikawrakow/ik_llama.cpp/pull/2664)
+* October 2 2026: Fix V-cache store for 3-D V without flash attention [PR 2581](https://github.com/ikawrakow/ik_llama.cpp/pull/2581)
+* March 27 2026: Fix CUDA Hadamard transform bug [PR 1526](https://github.com/ikawrakow/ik_llama.cpp/pull/1526)
+* March 26 2026: Fix CPU flash attention with bf16 KV cache [PR 1521](https://github.com/ikawrakow/ik_llama.cpp/pull/1521)
+* December 5 2025: CUDA: fix FA on Pascal GPUs [PR 1036](https://github.com/ikawrakow/ik_llama.cpp/pull/1036)
+* November 24 2025: Fix `Q6_0` dequantization [PR 1005](https://github.com/ikawrakow/ik_llama.cpp/pull/1005)
+* November 6 2025: Fix `iqk_mul_mat` when the number of rows is not a multiple of the repack rows [PR 911](https://github.com/ikawrakow/ik_llama.cpp/pull/911)
+* October 13 2025: Fix incomplete UTF-8 characters in streaming completions [PR 810](https://github.com/ikawrakow/ik_llama.cpp/pull/810)
+* May 23 2025: Fix bug in MMVQ kernel [PR 446](https://github.com/ikawrakow/ik_llama.cpp/pull/446)
+* May 16 2025: Fix AVX2 implementation of `IQ4_K, IQ4_KS, IQ5_K, IQ6_K` [PR 427](https://github.com/ikawrakow/ik_llama.cpp/pull/427) 
+* May 15 2025: Fix standard attention on the CPU [PR 421](https://github.com/ikawrakow/ik_llama.cpp/pull/421) 
+* May 13 2025: Fix SER. CPU: [PR 415](https://github.com/ikawrakow/ik_llama.cpp/pull/415) CUDA: [PR 416](https://github.com/ikawrakow/ik_llama.cpp/pull/416)
+* May 13 2025: Fix imatrix calculation for MLA models [PR 411](https://github.com/ikawrakow/ik_llama.cpp/pull/411)
+* May 12 2025: Fix new CUDA FA on Touring [PR 413](https://github.com/ikawrakow/ik_llama.cpp/pull/413)
 
 ## Resources
 
@@ -272,21 +380,23 @@ Contributions in form of pull requests, issue submissions (bug reports, feature 
 
 ## License
 
-- [subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
-- [server](examples/server/README.md)
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Documentation
+
+- [Server](examples/server/README.md)
 - [GBNF grammars](grammars/README.md)
-
-#### Development documentation
-
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
 - [Pascal and Volta GPUs](docs/pascal-volta.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 
-#### Seminal papers and background on the models
+## Seminal papers and background on the models
 
-If your issue is with model generation quality, then please at least scan the following links and papers to understand the limitations of LLaMA models. This is especially important when choosing an appropriate model size and appreciating both the significant and subtle differences between LLaMA models and ChatGPT:
+If your issue is with model generation quality, start with the technical report or model card of the exact model you are running, then scan the papers below. They cover both the foundations of transformer-based LLMs and the architectural ideas implemented by this project (MoE, MLA, linear/hybrid attention, sparse attention, MTP, KV-cache compression, quantization and speculative decoding). This is especially important when choosing an appropriate model size, and when appreciating the differences between base, instruct/chat and reasoning models.
+
+**Foundational background:**
 - LLaMA:
     - [Introducing LLaMA: A foundational, 65-billion-parameter large language model](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
     - [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)
@@ -295,6 +405,28 @@ If your issue is with model generation quality, then please at least scan the fo
 - GPT-3.5 / InstructGPT / ChatGPT:
     - [Aligning language models to follow instructions](https://openai.com/research/instruction-following)
     - [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155)
+- [RoFormer: Enhanced Transformer with Rotary Position Embedding (RoPE)](https://arxiv.org/abs/2104.09864)
+- [GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints](https://arxiv.org/abs/2305.13245)
+- [Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity](https://arxiv.org/abs/2101.03961)
+- [FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness](https://arxiv.org/abs/2205.14135), [FlashAttention-2](https://arxiv.org/abs/2307.08691), [FlashAttention-3](https://arxiv.org/abs/2407.08608)
+- [Mamba: Linear-Time Sequence Modeling with Selective State Spaces](https://arxiv.org/abs/2312.00752), [Transformers are SSMs: Generalized Models and Efficient Algorithms Through Structured State Space Duality (Mamba-2)](https://arxiv.org/abs/2405.21060)
+
+**Current open-weight model reports (2026, only families with runtime support in this fork):**
+- [DeepSeek-V4.1-Flash: Pushing the Limits of KV Cache Compression](https://arxiv.org/abs/2609.19969)
+- [GLM-5: from Vibe Coding to Agentic Engineering](https://arxiv.org/abs/2602.15763) and [GLM-5.3-Flash](https://docs.z.ai/guides/vlm/glm-5.3-flash)
+- [On the Design of Qwen3.8-Next Architecture: Evaluation, Efficiency, and Training Stability](https://arxiv.org/abs/2608.30320) (Qwen3.8-Flash-Next)
+- [Gemma 4](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/), including Gemma 4 12B
+- [Muse Glimmer 30B: An On-Device Agentic Model](https://arxiv.org/abs/2610.24628)
+
+**Quantization and low-precision inference:**
+- [GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers](https://arxiv.org/abs/2210.17323)
+- [AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration](https://arxiv.org/abs/2306.00978)
+- [QuIP#: Even Better LLM Quantization with Hadamard Incoherence and Lattice Codebooks](https://arxiv.org/abs/2402.04396)
+- [The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits (BitNet b1.58)](https://arxiv.org/abs/2402.17764) and [BitNet b1.58 2B4T Technical Report](https://arxiv.org/abs/2504.12285)
+
+**Inference acceleration:**
+- [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/abs/2211.17192)
+- [Accelerating Large Language Model Decoding with Speculative Sampling](https://arxiv.org/abs/2302.01318)
 
 ## Completions
 Command-line completion is available for some environments.
