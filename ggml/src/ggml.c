@@ -29069,43 +29069,19 @@ static void clear_numa_thread_affinity(void) {
 
 // Persistent workers keep whatever affinity was set last, so an unpinned phase
 // must restore each worker's virgin affinity: merely skipping the pin would leak
-// the previous phase's pinning. Virgin state is captured once per thread.
-#define GGML_LINUX_AFFINITY_MAX_THREADS 256
-static struct {
-    pthread_t thrd; // owner thread
-    cpu_set_t saved; // affinity before our first pin
-    int       used;
-} g_linux_aff_restore[GGML_LINUX_AFFINITY_MAX_THREADS];
-static int g_linux_aff_n = 0;
-static pthread_mutex_t g_linux_aff_lock = PTHREAD_MUTEX_INITIALIZER;
+// the previous phase's pinning. Virgin state is captured once per thread and
+// kept in TLS: a worker that exits frees it, and a recycled pthread_t cannot
+// inherit a dead worker's mask (the pid alone is not a usable key).
+static __thread cpu_set_t g_linux_aff_saved;
+static __thread bool      g_linux_aff_used = false;
 
 static cpu_set_t * ggml_linux_restore_slot(bool create) {
-    pthread_t self = pthread_self();
-    pthread_mutex_lock(&g_linux_aff_lock);
-    int found = -1;
-    for (int i = 0; i < g_linux_aff_n; ++i) {
-        if (g_linux_aff_restore[i].used && pthread_equal(g_linux_aff_restore[i].thrd, self)) {
-            found = i;
-            break;
+    if (!g_linux_aff_used && create) {
+        if (pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &g_linux_aff_saved) == 0) {
+            g_linux_aff_used = true;
         }
     }
-    if (found < 0 && create && g_linux_aff_n < GGML_LINUX_AFFINITY_MAX_THREADS) {
-        found = g_linux_aff_n++;
-        g_linux_aff_restore[found].thrd = self;
-    }
-    cpu_set_t * out = NULL;
-    if (found >= 0 && (g_linux_aff_restore[found].used || create)) {
-        if (!g_linux_aff_restore[found].used) {
-            if (pthread_getaffinity_np(self, sizeof(cpu_set_t), &g_linux_aff_restore[found].saved) == 0) {
-                g_linux_aff_restore[found].used = 1;
-            }
-        }
-        if (g_linux_aff_restore[found].used) {
-            out = &g_linux_aff_restore[found].saved;
-        }
-    }
-    pthread_mutex_unlock(&g_linux_aff_lock);
-    return out;
+    return g_linux_aff_used ? &g_linux_aff_saved : NULL;
 }
 
 // pin worker `thread_n` to its assigned logical CPU (restores virgin affinity without)
@@ -29245,79 +29221,30 @@ static bool ggml_win_get_group_affinity(int cpu, GROUP_AFFINITY * out) {
 // unpinned phase must restore each worker's virgin affinity: merely skipping
 // the pin would leak the previous phase's pinning (e.g. PP fill pins leaking
 // into a TG-only phase). Virgin state is captured once per thread, before our
-// first pin; it matches for every thread (process affinity at creation).
-#define GGML_WIN_AFFINITY_MAX_THREADS 256
-static struct {
-    LONG           key;   // per-thread cookie, never reused (TIDs are recycled, this is not)
-    GROUP_AFFINITY saved; // affinity before our first pin
-    LONG           used;
-} g_win_aff_restore[GGML_WIN_AFFINITY_MAX_THREADS];
-static atomic_int g_win_aff_n    = 0;
-static atomic_int g_win_aff_keys = 0;
+// first pin, and kept in TLS: a worker that exits frees it, and Windows thread
+// id reuse (non-OpenMP builds create n_threads-1 threads per graph) cannot
+// leak a dead worker's mask into a fresh one.
+static __declspec(thread) GROUP_AFFINITY g_win_aff_saved;
+static __declspec(thread) bool           g_win_aff_used = false;
 
-// TID alone is not a usable key: Windows recycles thread ids, and the
-// non-OpenMP path creates/destroys n_threads-1 threads per graph compute, so a
-// fresh thread can match a dead worker's slot and inherit its mask. Hand out a
-// cookie per thread instead - thread-local, so it dies with the thread.
-static __declspec(thread) LONG g_win_aff_cookie = 0;
-
-static LONG ggml_win_affinity_key(void) {
-    if (g_win_aff_cookie == 0) {
-        g_win_aff_cookie = InterlockedIncrement(&g_win_aff_keys); // never returns 0
-    }
-    return g_win_aff_cookie;
-}
-
-static GROUP_AFFINITY * ggml_win_restore_slot(bool create) {
-    const LONG key = ggml_win_affinity_key();
-    // only this thread ever queries its own key, so the racy scan is safe;
-    // slot allocation itself is atomic. The loaded count is clamped rather than
-    // trusted: two threads can both pass the full check below, so g_win_aff_n may
-    // briefly exceed the table size, and the scan must never follow it past the
-    // end and hand back a pointer to unrelated memory.
-    LONG found = -1;
-    const LONG n_all   = atomic_load(&g_win_aff_n);
-    const LONG n_slots = n_all < GGML_WIN_AFFINITY_MAX_THREADS ? n_all : GGML_WIN_AFFINITY_MAX_THREADS;
-    for (LONG i = 0; i < n_slots; ++i) {
-        if (g_win_aff_restore[i].key == key) {
-            found = i;
-            break;
-        }
-    }
-    if (found < 0) {
-        if (!create || n_slots >= GGML_WIN_AFFINITY_MAX_THREADS) {
-            return NULL; // never pinned by us, or the table is full
-        }
-        found = InterlockedIncrement(&g_win_aff_n) - 1;
-        if (found < 0 || found >= GGML_WIN_AFFINITY_MAX_THREADS) {
-            return NULL;
-        }
-        g_win_aff_restore[found].key = key;
-    } else if (g_win_aff_restore[found].used) {
-        return &g_win_aff_restore[found].saved;
-    } else if (!create) {
-        return NULL;
-    }
-    if (!GetThreadGroupAffinity(GetCurrentThread(), &g_win_aff_restore[found].saved)) {
-        return NULL; // used stays 0, capture retried on the next pin
-    }
-    g_win_aff_restore[found].used = 1;
-    return &g_win_aff_restore[found].saved;
-}
-
-// returns false when no virgin affinity could be stored (table full or capture
-// failed); the caller must then leave the thread alone, otherwise it could be
-// pinned with no way to ever be unpinned again
+// returns false when the virgin affinity could not be captured; the caller must
+// then leave the thread alone, otherwise it could be pinned with no way to ever
+// be unpinned again
 static bool ggml_win_save_affinity_once(void) {
-    return ggml_win_restore_slot(true) != NULL;
+    if (!g_win_aff_used) {
+        if (!GetThreadGroupAffinity(GetCurrentThread(), &g_win_aff_saved)) {
+            return false; // capture retried on the next pin
+        }
+        g_win_aff_used = true;
+    }
+    return true;
 }
 
 static void ggml_win_restore_affinity(void) {
-    GROUP_AFFINITY * saved = ggml_win_restore_slot(false);
-    if (saved == NULL) {
+    if (!g_win_aff_used) {
         return; // never pinned by us, nothing to restore
     }
-    if (!SetThreadGroupAffinity(GetCurrentThread(), saved, NULL)) {
+    if (!SetThreadGroupAffinity(GetCurrentThread(), &g_win_aff_saved, NULL)) {
         // once per thread: this runs on every unpinned graph compute
         static __declspec(thread) bool warned = false;
         if (!warned) {

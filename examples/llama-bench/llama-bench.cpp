@@ -999,16 +999,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.use_mmap.empty())     { params.use_mmap = cmd_params_defaults.use_mmap; }
     if (params.embeddings.empty())   { params.embeddings = cmd_params_defaults.embeddings; }
     if (params.n_threads.empty())    { params.n_threads = cmd_params_defaults.n_threads; }
-    {
-        // resolve explicit list, P-core auto, or P-first P+E fill; per-phase -t guard lives in
-        // llama_graph_compute (a phase with more threads than P-cores stays unpinned,
-        // fill truncates the combined list to the graph's thread count instead)
-        params.cpu_affinity = cpu_affinity_resolve_mode(
-            params.cpu_affinity, params.cpu_affinity_mode);
-        if (params.cpu_affinity_mode != LLAMA_CPU_AFFINITY_DISABLED && params.cpu_affinity.empty()) {
-            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
-        }
-    }
+    // resolve explicit -cm/-cr, P-core auto, or P-first P+E fill; the per-phase
+    // -t guard lives in llama_graph_compute (fill truncates the list per graph)
+    common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_mode);
     if (!params.buft_overrides.empty()) params.buft_overrides.emplace_back(llama_model_tensor_buft_override{nullptr, nullptr});
 
     return params;
@@ -2303,11 +2296,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        if (!inst.cpu_affinity.empty() && inst.cpu_affinity_mode == LLAMA_CPU_AFFINITY_DISABLED) {
-            llama_set_cpu_affinity(ctx, inst.cpu_affinity.data(), (int) inst.cpu_affinity.size());
-        } else if (inst.cpu_affinity_mode != LLAMA_CPU_AFFINITY_DISABLED && !inst.cpu_affinity.empty()) {
-            llama_set_cpu_affinity_auto(ctx, inst.cpu_affinity.data(), (int) inst.cpu_affinity.size(), inst.cpu_affinity_mode);
-        }
+        common_cpu_affinity_apply(ctx, inst.cpu_affinity, inst.cpu_affinity_mode, __func__);
 
         test t(inst, lmodel, ctx);
 

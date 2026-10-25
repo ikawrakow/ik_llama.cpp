@@ -575,6 +575,77 @@ static std::vector<int32_t> cpu_affinity_filter(const std::vector<int32_t> & cpu
 }
 
 #elif defined(_WIN32)
+// flat logical CPU id -> owning core: flat ids follow
+// GetLogicalProcessorInformationEx(RelationProcessorCore) enumeration order
+// (each GroupMask bit in order), the same mapping ggml/src/ggml.c uses for
+// pinning. One enumerator serves detection and filtering, so they cannot drift.
+struct win_flat_cpu {
+    WORD group;
+    int  bit;
+    int  core;       // index of the RelationProcessorCore record
+    BYTE efficiency; // EfficiencyClass of that core
+};
+
+static std::vector<win_flat_cpu> win_flat_cpus() {
+    std::vector<win_flat_cpu> cpus;
+
+    DWORD len = 0;
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &len)) {
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+            return cpus;
+        }
+    }
+    if (len == 0) {
+        return cpus;
+    }
+
+    // malloc: suitably aligned for SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX * buf =
+        (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) malloc(len);
+    if (!buf) {
+        return cpus;
+    }
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, buf, &len)) {
+        free(buf);
+        return cpus;
+    }
+
+    int core = 0;
+    const char * ptr = (const char *) buf;
+    const char * end = (const char *) buf + len;
+    while (ptr < end) {
+        const auto * info = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *>(ptr);
+        if (info->Size == 0) {
+            break;
+        }
+        if (info->Relationship == RelationProcessorCore) {
+            for (WORD g = 0; g < info->Processor.GroupCount; ++g) {
+                const KAFFINITY mask = (KAFFINITY) info->Processor.GroupMask[g].Mask;
+                const WORD      grp  = info->Processor.GroupMask[g].Group;
+                // bound by KAFFINITY width: 32 LPs/group on 32-bit, 64 on 64-bit
+                for (int bit = 0; bit < (int)(sizeof(KAFFINITY) * 8); ++bit) {
+                    if (!(mask & ((KAFFINITY) 1 << bit))) {
+                        continue;
+                    }
+                    // ggml caps its topology table at GGML_MAX_CPU_AFFINITY, so
+                    // ids past it cannot be pinned: stop here so they are
+                    // reported as out of topology instead of silently unbound
+                    if ((int) cpus.size() >= GGML_MAX_CPU_AFFINITY) {
+                        free(buf);
+                        return cpus;
+                    }
+                    cpus.push_back({grp, bit, core, info->Processor.EfficiencyClass});
+                }
+            }
+            ++core;
+        }
+        ptr += info->Size;
+    }
+
+    free(buf);
+    return cpus;
+}
+
 // Windows hybrid core detection via EfficiencyClass (highest class = P, rest = E),
 // mirroring Linux cpu_detect_cores(with_siblings, efficiency). Flat ids follow
 // GetLogicalProcessorInformationEx(RelationProcessorCore) enumeration order,
@@ -592,50 +663,18 @@ static std::vector<int32_t> cpu_detect_cores_win(bool with_siblings, bool effici
         return primaries;
     }
 
-    DWORD len = 0;
-    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &len)) {
-        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-            return primaries;
-        }
-    }
-    if (len == 0) {
+    const std::vector<win_flat_cpu> flat = win_flat_cpus();
+    if (flat.empty()) {
         return primaries;
     }
 
-    // malloc: suitably aligned for SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX
-    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX * buf =
-        (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) malloc(len);
-    if (!buf) {
-        return primaries;
-    }
-    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, buf, &len)) {
-        free(buf);
-        return primaries;
-    }
-
-    // pass 1: EfficiencyClass range; uniform (min == max) means no hybrid
+    // EfficiencyClass range; uniform (min == max) means no hybrid
     BYTE max_eff = 0, min_eff = 255;
-    {
-        const char * ptr = (const char *) buf;
-        const char * end = (const char *) buf + len;
-        while (ptr < end) {
-            const auto * info = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *>(ptr);
-            if (info->Size == 0) {
-                break;
-            }
-            if (info->Relationship == RelationProcessorCore) {
-                if (info->Processor.EfficiencyClass > max_eff) {
-                    max_eff = info->Processor.EfficiencyClass;
-                }
-                if (info->Processor.EfficiencyClass < min_eff) {
-                    min_eff = info->Processor.EfficiencyClass;
-                }
-            }
-            ptr += info->Size;
-        }
+    for (const win_flat_cpu & cpu : flat) {
+        max_eff = std::max(max_eff, cpu.efficiency);
+        min_eff = std::min(min_eff, cpu.efficiency);
     }
     if (min_eff >= max_eff) {
-        free(buf);
         return primaries; // uniform cores, no hybrid
     }
 
@@ -644,55 +683,31 @@ static std::vector<int32_t> cpu_detect_cores_win(bool with_siblings, bool effici
     const bool have_proc_mask =
         GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask) != 0;
 
-    // pass 2: primaries then SMT siblings, same flat-id order as ggml.c
-    int flat = 0;
-    {
-        const char * ptr = (const char *) buf;
-        const char * end = (const char *) buf + len;
-        while (ptr < end) {
-            const auto * info = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *>(ptr);
-            if (info->Size == 0) {
-                break;
-            }
-            if (info->Relationship == RelationProcessorCore) {
-                const bool is_target = ((info->Processor.EfficiencyClass == max_eff) != efficiency);
-                bool picked = false;
-                for (WORD g = 0; g < info->Processor.GroupCount; ++g) {
-                    const KAFFINITY mask = (KAFFINITY) info->Processor.GroupMask[g].Mask;
-                    const WORD      grp  = info->Processor.GroupMask[g].Group;
-                    // bound by KAFFINITY width: 32 LPs/group on 32-bit, 64 on 64-bit
-                    for (int bit = 0; bit < (int)(sizeof(KAFFINITY) * 8); ++bit) {
-                        if (!(mask & ((KAFFINITY) 1 << bit))) {
-                            continue;
-                        }
-                        const int cur_flat = flat++;
-                        if (cur_flat >= GGML_MAX_CPU_AFFINITY) {
-                            free(buf);
-                            primaries.insert(primaries.end(), extra.begin(), extra.end());
-                            return primaries; // backend supports up to GGML_MAX_CPU_AFFINITY
-                        }
-                        if (!is_target) {
-                            continue; // other class LP, still counts for flat ids
-                        }
-                        // single-group filter: skip LPs outside our start affinity (e.g. start /affinity)
-                        // multi-group (>64 CPUs): Group != 0 is included (limitation, ggml pin warns on failure)
-                        if (have_proc_mask && grp == 0 && !(proc_mask & ((DWORD_PTR) 1 << bit))) {
-                            continue;
-                        }
-                        if (!picked) {
-                            primaries.push_back(cur_flat);
-                            picked = true; // one thread per physical core (HT-less OK)
-                        } else if (with_siblings) {
-                            extra.push_back(cur_flat); // SMT sibling for n_threads overflow
-                        }
-                    }
-                }
-            }
-            ptr += info->Size;
+    // primaries then SMT siblings, in flat-id order
+    int  last_core = -1;
+    bool picked    = false;
+    for (int id = 0; id < (int) flat.size(); ++id) {
+        const win_flat_cpu & cpu = flat[id];
+        if (cpu.core != last_core) {
+            last_core = cpu.core;
+            picked    = false; // one thread per physical core (HT-less OK)
+        }
+        if ((cpu.efficiency == max_eff) != efficiency) {
+            continue; // other class LP, still counts for flat ids
+        }
+        // single-group filter: skip LPs outside our start affinity (e.g. start /affinity)
+        // multi-group (>64 CPUs): Group != 0 is included (limitation, ggml pin warns on failure)
+        if (have_proc_mask && cpu.group == 0 && !(proc_mask & ((DWORD_PTR) 1 << cpu.bit))) {
+            continue;
+        }
+        if (!picked) {
+            primaries.push_back(id);
+            picked = true;
+        } else if (with_siblings) {
+            extra.push_back(id); // SMT sibling for n_threads overflow
         }
     }
 
-    free(buf);
     primaries.insert(primaries.end(), extra.begin(), extra.end());
     return primaries;
 }
@@ -724,71 +739,22 @@ static std::vector<int32_t> cpu_affinity_filter(const std::vector<int32_t> & cpu
         return cpus;
     }
 
-    DWORD len = 0;
-    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &len)) {
-        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-            return cpus; // cannot validate, pass through (pin warns on failure)
-        }
-    }
-    if (len == 0) {
-        return cpus;
-    }
-    // malloc: suitably aligned for SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX
-    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX * buf =
-        (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) malloc(len);
-    if (!buf) {
-        return cpus;
-    }
-    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, buf, &len)) {
-        free(buf);
-        return cpus;
+    const std::vector<win_flat_cpu> flat = win_flat_cpus();
+    if (flat.empty()) {
+        return cpus; // cannot validate, pass through (pin warns on failure)
     }
 
-    // flat id -> (group, bit), same order as detection and ggml.c pinning
     DWORD_PTR proc_mask = 0, sys_mask = 0;
     const bool have_proc_mask =
         GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask) != 0;
-    std::vector<WORD> flat_group;
-    std::vector<int>  flat_bit;
-    {
-        const char * ptr = (const char *) buf;
-        const char * end = (const char *) buf + len;
-        while (ptr < end) {
-            const auto * info = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *>(ptr);
-            if (info->Size == 0) {
-                break;
-            }
-            if (info->Relationship == RelationProcessorCore) {
-                for (WORD g = 0; g < info->Processor.GroupCount; ++g) {
-                    const KAFFINITY mask = (KAFFINITY) info->Processor.GroupMask[g].Mask;
-                    const WORD      grp  = info->Processor.GroupMask[g].Group;
-                    // bound by KAFFINITY width (<= DWORD_PTR width on Windows)
-                    for (int bit = 0; bit < (int)(sizeof(KAFFINITY) * 8); ++bit) {
-                        if (mask & ((KAFFINITY) 1 << bit)) {
-                            // ggml caps its topology table at GGML_MAX_CPU_AFFINITY, so
-                            // ids past it cannot be pinned: stop here so they are
-                            // reported as out of topology instead of silently unbound
-                            if ((int) flat_group.size() >= GGML_MAX_CPU_AFFINITY) {
-                                break;
-                            }
-                            flat_group.push_back(grp);
-                            flat_bit.push_back(bit);
-                        }
-                    }
-                }
-            }
-            ptr += info->Size;
-        }
-    }
-    free(buf);
 
-    const int total = (int) flat_group.size();
+    const int total = (int) flat.size();
     std::vector<int32_t> result;
     for (const int32_t cpu : cpus) {
         if (cpu < 0 || cpu >= total) {
             fprintf(stderr, "warning: CPU %d is outside the available topology (%d LPs), ignored\n", cpu, total);
-        } else if (have_proc_mask && flat_group[cpu] == 0 &&
-                   !(proc_mask & ((DWORD_PTR) 1 << flat_bit[cpu]))) {
+        } else if (have_proc_mask && flat[cpu].group == 0 &&
+                   !(proc_mask & ((DWORD_PTR) 1 << flat[cpu].bit))) {
             fprintf(stderr, "warning: CPU %d is outside the process affinity, ignored\n", cpu);
         } else {
             result.push_back(cpu);
@@ -859,6 +825,43 @@ std::vector<int32_t> cpu_affinity_resolve_mode(const std::vector<int32_t> & cpus
                         "pinning disabled\n");
     }
     return out;
+}
+
+void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, int & mode) {
+    const bool auto_mode = mode != LLAMA_CPU_AFFINITY_DISABLED;
+    cpus = cpu_affinity_resolve_mode(cpus, mode);
+    if (auto_mode && cpus.empty()) {
+        // nothing to pin (non-hybrid CPU, GGML_HYBRID=0, start affinity excludes
+        // the cores): drop the mode so no per-graph work is scheduled for it
+        mode = LLAMA_CPU_AFFINITY_DISABLED;
+    }
+}
+
+void common_cpu_affinity_apply(llama_context * ctx, const std::vector<int32_t> & cpus, int mode, const char * who) {
+    if (ctx == nullptr || cpus.empty()) {
+        return;
+    }
+
+    std::string list;
+    for (size_t i = 0; i < cpus.size(); ++i) {
+        list += (i == 0 ? "" : ",") + std::to_string(cpus[i]);
+    }
+
+    if (mode == LLAMA_CPU_AFFINITY_DISABLED) {
+        llama_set_cpu_affinity(ctx, cpus.data(), (int) cpus.size());
+        LOG_INF("%s: pinning CPU worker threads to logical CPUs: %s\n", who, list.c_str());
+        return;
+    }
+
+    llama_set_cpu_affinity_auto(ctx, cpus.data(), (int) cpus.size(), mode);
+    const bool is_fill = mode == LLAMA_CPU_AFFINITY_FILL_ALL ||
+                         mode == LLAMA_CPU_AFFINITY_FILL_PP  ||
+                         mode == LLAMA_CPU_AFFINITY_FILL_TG;
+    const char * phase =
+        mode == LLAMA_CPU_AFFINITY_AUTO_PP || mode == LLAMA_CPU_AFFINITY_FILL_PP ? "PP only" :
+        mode == LLAMA_CPU_AFFINITY_AUTO_TG || mode == LLAMA_CPU_AFFINITY_FILL_TG ? "TG only" : "PP+TG";
+    LOG_INF("%s: auto-pinning%s CPU worker threads (%s) to logical CPUs: %s\n",
+            who, is_fill ? "-fill" : "", phase, list.c_str());
 }
 
 // Parse a CPU bitmask ("0x55", "85") into a list of logical CPU ids.
@@ -1273,7 +1276,7 @@ void gpt_params_parse_from_env(gpt_params & params) {
 
 }
 
-bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
+bool gpt_params_parse(int argc, char ** argv, gpt_params & params, bool draft_affinity) {
     gpt_params_parse_from_env(params);
     const auto params_org = params; // the example can modify the default params
 
@@ -1289,12 +1292,13 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
         return false;
     }
 
-    // note: auto affinity stays unresolved here, so llama_init_from_gpt_params
-    // can still tell explicit -cm/-cr apart from auto -ca/-capp/-catg
-
-    // filter an explicit list now for the cparams/draft paths that bypass init
-    if (!params.cpu_affinity.empty()) {
-        params.cpu_affinity = cpu_affinity_filter(params.cpu_affinity);
+    // Resolve once, here, so that every example using -ca/-capp/-catg/-caf*
+    // honours it: those that never call llama_init_from_gpt_params still get the
+    // list through common_context_params_to_llama (as an all-phase explicit pin).
+    // --draft-params keeps it unresolved: its auto list is the E-cores, resolved
+    // by common_speculative_apply_draft_affinity with cpu_affinity_resolve_draft.
+    if (!draft_affinity) {
+        common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_mode);
     }
 
     return true;
@@ -2688,7 +2692,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             invalid_param = true;
             return true;
         }
-        params.cpu_affinity_auto = false;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
         return true;
@@ -2700,63 +2703,54 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             invalid_param = true;
             return true;
         }
-        params.cpu_affinity_auto = false;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
         return true;
     }
     if (arg == "--cpu-affinity-auto" || arg == "-ca") {
         params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_auto = true;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_ALL;
         return true;
     }
     if (arg == "--cpu-affinity-pp-auto" || arg == "-capp") {
         params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_auto = true;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_PP;
         return true;
     }
     if (arg == "--cpu-affinity-tg-auto" || arg == "-catg") {
         params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_auto = true;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_TG;
         return true;
     }
     if (arg == "--cpu-affinity-fill" || arg == "-caf") {
         params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_auto = true;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_FILL_ALL;
         return true;
     }
     if (arg == "--cpu-affinity-fill-pp" || arg == "-cafpp") {
         params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_auto = true;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_FILL_PP;
         return true;
     }
     if (arg == "--cpu-affinity-fill-tg" || arg == "-caftg") {
         params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_auto = true;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_FILL_TG;
         return true;
     }
     if (arg == "--cpu-affinity") {
         params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_auto = true;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_ALL;
         return true;
     }
     if (arg == "--no-cpu-affinity") {
         params.cpu_affinity.clear();
-        params.cpu_affinity_auto = false;
         params.cpu_affinity_configured = true;
         params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
         return true;
@@ -4751,35 +4745,10 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         return iparams;
     }
 
-    // opt-in pinning only: explicit -cm/-cr (both phases), or auto P-cores
-    // via -ca (both), -capp (PP), -catg (TG); fill -caf/-cafpp/-caftg pins
-    // P-first P+E truncated per graph to n_threads; oversubscribed phases are
-    // restored to the full P+E spread so persistent workers cannot leak a pin
-    {
-        const std::vector<int32_t> cpu_affinity =
-            cpu_affinity_resolve_mode(params.cpu_affinity, params.cpu_affinity_mode);
-        if (!cpu_affinity.empty()) {
-            std::string cpus;
-            for (size_t i = 0; i < cpu_affinity.size(); ++i) {
-                cpus += (i == 0 ? "" : ",") + std::to_string(cpu_affinity[i]);
-            }
-            if (!params.cpu_affinity.empty()) {
-                // explicit -cm/-cr, already filtered at parse
-                llama_set_cpu_affinity(lctx, cpu_affinity.data(), (int) cpu_affinity.size());
-                LOG_INF("%s: pinning CPU worker threads to logical CPUs: %s\n", __func__, cpus.c_str());
-            } else {
-                llama_set_cpu_affinity_auto(lctx, cpu_affinity.data(), (int) cpu_affinity.size(), params.cpu_affinity_mode);
-
-                const bool is_fill = params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_ALL ||
-                                     params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_PP  ||
-                                     params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_TG;
-                const char * phase =
-                    params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_AUTO_PP || params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_PP ? "PP only" :
-                    params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_AUTO_TG || params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_TG ? "TG only" : "PP+TG";
-                LOG_INF("%s: auto-pinning%s CPU worker threads (%s) to logical CPUs: %s\n", __func__, is_fill ? "-fill" : "", phase, cpus.c_str());
-            }
-        }
-    }
+    // opt-in pinning: explicit -cm/-cr (both phases), or an auto/fill mode that
+    // was resolved at parse into params.cpu_affinity (installed for the per-graph
+    // PP/TG decision, see llama_cpu_affinity_apply)
+    common_cpu_affinity_apply(lctx, params.cpu_affinity, params.cpu_affinity_mode, __func__);
 
     for (auto [op, on_off] : params.offload_policy) {
         llama_set_offload_policy(lctx, op, on_off);

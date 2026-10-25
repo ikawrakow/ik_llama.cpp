@@ -197,34 +197,9 @@ int main(int argc, char ** argv) {
 
     // CPU affinity (port of llama-bench wiring for 11e8bd40): explicit -cm/-cr
     // already installed via cparams at init, auto -ca/-capp/-catg and fill
-    // -caf/-cafpp/-caftg resolved here (fill: P-first P+E, truncated per graph).
-    {
-        const std::vector<int32_t> cpu_affinity = cpu_affinity_resolve_mode(
-            params.cpu_affinity, params.cpu_affinity_mode);
-        if (params.cpu_affinity_mode != LLAMA_CPU_AFFINITY_DISABLED && cpu_affinity.empty()) {
-            params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
-        } else if (params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_DISABLED && !cpu_affinity.empty()) {
-            llama_set_cpu_affinity(ctx, cpu_affinity.data(), (int) cpu_affinity.size());
-            std::string cpus;
-            for (size_t i = 0; i < cpu_affinity.size(); ++i) {
-                cpus += (i == 0 ? "" : ",") + std::to_string(cpu_affinity[i]);
-            }
-            LOG_TEE("%s: pinning CPU worker threads to logical CPUs: %s\n", __func__, cpus.c_str());
-        } else if (params.cpu_affinity_mode != LLAMA_CPU_AFFINITY_DISABLED && !cpu_affinity.empty()) {
-            llama_set_cpu_affinity_auto(ctx, cpu_affinity.data(), (int) cpu_affinity.size(), params.cpu_affinity_mode);
-            const bool is_fill = params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_ALL ||
-                                 params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_PP  ||
-                                 params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_TG;
-            const char * phase =
-                params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_AUTO_PP || params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_PP ? "PP only" :
-                params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_AUTO_TG || params.cpu_affinity_mode == LLAMA_CPU_AFFINITY_FILL_TG ? "TG only" : "PP+TG";
-            std::string cpus;
-            for (size_t i = 0; i < cpu_affinity.size(); ++i) {
-                cpus += (i == 0 ? "" : ",") + std::to_string(cpu_affinity[i]);
-            }
-            LOG_TEE("%s: auto-pinning%s CPU worker threads (%s) to logical CPUs: %s\n", __func__, is_fill ? "-fill" : "", phase, cpus.c_str());
-        }
-    }
+    // -caf/-cafpp/-caftg are resolved at parse and installed here (fill: P-first
+    // P+E, truncated per graph).
+    common_cpu_affinity_apply(ctx, params.cpu_affinity, params.cpu_affinity_mode, __func__);
 
     const bool use_checkpoint = common_speculative_needs_checkpoint(model);
 

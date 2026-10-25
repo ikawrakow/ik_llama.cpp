@@ -13369,6 +13369,10 @@ void llama_set_n_threads(struct llama_context * ctx, uint32_t n_threads, uint32_
 }
 
 void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus) {
+    if (n_cpus > 0 && cpus == nullptr) {
+        LLAMA_LOG_WARN("%s: ignoring %d CPUs with a null list\n", __func__, n_cpus);
+        return;
+    }
     ctx->cpu_affinity_explicit.clear();
     if (n_cpus > 0 && cpus != nullptr) {
         ctx->cpu_affinity_explicit.assign(cpus, cpus + n_cpus);
@@ -13385,6 +13389,10 @@ void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, in
 }
 
 void llama_set_cpu_affinity_auto(struct llama_context * ctx, const int32_t * cpus, int n_cpus, int mode) {
+    if (n_cpus > 0 && cpus == nullptr) {
+        LLAMA_LOG_WARN("%s: ignoring %d CPUs with a null list\n", __func__, n_cpus);
+        return;
+    }
     ctx->cpu_affinity_auto_cpus.clear();
     if (n_cpus > 0 && cpus != nullptr) {
         ctx->cpu_affinity_auto_cpus.assign(cpus, cpus + n_cpus);

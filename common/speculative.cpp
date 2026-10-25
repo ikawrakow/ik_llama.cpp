@@ -2007,7 +2007,9 @@ static bool common_speculative_has_target_features(const common_speculative * sp
 // parse --draft-params into draft model/context parameters
 static bool common_speculative_parse_params(const std::string & args, gpt_params & out, bool print_usage) {
     auto [argc, argv] = parse_command_line("llama " + args);
-    const bool ok = gpt_params_parse(argc, argv, out);
+    // draft affinity stays unresolved here: its auto list is the E-cores, see
+    // common_speculative_apply_draft_affinity
+    const bool ok = gpt_params_parse(argc, argv, out, true);
     if (!ok && print_usage) {
         gpt_params_print_usage(argc, argv, out);
     }
@@ -2033,13 +2035,14 @@ static void common_speculative_apply_draft_affinity(const gpt_params & parsed, c
     if (!parsed.cpu_affinity_configured) {
         return;
     }
+    const bool auto_detect = parsed.cpu_affinity_mode != LLAMA_CPU_AFFINITY_DISABLED;
     // --cpu-affinity = hybrid E-cores
-    params.cpu_affinity = parsed.cpu_affinity_auto
+    params.cpu_affinity = auto_detect
         ? cpu_affinity_resolve_draft({}, true)
         : cpu_affinity_resolve_draft(parsed.cpu_affinity, false);
     params.cpu_affinity_configured = true;
     if (params.cpu_affinity.empty()) {
-        if (parsed.cpu_affinity_auto) {
+        if (auto_detect) {
             LOG_WRN("%s: no efficiency cores available for the draft affinity\n", __func__);
         }
     } else {
@@ -2056,17 +2059,16 @@ static void common_speculative_apply_draft_affinity(const gpt_params & parsed, c
     }
 }
 
-// the draft inherits the target affinity when it has none of its own. Auto modes
-// (-ca/-caf/...) must be resolved here as well: params_base.cpu_affinity stays empty
-// until llama_init_from_gpt_params, i.e. after this point, so without this the draft
-// would silently float whenever the target was pinned through an auto mode.
+// the draft inherits the target affinity when it has none of its own. The base
+// list is already resolved at parse, so no mode knowledge is needed here; a copy
+// keeps cparams_dft's pointer independent of params_base's lifetime.
 static const std::vector<int32_t> & speculative_draft_affinity(
         common_params_speculative & params,
         const gpt_params                 & params_base) {
     if (params.cpu_affinity_configured) {
         return params.cpu_affinity;
     }
-    params.cpu_affinity_inherited = cpu_affinity_resolve_mode(params_base.cpu_affinity, params_base.cpu_affinity_mode);
+    params.cpu_affinity_inherited = params_base.cpu_affinity;
     return params.cpu_affinity_inherited;
 }
 
@@ -2083,7 +2085,7 @@ bool common_speculative_load_draft_model(
 
     gpt_params params_dft = params_base;
     params_dft.cpu_affinity.clear();
-    params_dft.cpu_affinity_auto = false;
+    params_dft.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
     params_dft.cpu_affinity_configured = false;
     if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         params_dft.has_mtp = true;
@@ -2258,7 +2260,7 @@ bool common_speculative_prepare_startup(
     if (!params.has_dft() && !params.params.empty()) {
         gpt_params params_dft = params_base;
         params_dft.cpu_affinity.clear();
-        params_dft.cpu_affinity_auto = false;
+        params_dft.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
         params_dft.cpu_affinity_configured = false;
         if (!common_speculative_parse_params(params.params, params_dft, false)) {
             return false; // invalid --draft-params must abort startup
