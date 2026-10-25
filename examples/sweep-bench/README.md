@@ -11,7 +11,7 @@ for each ubatch-sized window in context:
     1. generate ubatch/4 tokens (not the whole window to save some time)
     2. measure generation performance
     3. remove generated tokens from KV cache
-    4. prepare a ubatch-sized batch of random tokens
+    4. prepare a ubatch-sized batch of random tokens (or of text tokens, see below)
     4. process prepared batch
     5. measure prompt processing performance
 
@@ -21,6 +21,10 @@ the context size without averaging the metrics values over the whole context.
 ## Usage
 
 ./llama-sweep-bench -c 8704 -ub 512 -m models/Meta-Llama-3.2-3B-Instruct-Q8_0.gguf
+
+By default the benchmark feeds random tokens. With `-f`, it feeds the tokens of a text file instead. The token at position `p` of the text goes to position `p` of the context, and the text repeats from the start if it is shorter than the sweep. Random tokens are fine for dense models, but in MoE models the experts each token selects depend on the token, so throughput on text can differ from throughput on random tokens.
+
+./llama-sweep-bench -c 8704 -ub 512 -m models/Meta-Llama-3.2-3B-Instruct-Q8_0.gguf -f wiki.test.raw
 
 ## Sample results
 
