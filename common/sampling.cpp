@@ -792,18 +792,33 @@ std::vector<llama_token> llama_sampling_sample_and_accept_n(struct common_sample
     return common_sampler_sample_and_accept_n(gsmpl, ctx, idxs, draft);
 }
 
-std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft, bool grammar_first) {
+inline void update_logit_bias(struct common_sampler * gsmpl, positional_ban_set * positional_ban, size_t i) {
+    if (!positional_ban) {
+        return;
+    }
+    auto & logit_bias = positional_ban->tokens;
+    auto it = logit_bias.find(i);
+    if (it != logit_bias.end()) {
+        for (llama_token tok : it->second) {
+            gsmpl->params.logit_bias[tok] += positional_ban->bias;
+        }
+    }
+}
+
+std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft, bool grammar_first, positional_ban_set * positional_ban) {
     GGML_ASSERT(idxs.size() == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
 
     std::vector<llama_token> result;
     result.reserve(idxs.size());
-
+    auto & old_bias = gsmpl->params.logit_bias;
     size_t i = 0;
     for (; i < draft.size(); i++) {
+        update_logit_bias(gsmpl, positional_ban, i);
         const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
-
         common_sampler_accept(gsmpl, ctx, id, true);
-
+        if (positional_ban) {
+            gsmpl->params.logit_bias = old_bias;
+        }
         result.push_back(id);
 
         if (draft[i] != id) {
@@ -812,23 +827,25 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
     }
 
     if (i == draft.size()) {
+        update_logit_bias(gsmpl, positional_ban, i);
         const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
 
         common_sampler_accept(gsmpl, ctx, id, true);
-
-        result.push_back(id);
+        if (positional_ban) {
+            gsmpl->params.logit_bias = old_bias;
+        }
     }
 
     return result;
-}
 
+}
 std::vector<llama_token> common_sampler_sample_and_accept_n(
         struct common_sampler * gsmpl,
         struct llama_context * ctx,
         const std::vector<int> & idxs,
         const std::vector<llama_token> & draft,
         const std::vector<common_speculative_token_dist> & dists,
-        bool grammar_first) {
+        bool grammar_first, positional_ban_set * positional_ban) {
     GGML_ASSERT(idxs.size() == draft.size() + 1);
     GGML_ASSERT(dists.size() == draft.size());
 
@@ -841,8 +858,10 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
         common_sampler_accept(gsmpl, ctx, id, true);
         result.push_back(id);
     };
+    auto & old_bias = gsmpl->params.logit_bias;
     size_t i = 0;
     for (; i < draft.size(); ++i) {
+        update_logit_bias(gsmpl, positional_ban, i);
         const llama_token fallback = common_sampler_sample(gsmpl, ctx, idxs[i], true);
         const auto & q = dists[i];
         GGML_ASSERT(q.ids.size() == q.probs.size());
@@ -858,6 +877,9 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
         };
 
         const auto * p = common_sampler_get_candidates(gsmpl, false);
+        if (positional_ban) {
+            gsmpl->params.logit_bias = old_bias;
+        }
         float p_draft = 0.0f;
         for (size_t j = 0; j < p->size; ++j) {
             if (p->data[j].id == draft[i]) {
@@ -889,13 +911,16 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
     }
 
     if (i == draft.size()) {
+        update_logit_bias(gsmpl, positional_ban, i);
         const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
+        if (positional_ban) {
+            gsmpl->params.logit_bias = old_bias;
+        }
         emit(id);
     }
 
     return result;
 }
-
 
 static void elb_print(common_params_sampling& sparams, const common_params_sampling::elb_param::elb_entry& entry) {
     #undef X
