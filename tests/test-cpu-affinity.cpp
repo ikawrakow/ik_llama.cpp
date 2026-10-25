@@ -66,19 +66,10 @@ int main() {
         assert(std::find(pcpus.begin(), pcpus.end(), cpu) == pcpus.end());
     }
 
-    // fill modes: P-first P+E combined list (empty on uniform CPUs)
+    // auto P-core resolve (empty on uniform CPUs)
     {
         const cpus_t p = cpu_affinity_resolve({}, true);
-        const cpus_t e = cpu_affinity_resolve_draft({}, true);
-        const cpus_t f = cpu_affinity_resolve_mode({}, LLAMA_CPU_AFFINITY_FILL_ALL);
-        assert(f.size() >= p.size());
-        assert(std::equal(p.begin(), p.end(), f.begin())); // P-cores in priority
-        for (size_t i = p.size(); i < f.size(); ++i) {
-            assert(std::find(p.begin(), p.end(), f[i]) == p.end()); // E tail
-            assert(std::find(e.begin(), e.end(), f[i]) != e.end());
-        }
-        // non-fill modes unchanged (DISABLED == no auto)
-        assert(cpu_affinity_resolve_mode({}, LLAMA_CPU_AFFINITY_DISABLED) == cpu_affinity_resolve({}, false));
+        assert(cpu_affinity_resolve({}, false).empty());
     }
 
     // empty list without auto = no pinning
@@ -94,10 +85,10 @@ int main() {
 
         gpt_params p;
         assert(gpt_params_parse(2, argv, p));
-        const cpus_t expected = cpu_affinity_resolve_mode({}, LLAMA_CPU_AFFINITY_AUTO_ALL);
+        const cpus_t expected = cpu_affinity_resolve({}, true);
         assert(p.cpu_affinity == expected);
-        // an auto mode with nothing to pin is dropped
-        assert((p.cpu_affinity_mode == LLAMA_CPU_AFFINITY_AUTO_ALL) == !expected.empty());
+        // -ca sets cpu_affinity_auto
+        assert(p.cpu_affinity_auto == !expected.empty());
     }
     {
         char arg0[] = "test";
@@ -108,7 +99,7 @@ int main() {
         gpt_params p;
         assert(gpt_params_parse(3, argv, p));
         assert(p.cpu_affinity == cpu_affinity_resolve({0, 1}, false));
-        assert(p.cpu_affinity_mode == LLAMA_CPU_AFFINITY_DISABLED);
+        assert(!p.cpu_affinity_auto);
     }
 
     // --draft-params affinity resolved, even when empty

@@ -796,48 +796,16 @@ std::vector<int32_t> cpu_affinity_resolve_draft(const std::vector<int32_t> & cpu
     return cpu_affinity_resolve_impl(cpus, auto_detect, cpu_affinity_auto_cpus_draft());
 }
 
-std::vector<int32_t> cpu_affinity_resolve_mode(const std::vector<int32_t> & cpus, int mode) {
-    if (mode != LLAMA_CPU_AFFINITY_FILL_ALL &&
-        mode != LLAMA_CPU_AFFINITY_FILL_PP  &&
-        mode != LLAMA_CPU_AFFINITY_FILL_TG) {
-        const std::vector<int32_t> out = cpu_affinity_resolve(cpus, mode != LLAMA_CPU_AFFINITY_DISABLED);
-        if (out.empty() && mode != LLAMA_CPU_AFFINITY_DISABLED && cpus.empty()) {
-            fprintf(stderr, "warning: auto CPU affinity found no usable CPUs "
-                            "(non-hybrid CPU, GGML_HYBRID=0, or start affinity excludes them), "
-                            "pinning disabled\n");
-        }
-        return out;
-    }
-    // explicit list wins over fill modes (unreachable via CLI last-wins, kept for API use)
-    if (!cpus.empty()) {
-        return cpu_affinity_filter(cpus);
-    }
-    // fill: P-first combined list, E-cores appended after P-cores (dedup)
-    std::vector<int32_t> out = cpu_affinity_resolve({}, true);
-    for (const int32_t cpu : cpu_affinity_resolve_draft({}, true)) {
-        if (std::find(out.begin(), out.end(), cpu) == out.end()) {
-            out.push_back(cpu);
-        }
-    }
-    if (out.empty()) {
+void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, bool auto_detect) {
+    cpus = cpu_affinity_resolve(cpus, auto_detect);
+    if (cpus.empty() && auto_detect) {
         fprintf(stderr, "warning: auto CPU affinity found no usable CPUs "
                         "(non-hybrid CPU, GGML_HYBRID=0, or start affinity excludes them), "
                         "pinning disabled\n");
     }
-    return out;
 }
 
-void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, int & mode) {
-    const bool auto_mode = mode != LLAMA_CPU_AFFINITY_DISABLED;
-    cpus = cpu_affinity_resolve_mode(cpus, mode);
-    if (auto_mode && cpus.empty()) {
-        // nothing to pin (non-hybrid CPU, GGML_HYBRID=0, start affinity excludes
-        // the cores): drop the mode so no per-graph work is scheduled for it
-        mode = LLAMA_CPU_AFFINITY_DISABLED;
-    }
-}
-
-void common_cpu_affinity_apply(llama_context * ctx, const std::vector<int32_t> & cpus, int mode, const char * who) {
+void common_cpu_affinity_apply(llama_context * ctx, const std::vector<int32_t> & cpus, const char * who) {
     if (ctx == nullptr || cpus.empty()) {
         return;
     }
@@ -847,21 +815,8 @@ void common_cpu_affinity_apply(llama_context * ctx, const std::vector<int32_t> &
         list += (i == 0 ? "" : ",") + std::to_string(cpus[i]);
     }
 
-    if (mode == LLAMA_CPU_AFFINITY_DISABLED) {
-        llama_set_cpu_affinity(ctx, cpus.data(), (int) cpus.size());
-        LOG_INF("%s: pinning CPU worker threads to logical CPUs: %s\n", who, list.c_str());
-        return;
-    }
-
-    llama_set_cpu_affinity_auto(ctx, cpus.data(), (int) cpus.size(), mode);
-    const bool is_fill = mode == LLAMA_CPU_AFFINITY_FILL_ALL ||
-                         mode == LLAMA_CPU_AFFINITY_FILL_PP  ||
-                         mode == LLAMA_CPU_AFFINITY_FILL_TG;
-    const char * phase =
-        mode == LLAMA_CPU_AFFINITY_AUTO_PP || mode == LLAMA_CPU_AFFINITY_FILL_PP ? "PP only" :
-        mode == LLAMA_CPU_AFFINITY_AUTO_TG || mode == LLAMA_CPU_AFFINITY_FILL_TG ? "TG only" : "PP+TG";
-    LOG_INF("%s: auto-pinning%s CPU worker threads (%s) to logical CPUs: %s\n",
-            who, is_fill ? "-fill" : "", phase, list.c_str());
+    llama_set_cpu_affinity(ctx, cpus.data(), (int) cpus.size());
+    LOG_INF("%s: pinning CPU worker threads to logical CPUs: %s\n", who, list.c_str());
 }
 
 // Parse a CPU bitmask ("0x55", "85") into a list of logical CPU ids.
@@ -1292,13 +1247,13 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params, bool draft_af
         return false;
     }
 
-    // Resolve once, here, so that every example using -ca/-capp/-catg/-caf*
-    // honours it: those that never call llama_init_from_gpt_params still get the
-    // list through common_context_params_to_llama (as an all-phase explicit pin).
+    // Resolve once, here, so that every example using -ca/-cr/-cm honours it:
+    // those that never call llama_init_from_gpt_params still get the list through
+    // common_context_params_to_llama as an all-phase explicit pin.
     // --draft-params keeps it unresolved: its auto list is the E-cores, resolved
     // by common_speculative_apply_draft_affinity with cpu_affinity_resolve_draft.
     if (!draft_affinity) {
-        common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_mode);
+        common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
     }
 
     return true;
@@ -2693,7 +2648,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             return true;
         }
         params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
+        params.cpu_affinity_auto = false;
         return true;
     }
     if (arg == "--cpu-range" || arg == "-cr") {
@@ -2704,55 +2659,19 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             return true;
         }
         params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
+        params.cpu_affinity_auto = false;
         return true;
     }
-    if (arg == "--cpu-affinity-auto" || arg == "-ca") {
+    if (arg == "--cpu-affinity-auto" || arg == "-ca" || arg == "--cpu-affinity") {
         params.cpu_affinity.clear(); // last flag wins: drop any explicit list
         params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_ALL;
-        return true;
-    }
-    if (arg == "--cpu-affinity-pp-auto" || arg == "-capp") {
-        params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_PP;
-        return true;
-    }
-    if (arg == "--cpu-affinity-tg-auto" || arg == "-catg") {
-        params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_TG;
-        return true;
-    }
-    if (arg == "--cpu-affinity-fill" || arg == "-caf") {
-        params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_FILL_ALL;
-        return true;
-    }
-    if (arg == "--cpu-affinity-fill-pp" || arg == "-cafpp") {
-        params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_FILL_PP;
-        return true;
-    }
-    if (arg == "--cpu-affinity-fill-tg" || arg == "-caftg") {
-        params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_FILL_TG;
-        return true;
-    }
-    if (arg == "--cpu-affinity") {
-        params.cpu_affinity.clear(); // last flag wins: drop any explicit list
-        params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_AUTO_ALL;
+        params.cpu_affinity_auto = true;
         return true;
     }
     if (arg == "--no-cpu-affinity") {
         params.cpu_affinity.clear();
         params.cpu_affinity_configured = true;
-        params.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
+        params.cpu_affinity_auto = false;
         return true;
     }
     if (arg == "-prexp" || arg == "--prefetch-experts") {
@@ -3900,15 +3819,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-prexp, --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
     options.push_back({ "*",           "-prexp-t, --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
-    options.push_back({ "*",           "-cm,   --cpu-mask MASK",         "opt-in: pin CPU worker threads to the logical CPUs set in MASK (hex or decimal bitmask, e.g. 0x55; 64 CPUs max, use --cpu-range for more; both PP+TG)"});
-    options.push_back({ "*",           "-cr,   --cpu-range LIST",        "opt-in: pin CPU worker threads to the given logical CPUs (e.g. 0-3,8,10-11; both PP+TG)"});
-    options.push_back({ "*",           "       --cpu-affinity",          "opt-in: alias of -ca, auto-pin CPU worker threads to physical P-cores (both PP+TG)"});
-    options.push_back({ "*",           "-ca,   --cpu-affinity-auto",     "opt-in: auto-pin CPU worker threads to physical P-cores on hybrid CPUs (both PP+TG)"});
-    options.push_back({ "*",           "-capp, --cpu-affinity-pp-auto",  "opt-in: auto-pin CPU worker threads to physical P-cores for PP (prompt/batch) only"});
-    options.push_back({ "*",           "-catg, --cpu-affinity-tg-auto",  "opt-in: auto-pin CPU worker threads to physical P-cores for TG (single-token) only"});
-    options.push_back({ "*",           "-caf,  --cpu-affinity-fill",     "opt-in: auto-pin P-cores first, then E-cores up to -t/-tb threads (both PP+TG)"});
-    options.push_back({ "*",           "-cafpp, --cpu-affinity-fill-pp", "opt-in: P-first P+E fill for PP (prompt/batch) only"});
-    options.push_back({ "*",           "-caftg, --cpu-affinity-fill-tg", "opt-in: P-first P+E fill for TG (single-token) only"});
+    options.push_back({ "*",           "-cm,   --cpu-mask MASK",         "opt-in: pin CPU worker threads to the logical CPUs set in MASK (hex or decimal bitmask, e.g. 0x55; 64 CPUs max, use --cpu-range for more)"});
+    options.push_back({ "*",           "-cr,   --cpu-range LIST",        "opt-in: pin CPU worker threads to the given logical CPUs (e.g. 0-3,8,10-11)"});
+    options.push_back({ "*",           "       --cpu-affinity",          "opt-in: alias of -ca, auto-pin CPU worker threads to physical P-cores"});
+    options.push_back({ "*",           "-ca,   --cpu-affinity-auto",     "opt-in: auto-pin CPU worker threads to physical P-cores on hybrid CPUs"});
     options.push_back({ "*",           "       --no-cpu-affinity",       "disable CPU affinity pinning (default: disabled, kept for compat)"});
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
     options.push_back({ "*",           "-gfm,  --gpu-fit-margin N",     "per-layer GPU fit margin as layer_id,margin pairs, comma-separated" });
@@ -4745,10 +4659,8 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         return iparams;
     }
 
-    // opt-in pinning: explicit -cm/-cr (both phases), or an auto/fill mode that
-    // was resolved at parse into params.cpu_affinity (installed for the per-graph
-    // PP/TG decision, see llama_cpu_affinity_apply)
-    common_cpu_affinity_apply(lctx, params.cpu_affinity, params.cpu_affinity_mode, __func__);
+    // opt-in pinning: -cm/-cr, or -ca resolved at parse into params.cpu_affinity
+    common_cpu_affinity_apply(lctx, params.cpu_affinity, __func__);
 
     for (auto [op, on_off] : params.offload_policy) {
         llama_set_offload_policy(lctx, op, on_off);

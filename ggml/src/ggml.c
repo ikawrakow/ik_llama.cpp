@@ -29067,38 +29067,9 @@ static void clear_numa_thread_affinity(void) {
     CPU_FREE(cpus);
 }
 
-// Persistent workers keep whatever affinity was set last, so an unpinned phase
-// must restore each worker's virgin affinity: merely skipping the pin would leak
-// the previous phase's pinning. Virgin state is captured once per thread and
-// kept in TLS: a worker that exits frees it, and a recycled pthread_t cannot
-// inherit a dead worker's mask (the pid alone is not a usable key).
-static __thread cpu_set_t g_linux_aff_saved;
-static __thread bool      g_linux_aff_used = false;
-
-static cpu_set_t * ggml_linux_restore_slot(bool create) {
-    if (!g_linux_aff_used && create) {
-        if (pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &g_linux_aff_saved) == 0) {
-            g_linux_aff_used = true;
-        }
-    }
-    return g_linux_aff_used ? &g_linux_aff_saved : NULL;
-}
-
-// pin worker `thread_n` to its assigned logical CPU (restores virgin affinity without)
+// pin worker `thread_n` to its assigned logical CPU (no-op without affinity)
 static void set_cpu_thread_affinity(const struct ggml_cplan * cplan, int thread_n) {
     if (cplan == NULL || cplan->cpu_affinity == NULL || cplan->n_cpu_affinity <= 0) {
-        cpu_set_t * saved = ggml_linux_restore_slot(false);
-        if (saved != NULL) {
-            const int rv = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), saved);
-            if (rv) {
-                fprintf(stderr, "warning: pthread_setaffinity_np() restore failed: %s\n", strerror(rv));
-            }
-        }
-        return;
-    }
-
-    if (ggml_linux_restore_slot(true) == NULL) {
-        // no virgin stored: pinning here would be irreversible, leave the thread unbound
         return;
     }
 
@@ -29217,53 +29188,9 @@ static bool ggml_win_get_group_affinity(int cpu, GROUP_AFFINITY * out) {
     return true;
 }
 
-// Persistent (OpenMP) workers keep whatever affinity was set last, so an
-// unpinned phase must restore each worker's virgin affinity: merely skipping
-// the pin would leak the previous phase's pinning (e.g. PP fill pins leaking
-// into a TG-only phase). Virgin state is captured once per thread, before our
-// first pin, and kept in TLS: a worker that exits frees it, and Windows thread
-// id reuse (non-OpenMP builds create n_threads-1 threads per graph) cannot
-// leak a dead worker's mask into a fresh one.
-static __declspec(thread) GROUP_AFFINITY g_win_aff_saved;
-static __declspec(thread) bool           g_win_aff_used = false;
-
-// returns false when the virgin affinity could not be captured; the caller must
-// then leave the thread alone, otherwise it could be pinned with no way to ever
-// be unpinned again
-static bool ggml_win_save_affinity_once(void) {
-    if (!g_win_aff_used) {
-        if (!GetThreadGroupAffinity(GetCurrentThread(), &g_win_aff_saved)) {
-            return false; // capture retried on the next pin
-        }
-        g_win_aff_used = true;
-    }
-    return true;
-}
-
-static void ggml_win_restore_affinity(void) {
-    if (!g_win_aff_used) {
-        return; // never pinned by us, nothing to restore
-    }
-    if (!SetThreadGroupAffinity(GetCurrentThread(), &g_win_aff_saved, NULL)) {
-        // once per thread: this runs on every unpinned graph compute
-        static __declspec(thread) bool warned = false;
-        if (!warned) {
-            warned = true;
-            fprintf(stderr, "warning: SetThreadGroupAffinity() restore failed: %lu\n",
-                    (unsigned long) GetLastError());
-        }
-    }
-}
-
-// pin worker `thread_n` to its assigned logical CPU (restores virgin affinity without)
+// pin worker `thread_n` to its assigned logical CPU (no-op without affinity)
 static void set_cpu_thread_affinity(const struct ggml_cplan * cplan, int thread_n) {
     if (cplan == NULL || cplan->cpu_affinity == NULL || cplan->n_cpu_affinity <= 0) {
-        ggml_win_restore_affinity();
-        return;
-    }
-
-    if (!ggml_win_save_affinity_once()) {
-        // no virgin stored: pinning here would be irreversible, leave the thread unbound
         return;
     }
 

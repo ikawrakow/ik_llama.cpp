@@ -94,17 +94,13 @@ std::vector<int32_t> cpu_affinity_resolve(const std::vector<int32_t> & cpus, boo
 // explicit affinity, else auto-detected E-cores
 std::vector<int32_t> cpu_affinity_resolve_draft(const std::vector<int32_t> & cpus, bool auto_detect);
 
-// mode-aware resolve: FILL modes return P-first P+E combined list (truncated
-// per graph to n_threads), other modes behave like cpu_affinity_resolve
-std::vector<int32_t> cpu_affinity_resolve_mode(const std::vector<int32_t> & cpus, int mode);
+// mode-aware resolve: explicit lists are filtered, auto selects P-cores;
+// an empty result (non-hybrid CPU or start affinity excludes them) is warned
+// about and leaves pinning disabled
+void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, bool auto_detect);
 
-// resolve cpus/mode in place: explicit lists are filtered, auto modes expanded,
-// and an auto mode that found no usable CPUs is disabled (warning written once)
-void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, int & mode);
-
-// install a resolved affinity on a context and log it: an explicit list pins all
-// phases, auto/fill modes are installed for the per-graph PP/TG decision
-void common_cpu_affinity_apply(llama_context * ctx, const std::vector<int32_t> & cpus, int mode, const char * who);
+// install a resolved affinity on a context and log it
+void common_cpu_affinity_apply(llama_context * ctx, const std::vector<int32_t> & cpus, const char * who);
 
 bool cpu_affinity_parse_mask (const std::string & value, std::vector<int32_t> & cpus);
 bool cpu_affinity_parse_range(const std::string & value, std::vector<int32_t> & cpus);
@@ -332,7 +328,7 @@ struct gpt_params {
     int32_t n_threads_batch       =      -1; // number of threads to use for batch processing (-1 = use n_threads)
     std::vector<int32_t> cpu_affinity;       // logical CPU ids to pin worker threads to, resolved at parse (empty = no pinning)
     bool    cpu_affinity_configured = false; // a CPU affinity option was given (tells --no-cpu-affinity apart from unset in --draft-params)
-    int     cpu_affinity_mode     = LLAMA_CPU_AFFINITY_DISABLED; // opt-in auto phases: ALL/-ca, PP/-capp, TG/-catg, FILL/-caf, FILL_PP/-cafpp, FILL_TG/-caftg (see llama.h)
+    bool    cpu_affinity_auto       = false; // --cpu-affinity/-ca: pick physical P-cores at parse
 
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size

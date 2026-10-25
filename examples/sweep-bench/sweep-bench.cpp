@@ -195,11 +195,9 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // CPU affinity (port of llama-bench wiring for 11e8bd40): explicit -cm/-cr
-    // already installed via cparams at init, auto -ca/-capp/-catg and fill
-    // -caf/-cafpp/-caftg are resolved at parse and installed here (fill: P-first
-    // P+E, truncated per graph).
-    common_cpu_affinity_apply(ctx, params.cpu_affinity, params.cpu_affinity_mode, __func__);
+    // CPU affinity: -cm/-cr and -ca are resolved at parse and installed via
+    // cparams at init; this re-applies the same list for the log line.
+    common_cpu_affinity_apply(ctx, params.cpu_affinity, __func__);
 
     const bool use_checkpoint = common_speculative_needs_checkpoint(model);
 

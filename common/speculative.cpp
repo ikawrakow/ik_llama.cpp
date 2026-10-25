@@ -2035,7 +2035,7 @@ static void common_speculative_apply_draft_affinity(const gpt_params & parsed, c
     if (!parsed.cpu_affinity_configured) {
         return;
     }
-    const bool auto_detect = parsed.cpu_affinity_mode != LLAMA_CPU_AFFINITY_DISABLED;
+    const bool auto_detect = parsed.cpu_affinity_auto;
     // --cpu-affinity = hybrid E-cores
     params.cpu_affinity = auto_detect
         ? cpu_affinity_resolve_draft({}, true)
@@ -2085,7 +2085,7 @@ bool common_speculative_load_draft_model(
 
     gpt_params params_dft = params_base;
     params_dft.cpu_affinity.clear();
-    params_dft.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
+    params_dft.cpu_affinity_auto = false;
     params_dft.cpu_affinity_configured = false;
     if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         params_dft.has_mtp = true;
@@ -2260,7 +2260,7 @@ bool common_speculative_prepare_startup(
     if (!params.has_dft() && !params.params.empty()) {
         gpt_params params_dft = params_base;
         params_dft.cpu_affinity.clear();
-        params_dft.cpu_affinity_mode = LLAMA_CPU_AFFINITY_DISABLED;
+        params_dft.cpu_affinity_auto = false;
         params_dft.cpu_affinity_configured = false;
         if (!common_speculative_parse_params(params.params, params_dft, false)) {
             return false; // invalid --draft-params must abort startup

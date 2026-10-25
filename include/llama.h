@@ -1160,36 +1160,9 @@ extern "C" {
     // (Linux: /sys cpu order, Windows: GetLogicalProcessorInformationEx
     // RelationProcessorCore order, group masks in bit order), NOT the Windows
     // logical processor number (group*64 + bit): they only coincide up to 64 LPs.
-    // Configure before compute, n_cpus == 0 disables pinning.
-    // Explicit list applies to both PP and TG phases.
+    // Configure before compute, n_cpus == 0 disables pinning. Applies to both
+    // PP and TG phases.
     LLAMA_API void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus);
-
-    // CPU affinity auto-pinning phases (trisection, opt-in). The auto list is
-    // stored and applied per graph compute: PP-only pins prompt/batch graphs,
-    // TG-only pins single-token graphs, ALL pins both. Phase is detected from
-    // the graph's thread count vs cparams n_threads (TG) / n_threads_batch (PP);
-    // when both counts are equal the phases are indistinguishable and both pin.
-    // A phase whose thread count exceeds the auto list is left unpinned so
-    // E-cores can join instead of oversubscribing P-cores.
-    // FILL variants take a P-first combined list (P-cores, then E-cores) and
-    // pin the first n_threads entries per graph, so -t 18 on 8P+12E pins
-    // 8P+10E, while -t 8 pins 8P. Needs no oversubscribe guard below total.
-    // Unpinned phases restore each worker's virgin affinity (ggml remembers it
-    // per thread), so persistent (OpenMP) workers cannot leak a previous pin.
-    enum llama_cpu_affinity_mode {
-        LLAMA_CPU_AFFINITY_DISABLED     = 0,
-        LLAMA_CPU_AFFINITY_AUTO_ALL     = 1,
-        LLAMA_CPU_AFFINITY_AUTO_PP      = 2,
-        LLAMA_CPU_AFFINITY_AUTO_TG      = 3,
-        LLAMA_CPU_AFFINITY_FILL_ALL     = 4,
-        LLAMA_CPU_AFFINITY_FILL_PP      = 5,
-        LLAMA_CPU_AFFINITY_FILL_TG      = 6,
-    };
-
-    // store auto list + phase mode; applied per graph compute (see above).
-    // For FILL modes the list must be P-first (P-cores, then E-cores).
-    // n_cpus == 0 or mode == DISABLED disables auto pinning.
-    LLAMA_API void llama_set_cpu_affinity_auto(struct llama_context * ctx, const int32_t * cpus, int n_cpus, int mode);
 
     // Get the number of threads used for generation of a single token.
     LLAMA_API uint32_t llama_n_threads(struct llama_context * ctx);
