@@ -1620,7 +1620,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
         auto tool_calls = p.rule("tool-calls",
             p.trigger_rule("tool-call",
                 p.literal(TOOL_CALL_START) +
-                p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls) +
+                p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls, /* allow_json_literals = */ true) +
                 p.literal(TOOL_CALL_END)
             )
         );
@@ -1696,7 +1696,7 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
 
         auto tool_calls = p.rule("tool-calls",
             p.trigger_rule("tool-call",
-                p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls)
+                p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls, /* allow_json_literals = */ true)
             )
         );
 
