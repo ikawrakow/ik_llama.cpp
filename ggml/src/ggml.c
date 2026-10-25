@@ -1407,7 +1407,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
     },
 
     [GGML_TYPE_IQ3_KS_R16] = {
-        .type_name                = "iq3ks_r16",
+        .type_name                = "iq3_ks_r16",
         .blck_size                = QK8_0,
         .type_size                = 13, // (204 B per 16-row x 32-col block)/16 rows, rounded up
         .is_quantized             = true,
