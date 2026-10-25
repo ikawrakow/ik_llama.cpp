@@ -2678,13 +2678,10 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
         ? cparams.dsv41_replay_keep : 0;
     const int32_t replay_boundary = replay_keep > 0 ? hparams.dsv41_replay_boundary : -1;
     auto replay_outputs_are_tail = [&]() {
-        if (n_outputs == n_tokens) {
-            return false;
-        }
         if (n_outputs == 0) {
             return true;
         }
-        if (n_outputs > n_tokens) {
+        if (n_outputs > replay_keep) {
             return false;
         }
         if (batch.logits == nullptr) {
@@ -2697,11 +2694,6 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
         }
         return true;
     };
-    lctx.dsv41_replay = {};
-    const bool replay = replay_keep > 0 && !worst_case && n_tokens > replay_keep &&
-        replay_outputs_are_tail();
-    const int32_t keep_off = replay ? n_tokens - replay_keep : 0;
-
     const int64_t n_embd_head = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_rope = hparams.n_rot;
     const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
@@ -2741,6 +2733,11 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
     } else {
         KQ_mask = hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
     }
+
+    lctx.dsv41_replay = {};
+    const bool replay = replay_keep > 0 && !worst_case && n_tokens > replay_keep &&
+        KQ_mask_swa_win != nullptr && lctx.swa_window_view.active && replay_outputs_are_tail();
+    const int32_t keep_off = replay ? n_tokens - replay_keep : 0;
 
     ggml_tensor * KQ_mask_swa_win_keep = nullptr;
     ggml_tensor * KQ_mask_hca_keep     = nullptr;
