@@ -307,7 +307,8 @@ extern "C" {
 
     typedef struct llama_ckpt_data {
         enum llama_ckpt_type type;
-        llama_pos pos;
+        llama_pos pos1;
+        llama_pos pos2;
     } llama_ckpt_data;
 
     typedef struct llama_token_data {
@@ -945,6 +946,8 @@ extern "C" {
     LLAMA_API bool llama_rewind_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id);
 
     LLAMA_API bool llama_rewind_ckpt_release(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id);
+
+    LLAMA_API llama_pos llama_rewind_ckpt_pos(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id);
 
 
     // Restore the recurrent state after speculative decode.

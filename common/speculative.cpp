@@ -58,7 +58,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"suffix",        COMMON_SPECULATIVE_TYPE_SUFFIX}
 };
 
-const llama_ckpt_data spec_ckpt = { LLAMA_CHECKPOINT_SPEC, 0 };
+const llama_ckpt_data spec_ckpt = { LLAMA_CHECKPOINT_SPEC, 0, 0 };
 
 bool common_speculative_needs_checkpoint(const llama_model * model) {
     return model != nullptr &&
