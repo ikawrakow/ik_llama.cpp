@@ -74,6 +74,7 @@ struct llm_build_context {
     const float norm_rms_eps;
 
     const int32_t n_tokens;
+    int32_t n_tokens_seg;   // token count of the segment being built (n_tokens unless replaying)
     const int32_t n_kv;     // size of KV cache to consider (n_kv <= kv_self.size)
     const int32_t n_outputs;
     const int32_t n_outputs_enc;
@@ -97,6 +98,7 @@ struct llm_build_context {
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
     const bool clear_lctx_inputs;
+    const bool worst_case;  // the graph only sizes buffers, so it must be at least as large as any real batch's
 
     const llm_build_cb & cb;
 

@@ -2355,6 +2355,9 @@ void llm_load_hparams(
                         hparams.dsv41_topk_source.fill(-1);
                         int32_t last_kv = -1, last_key = -1, last_idx = -1;
                         uint32_t csa_ratio = 0, hca_ratio = 0;
+                        uint32_t last_kv_ratio = 0;
+                        bool have_kv_source = false;
+                        hparams.dsv41_replay_boundary = -1;
                         for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                             const bool has_comp  = ml.get_tensor_meta(format("blk.%u.attn_compressor_kv.weight", il).c_str()) != nullptr;
                             const bool has_gate  = ml.get_tensor_meta(format("blk.%u.attn_compressor_gate.weight", il).c_str()) != nullptr;
@@ -2365,6 +2368,13 @@ void llm_load_hparams(
                             if (has_idx_q) last_idx = (int32_t) il;
                             const uint32_t r = hparams.dsv4_compress_ratios[il];
                             if (r == 0) continue;
+                            if (has_comp && last_kv == (int32_t) il) {
+                                if (have_kv_source && r != last_kv_ratio && hparams.dsv41_replay_boundary < 0) {
+                                    hparams.dsv41_replay_boundary = (int32_t) il;
+                                }
+                                last_kv_ratio  = r;
+                                have_kv_source = true;
+                            }
                             if (last_kv < 0 || last_key < 0 || last_idx < 0) {
                                 throw std::runtime_error(format("DeepSeek-V4.1 layer %u reads a compressed stream before any layer publishes one", il));
                             }
@@ -2400,6 +2410,10 @@ void llm_load_hparams(
                         hparams.dsv4_hc_lag = true;
                         hparams.dsv4_q_head_norm = false;
                         LLAMA_LOG_INFO("%s: DeepSeek-V4.1 compressed streams: csa ratio %u, hca ratio %u, shared from source layers\n", __func__, csa_ratio, hca_ratio);
+                        if (hparams.dsv41_has_replay_segment()) {
+                            LLAMA_LOG_INFO("%s: DeepSeek-V4.1 causal encoder-decoder: layers 0..%d encode, %d..%u decode\n",
+                                    __func__, hparams.dsv41_replay_boundary - 1, hparams.dsv41_replay_boundary, hparams.n_layer - 1);
+                        }
                     }
                     if (std::getenv("V41_SEPARATE") != nullptr) {
                         {

@@ -741,6 +741,12 @@ struct llama_context {
         int64_t win_off   = 0;
     } swa_window_view;
 
+    // keep slice chosen by the builder for this ubatch, read by the capture row accounting
+    struct dsv41_replay_state {
+        bool    active = false;
+        int64_t keep   = 0;
+    } dsv41_replay;
+
     // multi-head MTP chaining state: head k's output row at the last committed position,
     // written back after each warmup/update decode and fed into the next MTP graph through
     // inp_mtp_carry (zeroed when a prompt warmup restarts from position 0). The readback is
