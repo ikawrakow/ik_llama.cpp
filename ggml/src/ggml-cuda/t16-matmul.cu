@@ -75,8 +75,10 @@ static __global__ void k2_t16_matmul_kernel(
 
     const int ntok = min(K2_T16_TOK_BLK, n - t0);
     const char * tile0 = (const char *) trellis + j*nb1;
+    int buf = 0;
     for (int i = 0; i < I; ++i) {
         const uint32_t * p = (const uint32_t *)(tile0 + i*nb2);
+        buf ^= 1;
         const uint32_t w1 = k2_t16_fshr(p[il % nw], p[ih % nw], (uint32_t) sh);
         const float v = k2_t16_mul1((uint16_t)(w1 & 0xFFFFu));
         const float * xr = x + (16*i + r);
@@ -102,95 +104,156 @@ static __global__ void k2_t16_matmul_kernel(
 }
 
 // ---------------------------------------------------------------------------
-// Tensor-core prefill (n > 1): f16-MMA.
+// Tensor-core prefill (n > 1): f16-MMA, v2.
 //
-// Precision: k2_t16_mul1 ends in __hfma on __half and returns __half2float(v), so the decoded weight
-// is ALREADY an fp16 value -- __float2half(v) below is an exact round-trip and the weight side of
-// this path loses nothing. The only precision change vs the f32 kernel is the activation, rounded
-// f32 -> f16 (11-bit mantissa, against int8's 7 in the fork's MMQ path). The accumulator is f32, so
-// the rounding is in the operands only, not in the sum.
+// v1 (kept in git history) ran one MMA per warp per input tile with two block-wide
+// __syncthreads() per tile and re-read the activation tile once per 16-output row: 1606 t/s
+// pp512, 38% of this card's f16-with-f32-accumulate ceiling (~4267 t/s) and 5.3x behind an
+// IQ4_KS.  v2 fixes the structure:
+//   * block = 8 warps over a 64-output x 128-token tile: warp (m, nh) owns output tile
+//     j0+m and 64 tokens, so each input tile costs 4 MMA per warp (32 per block) instead of 1;
+//   * every warp decodes its OWN 16x16 weight tile into its own shared slot and stages its own
+//     activations, so the loop needs only __syncwarp() -- no block-wide barrier at all
+//     (the duplicate decode by the two warps sharing an output tile is ~200 ops per tile, far
+//     cheaper than a barrier);
+//   * activations are read as float4 (16 B per lane, 8 tokens per instruction) and written to
+//     shared as two half2 stores -- coalesced and 8-byte aligned by construction.
 //
-// Mapping: y[out,t] = sum_in W[out,in] x[in,t]  ->  D[m,n] = sum_k A[m,k] B[k,n] with
-//   m = out, k = in, n = token.  Thread (c,r) decodes the value at (out=c, in=r), so
-//   A[m][k] = sA[16*c + r] is row-major with no transpose (row_major fragment, ld = 16).
-// x is [in, n] (in = ne0), so a token block is 16 contiguous floats per input -> stage B
-// token-major (sB[t*16 + k]) and load it as a col_major fragment: coalesced loads, no transpose.
+// Precision: k2_t16_mul1 returns __half2float of an fp16 hfma result, so the decoded weight is
+// already an fp16 value and __float2half round-trips exactly; only the activations round
+// (f32 -> f16).  Accumulators are f32.
 // ---------------------------------------------------------------------------
 
-#define K2_T16_MMA_WARPS  8                       // 8 warps -> 128 tokens per block
-#define K2_T16_MMA_TOKENS (16*K2_T16_MMA_WARPS)
+#define K2_T16_MMA_WARPS   8
+#define K2_T16_MMA_M       4                      // output tiles per block (16 each)
+#define K2_T16_MMA_NHALF   2                      // token halves per warp
+#define K2_T16_MMA_TOKENS  (K2_T16_MMA_NHALF*64)  // 128 tokens per block
+#define K2_T16_MMA_NFRAG   4                      // 16-token MMA fragments per warp
 
-static __global__ void k2_t16_mma_kernel(
+// Pipeline stage: decode the block's 4 weight tiles and convert the activation tile, into the
+// given shared buffers.  Kept as a device function so the loop can stage tile i+1 *before* the
+// mma of tile i -- the whole point of the software pipeline below.
+static __device__ __forceinline__ void k2_t16_mma_stage(
+        const uint16_t * __restrict__ trellis,
+        const float    * __restrict__ x,
+        half           * sA_buf,
+        half           * sX_buf,
+        int K, int I, int n, size_t nb1, size_t nb2,
+        int i, int j0, int t0, int tid, int nw) {
+    const int q    = tid;                       // 256 threads cover one 16x16 tile exactly
+    const int cc   = q >> 4;
+    const int rr   = q & 15;
+    const int tpos = c_k2_t16_inv_perm[16*rr + cc];
+    const int bpos = tpos*K + K - 16 + 256*K;
+    const int ih   = bpos >> 5;
+    const int il   = (bpos + 15) >> 5;
+    const int sh   = (il + 1)*32 - (bpos + 16);
+#pragma unroll
+    for (int mt = 0; mt < K2_T16_MMA_M; ++mt) {
+        const uint32_t * pp = (const uint32_t *)((const char *) trellis + (j0 + mt)*nb1 + i*nb2);
+        const uint32_t w1 = k2_t16_fshr(pp[il % nw], pp[ih % nw], (uint32_t) sh);
+        sA_buf[mt*(16*24) + 24*cc + rr] = __float2half(k2_t16_mul1((uint16_t)(w1 & 0xFFFFu)));
+    }
+    // activations: 16 in x 128 tokens, 8 values per thread
+#pragma unroll
+    for (int e = 0; e < 2; ++e) {
+        const int idx = tid + 256*e;            // float4 slot 0..511
+        const int t   = idx >> 2;
+        const int k4  = (idx & 3) * 4;
+        const int gtok = t0 + t;
+        float4 xv = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        if (gtok < n) {
+            xv = *(const float4 *)(x + (16*i + k4) + (size_t)gtok*(size_t)(16*I));
+        }
+        half * dst = &sX_buf[t*24 + k4];
+        *reinterpret_cast<half2 *>(dst)     = __floats2half2_rn(xv.x, xv.y);
+        *reinterpret_cast<half2 *>(dst + 2) = __floats2half2_rn(xv.z, xv.w);
+    }
+}
+
+static __global__ void __launch_bounds__(32*K2_T16_MMA_WARPS)
+k2_t16_mma_kernel(
         const uint16_t * __restrict__ trellis,
         const float    * __restrict__ x,
         float          * __restrict__ y,
         int K, int I, int J, int n,
         size_t nb1, size_t nb2) {
-    const int j    = blockIdx.x;
-    const int t0   = blockIdx.y * K2_T16_MMA_TOKENS;
     const int tid  = threadIdx.x;
     const int warp = tid >> 5;
     const int lane = tid & 31;
+    const int j0   = blockIdx.x * K2_T16_MMA_M;
+    const int t0   = blockIdx.y * K2_T16_MMA_TOKENS;
 
-    __shared__ __align__(16) half  sA[16*16];
-    __shared__ __align__(16) half  sB[K2_T16_MMA_WARPS][16*16];
-    __shared__ __align__(16) float sY[K2_T16_MMA_WARPS][16*16];
+    const int m  = warp >> 1;
+    const int nh = warp & 1;
+    const int j  = j0 + m;
+    if (j >= J) {
+        return;
+    }
 
-    const int c    = tid >> 4;
-    const int r    = tid & 15;
-    const int tpos = c_k2_t16_inv_perm[16*r + c];
-    const int b    = tpos*K + K - 16 + 256*K;
-    const int ih   = b >> 5;
-    const int il   = (b + 15) >> 5;
-    const int sh   = (il + 1)*32 - (b + 16);
-    const int nw   = 8*K;
+    // Double buffered: the loop stages tile i+1 into one buffer while the mma reads the other,
+    // so ALU (decode + f32->f16 conversion) and tensor-core work overlap instead of alternating
+    // behind a barrier -- that alternation was what capped the first versions near 40-50% of the
+    // f16-with-f32-accumulate ceiling.
+    __shared__ __align__(16) half sA[2][K2_T16_MMA_M][16*24];
+    __shared__ __align__(16) half sX[2][K2_T16_MMA_TOKENS][24];
+    __shared__ __align__(16) float sY[K2_T16_MMA_WARPS][256];   // per-warp epilogue tile
 
-    const int tok_base = t0 + warp*16;
-    const int ntok     = min(16, n - tok_base);
+    const int nw = 8*K;
+    const int tok_base = t0 + nh*64;
+    const int ntok     = min(64, n - tok_base);
 
     wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> fa;
-    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> fb;
-    wmma::fragment<wmma::accumulator, 16, 16, 16, float> fc;
-    wmma::fill_fragment(fc, 0.0f);
-
-    const char * tile0 = (const char *) trellis + j*nb1;
-    for (int i = 0; i < I; ++i) {
-        const uint32_t * p = (const uint32_t *)(tile0 + i*nb2);
-        const uint32_t w1 = k2_t16_fshr(p[il % nw], p[ih % nw], (uint32_t) sh);
-        sA[16*c + r] = __float2half(k2_t16_mul1((uint16_t)(w1 & 0xFFFFu)));
-
-        if (ntok > 0) {
-            // 256 B entries over 32 lanes: consecutive lanes walk k (contiguous in x), then t.
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> fb[K2_T16_MMA_NFRAG];
+    wmma::fragment<wmma::accumulator, 16, 16, 16, float>              fc[K2_T16_MMA_NFRAG];
 #pragma unroll
-            for (int e = 0; e < 8; ++e) {
-                const int idx = lane + 32*e;
-                const int t   = idx >> 4;
-                const int k   = idx & 15;
-                sB[warp][16*t + k] = (t < ntok)
-                    ? __float2half(x[(16*i + k) + (size_t)(tok_base + t)*(size_t)(16*I)])
-                    : __float2half(0.0f);
-            }
+    for (int f = 0; f < K2_T16_MMA_NFRAG; ++f) {
+        wmma::fill_fragment(fc[f], 0.0f);
+    }
+
+    k2_t16_mma_stage(trellis, x, &sA[0][0][0], &sX[0][0][0], K, I, n, nb1, nb2, 0, j0, t0, tid, nw);
+    __syncthreads();
+
+    for (int i = 0; i < I; ++i) {
+        const int cur = i & 1;
+        const int nxt = cur ^ 1;
+        if (i + 1 < I) {
+            k2_t16_mma_stage(trellis, x, &sA[nxt][0][0], &sX[nxt][0][0], K, I, n, nb1, nb2,
+                             i + 1, j0, t0, tid, nw);
         }
-        __syncthreads();
         if (ntok > 0) {
-            wmma::load_matrix_sync(fa, sA, 16);
-            wmma::load_matrix_sync(fb, sB[warp], 16);
-            wmma::mma_sync(fc, fa, fb, fc);
+            wmma::load_matrix_sync(fa, &sA[cur][m][0], 24);
+#pragma unroll
+            for (int f = 0; f < K2_T16_MMA_NFRAG; ++f) {
+                if (f*16 < ntok) {
+                    wmma::load_matrix_sync(fb[f], &sX[cur][nh*64 + f*16][0], 24);
+                    wmma::mma_sync(fc[f], fa, fb[f], fc[f]);
+                }
+            }
         }
         __syncthreads();
     }
 
     if (ntok > 0) {
-        wmma::store_matrix_sync(sY[warp], fc, 16, wmma::mem_row_major);
-        __syncwarp();
+        float * sYw = sY[warp];
 #pragma unroll
-        for (int e = 0; e < 8; ++e) {
-            const int idx = lane + 32*e;
-            const int m   = idx >> 4;
-            const int t   = idx & 15;
-            if (t < ntok) {
-                y[(16*j + m) + (size_t)(tok_base + t)*(size_t)(16*J)] = sY[warp][idx];
+        for (int f = 0; f < K2_T16_MMA_NFRAG; ++f) {
+            if (f*16 >= ntok) {
+                continue;
             }
+            wmma::store_matrix_sync(sYw, fc[f], 16, wmma::mem_row_major);
+            __syncwarp();
+            const int ftok = min(16, ntok - f*16);
+#pragma unroll
+            for (int e = 0; e < 8; ++e) {
+                const int idx = lane + 32*e;
+                const int mm  = idx >> 4;
+                const int t   = idx & 15;
+                if (t < ftok) {
+                    y[(16*j + mm) + (size_t)(tok_base + f*16 + t)*(size_t)(16*J)] = sYw[idx];
+                }
+            }
+            __syncwarp();
         }
     }
 }
@@ -449,7 +512,8 @@ void ggml_cuda_op_t16_matmul(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
         return;
     }
     if (n > 1 && k2_t16_mma_enabled()) {
-        dim3 grid(J, (n + K2_T16_MMA_TOKENS - 1) / K2_T16_MMA_TOKENS);
+        dim3 grid((J + K2_T16_MMA_M - 1) / K2_T16_MMA_M,
+                  (n + K2_T16_MMA_TOKENS - 1) / K2_T16_MMA_TOKENS);
         k2_t16_mma_kernel<<<grid, 32*K2_T16_MMA_WARPS, 0, stream>>>(
                 (const uint16_t *) w->data, (const float *) x->data, (float *) dst->data,
                 K, I, J, n, w->nb[1], w->nb[2]);
