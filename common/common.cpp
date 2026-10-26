@@ -575,10 +575,8 @@ static std::vector<int32_t> cpu_affinity_filter(const std::vector<int32_t> & cpu
 }
 
 #elif defined(_WIN32)
-// flat logical CPU id -> owning core: flat ids follow
-// GetLogicalProcessorInformationEx(RelationProcessorCore) enumeration order
-// (each GroupMask bit in order), the same mapping ggml/src/ggml.c uses for
-// pinning. One enumerator serves detection and filtering, so they cannot drift.
+// flat logical CPU id -> owning core, in GetLogicalProcessorInformationEx
+// (RelationProcessorCore) order; same mapping as ggml/src/ggml.c pinning
 struct win_flat_cpu {
     WORD group;
     int  bit;
@@ -627,9 +625,8 @@ static std::vector<win_flat_cpu> win_flat_cpus() {
                     if (!(mask & ((KAFFINITY) 1 << bit))) {
                         continue;
                     }
-                    // ggml caps its topology table at GGML_MAX_CPU_AFFINITY, so
-                    // ids past it cannot be pinned: stop here so they are
-                    // reported as out of topology instead of silently unbound
+                    // ids past ggml's topology table cannot be pinned:
+                    // stop so they are reported as out of topology
                     if ((int) cpus.size() >= GGML_MAX_CPU_AFFINITY) {
                         free(buf);
                         return cpus;
@@ -646,14 +643,8 @@ static std::vector<win_flat_cpu> win_flat_cpus() {
     return cpus;
 }
 
-// Windows hybrid core detection via EfficiencyClass (highest class = P, rest = E),
-// mirroring Linux cpu_detect_cores(with_siblings, efficiency). Flat ids follow
-// GetLogicalProcessorInformationEx(RelationProcessorCore) enumeration order,
-// matching ggml/src/ggml.c Windows pinning. Primaries come first (one LP per
-// physical core of the target class); with_siblings appends the extra SMT
-// siblings for n_threads overflow, like the Linux auto lists. Respects the
-// start-up process affinity on single-group systems (e.g. 265K, 20 threads).
-// GGML_HYBRID=0 disables (e.g. when using Process Lasso). Uniform cores -> {}.
+// Windows hybrid detection via EfficiencyClass: primaries first, then SMT
+// siblings; respects start affinity, GGML_HYBRID=0 disables. Uniform -> empty.
 static std::vector<int32_t> cpu_detect_cores_win(bool with_siblings, bool efficiency) {
     std::vector<int32_t> primaries;
     std::vector<int32_t> extra;
@@ -769,7 +760,7 @@ std::vector<int32_t> cpu_get_efficiency_cpus() { return {}; }
 static std::vector<int32_t> cpu_affinity_auto_cpus()       { return {}; }
 static std::vector<int32_t> cpu_affinity_auto_cpus_draft() { return {}; }
 static std::vector<int32_t> cpu_affinity_filter(const std::vector<int32_t> & cpus) { return cpus; }
-#endif // __x86_64__ && __linux__
+#endif // x86_64 Linux / Windows
 
 /**
  * Returns number of CPUs on system that are useful for math.
@@ -1247,11 +1238,8 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params, bool draft_af
         return false;
     }
 
-    // Resolve once, here, so that every example using -ca/-cr/-cm honours it:
-    // those that never call llama_init_from_gpt_params still get the list through
-    // common_context_params_to_llama as an all-phase explicit pin.
-    // --draft-params keeps it unresolved: its auto list is the E-cores, resolved
-    // by common_speculative_apply_draft_affinity with cpu_affinity_resolve_draft.
+    // Resolve once here so every example sees -ca/-cr/-cm through cparams;
+    // --draft-params stays unresolved (auto = E-cores, see speculative.cpp).
     if (!draft_affinity) {
         common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
     }

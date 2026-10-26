@@ -2059,9 +2059,8 @@ static void common_speculative_apply_draft_affinity(const gpt_params & parsed, c
     }
 }
 
-// the draft inherits the target affinity when it has none of its own. The base
-// list is already resolved at parse, so no mode knowledge is needed here; a copy
-// keeps cparams_dft's pointer independent of params_base's lifetime.
+// draft inherits the target affinity when it has none; the copy keeps
+// cparams_dft's pointer independent of params_base's lifetime
 static const std::vector<int32_t> & speculative_draft_affinity(
         common_params_speculative & params,
         const gpt_params                 & params_base) {

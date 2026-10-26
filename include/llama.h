@@ -1154,14 +1154,8 @@ extern "C" {
     // n_threads_batch is the number of threads used for prompt and batch processing (multiple tokens)
     LLAMA_API void llama_set_n_threads(struct llama_context * ctx, uint32_t n_threads, uint32_t n_threads_batch);
 
-    // pin CPU worker threads to the given logical CPUs; thread t -> cpus[t % n_cpus].
-    // Linux via pthread_setaffinity_np, Windows via SetThreadGroupAffinity (group-aware).
-    // Flat ids are 0-based indices into the OS core enumeration
-    // (Linux: /sys cpu order, Windows: GetLogicalProcessorInformationEx
-    // RelationProcessorCore order, group masks in bit order), NOT the Windows
-    // logical processor number (group*64 + bit): they only coincide up to 64 LPs.
-    // Configure before compute, n_cpus == 0 disables pinning. Applies to both
-    // PP and TG phases.
+    // pin CPU worker threads to cpus[t % n_cpus] (Linux pthreads, Windows group-aware).
+    // Flat ids follow the OS core enumeration, not the Windows group*64+bit numbering.
     LLAMA_API void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus);
 
     // Get the number of threads used for generation of a single token.

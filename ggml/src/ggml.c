@@ -29097,11 +29097,8 @@ static void set_cpu_thread_affinity(const struct ggml_cplan * cplan, int thread_
     }
 }
 #elif defined(_WIN32)
-// Windows CPU affinity via SetThreadGroupAffinity (group-aware, works past 64 CPUs).
-// Flat CPU ids 0..N-1 follow GetLogicalProcessorInformationEx(RelationProcessorCore)
-// enumeration order (each GroupMask bit in order). Cached once via INIT_ONCE.
-// Fixes old 7bfd3606 defects: thread-safe init, no 4-group/128-LP caps,
-// return-code checks, and explicit cplan list instead of naive P-then-E policy.
+// Windows CPU affinity via SetThreadGroupAffinity (group-aware, >64 CPUs); flat
+// ids follow RelationProcessorCore enumeration, cached once via INIT_ONCE.
 static struct {
     WORD     group;
     KAFFINITY mask;

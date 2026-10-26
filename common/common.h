@@ -94,9 +94,8 @@ std::vector<int32_t> cpu_affinity_resolve(const std::vector<int32_t> & cpus, boo
 // explicit affinity, else auto-detected E-cores
 std::vector<int32_t> cpu_affinity_resolve_draft(const std::vector<int32_t> & cpus, bool auto_detect);
 
-// mode-aware resolve: explicit lists are filtered, auto selects P-cores;
-// an empty result (non-hybrid CPU or start affinity excludes them) is warned
-// about and leaves pinning disabled
+// resolve in place: explicit lists are filtered, auto selects P-cores; an
+// empty auto result warns and leaves pinning disabled
 void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, bool auto_detect);
 
 // install a resolved affinity on a context and log it
@@ -329,7 +328,6 @@ struct gpt_params {
     std::vector<int32_t> cpu_affinity;       // logical CPU ids to pin worker threads to, resolved at parse (empty = no pinning)
     bool    cpu_affinity_configured = false; // a CPU affinity option was given (tells --no-cpu-affinity apart from unset in --draft-params)
     bool    cpu_affinity_auto       = false; // --cpu-affinity/-ca: pick physical P-cores at parse
-
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)

@@ -66,12 +66,6 @@ int main() {
         assert(std::find(pcpus.begin(), pcpus.end(), cpu) == pcpus.end());
     }
 
-    // auto P-core resolve (empty on uniform CPUs)
-    {
-        const cpus_t p = cpu_affinity_resolve({}, true);
-        assert(cpu_affinity_resolve({}, false).empty());
-    }
-
     // empty list without auto = no pinning
     assert(cpu_affinity_resolve({}, false).empty());
     assert(cpu_affinity_resolve_draft({}, false).empty());
@@ -88,7 +82,7 @@ int main() {
         const cpus_t expected = cpu_affinity_resolve({}, true);
         assert(p.cpu_affinity == expected);
         // -ca sets cpu_affinity_auto
-        assert(p.cpu_affinity_auto == !expected.empty());
+        assert(p.cpu_affinity_auto);
     }
     {
         char arg0[] = "test";

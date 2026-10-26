@@ -7302,7 +7302,6 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     return llama_output_reserve(lctx, n_outputs, n_outputs, n_outputs);
 }
 
-
 static void llama_graph_compute(
         llama_context & lctx,
           ggml_cgraph * gf,

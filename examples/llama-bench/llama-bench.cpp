@@ -2272,7 +2272,6 @@ int main(int argc, char ** argv) {
         }
 
         common_cpu_affinity_apply(ctx, inst.cpu_affinity, __func__);
-
         test t(inst, lmodel, ctx);
 
         llama_kv_cache_clear(ctx);
