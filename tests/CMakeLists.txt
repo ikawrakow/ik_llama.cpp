@@ -124,6 +124,8 @@ llama_test(test-sampling-history)
 
 # quillama.cpp: AMX prompt-processing GEMM
 llama_target_and_test(test-quill-amx.cpp)
+# reported as skipped, not passed, on a CPU without AMX
+set_tests_properties(test-quill-amx PROPERTIES SKIP_RETURN_CODE 77)
 # upstream llama.cpp's behavioural grammar / JSON-schema tests (strings that must or must not match)
 llama_target_and_test(test-grammar-integration-upstream.cpp)
 target_include_directories(test-grammar-integration-upstream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)

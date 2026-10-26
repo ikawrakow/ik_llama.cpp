@@ -12,6 +12,8 @@
 #include <nlohmann/json.hpp>
 
 #include <cassert>
+#include <cmath>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -916,6 +918,98 @@ static void test_custom_root_symbol_check() {
     fprintf(stderr, "  ✅︎ Passed\n");
 }
 
+// quillama.cpp: numeric bounds against exact comparison. Random minimum / maximum / exclusive
+// bounds (integral and fractional, negative, draft-4 boolean exclusives) for "integer" and
+// "number"; each grammar must accept every candidate inside the bounds and reject every one
+// outside. Candidates are canonical JSON numbers (no exponent, no "-0") with up to 3 decimals and
+// bounds have up to 3 decimals, so strtod orders them exactly.
+static void test_quill_numeric_bounds_fuzz() {
+    std::mt19937 rng(1234);
+    auto rnd = [&](int a, int b) { return std::uniform_int_distribution<int>(a, b)(rng); };
+    auto dec = [&](int max_decimals) {
+        const int dp = rnd(0, max_decimals);
+        int scale = 1;
+        for (int i = 0; i < dp; ++i) scale *= 10;
+        const int v = rnd(-30 * scale, 30 * scale);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.*f", dp, (double) v / scale);
+        std::string out = buf;
+        if (out == "-0" || out.rfind("-0.", 0) == 0) {
+            bool nz = false;
+            for (char c : out) nz = nz || (c >= '1' && c <= '9');
+            if (!nz) out = out.substr(1);
+        }
+        return out;
+    };
+    std::vector<std::string> cands;
+    for (int i = -40; i <= 40; ++i) cands.push_back(std::to_string(i));
+    for (int i = 0; i < 160; ++i) {
+        std::string c = dec(3);
+        if (rnd(0, 3) == 0 && c.find('.') != std::string::npos) c += "0";  // trailing zero spelling
+        cands.push_back(c);
+    }
+    int n_checked = 0, n_schemas = 0;
+    for (int iter = 0; iter < 600; ++iter) {
+        const bool is_int = iter % 3 == 0;
+        json schema = {{"type", is_int ? "integer" : "number"}};
+        double lo = -INFINITY, hi = INFINITY;
+        bool lo_ex = false, hi_ex = false;
+        const int shape = rnd(0, 7);
+        auto put = [&](const char * key, const std::string & v) { schema[key] = json::parse(v); return strtod(v.c_str(), nullptr); };
+        if (shape & 1) {
+            if (rnd(0, 2) == 0) { lo = put("exclusiveMinimum", dec(3)); lo_ex = true; }
+            else { lo = put("minimum", dec(3)); if (rnd(0, 4) == 0) { schema["exclusiveMinimum"] = true; lo_ex = true; } }
+        }
+        if (shape & 2) {
+            if (rnd(0, 2) == 0) { hi = put("exclusiveMaximum", dec(3)); hi_ex = true; }
+            else { hi = put("maximum", dec(3)); if (rnd(0, 4) == 0) { schema["exclusiveMaximum"] = true; hi_ex = true; } }
+        }
+        if (!(shape & 3)) {
+            lo = put("minimum", dec(2));
+        }
+        auto inside = [&](double v) {
+            return (lo_ex ? v > lo : v >= lo) && (hi_ex ? v < hi : v <= hi);
+        };
+        std::string gstr;
+        try {
+            gstr = json_schema_to_grammar(schema, true);
+        } catch (const std::exception &) {
+            // rejected as unsatisfiable: no candidate may be inside
+            for (const auto & c : cands) {
+                const double v = strtod(c.c_str(), nullptr);
+                if ((!is_int || c.find('.') == std::string::npos) && inside(v)) {
+                    g_failures.push_back("numeric fuzz: " + schema.dump() + " rejected as unsatisfiable but " + c + " fits");
+                    break;
+                }
+            }
+            continue;
+        }
+        auto * grammar = build_grammar(gstr);
+        if (!grammar) {
+            g_failures.push_back("numeric fuzz: grammar failed to parse for " + schema.dump());
+            continue;
+        }
+        const llama_grammar_stacks stacks_org = llama_grammar_get_stacks(grammar);
+        llama_grammar_stacks & stacks_cur = llama_grammar_get_stacks(grammar);
+        ++n_schemas;
+        for (const auto & c : cands) {
+            const bool is_integral_spelling = c.find('.') == std::string::npos;
+            if (is_int && !is_integral_spelling) continue;
+            const bool expect = inside(strtod(c.c_str(), nullptr));
+            const bool got = match_string(c, grammar);
+            stacks_cur = stacks_org;
+            ++n_checked;
+            if (got != expect) {
+                g_failures.push_back("numeric fuzz: " + schema.dump() + " " + (got ? "accepts " : "rejects ") + c);
+                if (g_failures.size() > 20) break;
+            }
+        }
+        llama_grammar_free_impl(grammar);
+        if (g_failures.size() > 20) break;
+    }
+    fprintf(stderr, "numeric bounds fuzz: %d schemas, %d candidate checks\n", n_schemas, n_checked);
+}
+
 static void test_json_schema() {
     // Note that this is similar to the regular grammar tests,
     //  but we convert each json schema to a grammar before parsing.
@@ -1542,6 +1636,7 @@ int main() {
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();
+    test_quill_numeric_bounds_fuzz();
     if (!g_failures.empty()) {
         fprintf(stdout, "\n%zu FAILURES:\n", g_failures.size());
         for (const auto & f : g_failures) fprintf(stdout, "- %s\n", f.c_str());

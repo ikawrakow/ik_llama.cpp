@@ -6,8 +6,10 @@ supports keeps working; the changes below are on top:
 
 - **JSON output follows the requested schema.** `response_format: {"type": "json_object"}` was not
   enforced at all in ik_llama.cpp (upstream llama.cpp does enforce it), and two smaller gaps let
-  output escape the schema. Grammar-constrained sampling is also 1.7× faster, with an identical
-  token mask.
+  output escape the schema. Numeric bounds (`minimum`, `maximum`, exclusive, fractional) and
+  `minProperties` / `maxProperties` are enforced exactly, which neither ik nor upstream does.
+  Keywords no grammar can express, such as `uniqueItems` or `multipleOf`, are still not enforced.
+  Grammar-constrained sampling is also 1.7× faster, with an identical token mask.
 - **Faster generation on AVX2 servers** (AMD EPYC, Intel without AVX-512): +29% over a hand-tuned
   ik_llama.cpp on a Qwen3-30B-A3B-shaped MoE, from run-time repack by default, huge pages for the
   repacked weights, MoE decode work split and faster AVX2 flash attention at long context.

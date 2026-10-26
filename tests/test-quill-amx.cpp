@@ -142,7 +142,7 @@ static bool run_fa_case(int64_t D, int64_t N, int64_t n_kv, int64_t H, int64_t H
 }
 
 int main() {
-    if (!quill_amx_available()) { printf("AMX not available - skipping\n"); return 0; }
+    if (!quill_amx_available()) { printf("AMX not available - skipped\n"); return 77; }  // ctest SKIP_RETURN_CODE
     struct ggml_init_params ip = { 16*1024*1024, nullptr, false };
     ggml_context * ctx = ggml_init(ip); // initializes the fp16 tables
     bool ok = true;

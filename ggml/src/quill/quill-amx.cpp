@@ -67,7 +67,11 @@ struct aligned_buffer {
     T * get(size_t n) {
         if (n > size) {
             free(ptr);
+            size = 0;
             ptr  = (T *) aligned_alloc(64, round_up(n*sizeof(T), 64));
+            if (ptr == nullptr) {
+                GGML_ABORT("quill-amx: out of memory allocating a %zu-byte scratch buffer (QUILL_AMX=0 disables AMX)", n*sizeof(T));
+            }
             size = n;
         }
         return ptr;

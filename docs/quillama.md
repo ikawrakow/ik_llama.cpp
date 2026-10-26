@@ -18,7 +18,7 @@ branch. This page lists every change, what it does, how it was measured, and its
   - [9. Huge pages for repacked weights and other large CPU buffers](#9-huge-pages-for-repacked-weights-and-other-large-cpu-buffers)
   - [10. MoE work split for decode](#10-moe-work-split-for-decode)
   - [11. Sparse output layer under a grammar](#11-sparse-output-layer-under-a-grammar)
-  - [12. JSON schema: non-negative numbers and property counts](#12-json-schema-non-negative-numbers-and-property-counts)
+  - [12. JSON schema: numeric bounds and property counts](#12-json-schema-numeric-bounds-and-property-counts)
   - [13. Faster attention during generation at long context (AVX2)](#13-faster-attention-during-generation-at-long-context-avx2)
   - [14. Speculative decoding on CPU, and prompt-prefix reuse](#14-speculative-decoding-on-cpu-and-prompt-prefix-reuse)
   - [15. Hardened slot save/restore of context checkpoints, and a speculative EOG fix](#15-hardened-slot-saverestore-of-context-checkpoints-and-a-speculative-eog-fix)
@@ -271,10 +271,28 @@ the tokens allowed at each row (row i after accepting the first i drafted tokens
 `n_probs` is requested, for other speculative methods (`--spec-type`), when an output row belongs
 to a slot without a grammar, and while a lazy grammar waits for its trigger.
 
-### 12. JSON schema: non-negative numbers and property counts
+### 12. JSON schema: numeric bounds and property counts
 
-`{"type": "number", "minimum": 0}` (or `exclusiveMinimum >= 0`) forbids a leading `-`. Upstream
-llama.cpp ignores bounds on `number`, so models could emit negative values for such fields.
+`minimum`, `maximum`, `exclusiveMinimum` and `exclusiveMaximum` (also the draft-4 boolean
+`exclusiveMinimum: true`) are enforced exactly for `number` and `integer`. Upstream llama.cpp and ik
+ignore the bounds of `number` entirely and truncate fractional bounds of `integer`.
+
+- Each bound is read as an exact decimal from its JSON text, so `0.1`, `-2.5` and `1e-05` are
+  compared digit by digit, never rounded.
+- `integer`: fractional bounds round inward. `minimum: 1.2` accepts 2 and rejects 1;
+  `maximum: -1.5` accepts -2 and rejects -1.
+- `number`: the grammar splits the range by integer part and constrains the fraction digits at
+  the two ends. With `minimum: 10, maximum: 20` it accepts 10, 15.25 and 20.0, and rejects 3, 100,
+  20.5 and 9.99. A bounded number is written without an exponent (`1e3`), which is still valid
+  JSON. `-0` is not produced; write `0`.
+- Bounds that leave no value (`minimum: 5, maximum: 3`) are rejected with an error instead of
+  producing a grammar that never finishes.
+- Integer parts beyond 15 digits cannot be represented. Such a bound is reported as not
+  enforced, and the number keeps the plain grammar.
+
+`tests/test-grammar-integration-upstream.cpp` checks this against plain numeric comparison: 517
+random combinations of fractional, negative, exclusive and draft-4 bounds, each matched against
+about 200 candidate numbers (104,248 checks), with no mismatch.
 
 `minProperties` and `maxProperties` are enforced. ik and upstream llama.cpp ignored them, so a map
 such as `{"additionalProperties": {"type": "integer"}, "maxProperties": 2}` could get any number of
@@ -591,7 +609,9 @@ cd build && ctest -R "quill|grammar-integration-upstream"
 ```
 
 - `test-quill-amx`: AMX GEMM, fused up/gate and flash attention against float/double references,
-  for 18 weight types, odd sizes, multi-thread splits, GQA, causal masks and quantized KV caches.
+  for 18 weight types, odd sizes, multi-thread splits, GQA, causal masks and quantized KV caches. On a
+  CPU without AMX (or with `QUILL_AMX=0`) ctest reports it as skipped, not passed; run it on an
+  AMX machine (Sapphire Rapids or newer Xeon) to exercise the kernels.
 - `test-quill-grammar`: the fast grammar mask equals the reference algorithm.
 - `test-grammar-integration-upstream`: upstream llama.cpp's grammar / JSON-schema suite.
 - `scripts/quill-json-schema-test.py`: end-to-end structured output through the server (run it

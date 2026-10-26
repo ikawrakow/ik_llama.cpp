@@ -309,6 +309,290 @@ static std::string format_literal(const std::string & literal) {
 
 std::string gbnf_format_literal(const std::string & literal) { return format_literal(literal); }
 
+// quillama.cpp: exact numeric bounds. A bound is parsed from its JSON text into a decimal
+// (sign, integer part, fraction digits without trailing zeros), so 1.2, -0.5 and 1e-05 are
+// compared digit by digit and never rounded.
+namespace {
+struct quill_dec {
+    bool        neg  = false;
+    int64_t     ip   = 0;  // integer part of the magnitude
+    std::string frac;      // fraction digits, no trailing zeros
+    bool is_zero() const { return ip == 0 && frac.empty(); }
+};
+
+static bool quill_dec_parse(const json & v, quill_dec & out) {
+    if (!v.is_number()) {
+        return false;
+    }
+    const std::string s = v.dump();
+    quill_dec d;
+    size_t i = 0;
+    if (i < s.size() && (s[i] == '-' || s[i] == '+')) {
+        d.neg = s[i] == '-';
+        ++i;
+    }
+    std::string mant;
+    int point = -1;
+    for (; i < s.size() && (isdigit((unsigned char) s[i]) || s[i] == '.'); ++i) {
+        if (s[i] == '.') {
+            point = (int) mant.size();
+        } else {
+            mant += s[i];
+        }
+    }
+    if (point < 0) {
+        point = (int) mant.size();
+    }
+    if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+        point += atoi(s.c_str() + i + 1);
+    }
+    if (mant.empty() || point > 15 || point < -64) {
+        return false;  // beyond what the grammar's integral-part can write, or absurdly small
+    }
+    std::string ipart = point > 0 ? mant.substr(0, std::min<size_t>(point, mant.size())) : "";
+    while ((int) ipart.size() < point) {
+        ipart += '0';
+    }
+    std::string fpart = point >= 0 ? (point < (int) mant.size() ? mant.substr(point) : "")
+                                   : std::string(-point, '0') + mant;
+    while (!fpart.empty() && fpart.back() == '0') {
+        fpart.pop_back();
+    }
+    d.ip   = ipart.empty() ? 0 : std::stoll(ipart);
+    d.frac = fpart;
+    if (d.is_zero()) {
+        d.neg = false;
+    }
+    out = d;
+    return true;
+}
+
+// -1, 0, 1 like a <=> b
+static int quill_dec_cmp(const quill_dec & a, const quill_dec & b) {
+    if (a.neg != b.neg) {
+        return a.neg ? -1 : 1;
+    }
+    int r = 0;
+    if (a.ip != b.ip) {
+        r = a.ip < b.ip ? -1 : 1;
+    } else {
+        const size_t n = std::max(a.frac.size(), b.frac.size());
+        for (size_t k = 0; k < n && r == 0; ++k) {
+            const char ca = k < a.frac.size() ? a.frac[k] : '0';
+            const char cb = k < b.frac.size() ? b.frac[k] : '0';
+            r = ca < cb ? -1 : (ca > cb ? 1 : 0);
+        }
+    }
+    return a.neg ? -r : r;
+}
+
+// smallest integer >= d (> d when exclusive), largest integer <= d (< d when exclusive)
+static int64_t quill_dec_ceil(const quill_dec & d, bool exclusive) {
+    const bool integral = d.frac.empty();
+    const int64_t c = d.neg ? -d.ip : (integral ? d.ip : d.ip + 1);
+    return exclusive && integral ? c + 1 : c;
+}
+static int64_t quill_dec_floor(const quill_dec & d, bool exclusive) {
+    const bool integral = d.frac.empty();
+    const int64_t f = d.neg ? (integral ? -d.ip : -d.ip - 1) : d.ip;
+    return exclusive && integral ? f - 1 : f;
+}
+
+struct quill_frac_rule {
+    std::string ne;        // grammar for a non-empty digit sequence, "" if none fits
+    bool        empty_ok;  // whether ending here (all remaining digits zero) fits
+};
+
+// Fraction digits d[k..] given that d[..k) equals lo[..k) (tight_lo) and hi[..k) (tight_hi).
+// lo / hi are fraction digit strings with implicit trailing zeros.
+static quill_frac_rule quill_frac_between(const std::string * lo, bool lo_ex, const std::string * hi, bool hi_ex,
+                                          size_t k, bool tight_lo, bool tight_hi) {
+    auto rest_nonzero = [](const std::string & s, size_t from) {
+        for (size_t j = from; j < s.size(); ++j) {
+            if (s[j] != '0') {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (tight_lo && k >= lo->size()) {
+        // lo exhausted: its remaining digits are zeros, so every continuation is >= lo; > lo needs a
+        // nonzero digit
+        if (!lo_ex) {
+            tight_lo = false;
+        } else if (!tight_hi) {
+            return { "[0-9]* [1-9] [0-9]*", false };
+        }
+    }
+    if (tight_hi && k >= hi->size()) {
+        // hi exhausted: only zeros keep the value <= hi, and nothing keeps it < hi
+        if (hi_ex) {
+            return { "", false };
+        }
+        if (!tight_lo) {
+            return { "\"0\"+", true };
+        }
+        // tight on both with lo exclusive and hi exhausted: lo exhausted too (lo <= hi), so equal: none
+        return { "", false };
+    }
+    if (!tight_lo && !tight_hi) {
+        return { "[0-9]+", true };
+    }
+    bool empty_ok = true;
+    if (tight_lo) {
+        empty_ok = empty_ok && !lo_ex && !rest_nonzero(*lo, k);
+    }
+    if (tight_hi) {
+        empty_ok = empty_ok && (!hi_ex || rest_nonzero(*hi, k));
+    }
+    const char l = tight_lo ? (k < lo->size() ? (*lo)[k] : '0') : '0';  // past lo's end: implicit zeros
+    const char h = tight_hi ? (*hi)[k] : '9';
+    auto range = [](char a, char b) {
+        return a == b ? std::string("\"") + a + "\"" : std::string("[") + a + "-" + b + "]";
+    };
+    std::vector<std::string> alts;
+    auto add = [&](char a, bool tl, bool th) {
+        const quill_frac_rule r = quill_frac_between(lo, lo_ex, hi, hi_ex, k + 1, tl, th);
+        if (r.ne.empty() && !r.empty_ok) {
+            return;
+        }
+        const std::string tail = r.ne.empty() ? "" : (r.empty_ok ? " (" + r.ne + ")?" : " (" + r.ne + ")");
+        alts.push_back(range(a, a) + tail);
+    };
+    if (tight_lo && tight_hi && l == h) {
+        add(l, true, true);
+    } else {
+        if (tight_lo) {
+            add(l, true, false);
+        }
+        const char a = tight_lo ? (char) (l + 1) : '0';
+        const char b = tight_hi ? (char) (h - 1) : '9';
+        if (a <= b) {
+            alts.push_back(range(a, b) + " [0-9]*");
+        }
+        if (tight_hi) {
+            add(h, false, true);
+        }
+    }
+    std::string ne;
+    for (size_t j = 0; j < alts.size(); ++j) {
+        ne += (j ? " | " : "") + alts[j];
+    }
+    return { ne, empty_ok };
+}
+
+// optional "." and fraction digits between lo and hi (nullptr = unbounded); ok = false if none fits
+static std::string quill_fraction(const std::string * lo, bool lo_ex, const std::string * hi, bool hi_ex, bool & ok) {
+    const quill_frac_rule r = quill_frac_between(lo, lo_ex, hi, hi_ex, 0, lo != nullptr, hi != nullptr);
+    ok = !r.ne.empty() || r.empty_ok;
+    if (r.ne.empty()) {
+        return "";
+    }
+    return "(\".\" (" + r.ne + "))" + (r.empty_ok ? "?" : "");
+}
+
+// magnitudes u >= 0 with lo <= u <= hi (exclusive flags; hi == nullptr: unbounded)
+static void quill_magnitude_alts(const quill_dec & lo, bool lo_ex, const quill_dec * hi, bool hi_ex,
+                                 std::vector<std::string> & alts) {
+    auto lit = [](int64_t v) { return "\"" + std::to_string(v) + "\""; };
+    auto with = [](const std::string & a, const std::string & f) { return f.empty() ? a : a + " " + f; };
+    bool ok = false;
+    if (hi && hi->ip == lo.ip) {
+        const std::string f = quill_fraction(&lo.frac, lo_ex, &hi->frac, hi_ex, ok);
+        if (ok) {
+            alts.push_back(with(lit(lo.ip), f));
+        }
+        return;
+    }
+    const std::string f = quill_fraction(&lo.frac, lo_ex, nullptr, false, ok);
+    if (ok) {
+        alts.push_back(with(lit(lo.ip), f));
+    }
+    const int64_t a = lo.ip + 1;
+    const int64_t b = hi ? hi->ip - 1 : std::numeric_limits<int64_t>::max();
+    if (a <= b) {
+        std::stringstream out;
+        out << "(";
+        build_min_max_int(a, b, out);
+        out << ") (\".\" [0-9]+)?";
+        alts.push_back(out.str());
+    }
+    if (hi) {
+        const std::string fh = quill_fraction(nullptr, false, &hi->frac, hi_ex, ok);
+        if (ok) {
+            alts.push_back(with(lit(hi->ip), fh));
+        }
+    }
+}
+
+// a JSON number v with lo <= v <= hi (nullptr = unbounded), written without an exponent
+static std::string quill_number_range(const quill_dec * lo, bool lo_ex, const quill_dec * hi, bool hi_ex) {
+    std::vector<std::string> alts;
+    const quill_dec zero;
+    // v >= 0
+    if ((!hi || !hi->neg) && !(hi && hi->is_zero() && hi_ex)) {
+        const bool lo_pos = lo && !lo->neg;
+        quill_magnitude_alts(lo_pos ? *lo : zero, lo_pos && lo_ex, hi, hi_ex, alts);
+    }
+    // v < 0, written as "-" u with u = -v > 0
+    if (!lo || lo->neg) {
+        quill_dec ulo = zero;
+        bool ulo_ex = true;
+        if (hi && hi->neg) {
+            ulo = *hi;
+            ulo.neg = false;
+            ulo_ex = hi_ex;
+        }
+        quill_dec uhi;
+        if (lo) {
+            uhi = *lo;
+            uhi.neg = false;
+        }
+        std::vector<std::string> neg;
+        quill_magnitude_alts(ulo, ulo_ex, lo ? &uhi : nullptr, lo_ex, neg);
+        for (const auto & a : neg) {
+            alts.push_back("\"-\" " + a);
+        }
+    }
+    std::string r;
+    for (size_t j = 0; j < alts.size(); ++j) {
+        r += (j ? " | " : "") + std::string("(") + alts[j] + ")";
+    }
+    return r;
+}
+
+// reads minimum / exclusiveMinimum / maximum / exclusiveMaximum (also draft-4 boolean exclusives);
+// false if a bound is present but cannot be represented exactly
+static bool quill_read_bounds(const json & schema, bool & has_lo, quill_dec & lo, bool & lo_ex,
+                              bool & has_hi, quill_dec & hi, bool & hi_ex) {
+    has_lo = has_hi = lo_ex = hi_ex = false;
+    auto take = [&](const char * key, bool exclusive, bool is_lower) -> bool {
+        if (!schema.contains(key) || schema[key].is_boolean()) {
+            return true;
+        }
+        quill_dec d;
+        if (!quill_dec_parse(schema[key], d)) {
+            return false;
+        }
+        bool &      has = is_lower ? has_lo : has_hi;
+        quill_dec & cur = is_lower ? lo : hi;
+        bool &      ex  = is_lower ? lo_ex : hi_ex;
+        const int c = has ? quill_dec_cmp(d, cur) : 0;
+        if (!has || (is_lower ? c > 0 : c < 0) || (c == 0 && exclusive)) {  // keep the stricter bound
+            cur = d;
+            ex  = exclusive;
+            has = true;
+        }
+        return true;
+    };
+    auto flag = [&](const char * key) {
+        return schema.contains(key) && schema[key].is_boolean() && schema[key].get<bool>();
+    };
+    return take("minimum", flag("exclusiveMinimum"), true) && take("exclusiveMinimum", true, true) &&
+           take("maximum", flag("exclusiveMaximum"), false) && take("exclusiveMaximum", true, false);
+}
+} // namespace
+
 class common_schema_converter {
 private:
     friend class common_schema_info;
@@ -1054,15 +1338,22 @@ public:
         if (schema_type == "integer" && (schema.contains("minimum") || schema.contains("exclusiveMinimum") || schema.contains("maximum") || schema.contains("exclusiveMaximum"))) {
             int64_t min_value = std::numeric_limits<int64_t>::min();
             int64_t max_value = std::numeric_limits<int64_t>::max();
-            if (schema.contains("minimum")) {
-                min_value = schema["minimum"].get<int64_t>();
-            } else if (schema.contains("exclusiveMinimum")) {
-                min_value = schema["exclusiveMinimum"].get<int64_t>() + 1;
+            bool has_lo, lo_ex, has_hi, hi_ex;
+            quill_dec lo, hi;
+            if (quill_read_bounds(schema, has_lo, lo, lo_ex, has_hi, hi, hi_ex)) {
+                // quillama.cpp: fractional bounds round inward (minimum 1.2 -> 2, maximum -1.5 -> -2)
+                if (has_lo) {
+                    min_value = quill_dec_ceil(lo, lo_ex);
+                }
+                if (has_hi) {
+                    max_value = quill_dec_floor(hi, hi_ex);
+                }
+            } else {
+                _warnings.push_back("integer bounds beyond 15 digits were not enforced: " + schema.dump());
             }
-            if (schema.contains("maximum")) {
-                max_value = schema["maximum"].get<int64_t>();
-            } else if (schema.contains("exclusiveMaximum")) {
-                max_value = schema["exclusiveMaximum"].get<int64_t>() - 1;
+            if (min_value > max_value) {
+                _errors.push_back("no integer satisfies the bounds of " + schema.dump());
+                return "";
             }
             std::stringstream out;
             out << "(";
@@ -1082,8 +1373,27 @@ public:
             _errors.push_back("Unrecognized schema: " + schema.dump());
             return "";
         }
-        // quillama: a "number" with minimum / exclusiveMinimum >= 0 must not start with '-'
-        // (the remaining bounds of "number" are still not enforced, as upstream)
+        // quillama.cpp: "number" bounds, exact for any decimal bound (the value is written without an
+        // exponent)
+        if (schema_type == "number" && (schema.contains("minimum") || schema.contains("exclusiveMinimum") || schema.contains("maximum") || schema.contains("exclusiveMaximum"))) {
+            bool has_lo, lo_ex, has_hi, hi_ex;
+            quill_dec lo, hi;
+            if (quill_read_bounds(schema, has_lo, lo, lo_ex, has_hi, hi, hi_ex) && (has_lo || has_hi)) {
+                if (has_lo && has_hi) {
+                    const int c = quill_dec_cmp(lo, hi);
+                    if (c > 0 || (c == 0 && (lo_ex || hi_ex))) {
+                        _errors.push_back("no number satisfies the bounds of " + schema.dump());
+                        return "";
+                    }
+                }
+                const std::string body = quill_number_range(has_lo ? &lo : nullptr, lo_ex, has_hi ? &hi : nullptr, hi_ex);
+                if (!body.empty()) {
+                    return _add_rule(rule_name, "(" + body + ") space");
+                }
+            }
+        }
+        // a "number" whose bounds could not be represented exactly: minimum / exclusiveMinimum >= 0
+        // still forbids a leading '-'
         if (schema_type == "number") {
             auto non_negative = [&](const char * key) {
                 return schema.contains(key) && schema[key].is_number() && schema[key].get<double>() >= 0.0;
@@ -1093,7 +1403,6 @@ public:
                     BuiltinRule{"integral-part (\".\" decimal-part)? ([eE] [-+]? integral-part)? space", {"integral-part", "decimal-part"}});
             }
         }
-        // TODO: support minimum, maximum, exclusiveMinimum, exclusiveMaximum at least for zero
         return _add_primitive(rule_name == "root" ? "root" : schema_type.get<std::string>(), PRIMITIVE_RULES.at(schema_type.get<std::string>()));
     }
 

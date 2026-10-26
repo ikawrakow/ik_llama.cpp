@@ -45,16 +45,15 @@ bool request_tile_permission() {
 
 } // namespace
 
-static int g_amx_state = -1;   // -1 unknown, 0 off, 1 on
-
 extern "C" bool quill_amx_available(void) {
-    if (g_amx_state < 0) {
+    // decided once; a function-local static is initialized thread-safely even when compute
+    // threads reach this first
+    static const bool on = [] {
         const char * env = getenv("QUILL_AMX");
-        bool on = !(env && (strcmp(env, "0") == 0 || strcmp(env, "off") == 0));
-        on = on && cpu_has_amx_bf16() && request_tile_permission();
-        g_amx_state = on ? 1 : 0;
-    }
-    return g_amx_state == 1;
+        const bool allowed = !(env && (strcmp(env, "0") == 0 || strcmp(env, "off") == 0));
+        return allowed && cpu_has_amx_bf16() && request_tile_permission();
+    }();
+    return on;
 }
 
 extern "C" int quill_amx_min_batch(void) {
