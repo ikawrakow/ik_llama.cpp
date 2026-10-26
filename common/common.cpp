@@ -683,7 +683,8 @@ static std::vector<int32_t> cpu_detect_cores_win(bool with_siblings, bool effici
             last_core = cpu.core;
             picked    = false; // one thread per physical core (HT-less OK)
         }
-        if ((cpu.efficiency == max_eff) != efficiency) {
+        const bool is_efficiency = cpu.efficiency != max_eff; // higher class = P-core
+        if (is_efficiency != efficiency) {
             continue; // other class LP, still counts for flat ids
         }
         // single-group filter: skip LPs outside our start affinity (e.g. start /affinity)
