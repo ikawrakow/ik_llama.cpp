@@ -5,7 +5,10 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
+#include <mma.h>
 #include "t16-gemv.cuh"
+
+using namespace nvcuda;
 
 // K2 (t16): exact EXL3 trellis decode.
 //
@@ -96,6 +99,109 @@ static __global__ void k2_t16_matmul_kernel(
             yc[(t0 + t)*(size_t)(16*J)] = acc[t];
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tensor-core prefill (n > 1): f16-MMA.
+//
+// Precision: k2_t16_mul1 ends in __hfma on __half and returns __half2float(v), so the decoded weight
+// is ALREADY an fp16 value -- __float2half(v) below is an exact round-trip and the weight side of
+// this path loses nothing. The only precision change vs the f32 kernel is the activation, rounded
+// f32 -> f16 (11-bit mantissa, against int8's 7 in the fork's MMQ path). The accumulator is f32, so
+// the rounding is in the operands only, not in the sum.
+//
+// Mapping: y[out,t] = sum_in W[out,in] x[in,t]  ->  D[m,n] = sum_k A[m,k] B[k,n] with
+//   m = out, k = in, n = token.  Thread (c,r) decodes the value at (out=c, in=r), so
+//   A[m][k] = sA[16*c + r] is row-major with no transpose (row_major fragment, ld = 16).
+// x is [in, n] (in = ne0), so a token block is 16 contiguous floats per input -> stage B
+// token-major (sB[t*16 + k]) and load it as a col_major fragment: coalesced loads, no transpose.
+// ---------------------------------------------------------------------------
+
+#define K2_T16_MMA_WARPS  8                       // 8 warps -> 128 tokens per block
+#define K2_T16_MMA_TOKENS (16*K2_T16_MMA_WARPS)
+
+static __global__ void k2_t16_mma_kernel(
+        const uint16_t * __restrict__ trellis,
+        const float    * __restrict__ x,
+        float          * __restrict__ y,
+        int K, int I, int J, int n,
+        size_t nb1, size_t nb2) {
+    const int j    = blockIdx.x;
+    const int t0   = blockIdx.y * K2_T16_MMA_TOKENS;
+    const int tid  = threadIdx.x;
+    const int warp = tid >> 5;
+    const int lane = tid & 31;
+
+    __shared__ __align__(16) half  sA[16*16];
+    __shared__ __align__(16) half  sB[K2_T16_MMA_WARPS][16*16];
+    __shared__ __align__(16) float sY[K2_T16_MMA_WARPS][16*16];
+
+    const int c    = tid >> 4;
+    const int r    = tid & 15;
+    const int tpos = c_k2_t16_inv_perm[16*r + c];
+    const int b    = tpos*K + K - 16 + 256*K;
+    const int ih   = b >> 5;
+    const int il   = (b + 15) >> 5;
+    const int sh   = (il + 1)*32 - (b + 16);
+    const int nw   = 8*K;
+
+    const int tok_base = t0 + warp*16;
+    const int ntok     = min(16, n - tok_base);
+
+    wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> fa;
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> fb;
+    wmma::fragment<wmma::accumulator, 16, 16, 16, float> fc;
+    wmma::fill_fragment(fc, 0.0f);
+
+    const char * tile0 = (const char *) trellis + j*nb1;
+    for (int i = 0; i < I; ++i) {
+        const uint32_t * p = (const uint32_t *)(tile0 + i*nb2);
+        const uint32_t w1 = k2_t16_fshr(p[il % nw], p[ih % nw], (uint32_t) sh);
+        sA[16*c + r] = __float2half(k2_t16_mul1((uint16_t)(w1 & 0xFFFFu)));
+
+        if (ntok > 0) {
+            // 256 B entries over 32 lanes: consecutive lanes walk k (contiguous in x), then t.
+#pragma unroll
+            for (int e = 0; e < 8; ++e) {
+                const int idx = lane + 32*e;
+                const int t   = idx >> 4;
+                const int k   = idx & 15;
+                sB[warp][16*t + k] = (t < ntok)
+                    ? __float2half(x[(16*i + k) + (size_t)(tok_base + t)*(size_t)(16*I)])
+                    : __float2half(0.0f);
+            }
+        }
+        __syncthreads();
+        if (ntok > 0) {
+            wmma::load_matrix_sync(fa, sA, 16);
+            wmma::load_matrix_sync(fb, sB[warp], 16);
+            wmma::mma_sync(fc, fa, fb, fc);
+        }
+        __syncthreads();
+    }
+
+    if (ntok > 0) {
+        wmma::store_matrix_sync(sY[warp], fc, 16, wmma::mem_row_major);
+        __syncwarp();
+#pragma unroll
+        for (int e = 0; e < 8; ++e) {
+            const int idx = lane + 32*e;
+            const int m   = idx >> 4;
+            const int t   = idx & 15;
+            if (t < ntok) {
+                y[(16*j + m) + (size_t)(tok_base + t)*(size_t)(16*J)] = sY[warp][idx];
+            }
+        }
+    }
+}
+
+static bool k2_t16_mma_enabled() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * e = getenv("K2_T16_NOMMA");
+        cached = (e != nullptr && e[0] == '1') ? 0 : 1;
+    }
+    return cached != 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +445,14 @@ void ggml_cuda_op_t16_matmul(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
             if (K == 5) k2_t16_gemv_k5(nw, pf, grid, blkW, stream, tw, xf, yf, I, J, w->nb[1], w->nb[2]);
             else        k2_t16_gemv_k6(nw, pf, grid, blkW, stream, tw, xf, yf, I, J, w->nb[1], w->nb[2]);
         }
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    }
+    if (n > 1 && k2_t16_mma_enabled()) {
+        dim3 grid(J, (n + K2_T16_MMA_TOKENS - 1) / K2_T16_MMA_TOKENS);
+        k2_t16_mma_kernel<<<grid, 32*K2_T16_MMA_WARPS, 0, stream>>>(
+                (const uint16_t *) w->data, (const float *) x->data, (float *) dst->data,
+                K, I, J, n, w->nb[1], w->nb[2]);
         CUDA_CHECK(cudaGetLastError());
         return;
     }
