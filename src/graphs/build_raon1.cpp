@@ -129,7 +129,7 @@ static ggml_tensor * raon1_mla_attention(
     if (n_extra > 0) {
         // Raon-1's 64 NoPE channels are real extra K/Q channels.
         auto q_extra = ggml_view_3d(ctx0, q, n_extra, n_tokens, n_head, q->nb[1], q->nb[2], n_nope*q->nb[0]);
-        Qcur = ggml_concat(ctx0, Qcur_nope, q_extra, 0);      // [kv_lora + n_extra, n_tokens, n_head]
+        Qcur = ggml_concat(ctx0, q_extra, Qcur_nope, 0);      // [kv_lora + n_extra, n_tokens, n_head]
     }
     cb(Qcur, "Qcur", il);
 
@@ -141,7 +141,7 @@ static ggml_tensor * raon1_mla_attention(
     auto k_row = latent;
     if (n_extra > 0) {
         auto extra = ggml_view_2d(ctx0, kv, n_extra, n_tokens, kv->nb[1], kv_lora*kv->nb[0]);
-        k_row = ggml_concat(ctx0, latent, extra, 0);          // [kv_lora + n_extra, n_tokens]
+        k_row = ggml_concat(ctx0, extra, latent, 0);          // [kv_lora + n_extra, n_tokens]
     }
 
     const auto row_size = ggml_row_size(kv_self.k_l[il]->type, kv_lora + n_extra);
@@ -157,7 +157,7 @@ static ggml_tensor * raon1_mla_attention(
     ggml_tensor * kqv = nullptr;
     if (lctx.cparams.flash_attn) {
         auto V_cache = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora, llm.n_kv, row_size,
-                0);
+                ggml_row_size(K_cache->type, n_extra));
         kqv = ggml_flash_attn_ext(ctx0, Qcur, K_cache, V_cache, KQ_mask,
                 kq_scale, hparams.f_max_alibi_bias, 0.f);
         if (K_cache->ne[1] < 256) {
@@ -169,7 +169,7 @@ static ggml_tensor * raon1_mla_attention(
         ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
         kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
         auto V_cache = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora, llm.n_kv, row_size,
-                0);
+                ggml_row_size(K_cache->type, n_extra));
         kqv = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, V_cache)), kq);
     }
     cb(kqv, "kqv_compressed", il);
