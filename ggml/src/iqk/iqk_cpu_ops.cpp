@@ -569,6 +569,695 @@ void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth) {
 }
 
 namespace {
+// K2 (t16) trellis: tensor_core_perm maps the window order to the row-major
+// (in*16 + out) position inside a 16x16 tile. Dumped from exllamav3's
+// modules.quant.exl3_lib.quantize.tensor_core_perm (verified bit-exact).
+static const uint8_t k2_t16_perm[256] = {
+      0,  16, 128, 144,   8,  24, 136, 152,  32,  48, 160, 176,  40,  56, 168, 184,
+     64,  80, 192, 208,  72,  88, 200, 216,  96, 112, 224, 240, 104, 120, 232, 248,
+      1,  17, 129, 145,   9,  25, 137, 153,  33,  49, 161, 177,  41,  57, 169, 185,
+     65,  81, 193, 209,  73,  89, 201, 217,  97, 113, 225, 241, 105, 121, 233, 249,
+      2,  18, 130, 146,  10,  26, 138, 154,  34,  50, 162, 178,  42,  58, 170, 186,
+     66,  82, 194, 210,  74,  90, 202, 218,  98, 114, 226, 242, 106, 122, 234, 250,
+      3,  19, 131, 147,  11,  27, 139, 155,  35,  51, 163, 179,  43,  59, 171, 187,
+     67,  83, 195, 211,  75,  91, 203, 219,  99, 115, 227, 243, 107, 123, 235, 251,
+      4,  20, 132, 148,  12,  28, 140, 156,  36,  52, 164, 180,  44,  60, 172, 188,
+     68,  84, 196, 212,  76,  92, 204, 220, 100, 116, 228, 244, 108, 124, 236, 252,
+      5,  21, 133, 149,  13,  29, 141, 157,  37,  53, 165, 181,  45,  61, 173, 189,
+     69,  85, 197, 213,  77,  93, 205, 221, 101, 117, 229, 245, 109, 125, 237, 253,
+      6,  22, 134, 150,  14,  30, 142, 158,  38,  54, 166, 182,  46,  62, 174, 190,
+     70,  86, 198, 214,  78,  94, 206, 222, 102, 118, 230, 246, 110, 126, 238, 254,
+      7,  23, 135, 151,  15,  31, 143, 159,  39,  55, 167, 183,  47,  63, 175, 191,
+     71,  87, 199, 215,  79,  95, 207, 223, 103, 119, 231, 247, 111, 127, 239, 255,
+};
+
+static inline uint32_t k2_t16_fshr(uint32_t lo, uint32_t hi, uint32_t s) {
+    s &= 31;
+    return s == 0 ? lo : (hi << (32 - s)) | (lo >> s);
+}
+
+// mul1: exact EXL3 codebook. The integer sum is reinterpreted as fp16 bits, then
+// the affine map is evaluated like k2_codec.mul1_decode (fp32, one rounding to fp16).
+static inline float k2_t16_mul1(uint16_t w) {
+    const uint32_t x = uint32_t(w) * 0x83DCD12Du;
+    const uint32_t s = 0x6400u + ((x & 0xFFu) + ((x >> 8) & 0xFFu) + ((x >> 16) & 0xFFu) + (x >> 24));
+    const float h = GGML_FP16_TO_FP32(uint16_t(s));
+    const float v = h * 0.00676727294921875f + (-10.3828125f);
+    return GGML_FP16_TO_FP32(GGML_FP32_TO_FP16(v));
+}
+}
+
+#if defined(__AVX2__) && defined(__F16C__)
+// Dense AVX2 path: defined after the tile helpers (see below), dereferenced here.
+static bool k2_t16_dense_avx2(struct ggml_tensor * dst, int ith, int nth);
+#endif
+
+void iqk_t16_matmul(struct ggml_tensor * dst, int ith, int nth) {
+    const ggml_tensor * w = dst->src[0];
+    const ggml_tensor * x = dst->src[1];
+
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(w->type == GGML_TYPE_I16);
+    GGML_ASSERT(x->type == GGML_TYPE_F32);
+    GGML_ASSERT(w->ne[3] == 1 && x->ne[2] == 1 && x->ne[3] == 1);
+
+    const int K = int(w->ne[0] / 16);
+    const int J = int(w->ne[1]);
+    const int I = int(w->ne[2]);
+    const int in = 16*I;
+    const int out = 16*J;
+    const int n = int(x->ne[1]);
+
+    GGML_ASSERT(K >= 2 && K <= 6);
+    GGML_ASSERT(x->ne[0] == in && dst->ne[0] == out && dst->ne[1] == n);
+
+    const int nw32 = 8*K;
+    const int64_t xs = x->nb[1] / sizeof(float);
+    const int64_t ys = dst->nb[1] / sizeof(float);
+
+#if defined(__AVX2__) && defined(__F16C__)
+    {
+        const char * e = getenv("K2_T16_CPU_SCALAR");
+        if (!(e && atoi(e) != 0) && k2_t16_dense_avx2(dst, ith, nth)) return;
+    }
+#endif
+
+    for (int j = ith; j < J; j += nth) {
+        float * ybase = (float *)dst->data + 16*j;
+        // the op accumulates; zero the output slab owned by this thread
+        for (int c = 0; c < 16; ++c) {
+            float * yc = ybase + c;
+            for (int t = 0; t < n; ++t) {
+                yc[t*ys] = 0.0f;
+            }
+        }
+        for (int i = 0; i < I; ++i) {
+            const uint32_t * tile = (const uint32_t *)((const char *)w->data + i*w->nb[2] + j*w->nb[1]);
+            uint16_t win[256];
+            for (int t = 0; t < 128; ++t) {
+                const int b0 = t*2*K + K - 16 + 256*K;
+                const int b2 = b0 + K + 16;
+                const int i0 = (b0 / 32) % nw32;
+                const int i1u = (b2 - 1) / 32;
+                const int i1 = i1u % nw32;
+                const uint32_t w1 = k2_t16_fshr(tile[i1], tile[i0], uint32_t((i1u + 1)*32 - b2));
+                win[2*t]     = uint16_t((w1 >> K) & 0xFFFFu);
+                win[2*t + 1] = uint16_t(w1 & 0xFFFFu);
+            }
+            float m[256];
+            for (int t = 0; t < 256; ++t) {
+                m[k2_t16_perm[t]] = k2_t16_mul1(win[t]);
+            }
+            const float * xrow = (const float *)((const char *)x->data + 16*i*sizeof(float));
+            for (int r = 0; r < 16; ++r) {
+                const float * mr = m + 16*r;
+                for (int t = 0; t < n; ++t) {
+                    const float xv = xrow[r + t*xs];
+                    float * yt = ybase + t*ys;
+                    for (int c = 0; c < 16; ++c) {
+                        yt[c] += mr[c] * xv;
+                    }
+                }
+            }
+        }
+    }
+}
+
+namespace {
+// Scalar reference implementation of the K2 trellis MoE matmul. It is the specification
+// of the op and the fallback for builds without AVX2/F16C; iqk_t16_mul_mat_id at the end
+// of this block dispatches to the vectorised kernel when it can handle the shape.
+void k2_t16_moe_ref(struct ggml_tensor * dst, int ith, int nth) {
+    // MoE reference: y[:,u,t] = sv_e * H( w_e^T H(x[:,t] * su_e) ), e = ids[u,t].
+    // Mirrors the dense graph (mul -> hadamard -> matmul -> hadamard -> mul), with the
+    // transforms in-op because su/sv are per expert. su/sv may be NULL (identity).
+    const ggml_tensor * w   = dst->src[0];
+    const ggml_tensor * x   = dst->src[1];
+    const ggml_tensor * ids = dst->src[2];
+    const ggml_tensor * su  = dst->src[3];
+    const ggml_tensor * sv  = dst->src[4];
+
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(w->type == GGML_TYPE_I16);
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && ids->type == GGML_TYPE_I32);
+
+    const int K = int(w->ne[0] / 16);
+    const int J = int(w->ne[1]);
+    const int I = int(w->ne[2]);
+    const int E = int(w->ne[3]);
+    const int in = 16*I, out = 16*J;
+    const int n = int(x->ne[1]);
+    const int n_used = int(ids->ne[0]);
+    const int nw32 = 8*K;
+    GGML_ASSERT(K >= 2 && K <= 6);
+    GGML_ASSERT(x->ne[0] == in && dst->ne[0] == out && dst->ne[1] == n_used && dst->ne[2] == n);
+    GGML_ASSERT(ids->ne[1] == n);
+    GGML_ASSERT(in % 128 == 0 && out % 128 == 0);
+    if (su) { GGML_ASSERT(su->type == GGML_TYPE_F32 && su->ne[0] == in && su->ne[1] == E); }
+    if (sv) { GGML_ASSERT(sv->type == GGML_TYPE_F32 && sv->ne[0] == out && sv->ne[1] == E); }
+
+    std::vector<float> xp((size_t) in);
+    std::vector<float> yp((size_t) out);
+
+    const int64_t total = (int64_t) n * n_used;
+    for (int64_t tu = ith; tu < total; tu += nth) {
+        const int u = int(tu % n_used);
+        const int t = int(tu / n_used);
+        const int32_t e = *(const int32_t *)((const char *) ids->data + u*ids->nb[0] + t*ids->nb[1]);
+        GGML_ASSERT(e >= 0 && e < E);
+
+        const float * xcol = (const float *)((const char *) x->data + t * x->nb[1]);
+        // xp = H(x[:,t] * su_e)
+        for (int i = 0; i < in; ++i) {
+            float v = xcol[i];
+            if (su) {
+                v *= *(const float *)((const char *) su->data + (int64_t) e * su->nb[1] + (int64_t) i * 4);
+            }
+            xp[i] = v;
+        }
+        for (int blk = 0; blk < in/128; ++blk) { fast_ht(128, xp.data() + (size_t) blk * 128); }
+
+        std::fill(yp.begin(), yp.end(), 0.0f);
+        const char * wbase = (const char *) w->data + (size_t) e * w->nb[3];
+        for (int j = 0; j < J; ++j) {
+            for (int i = 0; i < I; ++i) {
+                const uint32_t * tile = (const uint32_t *)(wbase + (size_t) i * w->nb[2] + (size_t) j * w->nb[1]);
+                uint16_t win[256];
+                for (int tt = 0; tt < 128; ++tt) {
+                    const int b0 = tt*2*K + K - 16 + 256*K;
+                    const int b2 = b0 + K + 16;
+                    const int i0 = (b0 / 32) % nw32;
+                    const int i1u = (b2 - 1) / 32;
+                    const int i1 = i1u % nw32;
+                    const uint32_t w1 = k2_t16_fshr(tile[i1], tile[i0], uint32_t((i1u + 1)*32 - b2));
+                    win[2*tt]     = uint16_t((w1 >> K) & 0xFFFFu);
+                    win[2*tt + 1] = uint16_t(w1 & 0xFFFFu);
+                }
+                float m[256];
+                for (int tt = 0; tt < 256; ++tt) {
+                    m[k2_t16_perm[tt]] = k2_t16_mul1(win[tt]);
+                }
+                for (int rr = 0; rr < 16; ++rr) {
+                    const float xv = xp[(size_t) 16*i + rr];
+                    const float * mr = m + 16*rr;
+                    float * yo = yp.data() + (size_t) 16*j;
+                    for (int c = 0; c < 16; ++c) {
+                        yo[c] += mr[c] * xv;
+                    }
+                }
+            }
+        }
+        // yp = sv_e * H(yp)
+        for (int blk = 0; blk < out/128; ++blk) { fast_ht(128, yp.data() + (size_t) blk * 128); }
+        float * ycol = (float *)((char *) dst->data + u*dst->nb[1] + t*dst->nb[2]);
+        for (int o = 0; o < out; ++o) {
+            float v = yp[o];
+            if (sv) {
+                v *= *(const float *)((const char *) sv->data + (int64_t) e * sv->nb[1] + (int64_t) o * 4);
+            }
+            ycol[o] = v;
+        }
+    }
+}
+} // namespace k2_t16_moe_ref (scalar reference)
+
+#if defined __AVX2__ && defined __F16C__
+
+// The scalar reference accumulates with a separate multiply and add, and so does the
+// auto-vectorised form GCC emits for it. GCC's default (-ffp-contract=fast) would fuse the
+// multiply and add of the kernel below into an FMA, which rounds once instead of twice and
+// changes the last bits of the output; disable contraction for this block so both paths
+// are bit-identical (see tests/test-k2-moe-cpu.cpp, which reports 0 error).
+#if defined __GNUC__ && !defined __clang__
+#pragma GCC push_options
+#pragma GCC optimize ("fp-contract=off")
+#endif
+
+namespace {
+
+// ---- vectorised K2 trellis (t16) MoE matmul --------------------------------
+//
+// Weight layout: one (i,j) tile is 16K uint16 == 8K uint32 words holding a 16x16 block of
+// trellis weights. With tpos = inv_perm[q] (q = 16*r + c, exllamav3's tensor_core_perm) the
+// weight of output row r / column c of the tile is
+//     fshr(tile[hi], tile[lo], sh) & 0xffff
+//     b = tpos*K + K - 16 + 256*K,  lo = (b+15)/32,  hi = b/32,  sh = (lo+1)*32 - (b+16)
+// with lo/hi taken mod 8K (all four expressions come from the scalar loop above, which
+// applies them to two windows at a time; this is the same expression evaluated per output
+// element, which was verified to give bit-identical windows for K = 2..6).
+//
+// The two useful properties for SIMD:
+//  * for a fixed r the 16 columns split into two groups of 8 in which `sh` is constant and
+//    lo == base + K*c, so the 8 windows of a group are 8 words at a fixed stride plus one
+//    uniform shift, and the decoded tile comes out already in (r,c) order (no 16x16
+//    permutation needed - which is why there is no transpose anywhere below);
+//  * the decode of a tile does not depend on the token, so a tile decoded for one expert
+//    is reused by every token routed to that expert (NT below).
+
+struct K2_t16_tab {
+    int32_t  lo[16][2][8];   // word index of the bits that are shifted down
+    int32_t  hi[16][2][8];   // word index of the bits that are shifted in
+    uint32_t sh[16][2];      // right shift, constant per (r, half)
+    bool     same[16][2];    // hi == lo for all 8 lanes -> the second load set is skipped
+    bool     ok;             // false: unexpected layout, use the scalar reference
+};
+
+K2_t16_tab k2_t16_make_tab(int K) {
+    K2_t16_tab t{};
+    t.ok = true;
+    int tpos_of[256];
+    for (int tt = 0; tt < 256; ++tt) tpos_of[k2_t16_perm[tt]] = tt;
+    const int nw = 8*K;
+    for (int r = 0; r < 16; ++r) {
+        for (int g = 0; g < 2; ++g) {
+            uint32_t sh = 0;
+            bool same = true;
+            for (int c = 0; c < 8; ++c) {
+                const int tpos = tpos_of[16*r + 8*g + c];
+                const int b  = tpos*K + K - 16 + 256*K;
+                const int ih = b >> 5;
+                const int il = (b + 15) >> 5;
+                const uint32_t s = uint32_t((il + 1)*32 - (b + 16));
+                if (c == 0) {
+                    sh = s;
+                } else if (s != sh) {
+                    t.ok = false;   // would need per-lane shifts (does not happen)
+                }
+                t.lo[r][g][c] = il % nw;
+                t.hi[r][g][c] = ih % nw;
+                if (t.lo[r][g][c] != (t.lo[r][g][0] + K*c) % nw) t.ok = false;
+                if (t.hi[r][g][c] != t.lo[r][g][c]) same = false;
+            }
+            t.sh[r][g]   = sh & 31u;
+            t.same[r][g] = same;
+        }
+    }
+    return t;
+}
+
+const K2_t16_tab * k2_t16_tab_for(int K) {
+    static const K2_t16_tab tab[7] = {
+        K2_t16_tab{}, K2_t16_tab{},
+        k2_t16_make_tab(2), k2_t16_make_tab(3), k2_t16_make_tab(4),
+        k2_t16_make_tab(5), k2_t16_make_tab(6),
+    };
+    if (K < 2 || K > 6) return nullptr;
+    return tab[K].ok ? &tab[K] : nullptr;
+}
+
+// stages h = 1, 2, 4 of a 128-point FWHT inside one 8-float register
+static inline __m256 k2_ht8(__m256 v) {
+    {
+        const __m256 p = _mm256_permute_ps(v, 0xB1);
+        v = _mm256_blend_ps(_mm256_add_ps(v, p), _mm256_sub_ps(p, v), 0xAA);
+    }
+    {
+        const __m256 p = _mm256_permute_ps(v, 0x4E);
+        v = _mm256_blend_ps(_mm256_add_ps(v, p), _mm256_sub_ps(p, v), 0xCC);
+    }
+    {
+        const __m256 p = _mm256_permute2f128_ps(v, v, 0x01);
+        v = _mm256_blend_ps(_mm256_add_ps(v, p), _mm256_sub_ps(p, v), 0xF0);
+    }
+    return v;
+}
+
+// fast_ht(128, x) with AVX2: same butterflies in the same order, then the same
+// accumulated 1/sqrt(2)^7 scale, so the result is bit-identical to the scalar version.
+static inline void k2_ht128(float * x) {
+    __m256 r[16];
+    for (int i = 0; i < 16; ++i) r[i] = k2_ht8(_mm256_loadu_ps(x + 8*i));
+    for (int h = 1; h < 16; h <<= 1) {
+        for (int i = 0; i < 16; i += 2*h) {
+            for (int j = i; j < i + h; ++j) {
+                const __m256 a = r[j], b = r[j + h];
+                r[j]     = _mm256_add_ps(a, b);
+                r[j + h] = _mm256_sub_ps(a, b);
+            }
+        }
+    }
+    float scale = 1.0f;
+    for (int h = 1; h < 128; h <<= 1) scale *= 0.707106781f;
+    const __m256 sc = _mm256_set1_ps(scale);
+    for (int i = 0; i < 16; ++i) _mm256_storeu_ps(x + 8*i, _mm256_mul_ps(r[i], sc));
+}
+
+// k2_t16_mul1 for 8 windows at once. The reference computes
+//     s = 0x6400 + bytesum(w * 0x83DCD12D);  h = fp16(s);
+//     v = h*0.00676727294921875 - 10.3828125;  result = fp32(fp16(v))
+// The fp16 pattern 0x6400 + s (s <= 1020) is the normal half 1024 + s exactly, so h can be
+// built in fp32 without a half conversion; the final rounding uses the same hardware
+// (round-to-nearest-even) instruction that GGML_FP32_TO_FP16 expands to on F16C builds.
+static inline __m256 k2_t16_mul1_8(__m256i w) {
+    const __m256i x  = _mm256_mullo_epi32(_mm256_and_si256(w, _mm256_set1_epi32(0x0000FFFF)),
+                                          _mm256_set1_epi32((int) 0x83DCD12Du));
+    const __m256i bs = _mm256_madd_epi16(_mm256_maddubs_epi16(x, _mm256_set1_epi8(1)),
+                                         _mm256_set1_epi16(1));   // 4-byte sum, 0..1020
+    const __m256 h = _mm256_add_ps(_mm256_cvtepi32_ps(bs), _mm256_set1_ps(1024.0f));
+    const __m256 v = _mm256_sub_ps(_mm256_mul_ps(h, _mm256_set1_ps(0.00676727294921875f)),
+                                   _mm256_set1_ps(10.3828125f));
+    return _mm256_cvtph_ps(_mm256_cvtps_ph(v, _MM_FROUND_TO_NEAREST_INT));
+}
+
+// Decode one 16x16 tile and accumulate it into `acc` for NT tokens.
+// `xr[nt]` points at the transformed input row of token nt; element base+r is the input
+// row of the tile. Accumulation order per output element is (i, r) - identical to the
+// reference, and there is no FMA, so every add rounds exactly as the scalar loop does.
+//
+// The 8 windows of a (r, half) group are 8 separate words, so they are assembled with 8
+// scalar loads + vpinsrd. That is deliberately not a gather: on this class of CPU
+// (Coffee Lake) vpgatherdd costs ~29 cycles per 8 elements here and made the whole kernel
+// 3.3x slower than these plain loads (measurements in qat_tools/K2_MOE_CPU_KERNEL.md).
+template <int NT>
+static inline void k2_t16_tile_accum(const uint32_t * tile, const K2_t16_tab & tab,
+                                     const float * const * xr, int base, __m256 acc[NT][2]) {
+    for (int r = 0; r < 16; ++r) {
+        for (int g = 0; g < 2; ++g) {
+            const int * L = tab.lo[r][g];
+            const int * H = tab.hi[r][g];
+            const int s = (int) tab.sh[r][g];
+            const __m256i lo = _mm256_setr_epi32((int) tile[L[0]], (int) tile[L[1]], (int) tile[L[2]], (int) tile[L[3]],
+                                                (int) tile[L[4]], (int) tile[L[5]], (int) tile[L[6]], (int) tile[L[7]]);
+            __m256i hi = lo;
+            if (!tab.same[r][g]) {
+                hi = _mm256_setr_epi32((int) tile[H[0]], (int) tile[H[1]], (int) tile[H[2]], (int) tile[H[3]],
+                                       (int) tile[H[4]], (int) tile[H[5]], (int) tile[H[6]], (int) tile[H[7]]);
+            }
+            const __m256i w1 = s == 0 ? lo
+                : _mm256_or_si256(_mm256_srlv_epi32(lo, _mm256_set1_epi32(s)),
+                                  _mm256_sllv_epi32(hi, _mm256_set1_epi32(32 - s)));
+            const __m256 m = k2_t16_mul1_8(w1);
+            for (int nt = 0; nt < NT; ++nt) {
+                const __m256 xv = _mm256_broadcast_ss(xr[nt] + base + r);
+                acc[nt][g] = _mm256_add_ps(acc[nt][g], _mm256_mul_ps(m, xv));
+            }
+        }
+    }
+}
+
+struct K2_moe_args {
+    const K2_t16_tab * tab;
+    const char * w;  size_t w_nb1, w_nb2, w_nb3;
+    const float * x; int64_t x_nb1;
+    const float * su, * sv; int64_t su_nb1, sv_nb1;
+    char * y; int64_t y_nb1, y_nb2;
+    int I, J, n_used;
+    float * xp;     // NT*in scratch
+    float * yacc;   // NT*128 scratch
+};
+
+// One expert x NT tokens: transform the inputs, run the tile sweep in 128-output blocks
+// (the granularity of the output Hadamard), then transform and store each token's block.
+template <int NT>
+static void k2_t16_moe_chunk(const K2_moe_args & a, int e, const int32_t * pairs) {
+    const int in = 16*a.I;
+    const float * xr[NT];
+    int tk[NT], uk[NT];
+    for (int nt = 0; nt < NT; ++nt) {
+        const int t = pairs[nt] / a.n_used;
+        const int u = pairs[nt] % a.n_used;
+        tk[nt] = t;
+        uk[nt] = u;
+        float * xd = a.xp + (size_t) nt * in;
+        const float * xcol = (const float *)((const char *) a.x + (int64_t) t * a.x_nb1);
+        if (a.su) {
+            const float * surow = (const float *)((const char *) a.su + (int64_t) e * a.su_nb1);
+            for (int k = 0; k < in; ++k) xd[k] = xcol[k] * surow[k];
+        } else {
+            std::memcpy(xd, xcol, (size_t) in * sizeof(float));
+        }
+        for (int blk = 0; blk < in/128; ++blk) k2_ht128(xd + 128*blk);
+        xr[nt] = xd;
+    }
+    const char * wbase = a.w + (size_t) e * a.w_nb3;
+    for (int jb = 0; jb < a.J/8; ++jb) {
+        for (int jt = 0; jt < 8; ++jt) {
+            const int j = 8*jb + jt;
+            __m256 acc[NT][2];
+            for (int nt = 0; nt < NT; ++nt) {
+                acc[nt][0] = _mm256_setzero_ps();
+                acc[nt][1] = _mm256_setzero_ps();
+            }
+            for (int i = 0; i < a.I; ++i) {
+                const uint32_t * tile = (const uint32_t *)(wbase + (size_t) i * a.w_nb2 + (size_t) j * a.w_nb1);
+                k2_t16_tile_accum<NT>(tile, *a.tab, xr, 16*i, acc);
+            }
+            for (int nt = 0; nt < NT; ++nt) {
+                _mm256_storeu_ps(a.yacc + (size_t) nt * 128 + 16*jt,     acc[nt][0]);
+                _mm256_storeu_ps(a.yacc + (size_t) nt * 128 + 16*jt + 8, acc[nt][1]);
+            }
+        }
+        const int o = 128*jb;
+        const float * svrow = a.sv
+            ? (const float *)((const char *) a.sv + (int64_t) e * a.sv_nb1) + o : nullptr;
+        for (int nt = 0; nt < NT; ++nt) {
+            float * yv = a.yacc + (size_t) nt * 128;
+            k2_ht128(yv);
+            float * ycol = (float *)(a.y + (int64_t) uk[nt] * a.y_nb1 + (int64_t) tk[nt] * a.y_nb2) + o;
+            if (svrow) {
+                for (int k = 0; k < 128; ++k) ycol[k] = yv[k] * svrow[k];
+            } else {
+                std::memcpy(ycol, yv, 128 * sizeof(float));
+            }
+        }
+    }
+}
+
+struct K2_moe_scratch {
+    std::vector<float>   xp;
+    std::vector<float>   yacc;
+    std::vector<int32_t> cnt, pos, fill, order;
+};
+
+static K2_moe_scratch & k2_moe_scratch_get() {
+    thread_local K2_moe_scratch s;
+    return s;
+}
+
+// Returns false when the shape is outside what this kernel handles (the caller then runs
+// the scalar reference, which also carries the asserts).
+static bool k2_t16_moe_avx2(struct ggml_tensor * dst, int ith, int nth) {
+    const ggml_tensor * w   = dst->src[0];
+    const ggml_tensor * x   = dst->src[1];
+    const ggml_tensor * ids = dst->src[2];
+    const ggml_tensor * su  = dst->src[3];
+    const ggml_tensor * sv  = dst->src[4];
+
+    if (dst->type != GGML_TYPE_F32 || w->type != GGML_TYPE_I16) return false;
+    if (x->type != GGML_TYPE_F32 || ids->type != GGML_TYPE_I32) return false;
+    if (w->ne[0] % 16 != 0 || w->ne[3] < 1) return false;
+    const int K = int(w->ne[0] / 16);
+    if (K < 2 || K > 6) return false;
+    const int J = int(w->ne[1]), I = int(w->ne[2]), E = int(w->ne[3]);
+    const int in = 16*I, out = 16*J;
+    const int n = int(x->ne[1]), n_used = int(ids->ne[0]);
+    if (x->ne[0] != in || dst->ne[0] != out || dst->ne[1] != n_used || dst->ne[2] != n) return false;
+    if (ids->ne[1] != n || n < 1 || n_used < 1) return false;
+    if (in % 128 != 0 || out % 128 != 0) return false;
+    if (su && (su->type != GGML_TYPE_F32 || su->ne[0] != in || su->ne[1] != E)) return false;
+    if (sv && (sv->type != GGML_TYPE_F32 || sv->ne[0] != out || sv->ne[1] != E)) return false;
+
+    const K2_t16_tab * tab = k2_t16_tab_for(K);
+    if (!tab) return false;
+
+    const int total = n * n_used;
+    auto & sc = k2_moe_scratch_get();
+
+    // counting sort of the (t,u) pairs by expert: tokens sharing an expert share the
+    // decoded tiles, which is what makes the batched path cheaper than the reference
+    sc.cnt.assign((size_t) E, 0);
+    for (int t = 0; t < n; ++t) {
+        const char * idrow = (const char *) ids->data + (size_t) t * ids->nb[1];
+        for (int u = 0; u < n_used; ++u) {
+            const int32_t e = *(const int32_t *)(idrow + (size_t) u * ids->nb[0]);
+            if (e < 0 || e >= E) return false;
+            ++sc.cnt[e];
+        }
+    }
+    sc.pos.assign((size_t) E + 1, 0);
+    int ngrp = 0;
+    for (int e = 0; e < E; ++e) {
+        sc.pos[e] = ngrp;
+        ngrp += sc.cnt[e];
+    }
+    sc.pos[E] = ngrp;
+    sc.order.assign((size_t) total, 0);
+    sc.fill.assign(sc.pos.begin(), sc.pos.begin() + E);
+    for (int t = 0; t < n; ++t) {
+        const char * idrow = (const char *) ids->data + (size_t) t * ids->nb[1];
+        for (int u = 0; u < n_used; ++u) {
+            const int32_t e = *(const int32_t *)(idrow + (size_t) u * ids->nb[0]);
+            sc.order[sc.fill[e]++] = t * n_used + u;
+        }
+    }
+
+    if (sc.xp.size() < (size_t) 4 * in) sc.xp.resize((size_t) 4 * in);
+    if (sc.yacc.size() < 4 * 128)       sc.yacc.resize(4 * 128);
+
+    K2_moe_args a;
+    a.tab    = tab;
+    a.w      = (const char *) w->data;
+    a.w_nb1  = w->nb[1];
+    a.w_nb2  = w->nb[2];
+    a.w_nb3  = w->nb[3];
+    a.x      = (const float *) x->data;
+    a.x_nb1  = x->nb[1];
+    a.su     = su ? (const float *) su->data : nullptr;
+    a.su_nb1 = su ? (int64_t) su->nb[1] : 0;
+    a.sv     = sv ? (const float *) sv->data : nullptr;
+    a.sv_nb1 = sv ? (int64_t) sv->nb[1] : 0;
+    a.y      = (char *) dst->data;
+    a.y_nb1  = dst->nb[1];
+    a.y_nb2  = dst->nb[2];
+    a.I      = I;
+    a.J      = J;
+    a.n_used = n_used;
+    a.xp     = sc.xp.data();
+    a.yacc   = sc.yacc.data();
+
+    // work items are (expert, up to 4 tokens) chunks, spread over the threads round-robin
+    int work = 0;
+    for (int e = 0; e < E; ++e) {
+        const int gs = sc.cnt[e];
+        if (gs == 0) continue;
+        const int32_t * pairs = sc.order.data() + sc.pos[e];
+        for (int c0 = 0; c0 < gs; ) {
+            const int rem = gs - c0;
+            const bool mine = (work++ % nth) == ith;
+            if (mine) {
+                if (rem >= 4)      { k2_t16_moe_chunk<4>(a, e, pairs + c0); c0 += 4; }
+                else if (rem >= 2) { k2_t16_moe_chunk<2>(a, e, pairs + c0); c0 += 2; }
+                else               { k2_t16_moe_chunk<1>(a, e, pairs + c0); c0 += 1; }
+            } else {
+                c0 += rem >= 4 ? 4 : (rem >= 2 ? 2 : 1);
+            }
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+#if defined __GNUC__ && !defined __clang__
+#pragma GCC pop_options
+#endif
+
+#endif // __AVX2__ && __F16C__
+
+#if defined(__AVX2__) && defined(__F16C__)
+// One dense (non-MoE) K2 matmul, vectorised by reusing k2_t16_tile_accum, which decodes 8
+// windows per register with the same accumulation order (i, r) and no FMA as the scalar
+// reference, so the results are bit-identical. The scalar reference above stays the
+// specification and the fallback; K2_T16_CPU_SCALAR=1 forces it.
+template <int NT>
+static void k2_t16_dense_nt(struct ggml_tensor * dst, int ith, int nth) {
+    const ggml_tensor * w = dst->src[0];
+    const ggml_tensor * x = dst->src[1];
+    const int K = int(w->ne[0] / 16), J = int(w->ne[1]), I = int(w->ne[2]);
+    const int n = int(x->ne[1]);
+    const int64_t ys = dst->nb[1] / sizeof(float);
+    const K2_t16_tab * tab = k2_t16_tab_for(K);
+    if (!tab) return;
+    for (int j = ith; j < J; j += nth) {
+        for (int t0 = 0; t0 < n; t0 += NT) {
+            const int ntl = (n - t0 < NT) ? (n - t0) : NT;
+            float * yt[NT]; const float * xr[NT];
+            __m256 acc[NT][2];
+            for (int t = 0; t < NT; ++t) {
+                const int tt = (t < ntl) ? t : 0;
+                yt[t] = (float *) dst->data + 16*j + (t0 + tt)*ys;
+                xr[t] = (const float *) ((const char *) x->data + (t0 + tt)*x->nb[1]);
+                acc[t][0] = _mm256_setzero_ps();
+                acc[t][1] = _mm256_setzero_ps();
+            }
+            for (int i = 0; i < I; ++i) {
+                const uint32_t * tile = (const uint32_t *) ((const char *) w->data + i*w->nb[2] + j*w->nb[1]);
+                k2_t16_tile_accum<NT>(tile, *tab, xr, 16*i, acc);
+            }
+            for (int t = 0; t < ntl; ++t) {
+                _mm256_storeu_ps(yt[t],     acc[t][0]);
+                _mm256_storeu_ps(yt[t] + 8, acc[t][1]);
+            }
+        }
+    }
+}
+
+static bool k2_t16_dense_avx2(struct ggml_tensor * dst, int ith, int nth) {
+    const int n = int(dst->src[1]->ne[1]);
+    if (n == 1) { k2_t16_dense_nt<1>(dst, ith, nth); return true; }
+    if (n == 2) { k2_t16_dense_nt<2>(dst, ith, nth); return true; }
+    k2_t16_dense_nt<4>(dst, ith, nth); return true;   // NT=4 covers tails
+}
+#endif
+
+void iqk_t16_mul_mat_id(struct ggml_tensor * dst, int ith, int nth) {
+#if defined __AVX2__ && defined __F16C__
+    if (k2_t16_moe_avx2(dst, ith, nth)) return;
+#endif
+    k2_t16_moe_ref(dst, ith, nth);
+}
+
+void iqk_t16_embed_get_rows(struct ggml_tensor * dst, int ith, int nth) {
+    const ggml_tensor * w   = dst->src[0];
+    const ggml_tensor * sg  = dst->src[1];
+    const ggml_tensor * ids = dst->src[2];
+
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(w->type == GGML_TYPE_I16 && sg->type == GGML_TYPE_F16 && ids->type == GGML_TYPE_I32);
+
+    const int K      = dst->op_params[0];
+    const int groups = dst->op_params[1];
+    const int hidden = dst->op_params[2];
+    const int W      = int(w->ne[0] / groups);
+    const int nw     = W - 1;
+    const int n      = int(ids->ne[0]);
+    GGML_ASSERT(dst->ne[0] == hidden && dst->ne[1] == n);
+    GGML_ASSERT(K >= 1 && K <= 8 && nw == 16*K);
+
+    const uint16_t * signs = (const uint16_t *) sg->data;
+    const int32_t  * tok   = (const int32_t *) ids->data;
+    const char * data = (const char *) w->data;
+    const int64_t row_bytes = (int64_t) w->ne[0] * sizeof(uint16_t);
+    const uint32_t mask = (1u << K) - 1u;
+    const int reps = (15 + K) / K;
+    const int64_t vocab = w->ne[1];
+
+    for (int t = ith; t < n; t += nth) {
+        const int64_t id = tok[t];
+        GGML_ASSERT(id >= 0 && id < vocab);
+        const uint16_t * row = (const uint16_t *)(data + id * row_bytes);
+        float * out = (float *) dst->data + (int64_t) t * hidden;
+        for (int g = 0; g < groups; ++g) {
+            const uint16_t * rg = row + (int64_t) g * W;
+            const float scale = GGML_FP16_TO_FP32(rg[0]);
+            const uint16_t * sw = rg + 1;
+            uint16_t sym[256];
+            for (int i = 0; i < 256; ++i) {
+                const int bit = i * K;
+                const int wi  = bit >> 4;
+                const int off = bit & 15;
+                const uint32_t win = (uint32_t) sw[wi] | ((uint32_t) sw[(wi + 1) % nw] << 16);
+                sym[i] = (uint16_t)((win >> off) & mask);
+            }
+            float vals[256];
+            for (int i = 0; i < 256; ++i) {
+                uint32_t st = 0;
+                for (int j = 0; j < reps; ++j) {
+                    st |= (uint32_t) sym[(i - j) & 255] << (j * K);
+                }
+                vals[i] = k2_t16_mul1((uint16_t)(st & 0xFFFFu)) * scale;
+            }
+            fast_ht(256, vals);
+            for (int j = 0; j < 256; ++j) {
+                const int o = g * 256 + j;
+                if (o >= hidden) break;
+                out[o] = vals[j] * GGML_FP16_TO_FP32(signs[g * 256 + j]);
+            }
+        }
+    }
+}
+
+namespace {
 float iqk_exp_with_thresh_impl(int n, float * logits, float max, float min) {
     float sum = 0;
 #ifdef __AVX2__
