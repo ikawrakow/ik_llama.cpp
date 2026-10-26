@@ -33,6 +33,11 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth);
 
 void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth);
 
+void iqk_t16_matmul(struct ggml_tensor * dst, int ith, int nth);
+void iqk_t16_mul_mat_id(struct ggml_tensor * dst, int ith, int nth);
+
+void iqk_t16_embed_get_rows(struct ggml_tensor * dst, int ith, int nth);
+
 float iqk_exp_with_thresh(int n, float * logits, float max, float min);
 
 bool iqk_ssm_conv4(int nr, int nc, int nt,

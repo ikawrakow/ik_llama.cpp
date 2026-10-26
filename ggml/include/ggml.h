@@ -728,6 +728,9 @@ extern "C" {
         GGML_OP_MASK_TO_IDX,
         GGML_OP_LATENT_ATTN,
         GGML_OP_DS4_COMP,
+        GGML_OP_T16_MATMUL,
+        GGML_OP_T16_MUL_MAT_ID,
+        GGML_OP_T16_EMBED_GET_ROWS,
 
         GGML_OP_COUNT,
     };
@@ -1161,6 +1164,33 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   n);
+
+    // K2 (t16) trellis matmul: trellis I16 [16K, out/16, in/16], x F32 [in, n],
+    // output F32 [out, n]. K = trellis->ne[0]/16 (2..6); no transforms/scales here.
+    GGML_API struct ggml_tensor * ggml_t16_matmul(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * trellis,
+            struct ggml_tensor  * x);
+
+    // K2 MoE: y[out, n_used, n] = w[ids[u,t]] @ x[:,t]. Optional per-expert scales
+    // su F16 [in, n_expert] / sv F16 [out, n_expert] are applied inside the op exactly
+    // as the dense path does it in the graph (x*su -> H -> matmul -> H -> *sv).
+    GGML_API struct ggml_tensor * ggml_t16_mul_mat_id(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * trellis,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * su,
+            struct ggml_tensor  * sv);
+
+    // K2E trellis token embedding lookup: w I16 [words, vocab], signs F16 [256, groups],
+    // ids I32 [n]; output F32 [n_embd, n].
+    GGML_API struct ggml_tensor * ggml_t16_embed_get_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * w,
+            struct ggml_tensor  * signs,
+            struct ggml_tensor  * ids,
+            int64_t               n_embd);
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b

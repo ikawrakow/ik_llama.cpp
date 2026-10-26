@@ -4704,9 +4704,12 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "MASK_TO_IDX",
     "LATENT_ATTN",
     "DS4_COMP",
+    "T16_MATMUL",
+    "T16_MUL_MAT_ID",
+    "T16_EMBED_GET_ROWS",
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4833,10 +4836,12 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "mask_to_idx(masl)",
     "latent_attn_prefix(q,c,pk,pv,mask)",
     "ds4_comp(state, score, idx)",
+    "t16_matmul(t,x)",
+    "t16_embed_get_rows(w,s,i)",
 
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6702,6 +6707,98 @@ struct ggml_tensor * ggml_hadamard(
     result->src[0] = a;
 
     result->op_params[0] = n;
+
+    return result;
+}
+
+// ggml_t16_matmul
+
+struct ggml_tensor * ggml_t16_matmul(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * trellis,
+        struct ggml_tensor  * x) {
+
+    GGML_ASSERT(trellis->type == GGML_TYPE_I16);
+    GGML_ASSERT(trellis->ne[3] == 1);
+    GGML_ASSERT(ggml_is_contiguous(trellis));
+    GGML_ASSERT(x->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(x));
+    GGML_ASSERT(x->ne[2] == 1 && x->ne[3] == 1);
+    GGML_ASSERT(trellis->ne[0] % 16 == 0);
+    GGML_ASSERT(x->ne[0] == 16*trellis->ne[2]);
+
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 16*trellis->ne[1], x->ne[1]);
+
+    result->op     = GGML_OP_T16_MATMUL;
+    result->src[0] = trellis;
+    result->src[1] = x;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_t16_mul_mat_id(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * trellis,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * ids,
+        struct ggml_tensor  * su,
+        struct ggml_tensor  * sv) {
+
+    GGML_ASSERT(trellis->type == GGML_TYPE_I16);
+    GGML_ASSERT(ggml_is_contiguous(trellis));
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && ggml_is_contiguous(x));
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(x->ne[2] == 1 && x->ne[3] == 1);
+    GGML_ASSERT(ids->ne[1] == x->ne[1]);
+    GGML_ASSERT(trellis->ne[0] % 16 == 0);
+    GGML_ASSERT(x->ne[0] == 16*trellis->ne[2]);
+    if (su) {
+        GGML_ASSERT(su->type == GGML_TYPE_F32 && su->ne[0] == 16*trellis->ne[2] && su->ne[1] == trellis->ne[3]);
+    }
+    if (sv) {
+        GGML_ASSERT(sv->type == GGML_TYPE_F32 && sv->ne[0] == 16*trellis->ne[1] && sv->ne[1] == trellis->ne[3]);
+    }
+
+    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
+            16*trellis->ne[1], ids->ne[0], x->ne[1]);
+
+    result->op     = GGML_OP_T16_MUL_MAT_ID;
+    result->src[0] = trellis;
+    result->src[1] = x;
+    result->src[2] = ids;
+    result->src[3] = su;
+    result->src[4] = sv;
+
+    return result;
+}
+
+// ggml_t16_embed_get_rows
+
+struct ggml_tensor * ggml_t16_embed_get_rows(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * w,
+        struct ggml_tensor  * signs,
+        struct ggml_tensor  * ids,
+        int64_t               n_embd) {
+
+    GGML_ASSERT(w->type == GGML_TYPE_I16 && w->ne[2] == 1 && w->ne[3] == 1);
+    GGML_ASSERT(signs->type == GGML_TYPE_F16 && signs->ne[0] == 256 && signs->ne[2] == 1);
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    const int64_t groups = signs->ne[1];
+    GGML_ASSERT(groups > 0 && w->ne[0] % groups == 0);
+    const int64_t W = w->ne[0] / groups;
+    GGML_ASSERT((W - 1) % 16 == 0);
+    GGML_ASSERT(groups*256 >= n_embd);
+
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, ids->ne[0]);
+
+    result->op        = GGML_OP_T16_EMBED_GET_ROWS;
+    result->src[0]    = w;
+    result->src[1]    = signs;
+    result->src[2]    = ids;
+    result->op_params[0] = (int32_t) ((W - 1) / 16); // K
+    result->op_params[1] = (int32_t) groups;
+    result->op_params[2] = (int32_t) n_embd;
 
     return result;
 }
@@ -26992,6 +27089,18 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 iqk_hadamard(tensor, params->ith, params->nth);
             } break;
+        case GGML_OP_T16_MATMUL:
+            {
+                iqk_t16_matmul(tensor, params->ith, params->nth);
+            } break;
+        case GGML_OP_T16_MUL_MAT_ID:
+            {
+                iqk_t16_mul_mat_id(tensor, params->ith, params->nth);
+            } break;
+        case GGML_OP_T16_EMBED_GET_ROWS:
+            {
+                iqk_t16_embed_get_rows(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_ACC:
             {
                 ggml_compute_forward_acc(params, tensor);
@@ -27944,6 +28053,14 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_HADAMARD:
             {
                 GGML_ABORT("fatal error"); // TODO: implement
+            }
+        case GGML_OP_T16_MATMUL:
+            {
+                GGML_ABORT("fatal error"); // inference only
+            }
+        case GGML_OP_T16_EMBED_GET_ROWS:
+            {
+                GGML_ABORT("fatal error"); // inference only
             }
         case GGML_OP_CONCAT:
             {
@@ -29147,6 +29264,8 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MULTI_ADD:
         case GGML_OP_MUL_MULTI_ADD:
         case GGML_OP_HADAMARD:
+        case GGML_OP_T16_MATMUL:
+        case GGML_OP_T16_EMBED_GET_ROWS:
         case GGML_OP_REPEAT:
         case GGML_OP_SUB:
             {
