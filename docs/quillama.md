@@ -18,7 +18,7 @@ branch. This page lists every change, what it does, how it was measured, and its
   - [9. Huge pages for repacked weights and other large CPU buffers](#9-huge-pages-for-repacked-weights-and-other-large-cpu-buffers)
   - [10. MoE work split for decode](#10-moe-work-split-for-decode)
   - [11. Sparse output layer under a grammar](#11-sparse-output-layer-under-a-grammar)
-  - [12. JSON schema: non-negative numbers](#12-json-schema-non-negative-numbers)
+  - [12. JSON schema: non-negative numbers and property counts](#12-json-schema-non-negative-numbers-and-property-counts)
   - [13. Faster attention during generation at long context (AVX2)](#13-faster-attention-during-generation-at-long-context-avx2)
   - [14. Speculative decoding on CPU, and prompt-prefix reuse](#14-speculative-decoding-on-cpu-and-prompt-prefix-reuse)
   - [15. Hardened slot save/restore of context checkpoints, and a speculative EOG fix](#15-hardened-slot-saverestore-of-context-checkpoints-and-a-speculative-eog-fix)
@@ -271,10 +271,19 @@ the tokens allowed at each row (row i after accepting the first i drafted tokens
 `n_probs` is requested, for other speculative methods (`--spec-type`), when an output row belongs
 to a slot without a grammar, and while a lazy grammar waits for its trigger.
 
-### 12. JSON schema: non-negative numbers
+### 12. JSON schema: non-negative numbers and property counts
 
-`{"type": "number", "minimum": 0}` (or `exclusiveMinimum >= 0`) now forbids a leading `-`. Upstream
+`{"type": "number", "minimum": 0}` (or `exclusiveMinimum >= 0`) forbids a leading `-`. Upstream
 llama.cpp ignores bounds on `number`, so models could emit negative values for such fields.
+
+`minProperties` and `maxProperties` are enforced. ik and upstream llama.cpp ignored them, so a map
+such as `{"additionalProperties": {"type": "integer"}, "maxProperties": 2}` could get any number of
+keys. The grammar emits the optional properties in declaration order, then the extra keys, and
+counts them: required, optional and extra properties together stay within the bounds. This covers
+pure maps, objects with declared optional properties, both mixed, and a bare
+`{"type": "object", "maxProperties": N}`. Schemas without these keywords get exactly the grammar
+they got before. With a random-weight model, `scripts/quill-json-schema-test.py` went from 52/54
+to 109/109 valid outputs on a dense model, 113/113 on a MoE and 112/112 on a hybrid model.
 
 ### 13. Faster attention during generation at long context (AVX2)
 

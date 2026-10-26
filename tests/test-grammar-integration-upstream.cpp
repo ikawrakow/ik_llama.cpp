@@ -1254,6 +1254,55 @@ static void test_json_schema() {
         }
     );
 
+    // quillama.cpp: minProperties / maxProperties
+    test_schema(
+        "map with maxProperties",
+        R"""({"type": "object", "additionalProperties": {"type": "integer"}, "maxProperties": 2})""",
+        { R"""({})""", R"""({"a": 1})""", R"""({"a": 1, "b": 2})""" },
+        { R"""({"a": 1, "b": 2, "c": 3})""", R"""({"a": "x"})""" }
+    );
+    test_schema(
+        "map with minProperties",
+        R"""({"type": "object", "additionalProperties": {"type": "integer"}, "minProperties": 1, "maxProperties": 3})""",
+        { R"""({"a": 1})""", R"""({"a": 1, "b": 2, "c": 3})""" },
+        { R"""({})""", R"""({"a": 1, "b": 2, "c": 3, "d": 4})""" }
+    );
+    test_schema(
+        "bare object with maxProperties",
+        R"""({"type": "object", "maxProperties": 1})""",
+        { R"""({})""", R"""({"x": "y"})""", R"""({"x": [1, 2]})""" },
+        { R"""({"x": 1, "y": 2})""" }
+    );
+    test_schema(
+        "optional properties with maxProperties",
+        R"""({"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}, "c": {"type": "integer"}},
+              "required": ["a"], "additionalProperties": false, "maxProperties": 2})""",
+        { R"""({"a": 1})""", R"""({"a": 1, "b": 2})""", R"""({"a": 1, "c": 3})""" },
+        { R"""({"a": 1, "b": 2, "c": 3})""", R"""({"b": 2})""" }
+    );
+    test_schema(
+        "optional properties with minProperties",
+        R"""({"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}, "c": {"type": "integer"}},
+              "required": ["a"], "additionalProperties": false, "minProperties": 2})""",
+        { R"""({"a": 1, "b": 2})""", R"""({"a": 1, "c": 3})""", R"""({"a": 1, "b": 2, "c": 3})""" },
+        { R"""({"a": 1})""" }
+    );
+    test_schema(
+        "optional properties and extra keys with maxProperties",
+        R"""({"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "boolean"}},
+              "additionalProperties": {"type": "integer"}, "maxProperties": 2})""",
+        { R"""({})""", R"""({"a": 1, "b": true})""", R"""({"b": true, "x": 1})""", R"""({"x": 1, "y": 2})""" },
+        { R"""({"a": 1, "b": true, "x": 1})""", R"""({"x": 1, "y": 2, "z": 3})""" }
+    );
+    test_schema(
+        "nested map with maxProperties",
+        R"""({"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "boolean"},
+              "meta": {"type": "object", "additionalProperties": {"type": "integer"}, "maxProperties": 2}},
+              "required": ["a"], "additionalProperties": false})""",
+        { R"""({"a": 1, "meta": {"x": 1, "y": 2}})""", R"""({"a": 1, "b": false, "meta": {}})""" },
+        { R"""({"a": 1, "meta": {"x": 1, "y": 2, "z": 3}})""" }
+    );
+
     // Properties (from: https://json-schema.org/understanding-json-schema/reference/object#properties)
     test_schema(
         "object properties",

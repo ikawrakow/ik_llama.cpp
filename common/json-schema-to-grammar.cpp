@@ -641,7 +641,9 @@ private:
         const std::vector<std::pair<std::string, json>> & properties,
         const std::unordered_set<std::string> & required,
         const std::string & name,
-        const json & additional_properties)
+        const json & additional_properties,
+        int min_props = 0,
+        int max_props = std::numeric_limits<int>::max())
     {
         std::vector<std::string> required_props;
         std::vector<std::string> optional_props;
@@ -683,6 +685,73 @@ private:
                 rule += " \",\" space ";
             }
             rule += prop_kv_rule_names[required_props[i]];
+        }
+
+        // quillama.cpp: minProperties / maxProperties. The optional properties are emitted in
+        // declaration order, each present or absent, then the additional properties ("*", last), so
+        // the grammar can count: state (i, c) = optional property i is next and c properties have
+        // been emitted so far. Without these keywords the rule below is unchanged.
+        const bool counted = min_props > 0 || max_props != std::numeric_limits<int>::max();
+        if (counted && (int) required_props.size() <= max_props) {
+            const bool has_max = max_props != std::numeric_limits<int>::max();
+            static const std::string FAIL = "\x01";
+            std::map<std::pair<size_t, int>, std::string> memo;
+            std::function<std::string(size_t, int)> rest = [&](size_t i, int c) -> std::string {
+                // without a maximum, counts at or above the minimum behave alike
+                const int key_c = has_max ? c : std::min(c, std::max(min_props, 1));
+                const auto key = std::make_pair(i, key_c);
+                auto it = memo.find(key);
+                if (it != memo.end()) {
+                    return it->second;
+                }
+                const std::string comma = c > 0 ? "\",\" space " : "";
+                std::vector<std::string> alts;
+                bool has_empty = false;
+                if (i == optional_props.size()) {
+                    has_empty = c >= min_props;
+                } else if (optional_props[i] == "*") {
+                    const std::string & kv = prop_kv_rule_names["*"];
+                    const int lo = std::max(0, min_props - c);
+                    const int hi = has_max ? max_props - c : std::numeric_limits<int>::max();
+                    if (hi >= lo) {
+                        const std::string rep = c > 0
+                            ? build_repetition("( \",\" space " + kv + " )", lo, hi)
+                            : build_repetition(kv, lo, hi, "\",\" space");
+                        if (rep.empty()) {
+                            has_empty = true;
+                        } else {
+                            alts.push_back(rep);
+                        }
+                    }
+                } else {
+                    const std::string skip = rest(i + 1, c);
+                    if (skip == "") {
+                        has_empty = true;
+                    } else if (skip != FAIL) {
+                        alts.push_back(skip);
+                    }
+                    if (c < max_props) {
+                        const std::string next = rest(i + 1, c + 1);
+                        if (next != FAIL) {
+                            alts.push_back(comma + prop_kv_rule_names[optional_props[i]] + (next.empty() ? "" : " " + next));
+                        }
+                    }
+                }
+                std::string res;
+                if (alts.empty()) {
+                    res = has_empty ? "" : FAIL;
+                } else {
+                    res = _add_rule(name + (name.empty() ? "" : "-") + "props-" + std::to_string(i) + "-" + std::to_string(key_c),
+                                    alts.size() == 1 && !has_empty ? alts[0] : "(" + string_join(alts, " | ") + ")" + (has_empty ? "?" : ""));
+                }
+                memo[key] = res;
+                return res;
+            };
+            const std::string tail = rest(0, (int) required_props.size());
+            if (tail != FAIL) {
+                return rule + (tail.empty() ? "" : " " + tail) + " \"}\" space";
+            }
+            // unsatisfiable bounds: fall back to the unbounded object
         }
 
         if (!optional_props.empty()) {
@@ -867,9 +936,11 @@ public:
             }
             return _add_rule(rule_name, "(" + string_join(enum_values, " | ") + ") space");
         }
+        const bool has_prop_count = schema.contains("minProperties") || schema.contains("maxProperties");
         if ((schema_type.is_null() || schema_type == "object")
                 && (schema.contains("properties") ||
-                    (schema.contains("additionalProperties") && schema["additionalProperties"] != true))) {
+                    (schema.contains("additionalProperties") && schema["additionalProperties"] != true) ||
+                    (schema_type == "object" && has_prop_count))) {
             std::unordered_set<std::string> required;
             if (schema.contains("required") && schema["required"].is_array()) {
                 for (const auto & item : schema["required"]) {
@@ -884,10 +955,16 @@ public:
                     properties.emplace_back(prop.key(), prop.value());
                 }
             }
+            const auto count = [&](const char * k, int dflt) {
+                return schema.contains(k) && schema[k].is_number_integer() ? std::max(0, schema[k].get<int>()) : dflt;
+            };
+            // a bare {"type": "object", "maxProperties": N} is a map of any values
+            json additional = schema.contains("additionalProperties") ? schema["additionalProperties"]
+                            : (!schema.contains("properties") ? json(true) : json());
             return _add_rule(rule_name,
                 _build_object_rule(
-                    properties, required, name,
-                    schema.contains("additionalProperties") ? schema["additionalProperties"] : json()));
+                    properties, required, name, additional,
+                    count("minProperties", 0), count("maxProperties", std::numeric_limits<int>::max())));
         }
         if ((schema_type.is_null() || schema_type == "object" || schema_type == "string") && schema.contains("allOf")) {
             std::unordered_set<std::string> required;
