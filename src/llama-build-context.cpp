@@ -1476,7 +1476,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                     return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
                 };
                 auto situ_up = [&](ggml_tensor * x, float beta) {
-                    return ggml_softcap(ctx, x, 1.0f/beta, beta);
+                    return beta > 0.0f ? ggml_softcap(ctx, x, 1.0f/beta, beta) : x;
                 };
                 cur = ggml_mul(ctx, situ_gate(cur, hp.situ_beta), situ_up(tmp, hp.situ_linear_beta));
                 type_gate = LLM_FFN_SEQ;
@@ -1800,7 +1800,7 @@ llm_expert_gating_func_type   gating_op,
                 return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
             };
             auto situ_up = [&](ggml_tensor * x, float beta) {
-                return ggml_softcap(ctx, x, 1.0f/beta, beta);
+                return beta > 0.0f ? ggml_softcap(ctx, x, 1.0f/beta, beta) : x;
             };
             par = ggml_mul(ctx, situ_gate(gate, hp.situ_beta), situ_up(up, hp.situ_linear_beta));
         } else {
@@ -1861,7 +1861,7 @@ llm_expert_gating_func_type   gating_op,
                 return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
             };
             auto situ_up = [&](ggml_tensor * x, float beta) {
-                return ggml_softcap(ctx, x, 1.0f/beta, beta);
+                return beta > 0.0f ? ggml_softcap(ctx, x, 1.0f/beta, beta) : x;
             };
             par = ggml_mul(ctx, situ_gate(gate, hp.situ_beta), situ_up(up, hp.situ_linear_beta));
         }
