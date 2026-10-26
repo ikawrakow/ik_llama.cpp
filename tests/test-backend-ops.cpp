@@ -2191,6 +2191,9 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     test_cases.emplace_back(new test_dup(GGML_TYPE_F16));
     test_cases.emplace_back(new test_dup(GGML_TYPE_I32));
     test_cases.emplace_back(new test_dup(GGML_TYPE_I16));
+    test_cases.emplace_back(new test_t16_mul_mat_id(4, 8, 8,  4, 3, 2, true));
+    test_cases.emplace_back(new test_t16_mul_mat_id(3, 8, 16, 3, 2, 2, true));
+    test_cases.emplace_back(new test_t16_mul_mat_id(6, 8, 8,  2, 1, 1, false));
     test_cases.emplace_back(new test_dup(GGML_TYPE_F32, {10, 10, 5, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_dup(GGML_TYPE_F16, {10, 10, 5, 1}, {0, 2, 1, 3})); // dup by rows
     test_cases.emplace_back(new test_dup(GGML_TYPE_F32, {10, 10, 5, 1}, {1, 0, 2, 3}));
@@ -2540,6 +2543,42 @@ static void usage(char ** argv) {
     printf("  valid modes are: test (compare with CPU backend for correctness) or perf (performance evaluation)\n");
     printf("  op names are as given by ggml_op_desc()\n");
 }
+
+
+// GGML_OP_T16_MUL_MAT_ID  (K2 MoE: expert-selected trellis matmul + H + per-expert scales)
+struct test_t16_mul_mat_id : public test_case {
+    const int K, I, J, E, n, n_used;
+    const bool scales;
+    std::string vars() override { return VARS_TO_STR7(K, I, J, E, n, n_used, scales); }
+    test_t16_mul_mat_id(int K = 4, int I = 8, int J = 8, int E = 4, int n = 3, int n_used = 2, bool scales = true)
+        : K(K), I(I), J(J), E(E), n(n), n_used(n_used), scales(scales) {}
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * w   = ggml_new_tensor_4d(ctx, GGML_TYPE_I16, 16*K, J, I, E);
+        ggml_tensor * x   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 16*I, n);
+        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_used, n);
+        ggml_tensor * su  = scales ? ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 16*I, E) : nullptr;
+        ggml_tensor * sv  = scales ? ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 16*J, E) : nullptr;
+        return ggml_t16_mul_mat_id(ctx, w, x, ids, su, sv);
+    }
+    void initialize_tensors(ggml_context * ctx) override {
+        std::random_device rd;
+        std::default_random_engine rng(rd());
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                std::vector<int32_t> data(ggml_nelements(t));
+                for (auto & v : data) { v = (int32_t)(rng() % (unsigned) E); }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+            } else if (t->type == GGML_TYPE_I16) {
+                std::vector<int16_t> data(ggml_nelements(t));
+                for (auto & v : data) { v = (int16_t)(rng() & 0xFFFFu); }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int16_t));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+    double max_nmse_err() override { return 1e-6; }
+};
 
 int main(int argc, char ** argv) {
     test_mode mode = MODE_TEST;
