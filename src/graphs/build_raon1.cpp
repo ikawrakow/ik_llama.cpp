@@ -160,6 +160,9 @@ static ggml_tensor * raon1_mla_attention(
                 0);
         kqv = ggml_flash_attn_ext(ctx0, Qcur, K_cache, V_cache, KQ_mask,
                 kq_scale, hparams.f_max_alibi_bias, 0.f);
+        if (K_cache->ne[1] < 256) {
+            ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
+        }
         kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3); // [kv_lora, n_tokens, n_head]
     } else {
         auto kq = ggml_mul_mat(ctx0, K_cache, Qcur); // [n_kv, n_tokens, n_head]
