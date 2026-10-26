@@ -1,8 +1,8 @@
 # quillama.cpp: ik_llama.cpp tuned for CPU-only servers
 
-quillama.cpp is [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (history kept, so upstream
-changes merge) with changes for running models on a server without a GPU, such as a VPS with lots
-of RAM and an SSD:
+quillama.cpp is a fork of [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) with changes for
+running models on a server without a GPU, such as a VPS with lots of RAM and an SSD. Everything ik
+supports keeps working; the changes below are on top:
 
 - **JSON output follows the requested schema.** `response_format: {"type": "json_object"}` was not
   enforced at all in ik_llama.cpp (upstream llama.cpp does enforce it), and two smaller gaps let

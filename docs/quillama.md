@@ -1,8 +1,8 @@
 # quillama.cpp: technical notes
 
-quillama.cpp is [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (full history kept, so
-upstream ik changes can be merged) tuned for **CPU-only servers**, such as a VPS with lots of RAM, a
-fast SSD and no GPU. This page lists every change, what it does, how it was measured, and its limits.
+quillama.cpp is a fork of [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) tuned for
+**CPU-only servers**, such as a VPS with lots of RAM, a fast SSD and no GPU. It tracks ik's main
+branch. This page lists every change, what it does, how it was measured, and its limits.
 
 - [Build and run](#build-and-run)
 - [Docker](#docker)
@@ -15,8 +15,17 @@ fast SSD and no GPU. This page lists every change, what it does, how it was meas
   - [6. Models larger than RAM: expert streaming from SSD](#6-models-larger-than-ram-expert-streaming-from-ssd)
   - [7. Grammar jump-forward drafting](#7-grammar-jump-forward-drafting)
   - [8. Transparent huge pages that actually work on a VPS](#8-transparent-huge-pages-that-actually-work-on-a-vps)
+  - [9. Huge pages for repacked weights and other large CPU buffers](#9-huge-pages-for-repacked-weights-and-other-large-cpu-buffers)
+  - [10. MoE work split for decode](#10-moe-work-split-for-decode)
+  - [11. Sparse output layer under a grammar](#11-sparse-output-layer-under-a-grammar)
+  - [12. JSON schema: non-negative numbers](#12-json-schema-non-negative-numbers)
+  - [13. Faster attention during generation at long context (AVX2)](#13-faster-attention-during-generation-at-long-context-avx2)
+  - [14. Speculative decoding on CPU, and prompt-prefix reuse](#14-speculative-decoding-on-cpu-and-prompt-prefix-reuse)
+  - [15. Hardened slot save/restore of context checkpoints, and a speculative EOG fix](#15-hardened-slot-saverestore-of-context-checkpoints-and-a-speculative-eog-fix)
+  - [16. Making ik quants (IQ3_K, IQ4_KS, ...) with upstream / unsloth importance matrices](#16-making-ik-quants-iq3_k-iq4_ks--with-upstream--unsloth-importance-matrices)
+  - [17. Branch-point checkpoints at message boundaries (idea from Magnitude)](#17-branch-point-checkpoints-at-message-boundaries-idea-from-magnitude)
 - [Benchmarks](#benchmarks)
-- [Ideas taken from Strata and the MoE-cache fork](#ideas-taken-from-strata-and-the-moe-cache-fork)
+- [Ideas taken from Strata, the MoE-cache fork and AirLLM](#ideas-taken-from-strata-the-moe-cache-fork-and-airllm)
 - [Environment variables](#environment-variables)
 - [Tests](#tests)
 
@@ -72,6 +81,8 @@ docker logs -f quillama          # shows whether the model was repacked into RAM
   `quillama: ...` and the speed of a long prompt tell whether it is in use.
 - The healthcheck allows 15 minutes for loading, because repacking a large model takes a while.
 
+
+## What changed
 
 ### 1. JSON schema / structured output now always constrains the output
 
@@ -308,19 +319,24 @@ more drafts, so measure before enabling it.
 earlier one processes only the new tokens, also after an unrelated request moved it out of the
 slot into `--cache-ram`. It passes with 1 and 2 slots and with speculative decoding on.
 
-### 15. Slot save/restore checkpoints and speculative EOG fix (October 2026 upstream review)
+### 15. Hardened slot save/restore of context checkpoints, and a speculative EOG fix
 
-Upstream llama.cpp #26004 makes slot save/restore keep context checkpoints. ik already saved them,
-but the loader trusted the file. A corrupt or truncated `.checkpoints` file could crash the server
-on `/slots/N?action=restore` (huge allocation) or load garbage. The checkpoints' `n_tokens` was not
-saved and was left uninitialized after a restore, and a stale `.checkpoints` file from an older
-save could be loaded with a new one. Now every size is bounded by the bytes left in the file, a bad
-file is rejected (the slot then reprocesses the prompt), `n_tokens` is stored in the legacy field
-(older files still load), only the newest `--ctx-checkpoints` entries are kept, spilled checkpoints
-are written from disk, and an incomplete write is reported as a failed save.
+`/slots/N?action=save` also writes the slot's context checkpoints to a `.checkpoints` file, and
+`action=restore` reads them back. ik's loader trusted that file, so a corrupt or truncated file
+could crash the server (a huge allocation) or load garbage. quillama's loader:
 
-Speculative decoding: a matching draft token that is EOG no longer lets the draft tokens after it
-be accepted into the context (as upstream #29638).
+- bounds every size by the bytes left in the file and rejects a bad file (the slot then reprocesses
+  the prompt);
+- keeps only the newest `--ctx-checkpoints` entries;
+- reads spilled checkpoints back from disk before saving them;
+- reports an incomplete write as a failed save.
+
+The layout is ik's (`n_tokens` in the 8 bytes after `pos_max`), so files written by either build
+load in the other. `scripts/quill-slot-checkpoint-test.py` restores valid, legacy, truncated and
+corrupt files and checks that the server keeps answering.
+
+Speculative decoding: a matching draft token that is end-of-generation no longer lets the draft
+tokens after it be accepted into the context (as upstream llama.cpp #29638).
 
 ### 16. Making ik quants (IQ3_K, IQ4_KS, ...) with upstream / unsloth importance matrices
 
@@ -434,7 +450,7 @@ cap and eviction.
 
 ## Benchmarks
 
-### Current (October 9, 2026): AVX2 build, the target VPS class
+### AVX2 build: the target VPS class (EPYC without AVX-512)
 
 Machine: cloud VM, 4 vCPUs of an Intel Xeon, 15 GB RAM. All builds are AVX2-only
 (`-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_AVX512=OFF -mtune=znver3`), so they run the same code as
@@ -445,15 +461,14 @@ without AMX. Model: a Qwen3-30B-A3B-shaped Q4_K_M MoE (random weights, real Qwen
 `-fa 1 -ctk q8_0 -ctv q8_0`. The numbers are medians of 4 interleaved rounds of `llama-bench -r 3`;
 this VM varies by ±10% from run to run.
 
-Compared: ik_llama.cpp main (`683e4552`, Oct 9) with run-time repack (`-rtr 1`, its best setting
-here; without it ik generates ~29 t/s), quillama.cpp as of the first round of benchmarks
-(`c234f96f`, Oct 6), and quillama.cpp now.
+Compared: ik_llama.cpp main at `683e4552` (October 9, 2026) with run-time repack (`-rtr 1`, its
+best setting here; without it ik generates ~29 t/s), and quillama.cpp with its defaults.
 
-| | ik_llama.cpp `-rtr` | quillama round 1 | **quillama now** | now vs ik | now vs round 1 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| generation | 33.7 t/s | 35.2 t/s | **43.5 t/s** | **+29%** | **+24%** |
-| generation at 4k context | 29.9 t/s | 30.0 t/s | **34.3 t/s** | +15% | +14% |
-| prompt, 512 tokens (no AMX) | 252 t/s | 272 t/s | 258 t/s | same | same |
+| | ik_llama.cpp `-rtr` | **quillama.cpp** | difference |
+| --- | ---: | ---: | ---: |
+| generation | 33.7 t/s | **43.5 t/s** | **+29%** |
+| generation at 4k context | 29.9 t/s | **34.3 t/s** | +15% |
+| prompt, 512 tokens (no AMX) | 252 t/s | 258 t/s | same |
 
 **JSON-schema generation** (server `/completion`, nested schema with enums, bounded strings,
 integers and an array; 4 requests, temperature 0.8, `-np 1`):
@@ -461,28 +476,27 @@ integers and an array; 4 requests, temperature 0.8, `-np 1`):
 | | t/s |
 | --- | ---: |
 | ik_llama.cpp `-rtr` | 14.0 |
-| quillama round 1 | 22.8 |
-| **quillama now** | **≈32** |
+| **quillama.cpp** | **≈32** |
 
-What the new generation speed comes from (same build, one feature switched off at a time, mean of 2
-rounds, noisy):
+Where the generation gain comes from (same build, one feature switched off at a time, mean of 2
+runs, noisy):
 
 | Switched off | generation | at 8k context |
 | --- | ---: | ---: |
-| nothing (quillama now) | 38.4 t/s | 30.2 t/s |
+| nothing (quillama defaults) | 38.4 t/s | 30.2 t/s |
 | huge pages for the repacked weights (`QUILL_THP=0`) | 34.0 t/s (−11%) | 24.7 t/s (−18%) |
 | AVX2 flash-attention V blocking (`QUILL_FA_VBLOCK=0`) | ≈ same | 27.9 t/s (−8%) |
 | 128-row MoE decode chunks (`QUILL_MOE_MIN_CHUNK=32`) | 37.2 t/s (−3%) | 28.5 t/s (−6%) |
 
-The JSON gain on top of that comes from the grammar mask (round 1), computing the output layer only
-for grammar-allowed tokens (section 11, now also for the verification rows of a grammar draft), and
-adaptive grammar drafting (section 7).
+The JSON gain on top of that comes from the faster grammar mask (section 2), computing the output
+layer only for grammar-allowed tokens (section 11, including the verification rows of a grammar
+draft), and adaptive grammar drafting (section 7).
 
 With AMX available (Sapphire Rapids and newer Xeons), quillama's prompt processing is much faster
 still: on this VM, prompt 512 tokens 490-720 t/s vs ik's 240-285 t/s (AVX2 build, AMX on at run
 time). Generation is unaffected by AMX.
 
-### Round 1 (October 6, 2026): native build on an AMX Xeon
+### Native build on an AMX Xeon: prompt processing
 
 Machine: cloud VM with 4 vCPUs of an Intel Xeon (Sapphire Rapids class, AMX-BF16/INT8), 15 GB RAM.
 Both builds `GGML_NATIVE=ON`, 4 threads, ik_llama.cpp at `3d27f5bb`. Random-weight models with a
@@ -509,7 +523,7 @@ JSON-schema generation (dense model): 10.3 t/s → 21.9 t/s. Upstream llama.cpp 
 dense prompt 512 tokens 330 t/s, generation 20.4 t/s; MoE prompt 512 tokens 185 t/s, generation
 25.1 t/s.
 
-| Change (round 1) | Prompt (dense / MoE) | Generation |
+| Change | Prompt (dense / MoE) | Generation |
 | --- | --- | --- |
 | AMX GEMM + fast dequantization | 2.2× / 1.3-1.5× | n/a |
 | AMX flash attention | 2.8× / 2.7× vs tuned ik at 4096 tokens | n/a |
