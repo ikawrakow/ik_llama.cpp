@@ -9,7 +9,14 @@
 struct llama_context;
 struct llama_model;
 struct ggml_tensor;
+struct ggml_context;
 struct llama_spec_feature_view;
+
+ggml_tensor * llama_dflash_hc_mean_for_capture(ggml_context * ctx, ggml_tensor * tensor, int32_t hc_count);
+
+static inline bool llama_dflash_capture_layer_requested(const std::vector<int32_t> & layer_ids, int32_t layer_id) {
+    return std::find(layer_ids.begin(), layer_ids.end(), layer_id) != layer_ids.end();
+}
 
 struct llama_dflash_window_update {
         uint64_t version = 0;
