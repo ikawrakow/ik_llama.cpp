@@ -30,6 +30,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN2VL,         "qwen2vl"      },
     { LLM_ARCH_QWEN3,           "qwen3"        },
     { LLM_ARCH_QWEN3MOE,        "qwen3moe"     },
+    { LLM_ARCH_FLINT,           "flint"        },
     { LLM_ARCH_QWEN3NEXT,       "qwen3next"    },
     { LLM_ARCH_QWEN3VL,         "qwen3vl"      },
     { LLM_ARCH_QWEN3VLMOE,      "qwen3vlmoe"   },
@@ -100,6 +101,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MUSE_GLIMMER,    "muse-glimmer" },
     { LLM_ARCH_LFM2,            "lfm2"         },
     { LLM_ARCH_LFM2MOE,         "lfm2moe"      },
+    { LLM_ARCH_MAPLE,           "maple"        },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
@@ -207,6 +209,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT, "%s.attention.relative_buckets_count" },
     { LLM_KV_ATTENTION_SLIDING_WINDOW,         "%s.attention.sliding_window"         },
     { LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, "%s.attention.sliding_window_pattern" },
+    { LLM_KV_ATTENTION_ROPE_PATTERN,           "%s.attention.rope_pattern"           },
     { LLM_KV_ATTENTION_SCALE,                  "%s.attention.scale"                  },
     { LLM_KV_ATTENTION_OUTPUT_SCALE,           "%s.attention.output_scale"           },
     { LLM_KV_ATTENTION_TEMPERATURE_LENGTH,     "%s.attention.temperature_length"     },
@@ -294,6 +297,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },
+    { LLM_KV_TOKENIZER_NORMALIZER_NFC,       "tokenizer.ggml.normalizer.nfc"           },
     { LLM_KV_TOKENIZER_LIST,                 "tokenizer.ggml.tokens"                   },
     { LLM_KV_TOKENIZER_TOKEN_TYPE,           "tokenizer.ggml.token_type"               },
     { LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT,     "tokenizer.ggml.token_type_count"         },

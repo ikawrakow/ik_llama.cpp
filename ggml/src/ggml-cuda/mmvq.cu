@@ -23,6 +23,17 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
     // nrows_dst == nrows of the matrix that the kernel writes into
     const int64_t nrows_dst = id == ctx.device ? ne0 : row_diff;
 
+    if (src1_ncols > MMVQ_MAX_NCOLS_PASCAL) {
+        const int64_t src1_col_size = src1_padded_row_size/QK8_1*sizeof(block_q8_1);
+        for (int64_t i = 0; i < src1_ncols; i += MMVQ_MAX_BATCH_SIZE) {
+            ggml_cuda_op_mul_mat_vec_q_impl(ctx, type, ne00, ne0, ne2, nb02, nb12, nb2, ids_nb0, bias_nb1,
+                    src0_dd_u, src0_dd_g, src1_ddq_i + i*src1_col_size, dst_dd_i + i*nrows_dst, ids_data, bias_u, bias_g,
+                    row_low, row_high, std::min<int64_t>(src1_ncols - i, MMVQ_MAX_BATCH_SIZE), src1_padded_row_size,
+                    unary_op, limit, stream);
+        }
+        return;
+    }
+
     mmvq_args args{/* vx_u     */ src0_dd_u,
                    /* vx_g     */ src0_dd_g,
                    /* bias_u   */ bias_u,
@@ -46,6 +57,9 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
     };
 
     switch (type) {
+        case GGML_TYPE_Q2_0:
+            mul_mat_vec_q2_0_q8_1_cuda(args, stream);
+            break;
         case GGML_TYPE_Q4_0:
             mul_mat_vec_q4_0_q8_1_cuda(args, stream);
             break;
@@ -111,6 +125,7 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
             break;
         case GGML_TYPE_IQ1_BN:
         case GGML_TYPE_IQ2_BN:
+        case GGML_TYPE_PQ2_0:
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ2_KL:
@@ -134,7 +149,9 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
         case GGML_TYPE_IQ5_KS_R4:
         case GGML_TYPE_IQ1_S_R4:
         case GGML_TYPE_IQ1_M_R4:
+        case GGML_TYPE_IQ3_KS_R16:
         case GGML_TYPE_IQ4_KS_R16:
+        case GGML_TYPE_IQ5_KS_R16:
             iqk_mul_mat_vec_q(type, args, stream);
             break;
         default:
@@ -324,6 +341,8 @@ bool ggml_cuda_mmvq_type_supported(ggml_type src0_type) {
         case GGML_TYPE_IQ1_M:
         case GGML_TYPE_IQ1_BN:
         case GGML_TYPE_IQ2_BN:
+        case GGML_TYPE_Q2_0:
+        case GGML_TYPE_PQ2_0:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_IQ4_XS:
@@ -352,6 +371,8 @@ bool ggml_cuda_mmvq_type_supported(ggml_type src0_type) {
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
         case GGML_TYPE_IQ4_KS_R16:
+        case GGML_TYPE_IQ5_KS_R16:
+        case GGML_TYPE_IQ3_KS_R16:
             return true;
         default:
             return false;

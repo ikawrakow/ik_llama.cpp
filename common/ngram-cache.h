@@ -2,8 +2,10 @@
 
 #include "llama.h"
 
+#include <algorithm>
 #include <unordered_map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #define LLAMA_NGRAM_MIN    1
@@ -54,8 +56,82 @@ struct common_ngram_hash_function {
     }
 };
 
-// token -> number of times token has been seen
-typedef std::unordered_map<llama_token, int32_t> common_ngram_cache_part;
+// Insertion may invalidate iterators/references, including all on reallocation.
+class common_ngram_cache_part {
+public:
+    using value_type = std::pair<llama_token, int32_t>;
+    using container_type = std::vector<value_type>;
+    using iterator = container_type::iterator;
+    using const_iterator = container_type::const_iterator;
+
+    iterator begin() { return entries.begin(); }
+    const_iterator begin() const { return entries.begin(); }
+    const_iterator cbegin() const { return entries.cbegin(); }
+    iterator end() { return entries.end(); }
+    const_iterator end() const { return entries.end(); }
+    const_iterator cend() const { return entries.cend(); }
+    size_t size() const { return entries.size(); }
+    bool empty() const { return entries.empty(); }
+
+    iterator find(llama_token token) {
+        const auto it = lower_bound(token);
+        return it != entries.end() && it->first == token ? it : entries.end();
+    }
+
+    const_iterator find(llama_token token) const {
+        const auto it = lower_bound(token);
+        return it != entries.end() && it->first == token ? it : entries.end();
+    }
+
+    // Duplicate serialized followers retain their first count.
+    std::pair<iterator, bool> emplace(llama_token token, int32_t count) {
+        const auto it = lower_bound(token);
+        if (it != entries.end() && it->first == token) {
+            return {it, false};
+        }
+        return {entries.insert(it, value_type{token, count}), true};
+    }
+
+    static common_ngram_cache_part from_unsorted(container_type values) {
+        if (values.size() > 1) {
+            std::stable_sort(values.begin(), values.end(),
+                    [](const value_type & left, const value_type & right) {
+                        return left.first < right.first;
+                    });
+            const auto unique_end = std::unique(values.begin(), values.end(),
+                    [](const value_type & left, const value_type & right) {
+                        return left.first == right.first;
+                    });
+            values.erase(unique_end, values.end());
+        }
+
+        if (values.capacity() - values.size() > values.size()) {
+            container_type compact(values.begin(), values.end());
+            values.swap(compact);
+        }
+
+        common_ngram_cache_part part;
+        part.entries = std::move(values);
+        return part;
+    }
+
+private:
+    iterator lower_bound(llama_token token) {
+        return std::lower_bound(entries.begin(), entries.end(), token,
+                [](const value_type & entry, llama_token value) {
+                    return entry.first < value;
+                });
+    }
+
+    const_iterator lower_bound(llama_token token) const {
+        return std::lower_bound(entries.begin(), entries.end(), token,
+                [](const value_type & entry, llama_token value) {
+                    return entry.first < value;
+                });
+    }
+
+    container_type entries;
+};
 
 // n-gram -> empirical distribution of following tokens
 typedef std::unordered_map<common_ngram, common_ngram_cache_part, common_ngram_hash_function> common_ngram_cache;

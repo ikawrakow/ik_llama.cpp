@@ -74,6 +74,7 @@ struct llm_build_context {
     const float norm_rms_eps;
 
     const int32_t n_tokens;
+    int32_t n_tokens_seg;   // token count of the segment being built (n_tokens unless replaying)
     const int32_t n_kv;     // size of KV cache to consider (n_kv <= kv_self.size)
     const int32_t n_outputs;
     const int32_t n_outputs_enc;
@@ -97,6 +98,7 @@ struct llm_build_context {
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
     const bool clear_lctx_inputs;
+    const bool worst_case;  // the graph only sizes buffers, so it must be at least as large as any real batch's
 
     const llm_build_cb & cb;
 
@@ -244,6 +246,7 @@ struct llm_build_context {
     ggml_cgraph * build_qwen3moe();
 
     ggml_cgraph * build_mellum();
+    ggml_cgraph * build_maple();
 
     ggml_cgraph * build_qwen3vlmoe();
 
@@ -446,6 +449,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_mimo2();
 
+    ggml_cgraph * build_flint();
+
     ggml_cgraph * build_seedoss();
 
     ggml_cgraph * build_laguna();
@@ -472,7 +477,8 @@ struct llm_build_context {
             int64_t head_dim, int64_t n_head, int il, const llm_build_cb & cb);
 
     static ggml_tensor * llm_build_lora_mm_id(llama_context & lctx, ggml_context * ctx0,
-          ggml_tensor * w, ggml_tensor * cur, ggml_tensor * ids);
+          ggml_tensor * w, ggml_tensor * cur, ggml_tensor * ids,
+          ggml_tensor * cache_w = nullptr, ggml_tensor * cache_ids = nullptr);
 
     static ggml_tensor * llm_build_inp_embd(ggml_context * ctx, llama_context & lctx,
         const llama_hparams & hparams,
@@ -659,7 +665,8 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_tensor * prev_embeddings,
         int64_t n_embd_head,
         struct ggml_cgraph * gf,
-        struct ggml_tensor * inp_pos
+        struct ggml_tensor * inp_pos,
+        bool emit_logits
     );
 
     struct ggml_tensor * build_qwen35moe_mtp(
@@ -667,7 +674,8 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_tensor * prev_embeddings,
         int64_t n_embd_head,
         struct ggml_cgraph * gf,
-        struct ggml_tensor * inp_pos
+        struct ggml_tensor * inp_pos,
+        bool emit_logits
     );
 
     ggml_cgraph * new_graph_custom();

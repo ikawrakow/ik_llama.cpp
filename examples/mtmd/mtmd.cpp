@@ -448,19 +448,32 @@ struct mtmd_tokenizer {
     int32_t tokenize(mtmd_input_chunks * output) {
         cur.entries.clear();
         std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
+
+        size_t n_markers = 0;
+        for (const auto & part : parts) {
+            if (part == ctx->media_marker) {
+                n_markers++;
+            }
+        }
+
+        if (n_markers > bitmaps.size()) {
+            LOG_WRN("%s: prompt has %zu more media marker(s) than bitmap(s), "
+                    "the unmatched marker(s) will be treated as literal text\n",
+                    __func__, n_markers - bitmaps.size());
+        }
+
         size_t i_bm = 0; // index of the current bitmap
         for (auto & part : parts) {
             if (part == ctx->media_marker) {
-                // this is a marker, we should add the next bitmap
-                if (i_bm >= bitmaps.size()) {
-                    LOG_ERR("%s: error: number of bitmaps (%zu) does not match number of markers (%zu)\n",
-                            __func__, bitmaps.size(), parts.size() - 1);
-                    return 1;
-                }
-                const mtmd_bitmap * bitmap = bitmaps[i_bm++];
-                int32_t res = add_media(bitmap);
-                if (res != 0) {
-                    return res;
+                if (i_bm < bitmaps.size()) {
+                    // this is a marker, we should add the next bitmap
+                    const mtmd_bitmap * bitmap = bitmaps[i_bm++];
+                    int32_t res = add_media(bitmap);
+                    if (res != 0) {
+                        return res;
+                    }
+                } else {
+                    add_text(part, parse_special);
                 }
             } else {
                 // this is a text part, we should add it as text
@@ -492,8 +505,8 @@ struct mtmd_tokenizer {
         }
 
         if (i_bm != bitmaps.size()) {
-            LOG_ERR("%s: error: number of bitmaps (%zu) does not match number of markers (%zu)\n",
-                    __func__, bitmaps.size(), parts.size() - 1);
+            LOG_ERR("%s: error: number of bitmaps (%zu) does not match number of media markers (%zu)\n",
+                    __func__, bitmaps.size(), n_markers);
             return 1;
         }
 

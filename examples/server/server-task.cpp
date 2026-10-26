@@ -1212,6 +1212,23 @@ void server_prompt_cache::update() {
 
             states.pop_front();
         }
+
+        // Trim checkpoints when the remaining state exceeds the limit. Keep the
+        // prompt-end checkpoint while another checkpoint can be evicted instead.
+        for (auto& state : states) {
+            while (size() > limit_size && !state.checkpoints.empty()) {
+                auto it = state.checkpoints.begin();
+                if (it->prompt_end && std::next(it) != state.checkpoints.end()) {
+                    ++it;
+                }
+                LLAMA_LOG_INFO(" - cache size limit reached, dropping a checkpoint (size = %.3f MiB)\n",
+                    it->size() / (1024.0 * 1024.0));
+                if (!it->spill_path.empty()) {
+                    remove(it->spill_path.c_str());
+                }
+                state.checkpoints.erase(it);
+            }
+        }
     }
 
     // average size per token

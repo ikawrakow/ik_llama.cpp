@@ -93,6 +93,7 @@ class Keys:
         EXPERT_GROUP_USED_COUNT           = "{arch}.expert_group_used_count"
         EXPERT_WEIGHTS_SCALE              = "{arch}.expert_weights_scale"
         EXPERT_WEIGHTS_NORM               = "{arch}.expert_weights_norm"
+        SWIGLU_CLAMP_EXP                  = "{arch}.swiglu_clamp_exp"
         EXPERT_GATING_FUNC                = "{arch}.expert_gating_func"
         NEXTN_PREDICT_LAYERS              = "{arch}.nextn_predict_layers"
         POOLING_TYPE                      = "{arch}.pooling_type"
@@ -124,6 +125,7 @@ class Keys:
         REL_BUCKETS_COUNT = "{arch}.attention.relative_buckets_count"
         SLIDING_WINDOW    = "{arch}.attention.sliding_window"
         SLIDING_WINDOW_PATTERN = "{arch}.attention.sliding_window_pattern"
+        ROPE_PATTERN           = "{arch}.attention.rope_pattern"
         SHARED_KV_LAYERS       = "{arch}.attention.shared_kv_layers"
         KEY_LENGTH_SWA         = "{arch}.attention.key_length_swa"
         VALUE_LENGTH_SWA       = "{arch}.attention.value_length_swa"
@@ -253,6 +255,7 @@ class MODEL_ARCH(IntEnum):
     QWEN2MOE     = auto()
     QWEN3        = auto()
     QWEN3MOE     = auto()
+    FLINT        = auto()
     MELLUM       = auto()
     PHI2         = auto()
     PHI3         = auto()
@@ -299,6 +302,7 @@ class MODEL_ARCH(IntEnum):
     LAGUNA       = auto()
     LFM2         = auto()
     LFM2MOE      = auto()
+    MAPLE        = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -503,6 +507,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN2MOE:       "qwen2moe",
     MODEL_ARCH.QWEN3:          "qwen3",
     MODEL_ARCH.QWEN3MOE:       "qwen3moe",
+    MODEL_ARCH.FLINT:          "flint",
     MODEL_ARCH.MELLUM:         "mellum",
     MODEL_ARCH.PHI2:           "phi2",
     MODEL_ARCH.PHI3:           "phi3",
@@ -549,6 +554,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LAGUNA:         "laguna",
     MODEL_ARCH.LFM2:           "lfm2",
     MODEL_ARCH.LFM2MOE:        "lfm2moe",
+    MODEL_ARCH.MAPLE:          "maple",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -1043,6 +1049,32 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
     ],
+    MODEL_ARCH.FLINT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_SINKS,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_INP_SHEXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+    ],
     MODEL_ARCH.MELLUM: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -1316,6 +1348,23 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_GATE_UP_EXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
+    MODEL_ARCH.MAPLE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
     ],
     MODEL_ARCH.MAMBA: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -2156,6 +2205,9 @@ class GGMLQuantizationType(IntEnum):
     IQ4_K_R4  = 339
     IQ5_K_R4  = 340
     IQ4_KS_R4 = 344
+    IQ4_KS_R16= 345
+    IQ3_KS_R16= 346
+    IQ5_KS_R16= 347
     IQ5_KS_R4 = 352
     Q8_KV_R8  = 398
     Q8_K_R8   = 399
@@ -2257,6 +2309,9 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ5_K_R4      = 341 #except 1d tensors
     MOSTLY_IQ4_KS_R4     = 345 #except 1d tensors
     MOSTLY_IQ5_KS_R4     = 350 #except 1d tensors
+    MOSTLY_IQ4_KS_R16    = 351 #except 1d tensors
+    MOSTLY_IQ3_KS_R16    = 352 #except 1d tensors
+    MOSTLY_IQ5_KS_R16    = 353 #except 1d tensors
     MOSTLY_Q8_KV_R8      = 398 #except 1d tensors
     MOSTLY_Q8_K_R8       = 399 #except 1d tensors
 
@@ -2396,6 +2451,9 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ5_K_R4    : ( 256,  176),
     GGMLQuantizationType.IQ4_KS_R4   : ( 256,  136),
     GGMLQuantizationType.IQ5_KS_R4   : ( 256,  168),
+    GGMLQuantizationType.IQ3_KS_R16  : (  32,   13),
+    GGMLQuantizationType.IQ4_KS_R16  : (  32,   17),
+    GGMLQuantizationType.IQ5_KS_R16  : (  32,   21),
     GGMLQuantizationType.Q8_KV_R8    : (  32,   32),
     GGMLQuantizationType.Q8_K_R8     : ( 256,  258),
 }
@@ -2422,6 +2480,9 @@ GGML_ROW_META_SIZES: dict[GGMLQuantizationType, int] = {
     GGMLQuantizationType.Q8_KV       :  8,
     GGMLQuantizationType.Q8_KV_R8    :  4,
     GGMLQuantizationType.Q8_K16      : 20,
+    GGMLQuantizationType.IQ3_KS_R16  :  4,
+    GGMLQuantizationType.IQ4_KS_R16  :  4,
+    GGMLQuantizationType.IQ5_KS_R16  :  4,
 }
 
 

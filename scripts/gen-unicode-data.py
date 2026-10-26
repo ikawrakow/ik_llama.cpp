@@ -1,8 +1,59 @@
 from __future__ import annotations
 
 import array
+import sys
 import unicodedata
 import requests
+
+
+def out(line=""):
+    print(line, end='\n')  # noqa
+
+
+def normalization_tables():
+    out(f"// Canonical normalization tables: Unicode {unicodedata.unidata_version}.")
+    combining = [(cpt, value) for cpt in range(0x110000)
+                 if (value := unicodedata.combining(chr(cpt)))]
+    out("const unicode_cpt_value unicode_combining_class[] = {")
+    for cpt, value in combining:
+        out(f"{{0x{cpt:06X}, {value}}},")
+    out("};")
+    out("const size_t unicode_combining_class_count = "
+        "sizeof(unicode_combining_class) / sizeof(unicode_combining_class[0]);\n")
+
+    decompositions = []
+    compositions = []
+    for cpt in range(0x110000):
+        if 0xAC00 <= cpt < 0xAC00 + 11172:
+            continue
+        raw = unicodedata.decomposition(chr(cpt))
+        if not raw or raw.startswith("<"):
+            continue
+        parts = [int(part, 16) for part in raw.split()]
+        assert 1 <= len(parts) <= 2
+        first, second = parts[0], parts[1] if len(parts) == 2 else 0
+        decompositions.append((cpt, first, second))
+        if second and unicodedata.normalize("NFC", chr(first) + chr(second)) == chr(cpt):
+            compositions.append(((first << 32) | second, cpt))
+    out("const unicode_decomp_entry unicode_decomposition[] = {")
+    for cpt, first, second in decompositions:
+        out(f"{{0x{cpt:06X}, 0x{first:06X}, 0x{second:06X}}},")
+    out("};")
+    out("const size_t unicode_decomposition_count = "
+        "sizeof(unicode_decomposition) / sizeof(unicode_decomposition[0]);\n")
+
+    out("const unicode_comp_entry unicode_composition[] = {")
+    for key, cpt in sorted(compositions):
+        out(f"{{0x{key:016X}ULL, 0x{cpt:06X}}},")
+    out("};")
+    out("const size_t unicode_composition_count = "
+        "sizeof(unicode_composition) / sizeof(unicode_composition[0]);")
+
+
+# Generate only canonical tables, without downloading the UCD data.
+if sys.argv[1:] == ["--normalization-only"]:
+    normalization_tables()
+    sys.exit(0)
 
 
 MAX_CODEPOINTS = 0x110000
@@ -155,10 +206,6 @@ for codepoint, norm in table_nfd:
 # Generate 'unicode-data.cpp':
 #   python ./scripts//gen-unicode-data.py > unicode-data.cpp
 
-def out(line=""):
-    print(line, end='\n')  # noqa
-
-
 out("""\
 // generated with scripts/gen-unicode-data.py
 
@@ -194,3 +241,5 @@ out("const std::vector<range_nfd> unicode_ranges_nfd = {  // start, last, nfd")
 for triple in ranges_nfd:
     out("{0x%06X, 0x%06X, 0x%06X}," % triple)
 out("};\n")
+
+normalization_tables()

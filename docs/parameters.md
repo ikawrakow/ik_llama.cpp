@@ -74,6 +74,9 @@ Some often used terms.
 | `-wgt, --worst-graph-tokens N` | Number of tokens to use for worst-case graph | - | Control compute buffer sizes for large batches. Provided "as is" for users that understand the limitations, please don't open issues when using this. [PR 1560](https://github.com/ikawrakow/ik_llama.cpp/pull/1560) |
 | `-t, --threads N` | Number of threads to use during generation | 4 | Try to match the number of physical CPU cores. Avoid odd numbers (e.g. 1,3,...). |
 | `-tb, --threads-batch N` | Number of threads to use during batch and prompt processing | Same as `--threads` | Same as `--threads` When doing full GPU offload, use a lower number (e.g. 2) |
+| `--cpu-affinity` | Pin CPU worker threads to the physical P-cores (hybrid CPUs) | off | Opt-in, Linux only. One thread per physical P-core (primaries first, then SMT siblings), resolved via `thread_siblings_list`; respects an external taskset/cpuset. [PR 2565](https://github.com/ikawrakow/ik_llama.cpp/pull/2565) For sustained laptop inference see [CPU thermal throttling](development/token_generation_performance_tips.md#thermal-throttling-on-laptops-external-tools). |
+| `-cm, --cpu-mask MASK` | Pin CPU worker threads to an explicit bitmask of logical CPUs | - | Opt-in, Linux only. Intersected with the process affinity (taskset); dropped CPUs are warned about. [PR 2565](https://github.com/ikawrakow/ik_llama.cpp/pull/2565) |                                                       
+| `-cr, --cpu-range LIST` | Pin CPU worker threads to an explicit core range (e.g. `4-7`) | - | Opt-in, Linux only. Intersected with the process affinity (taskset). [PR 2565](https://github.com/ikawrakow/ik_llama.cpp/pull/2565) |
 | `-tm,   --threads-mtmd N` | Number of threads to use during multimodal image processing | Same as `--threads-batch` | Control CPU thread count used during multimodal image/audio processing (mmproj encoding), separate from the main LLM thread count. |
 | `-c, --ctx-size N` | Size of the prompt context | 0 (loaded from model) | Influences the size of KV size (memory) therefore look for a value that fits your system then increase as needed (2048, 4096,…). If you use parallel slots, this context size will be split across the slots. |
 | `-n, --predict N` | Number of tokens to predict | -1 (infinity) | -1 (infinity), -2 (until context filled). Safe to leave default. |
@@ -81,7 +84,7 @@ Some often used terms.
 | `-ub, --ubatch-size N` | Physical maximum batch size | 512 | Safe to leave default. Similar to `--batch-size N` |
 | `--keep N` | Number of tokens to keep from the initial prompt | 0 | -1 = all |
 | `--chunks N` | Max number of chunks to process | -1 (all) |  |
-| `-dr, --dry-run` | Skip loading tensors in the files | - | Skips loading files, yet still report OOM error and print memory usage correctly, which is helpful for manually tuning of very large models. |
+| `-dr, --dry-run` | Skip loading tensors in the files | - | Skips loading files, yet still reports OOM error and print memory usage correctly, which is helpful for manually tuning of very large models. |
 | `--minilog` | Print important information | - | For `llama-server`, log request message for completions/response/anthropic and response. The prompt in the json format and the text response are saved in the log file and printed to the console. [PR 1477](https://github.com/ikawrakow/ik_llama.cpp/pull/1477) |
 | `-fa, --flash-attn` | Enables Flash Attention | on | auto / on / off Improves t/s and reduces memory usage. |
 | `--no-fa, --no-flash-attn` | Disable Flash Attention |  | Alternative parameter to turn off FA. See `--flash-attn` |
@@ -139,7 +142,7 @@ Check the details [here](./speculative.md).
 | `-cd, --ctx-size-draft N` | Size of the prompt context for the draft model | 0 (inherits target context for DFlash/DSpark, otherwise loaded from model) | Similar to `--ctx-size` but applied to the draft model, if used. For DFlash/DSpark, the retained history is this value minus the query block. |
 | `-ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model | - | For draft model, see: `-ctk` |
 | `-ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for the draft model | - | For draft model, see: `-ctk` |
-| `-draft, --draft-params` | Comma-separated list of draft model parameters | - |  |
+| `-draft, --draft-params` | Comma-separated list of draft model parameters | - | May also carry CPU affinity options for the draft/speculative model; by default the draft inherits the target model's affinity. [PR 2588](https://github.com/ikawrakow/ik_llama.cpp/pull/2588) |
 | `--spec-type SPEC[:k=v,...]` | Canonical speculative stage entry; repeat to configure the supported two-stage chain | - | Types: `none`, `draft`, `dflash`, `dspark`, `mtp`, `ngram-cache`, `ngram-simple`, `ngram-map-k`, `ngram-map-k4v`, `ngram-mod`, `suffix`. Canonical keys include `n_max`, `n_min`, `p_min`, `heads`, `ngram_size_n`, `ngram_size_m`, `ngram_min_hits`, `suffix_min_match_len`, `suffix_max_depth`, `suffix_corpus`. For MTP, `heads=1` is the default; values above `1` and `heads=0` (all model heads) are experimental. String values may escape commas as `\,` or quote the value inside the stage payload. Examples: `--spec-type ngram-mod:n_max=64,n_min=2,ngram_size_n=8 --spec-type mtp:n_max=1,p_min=0.0`, `--model-draft draft.gguf --spec-type dflash:n_max=4` |
 | `--spec-autotune` | Automatically tune speculative params to maximize tokens/sec | - | Automatically determines the near-optimal arguments for the type of speculation being performed [PR 1595](https://github.com/ikawrakow/ik_llama.cpp/pull/1595) |
 | `--spec-ckpt-mode MODE` (deprecated alias: `--recurrent-ckpt-mode MODE`) | Checkpoint strategy for speculative decoding | auto | One of: - `auto` choose direct per-step, then device fallback, then host fallback - `per-step` save architecture state per draft step; no re-decode on rejection - `gpu-fallback` copy architecture state to a device buffer; re-decode on rejection - `cpu` serialize architecture state in host storage; re-decode on rejection [PR 1669](https://github.com/ikawrakow/ik_llama.cpp/pull/1669) [PR 1774](https://github.com/ikawrakow/ik_llama.cpp/pull/1774) |
@@ -153,9 +156,9 @@ Notes:
 
 ## Cache Prompt to Host Memory
 
-When user starts a new conversation, the old conversation's kv cache will be saved in ram and can be retrieved later. This greatly reduces prompt processing time when switching between conversations and can have as many conversation as your ram is allowed.
+When the user starts a new conversation, the old conversation's KV cache will be saved in RAM and can be retrieved later. This greatly reduces prompt processing time when switching between conversations and can have as many conversations as your RAM allows.
 
-Note: When the available memory is very limited, turn this option off (`-cram 0`) to avoid memory swaping.
+Note: When the available memory is very limited, turn this option off (`-cram 0`) to avoid memory swapping.
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
@@ -176,6 +179,9 @@ Good overview on [kalomaze/llm_samplers_explained.md](https://gist.github.com/ka
 | `--banned-string-file` | File path of the list of banned strings on each line |  |  |
 | `--banned-n` | Number of tokens banned in the phrase during rewind. | -1 | -1 means all tokens [PR 1185](https://github.com/ikawrakow/ik_llama.cpp/pull/1185) |
 | `--expiring-logit-bias-file FILENAME` | Load bias states from a custom file format | - | [PR 1731](https://github.com/ikawrakow/ik_llama.cpp/pull/1731) [PR 1770](https://github.com/ikawrakow/ik_llama.cpp/pull/1770) |
+
+Notes:
+- GGUFs can embed publisher-recommended sampling defaults under `general.sampling.*` metadata (e.g. `general.sampling.top_p`, `general.sampling.temp`, `general.sampling.sequence`). They are applied to any sampler value not explicitly set. [PR 2625](https://github.com/ikawrakow/ik_llama.cpp/pull/2625)
 
 ## Prompt Template
 
@@ -200,11 +206,11 @@ Incorrect prompt template or it's format may break the model output.
 
 KV cache improves speed and efficiency especially at long context by reusing [past calculations](https://huggingface.co/blog/not-lain/kv-caching).
 
-SWA keeps a sliding window of the prompt when prompt is longer than the context size and shift the kv cache accordingly to avoid reprocessing the whole prompt.
+SWA keeps a sliding window of the prompt when prompt is longer than the context size and shifts the KV cache accordingly to avoid reprocessing the whole prompt.
 
 The context (a.k.a. KV cache) is stored on the device where the associated attention tensors are.
 
-MLA models already have the cache compressed, it doesn't really makes sense to compress it with the available parameters.
+MLA models already have the cache compressed, it doesn't really make sense to compress it with the available parameters.
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
@@ -314,11 +320,11 @@ llama_new_context_with_model: KV self size  =   59.50 MiB, K (q8_0):   29.75 MiB
 - Using `--k-cache-hadamard` on quants lower than `Q6_0` may give better results. Additionally, `ik_llama.cpp` provides `--v-cache-hadamard` for the V-cache. Example: `--cache-type-k q6_0 --k-cache-hadamard --cache-type-v q6_0 --v-cache-hadamard`
 - `Q4_0` achieves low perplexity even without Hadamard.
 
-3. Offload less to the GPU. Try to find a mix of parameters that better suits your system that default.
+3. Offload less to the GPU. Try to find a mix of parameters that better suits your system than default.
 
-- Try `--fit`. `ik_llama.cpp` automatically determine which tensors to offload to the GPUs based on the available VRAM.
+- Try `--fit`. `ik_llama.cpp` automatically determines which tensors to offload to the GPUs based on the available VRAM.
 
-- Use `--no-kv-offload` to keep KV cache on CPU. This is provided for flexibility, and practically not desired as reduces the prompt processing speed.
+- Use `--no-kv-offload` to keep KV cache on CPU. This is provided for flexibility, and practically not desired as it reduces the prompt processing speed.
 
 - Identify tensors, how many layers (also shape and more metadata) by opening the GGUF model file on the Web browser [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf) then scroll down to the Tensors table. For the split models, look to each file part.
 
@@ -498,6 +504,10 @@ llama-gguf-split --split --split-max-size 1G --no-tensor-first-split /models/mod
 | `--extra-output-tensor ggml_type` | Requantize and add output tensor of that type. | - | [PR 1810](https://github.com/ikawrakow/ik_llama.cpp/pull/1810) see `--mtp-requantize-output-tensor type` as on-the-fly alternative. |
 | `--fudge-factor` | Value to undo the built-in fudge factors of certain quant types | - | Some quant types now carry built-in fudge factors; supply the matching value from the PR's type/factor table to undo them. [PR 2361](https://github.com/ikawrakow/ik_llama.cpp/pull/2361) |
 | `--slab-size N` | Process tensors larger than N MiB in slabs to limit peak memory | 1024 | `--slab-size 0` disables slab processing (previous behavior). [PR 2537](https://github.com/ikawrakow/ik_llama.cpp/pull/2537) |
+| `--cuda-quantize` | Encode quantization on the CUDA GPU | - | Currently supports `IQ4_KT` and `IQ3_KT` [PR 2572](https://github.com/ikawrakow/ik_llama.cpp/pull/2572) |
+
+Notes:
+- Trellis quants (`IQ1_KT`, `IQ2_KT`, `IQ3_KT`, `IQ4_KT`) can only be quantized on AVX2 CPUs; `llama-quantize` aborts with an error on other CPUs. [PR 2613](https://github.com/ikawrakow/ik_llama.cpp/pull/2613)
 
 ### Build Arguments
 

@@ -191,12 +191,15 @@ struct llama_hparams {
     std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_index_key_source = {};
     std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_topk_source      = {};
 
+    int32_t dsv41_replay_boundary = -1;   // first decoder layer: first KV source whose ratio differs from the previous one, -1 if none
+
     int32_t  dsv4_candidate_source_layer = -1;
     uint32_t dsv4_candidate_block_size   = 0;
     uint32_t dsv4_candidate_topk_blocks  = 0;
     bool dsv41_is_kv_source   (uint32_t il) const { return dsv4_shared_streams && dsv41_kv_source[il]        == (int32_t) il; }
     bool dsv41_owns_index_k   (uint32_t il) const { return dsv4_shared_streams && dsv41_index_key_source[il] == (int32_t) il; }
     bool dsv41_is_index_source(uint32_t il) const { return dsv4_shared_streams && dsv41_topk_source[il]      == (int32_t) il; }
+    bool dsv41_has_replay_segment() const { return dsv41_replay_boundary > 0 && dsv41_replay_boundary < (int32_t) n_layer; }
 
     // DeepSeek-V4.1 engram: n-gram keyed tables added into the stream at a few layers
     uint32_t engram_n_head         = 0;
@@ -228,7 +231,7 @@ struct llama_hparams {
     std::array<uint64_t, LLAMA_MAX_PLE_HEADS> ple_head_offsets      = {};
     std::array<uint64_t, LLAMA_MAX_PLE_HEADS> ple_head_vocab_sizes  = {};
 
-	// qwen3vl deepstack
+    // qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 
     // gemma4 per-layer embedding
@@ -268,6 +271,7 @@ struct llama_hparams {
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
     std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> rope_pattern;
 
     std::array<float, LLAMA_MAX_LAYERS> swiglu_limits;
     std::array<float, LLAMA_MAX_LAYERS> swiglu_limits_shared;
@@ -310,6 +314,8 @@ struct llama_hparams {
         if (this->n_ff_exp           != other.n_ff_exp)           return true;
         if (this->n_ff_shexp         != other.n_ff_shexp)         return true;
         if (this->n_expert_shared    != other.n_expert_shared)    return true;
+        if (this->rope_pattern       != other.rope_pattern)       return true;
+        if (this->swa_layers         != other.swa_layers)         return true;
         if (this->n_value_expert      != other.n_value_expert)      return true;
         if (this->n_value_expert_used != other.n_value_expert_used) return true;
 
@@ -537,6 +543,8 @@ struct llama_hparams {
         // Regular comparison using the provided absolute tolerance
         return std::fabs(b - a) <= abs_tol;
     }
+
+    bool has_rope(uint32_t il) const { return rope_pattern[il] > 0; }
 
     uint32_t rope_n_rot(uint32_t il) const {
         const uint32_t v = rope_dim_per_layer[il];

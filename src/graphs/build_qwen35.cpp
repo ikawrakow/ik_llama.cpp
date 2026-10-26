@@ -20,12 +20,15 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         const int il_mtp = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il_mtp];
 
-        cur = build_qwen35moe_mtp(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos);
+        const bool emit_logits = cparams.mtp_op_type == MTP_OP_DRAFT_GEN ||
+                cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
+        cur = build_qwen35moe_mtp(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos, emit_logits);
     } else {
         delta_net delta(lctx, batch);
 
         ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-        ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = (n_tokens > 1 && n_outputs < n_tokens &&
+                (!lctx.cparams.mtp || n_outputs > 0)) ? build_inp_out_ids() : nullptr;
         ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
@@ -38,9 +41,10 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         for (int il = 0; il < n_transformer_layers; ++il) {
 
             if (hparams.is_recurrent(il)) {
-                cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_transformer_layers - 1 ? inp_out_ids : nullptr, il, cb);
+                cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_transformer_layers - 1 && !lctx.cparams.mtp ? inp_out_ids : nullptr, il, cb);
             } else {
-                cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_transformer_layers - 1 ? inp_out_ids : nullptr, nullptr,
+                cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos,
+                        il == n_transformer_layers - 1 && !lctx.cparams.mtp ? inp_out_ids : nullptr, nullptr,
                         KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, true);
             }
 
@@ -64,8 +68,23 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
             inpL = cur;
         }
 
-        cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
-        cb(cur, "result_output", -1);
+        if (n_outputs == 0) {
+            cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
+            cb(cur, "result_norm", -1);
+        } else if (lctx.cparams.mtp) {
+            auto hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
+            cb(hidden, "result_norm", -1);
+            if (inp_out_ids && hidden->ne[1] > n_outputs) {
+                inpL = ggml_get_rows(ctx0, hidden, inp_out_ids);
+            } else {
+                inpL = hidden;
+            }
+            cur = build_output(lctx, ctx0, inpL, model.output, nullptr, cb);
+            cb(cur, "result_output", -1);
+        } else {
+            cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+            cb(cur, "result_output", -1);
+        }
     }
 
     ggml_build_forward_expand(gf, cur);
@@ -91,12 +110,15 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         const int il_mtp = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il_mtp];
 
-        cur = build_qwen35_mtp(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos);
+        const bool emit_logits = cparams.mtp_op_type == MTP_OP_DRAFT_GEN ||
+                cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
+        cur = build_qwen35_mtp(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos, emit_logits);
     } else {
         delta_net delta(lctx, batch);
 
         ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-        ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = (n_tokens > 1 && n_outputs < n_tokens &&
+                (!lctx.cparams.mtp || n_outputs > 0)) ? build_inp_out_ids() : nullptr;
         ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
@@ -111,9 +133,10 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         for (int il = 0; il < n_transformer_layers; ++il) {
 
             if (hparams.is_recurrent(il)) {
-                cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_transformer_layers - 1 ? inp_out_ids : nullptr, il, cb);
+                cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_transformer_layers - 1 && !lctx.cparams.mtp ? inp_out_ids : nullptr, il, cb);
             } else {
-                cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_transformer_layers - 1 ? inp_out_ids : nullptr, nullptr,
+                cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos,
+                        il == n_transformer_layers - 1 && !lctx.cparams.mtp ? inp_out_ids : nullptr, nullptr,
                         KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, true);
             }
 
@@ -130,8 +153,23 @@ ggml_cgraph * llm_build_context::build_qwen35() {
             inpL = cur;
         }
 
-        cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
-        cb(cur, "result_output", -1);
+        if (n_outputs == 0) {
+            cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
+            cb(cur, "result_norm", -1);
+        } else if (lctx.cparams.mtp) {
+            auto hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
+            cb(hidden, "result_norm", -1);
+            if (inp_out_ids && hidden->ne[1] > n_outputs) {
+                inpL = ggml_get_rows(ctx0, hidden, inp_out_ids);
+            } else {
+                inpL = hidden;
+            }
+            cur = build_output(lctx, ctx0, inpL, model.output, nullptr, cb);
+            cb(cur, "result_output", -1);
+        } else {
+            cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+            cb(cur, "result_output", -1);
+        }
     }
 
     ggml_build_forward_expand(gf, cur);
@@ -144,7 +182,8 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
     struct ggml_tensor * prev_embeddings,
     int64_t n_embd_head,
     struct ggml_cgraph * gf,
-    struct ggml_tensor * inp_pos) {
+    struct ggml_tensor * inp_pos,
+    bool emit_logits) {
 
     const int il = hparams.n_layer - 1;
 
@@ -174,6 +213,10 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
             inp_pos, nullptr, nullptr,
             KQ_mask, nullptr, nullptr,
             kq_scale, 0.0f, 0, il, true, false, true, false, true, nullptr);
+
+    if (!emit_logits) {
+        return cur;
+    }
 
     if (inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
@@ -209,7 +252,8 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
     struct ggml_tensor * prev_embeddings,
     int64_t n_embd_head,
     struct ggml_cgraph * gf,
-    struct ggml_tensor * inp_pos) {
+    struct ggml_tensor * inp_pos,
+    bool emit_logits) {
 
     const int il = hparams.n_layer - 1;
 
@@ -241,6 +285,10 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
             inp_pos, inp_out_ids, nullptr,
             KQ_mask, nullptr, nullptr,
             kq_scale, 0.0f, 0, il, true, false, true, false, true, nullptr);
+
+    if (!emit_logits) {
+        return cur;
+    }
 
     // Dense FFN — optional (9B and 4B don't have FFN in MTP layer)
     if (mtp_layer.ffn_gate != nullptr) {

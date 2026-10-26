@@ -53,12 +53,12 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
     auto V = dst->src[2];
     auto indexer = dst->src[5];
     if (indexer && indexer->type == GGML_TYPE_I32 && indexer->ne[0] < K->ne[1] &&
-        Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 && K->ne[2] == 1) {
-        auto row_size_k = ggml_row_size(K->type, K->ne[0]);
-        auto row_size_v = ggml_row_size(V->type, V->ne[0]);
+        Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 && (K->ne[2] == 1 || Q->ne[1] > 1)) {
+        auto row_size_k = ggml_row_size(K->type, K->ne[0])*K->ne[2];
+        auto row_size_v = ggml_row_size(V->type, V->ne[0])*K->ne[2];
         auto work_size  = (row_size_k + row_size_v + 64) * indexer->ne[0];
         size_t result = work_size * nth;
-        if (Q->ne[1]== 1) result += 512*sizeof(float);
+        if (Q->ne[1] == 1) result += 512*sizeof(float);
         return result;
         //return work_size * nth;
     }
@@ -76,27 +76,15 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
             size += nstep_k*result_size;
             return size;
         }
-        int nstep_k = K->ne[1]/32;
-        if (nstep_k >= 4*nth) {
-            auto size_thread = (V->ne[0] + 16)*rk2*sizeof(float);
-            size += size_thread*nth;
-            return size;
+        // With nth >= rk2 the consumer can fall through to the chunked loop, which uses up to 4*nth slots.
+        int nstep_k = nth;
+        if (nth >= rk2) {
+            nstep_k = (K->ne[1] + 31)/32;
+            if (nstep_k > 4*nth) nstep_k = 4*nth;
+            if (nstep_k < nth) nstep_k = nth;
         }
-        int gcd_k   = simple_gcd(nstep_k, nth);
-        if (gcd_k >= 1) {
-            int nth_k = nth/gcd_k;
-            int nq_per_thread = (rk2 + nth_k - 1)/nth_k;
-            if (nq_per_thread > 1) {
-                auto size_thread = (V->ne[0] + 16)*nq_per_thread*sizeof(float);
-                size += size_thread*nth;
-                return size;
-            }
-        }
-        int rv2 = Q->ne[2] / V->ne[2];
-        if (Q->ne[1] == 1 && Q->ne[3] == 1 && rk2 > 1 && rk2 == rv2 && K->ne[1]*K->ne[2] >= 32*nth) {
-            auto result_size = (V->ne[0] + 16)*rk2*sizeof(float);
-            size += result_size*nth;
-        }
+        size_t result_size = (V->ne[0] + 16)*rk2*sizeof(float);
+        size += nstep_k*result_size;
         return size;
     }
     return size;
@@ -163,14 +151,13 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     if (type_q != 0 || type_mask != 1 || max_bias > 0) return false;
 
     if (indexer && indexer->type == GGML_TYPE_I32) {
-        //if (indexer->ne[0] < nek1 && neq1 >= nth && neq3 == 1 && nek3 == 1 && nev3 == 1 && nek2 == 1) {
-        if (indexer->ne[0] < nek1 && neq3 == 1 && nek3 == 1 && nev3 == 1 && nek2 == 1) {
+        if (indexer->ne[0] < nek1 && neq3 == 1 && nek3 == 1 && nev3 == 1 && (nek2 == 1 || neq1 > 1)) {
             // Workbuffer: we need
             // * indexer->ne[0] * sizeof(ggml_half) to extract the mask for a row
             // * indexer->ne[0] * ggml_row_size(int_type_k_in, Dk) to extract the selected K cache entries
             // * indexer->ne[0] * ggml_row_size(int_type_v, Dv) to extract the selected V cache entries
-            auto row_size_k = ggml_row_size(ggml_type(int_type_k_in), Dk);
-            auto row_size_v = ggml_row_size(ggml_type(int_type_v   ), Dv);
+            auto row_size_k = ggml_row_size(ggml_type(int_type_k_in), Dk)*nek2;
+            auto row_size_v = ggml_row_size(ggml_type(int_type_v   ), Dv)*nek2;
             auto work_size  = (row_size_k + row_size_v + 64) * indexer->ne[0];
             ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
             int  nkv = indexer->ne[0];
@@ -267,11 +254,15 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 int this_nkv = 32*((last_found + 31)/32);
                 auto this_q = (const char *)q + iq*stride_q;
                 auto this_qkv = qkv + iq*ne1*nb1/sizeof(float);
-                if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
-                         Dk, Dv, neq2, this_nkv, nbq2, row_size_k, row_size_v, 0, Dv,
-                         (const float *)this_q, work_k, k == v ? work_k : work_v, work_m, (const float *)sinks, 1,
-                         scale, softcap,
-                         this_qkv, nullptr, nullptr)) return false;
+                for (int ik2 = 0; ik2 < nek2; ++ik2) {
+                    if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
+                                Dk, Dv, neq2/nek2, this_nkv, nbq2, row_size_k, row_size_v, 0, Dv,
+                                (const float *)(this_q + ik2*(neq2/nek2)*nbq2),
+                                work_k + ik2*row_size_k/nek2,
+                                k == v ? work_k + ik2*row_size_k/nek2: work_v + ik2*row_size_v/nek2,
+                                work_m, (const float *)sinks, 1, scale, softcap,
+                                this_qkv + ik2*(neq2/nek2)*nb1/sizeof(float), nullptr, nullptr)) return false;
+                }
             }
             return true;
         }

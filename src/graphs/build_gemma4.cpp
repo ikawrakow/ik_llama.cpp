@@ -263,6 +263,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
                     sa_inp[id] = ggml_mul(ctx0, sa_inp[id], scale->splits[id]);
                     cb(sa_inp[id], "sa_inp_scaled", il_cb);
                 }
+                sa_inp[id] = lctx.cvec.apply_to_device(ctx0, sa_inp[id], il - 1, id);
                 if (!emitted_prev_l_out) {
                     cb(sa_inp[id], "l_out", il - 1);
                     emitted_prev_l_out = true;
@@ -534,6 +535,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
         cur = ggml_mul(ctx0, cur, scale->splits[idx]);
         cb(cur, "ffn_out_scaled", hparams.n_layer-1);
     }
+    cur = lctx.cvec.apply_to_device(ctx0, cur, hparams.n_layer-1, idx);
     cb(cur, "l_out", hparams.n_layer-1);
 
     cur = llm_build_context::build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);

@@ -62,6 +62,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_MELLUM2         = 51,
     LLAMA_VOCAB_PRE_TYPE_K2_HORIZON      = 52,
     LLAMA_VOCAB_PRE_TYPE_MINICPM5        = 53,
+    LLAMA_VOCAB_PRE_TYPE_FLINT           = 54,
 };
 
 struct LLM_KV;
@@ -84,6 +85,7 @@ struct llama_vocab {
 
     enum llama_vocab_type     get_type()     const;
     enum llama_vocab_pre_type get_pre_type() const;
+    bool                      get_normalize_nfc() const;
 
     uint32_t n_tokens() const;
     uint32_t n_token_types() const;

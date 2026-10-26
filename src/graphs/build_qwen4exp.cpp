@@ -19,7 +19,7 @@ static ggml_tensor * qwen4exp_grouped_rms(
     return ggml_mul(ctx0, t, w);
 }
 
-// the low-rank down/up pair is a gate over the normalised streams, not a mixing matrix
+// the low-rank down/up pair is a gate over the normalized streams, not a mixing matrix
 static ggml_tensor * qwen4exp_hc_mix(
         llm_build_context & bctx,
         ggml_context      * ctx0,
@@ -72,7 +72,7 @@ static ggml_tensor * qwen4exp_hc_mix(
     return mixed;
 }
 
-// the factor of two centres the weights on one, so an untrained injection is a plain
+// the factor of two centers the weights on one, so an untrained injection is a plain
 // residual add
 static ggml_tensor * qwen4exp_hc_combine(
         ggml_context        * ctx0,
@@ -345,6 +345,10 @@ static ggml_tensor * qwen4exp_qsa_mask(
             ggml_set_input(t);
             ggml_build_forward_expand(gf, t);
         }
+        auto causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
+        auto cut_mask = ggml_add(ctx0, causal, inp->bias);
+        cb(cut_mask, "qsa_cut_mask", il);
+        inp->cut_mask = cut_mask;
     }
 
     ggml_tensor * k_all = ggml_view_2d(ctx0, kr_cache, idx_dim, n_kv,
@@ -399,23 +403,13 @@ static ggml_tensor * qwen4exp_qsa_mask(
             bctx.ext_factor, bctx.attn_factor, bctx.beta_fast, bctx.beta_slow);
     cb(q, "qsa_q", il);
 
-    // causality and sequence membership come from KQ_mask rather than being rebuilt on the
-    // host; inp->bias carries only what is specific to the block cut
-    ggml_tensor * causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
-    if (causal->type != GGML_TYPE_F32) {
-        causal = ggml_cast(ctx0, causal, GGML_TYPE_F32);
-    }
-    ggml_tensor * cut_mask = ggml_add(ctx0, inp->bias, causal);
-    cb(cut_mask, "qsa_cut_mask", il);
+    auto cut_mask = inp->cut_mask;
+    GGML_ASSERT(cut_mask);
 
     // top-k selects cells, not blocks: every cell carries its own block's pooled key, so the
     // causal mask can still drop cells inside a selected block. The op scores and sorts
     // internally, so the n_kv by n_tokens score matrix is never materialized.
     if (lctx.cparams.fused_idx_topk) {
-        //ggml_tensor * k_cells = ggml_get_rows_ext(ctx0, pooled, inp->cell_blk, true, false);
-        //k_cells = ggml_reshape_3d(ctx0, k_cells, idx_dim, n_kv, 1);
-        //ggml_tensor * fused = ggml_indexer_topk(ctx0, k_cells, q, inp->head_w, cut_mask,
-        //        GGML_UNARY_OP_RELU, width);
         ggml_tensor * fused = ggml_indexer_topk(ctx0, pooled, q, inp->head_w, cut_mask, inp->cell_blk,
                 GGML_UNARY_OP_RELU, width);
         cb(fused, "qsa_top_k", il);
@@ -458,6 +452,7 @@ static bool qwen4exp_qsa_gather(
         llm_build_context & bctx,
         ggml_context      * ctx0,
         ggml_tensor       * top_k,
+        int32_t             n_pad,
         ggml_tensor       * KQ_mask,
         int                 il,
         const llm_build_cb & cb,
@@ -485,7 +480,6 @@ static bool qwen4exp_qsa_gather(
 
     const int32_t n_cells = kv_self.rows(il);
     const int32_t width   = top_k->ne[0];
-    const int32_t n_pad   = GGML_PAD(width, llama_kv_cache::get_padding(bctx.cparams.flash_attn));
 
     // not worth the extra copy until the cache is a few times the selection width
     if (3*n_pad > bctx.n_kv) {
@@ -530,6 +524,8 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     ggml_cgraph * gf = new_graph_custom();
 
     const bool is_mtp = lctx.cparams.mtp_op_type != MTP_OP_NONE;
+    const bool emit_logits = lctx.cparams.mtp_op_type == MTP_OP_DRAFT_GEN ||
+            lctx.cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
 
     // the MTP pass walks only the QSA tail: no recurrent state, so the draft
     // context has zero qnext state slots and the delta-net ctor must not run
@@ -644,13 +640,34 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
 
             ggml_tensor * k_sel = nullptr;
             ggml_tensor * v_sel = nullptr;
+            const int32_t n_pad = top_k
+                ? GGML_PAD(top_k->ne[0], llama_kv_cache::get_padding(cparams.flash_attn)) : 0;
             const bool gathered = top_k &&
-                qwen4exp_qsa_gather(*this, ctx0, top_k, KQ_mask, il, cb, &k_sel, &v_sel, &mask);
+                qwen4exp_qsa_gather(*this, ctx0, top_k, n_pad, KQ_mask, il, cb, &k_sel, &v_sel, &mask);
 
+            ggml_tensor * selected = nullptr;
+            if (top_k && !gathered && flash_attn && !kv_self.k_l[il]->extra && !kv_self.v_l[il]->extra) {
+                int n_kv_min = ggml_backend_buffer_is_host(kv_self.k_l[il]->buffer) ? 3*n_pad : 8*n_pad;
+                if (n_kv_min <= n_kv) {
+                    selected = ggml_mask_to_index(ctx0, mask, n_pad);
+                    cb(selected, "qsa_mask_idx", il);
+                    ggml_build_forward_expand(gf, selected);
+                }
+            }
+
+            const int n_nodes = gf->n_nodes;
             cur = build_std_attention(gf, nullptr, cur, inp_pos, nullptr, nullptr,
                     mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false,
                     /* add_input */ false, /* is_norm */ false, /* is_multi */ true,
                     nullptr, -1, 0.0f, nullptr, gathered ? &k_sel : nullptr, gathered ? &v_sel : nullptr);
+            if (selected) {
+                for (int i = n_nodes; i < gf->n_nodes; ++i) {
+                    ggml_tensor * node = gf->nodes[i];
+                    if (node->op == GGML_OP_FLASH_ATTN_EXT && node->src[3] == mask) {
+                        node->src[5] = selected;
+                    }
+                }
+            }
         }
 
         res_hc = qwen4exp_hc_combine(ctx0, hparams, res_hc, cur, inject, n_embd, il, cb);
@@ -683,6 +700,12 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     if (is_mtp) {
         // wide stream out: the next draft step's hidden input (scheme A)
         ggml_tensor * flat = ggml_reshape_2d(ctx0, res_hc, hc * n_embd, n_tokens);
+
+        if (!emit_logits) {
+            ggml_build_forward_expand(gf, flat);
+            return gf;
+        }
+
         ggml_tensor * h_next = inp_out_ids ? ggml_get_rows(ctx0, flat, inp_out_ids) : flat;
         cb(h_next, "result_mtp_embd", -1);
         ggml_set_output(h_next);
@@ -704,10 +727,13 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     if (lctx.cparams.mtp && hparams.n_embd_out > hparams.n_embd) {
         // hand the draft the pre-mixer wide stream for its first step
         ggml_tensor * flat = ggml_reshape_2d(ctx0, res_hc, hc * n_embd, n_tokens);
-        ggml_tensor * h_nextn = inp_out_ids ? ggml_get_rows(ctx0, flat, inp_out_ids) : flat;
-        cb(h_nextn, "result_mtp_embd", -1);
-        ggml_set_output(h_nextn);
-        ggml_build_forward_expand(gf, h_nextn);
+        cb(flat, "result_mtp_embd", -1);
+        ggml_set_output(flat);
+        ggml_build_forward_expand(gf, flat);
+
+        if (n_outputs == 0) {
+            return gf;
+        }
     }
 
     ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams, res_hc,

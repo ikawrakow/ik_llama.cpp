@@ -52,6 +52,8 @@ add_library(llama
             llama-load-tensors.cpp
             llama-build-context.h
             llama-build-context.cpp
+            llama-moe-cache.h
+            llama-moe-cache.cpp
             llama-model.h
             llama-model.cpp
             llama-reload-info.h
@@ -94,6 +96,7 @@ add_library(llama
             graphs/build_qwen2.cpp
             graphs/build_qwen3.cpp
             graphs/build_mellum.cpp
+            graphs/build_maple.cpp
             graphs/build_qwen3next.cpp
             graphs/build_lfm2.cpp
             graphs/build_qwen4exp.cpp
@@ -131,6 +134,7 @@ add_library(llama
             graphs/build_ernie45.cpp
             graphs/build_hunyuan.cpp
             graphs/build_mimo2.cpp
+            graphs/build_flint.cpp
             graphs/build_openai.cpp
             graphs/build_bailingmoe2.cpp
             graphs/build_bailingmoe3.cpp

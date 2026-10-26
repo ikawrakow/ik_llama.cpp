@@ -11,10 +11,16 @@
 #include "vecdotq.cuh"
 #include "mmvq-args.h"
 
+static constexpr __host__ __device__ int mmvq_rows_per_cuda_block(const ggml_type type, const int ncols_y, const int arch) {
+    const bool two_rows_n1 = (arch <= CC_PASCAL || arch == CC_TURING) && type != GGML_TYPE_Q3_K;
+    return ncols_y == 1 ? (two_rows_n1 ? 2 : 1) : ncols_y < 4 ? 1 : 2;
+}
+
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q2_0   : return vec_dot_q2_0_q8_1;
         case GGML_TYPE_Q4_0   : return vec_dot_q4_0_q8_1;
         case GGML_TYPE_Q4_1   : return vec_dot_q4_1_q8_1;
         case GGML_TYPE_Q5_0   : return vec_dot_q5_0_q8_1;
@@ -42,6 +48,7 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
 
 static constexpr __device__ int get_vdr_mmvq(ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q2_0    : return VDR_Q2_0_Q8_1_MMVQ;
         case GGML_TYPE_Q4_0    : return VDR_Q4_0_Q8_1_MMVQ;
         case GGML_TYPE_Q4_1    : return VDR_Q4_1_Q8_1_MMVQ;
         case GGML_TYPE_Q5_0    : return VDR_Q5_0_Q8_1_MMVQ;
@@ -82,6 +89,8 @@ static __device__ void k_mul_mat_vec_q(
 
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
     constexpr int rows_per_cuda_block = 1;
+#elif defined(__CUDA_ARCH__) && !defined(GGML_USE_MUSA)
+    constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block(type, ncols_y, __CUDA_ARCH__);
 #else
     constexpr int rows_per_cuda_block = ncols_y < 4 ? 1 : 2;
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
@@ -167,6 +176,8 @@ static __device__ void k_fused_mul_mat_vec_q(
 
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
     constexpr int rows_per_cuda_block = 1;
+#elif defined(__CUDA_ARCH__) && !defined(GGML_USE_MUSA)
+    constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block(type, ncols_y, __CUDA_ARCH__);
 #else
     constexpr int rows_per_cuda_block = ncols_y < 4 ? 1 : 2;
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
@@ -180,13 +191,13 @@ static __device__ void k_fused_mul_mat_vec_q(
 // partial sum for each thread
     float tmp_u[ncols_y][rows_per_cuda_block] = {0.0f};
     float tmp_g[ncols_y][rows_per_cuda_block] = {0.0f};
-    float local_bias_u[rows_per_cuda_block]    = { 0.0f };
-    float local_bias_g[rows_per_cuda_block]    = { 0.0f };
+    float local_bias_u = 0.0f;
+    float local_bias_g = 0.0f;
     if (bias_u && threadIdx.y == 0 && threadIdx.x < rows_per_cuda_block && row0 + threadIdx.x < nrows_dst) {
-        local_bias_u[threadIdx.x] = bias_u[row0 + threadIdx.x];
+        local_bias_u = bias_u[row0 + threadIdx.x];
     }
     if (bias_g && threadIdx.y == 0 && threadIdx.x < rows_per_cuda_block && row0 + threadIdx.x < nrows_dst) {
-        local_bias_g[threadIdx.x] = bias_g[row0 + threadIdx.x];
+        local_bias_g = bias_g[row0 + threadIdx.x];
     }
 
     const block_q8_1 * y = (const block_q8_1 *) vy;
@@ -239,8 +250,16 @@ static __device__ void k_fused_mul_mat_vec_q(
         }
 
         if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || row0 + threadIdx.x < nrows_dst)) {
-            float u = tmp_u[j][threadIdx.x];
-            float g = tmp_g[j][threadIdx.x];
+            // a select instead of tmp_u[j][threadIdx.x], which would put tmp_u/tmp_g in local memory
+            float u = tmp_u[j][0];
+            float g = tmp_g[j][0];
+#pragma unroll
+            for (int i = 1; i < rows_per_cuda_block; ++i) {
+                if (threadIdx.x == i) {
+                    u = tmp_u[j][i];
+                    g = tmp_g[j][i];
+                }
+            }
             float r;
             if (unary_op == GGML_UNARY_OP_SWIGLU_OAI && !bias_u) {
                 constexpr float alpha = 1.702f;
@@ -266,8 +285,8 @@ static __device__ void k_fused_mul_mat_vec_q(
                 default: {
                   constexpr float alpha = 1.702f;
                   constexpr float limit = 7.0f;
-                  g += local_bias_g[threadIdx.x];
-                  u += local_bias_u[threadIdx.x];
+                  g += local_bias_g;
+                  u += local_bias_u;
                   g = fminf(g, limit);
                   u = fmaxf(fminf(u, limit), -limit);
                   r = g / (1.0f + expf(-g * alpha)) * (1.0f + u);
@@ -289,6 +308,14 @@ static __global__ void mul_mat_vec_q(
     const char * __restrict__ ids_data, const void * __restrict__ bias,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst,
     const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, const int64_t bias_nb1) {
+
+#if __CUDA_ARCH__ != CC_PASCAL
+    // more than MMVQ_MAX_BATCH_SIZE columns is only used on sm_60, see ggml_cuda_mmvq_max_batch_size()
+    if constexpr (ncols_y > MMVQ_MAX_BATCH_SIZE) {
+        NO_DEVICE_CODE;
+        return;
+    }
+#endif // __CUDA_ARCH__ != CC_PASCAL
 
     int i2 = blockIdx.y;
     char * cdst = (char *)dst + i2*nb2;
@@ -333,12 +360,17 @@ template <ggml_type type, int nwarps>
 static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
 
     GGML_ASSERT(args.ncols_x % ggml_blck_size(type) == 0);
-    GGML_ASSERT(args.ncols_y <= MMVQ_MAX_BATCH_SIZE);
+    constexpr int k_max_cols = ggml_cuda_has_arch(CC_PASCAL) ? MMVQ_MAX_NCOLS_PASCAL : MMVQ_MAX_BATCH_SIZE;
+    GGML_ASSERT(args.ncols_y <= k_max_cols);
 
+#ifdef GGML_USE_MUSA
+    int64_t rows_per_cuda_block = args.ncols_y < 4 ? 1 : 2;
+#else
     int id = ggml_cuda_get_device();
+    const int cc = ggml_cuda_info().devices[id].cc;
 
-    int64_t rows_per_cuda_block = ggml_cuda_info().devices[id].cc < CC_RDNA2 ?
-        args.ncols_y < 4 ? 1 : 2 : 1;
+    int64_t rows_per_cuda_block = cc < CC_RDNA2 ? mmvq_rows_per_cuda_block(type, args.ncols_y, ggml_cuda_highest_compiled_arch(cc)) : 1;
+#endif
 
     const int64_t nblocks = (args.nrows_x + rows_per_cuda_block - 1) / rows_per_cuda_block;
     const dim3 block_nums(nblocks, args.ne2, 1);
@@ -432,6 +464,31 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
             mul_mat_vec_q<type, 8, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
             break;
+        // 9-12 columns are only used on sm_60, so instantiate these kernels only when it is a compiled arch
+        case 9:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                mul_mat_vec_q<type, 9, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
+        case 10:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                mul_mat_vec_q<type, 10, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
+        case 11:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                mul_mat_vec_q<type, 11, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
+        case 12:
+            if constexpr (ggml_cuda_has_arch(CC_PASCAL)) {
+                mul_mat_vec_q<type, 12, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vy, args.dst, args.ids_data, args.bias_u,
+                        args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.bias_nb1);
+            }
+            break;
         default:
             GGML_ABORT("fatal error");
             break;
@@ -443,8 +500,12 @@ template <ggml_type type>
 static void mul_mat_vec_q_cuda(const mmvq_args & args, cudaStream_t stream) {
     int nwarps = 1;
     int id = ggml_cuda_get_device();
-    if (args.ne2 < 2 && ggml_cuda_info().devices[id].cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
+    const int cc = ggml_cuda_info().devices[id].cc;
+    if (args.ne2 < 2 && cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
         nwarps = args.ncols_y <= 4 ? 4 : 2;
+        if (args.ncols_y == 1 && ((type == GGML_TYPE_Q2_K && cc < CC_TURING) || (type == GGML_TYPE_Q3_K && cc < CC_AMPERE))) {
+            nwarps = 2;
+        }
     }
     switch (nwarps) {
         case 1:
@@ -458,6 +519,7 @@ static void mul_mat_vec_q_cuda(const mmvq_args & args, cudaStream_t stream) {
     }
 }
 
+extern void mul_mat_vec_q2_0_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_q4_0_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_q4_1_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_q5_0_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);

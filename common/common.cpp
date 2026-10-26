@@ -17,6 +17,7 @@
 #include "chat.h"
 #include "json-schema-to-grammar.h"
 #include <algorithm>
+#include <charconv>
 #include <cerrno>
 #include <cinttypes>
 #include <climits>
@@ -29,6 +30,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -879,6 +881,13 @@ static bool is_autoy(const std::string & value) {
 static void common_speculative_finalize_stages(gpt_params & params) {
     auto & spec = params.speculative;
 
+    if (!params.lookup_cache_static.empty()) {
+        spec.lookup_cache_static = params.lookup_cache_static;
+    }
+    if (!params.lookup_cache_dynamic.empty()) {
+        spec.lookup_cache_dynamic = params.lookup_cache_dynamic;
+    }
+
     if (!spec.stages.empty()) {
         const auto resolved = spec.get_resolved_stages();
         if (resolved.size() != spec.stages.size()) {
@@ -917,6 +926,10 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         if (invalid_param) {
             throw std::invalid_argument("error: invalid parameter for argument: " + arg);
         }
+    }
+
+    if (params.fit && params.moe_cache_size > 0) {
+        throw std::invalid_argument("error: --fit cannot be combined with --moe-cache-mib because fit does not reserve context-time cache memory");
     }
 
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
@@ -1568,6 +1581,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--top-k") {
         CHECK_ARG
         sparams.top_k = std::stoi(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_TOP_K;
         return true;
     }
     if (arg == "-c" || arg == "--ctx-size") {
@@ -1685,27 +1699,32 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         CHECK_ARG
         const auto sampler_names = string_split(argv[i], ";");
         sparams.samplers_sequence = llama_sampling_types_from_names(sampler_names, true);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS;
         return true;
     }
     if (arg == "--sampling-seq") {
         CHECK_ARG
         sparams.samplers_sequence = llama_sampling_types_from_chars(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS;
         return true;
     }
     if (arg == "--top-p") {
         CHECK_ARG
         sparams.top_p = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_TOP_P;
         return true;
     }
     if (arg == "--min-p") {
         CHECK_ARG
         sparams.min_p = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_MIN_P;
         return true;
     }
     if (arg == "--temp") {
         CHECK_ARG
         sparams.temp = std::stof(argv[i]);
         sparams.temp = std::max(sparams.temp, 0.0f);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_TEMP;
         return true;
     }
     if (arg == "--tfs") {
@@ -1722,11 +1741,13 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         CHECK_ARG
         sparams.penalty_last_n = std::stoi(argv[i]);
         sparams.n_prev = std::max(sparams.n_prev, sparams.penalty_last_n);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N;
         return true;
     }
     if (arg == "--repeat-penalty") {
         CHECK_ARG
         sparams.penalty_repeat = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT;
         return true;
     }
     if (arg == "--frequency-penalty") {
@@ -1752,26 +1773,31 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--mirostat") {
         CHECK_ARG
         sparams.mirostat = std::stoi(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT;
         return true;
     }
     if (arg == "--mirostat-lr") {
         CHECK_ARG
         sparams.mirostat_eta = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA;
         return true;
     }
     if (arg == "--mirostat-ent") {
         CHECK_ARG
         sparams.mirostat_tau = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU;
         return true;
     }
     if (arg == "--xtc-probability") {
         CHECK_ARG
         sparams.xtc_probability = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY;
         return true;
     }
     if (arg == "--xtc-threshold") {
         CHECK_ARG
         sparams.xtc_threshold = std::stof(argv[i]);
+        sparams.user_sampling_config |= COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD;
         return true;
     }
     if (arg == "--top-n-sigma") {
@@ -2273,6 +2299,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.swa_compress = true;
         return true;
     }
+    if (arg == "--dsv41-replay-keep") {
+        CHECK_ARG
+        params.dsv41_replay_keep = std::max(0, std::stoi(argv[i]));
+        return true;
+    }
     if (arg == "-dsv4ls" || arg == "--dsv4-legacy-state") {
         params.dsv4_legacy_state = true;
         return true;
@@ -2503,6 +2534,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         //    std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
         //    params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
         //}
+        return true;
+    }
+    if (arg == "--moe-cache-mib") {
+        CHECK_ARG
+        uint64_t mib = 0;
+        const char * value = argv[i];
+        const char * end = value + std::strlen(value);
+        const auto parsed = std::from_chars(value, end, mib);
+        if (parsed.ec != std::errc() || parsed.ptr != end || value[0] == '-' ||
+                mib > std::numeric_limits<size_t>::max() / (1024*1024)) {
+            fprintf(stderr, "error: Invalid value for --moe-cache-mib: %s (must be non-negative and fit in MiB)\n", argv[i]);
+            invalid_param = true;
+            return true;
+        }
+        params.moe_cache_size = (size_t) mib * 1024 * 1024;
         return true;
     }
     if (arg == "--fit") {
@@ -3490,6 +3536,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-fidx,  --fused-indexer-topk",  "enable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fidx, --no-fused-indexer-topk", "disable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
     options.push_back({ "*",           "        --swa-compress",         "allocate sliding-window layers at window size instead of n_ctx (default: %s)", params.swa_compress ? "enabled" : "disabled" });
+    options.push_back({ "*",           "        --dsv41-replay-keep N", "DeepSeek-V4.1 prefill: run the decoder layers on the last N prompt tokens only; requires --swa-compress (default: %d, 0 = off)", params.dsv41_replay_keep });
     options.push_back({ "*",           "-dsv4ls, --dsv4-legacy-state",   "write DeepSeek-V4 state in the legacy full-slice layout, byte-identical to main (default: %d)", params.dsv4_legacy_state });
     options.push_back({ "*",           "-dsatk, --dsa-top-k",           "DSA top-k override; <0 uses the model's configured indexer_top_k (default: %d)", params.dsa_top_k });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
@@ -3709,9 +3756,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --no-context-shift",     "disable context-shift." });
     options.push_back({ "*",           "--context-shift (auto|on|off|0|1)", "set context-shift (default: %s)", params.ctx_shift ? "on" : "off" });
     options.push_back({ "backend" });
-    options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
-    options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
-    options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters (--cpu-affinity pins the draft to E-cores on Intel hybrid CPUs, -cr LIST picks CPUs)" });
+    options.push_back({ "*",           "       --rpc SERVERS",          "comma-separated list of RPC servers" });
+    options.push_back({ "*",           "-cuda, --cuda-params",          "comma-separated list of cuda parameters" });
+    options.push_back({ "*",           "-draft, --draft-params",        "comma-separated list of draft model parameters (--cpu-affinity pins the draft to E-cores on Intel hybrid CPUs, -cr LIST picks CPUs)" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
@@ -3721,6 +3768,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-rtr,   --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       --moe-cache-mib N",       "Total GPU cache budget in MiB for CPU-resident MoE experts, split across GPUs (default: 0, disabled)"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
     options.push_back({ "*",           "       --moe-lookahead",         "quillama (experimental): run the next layer's MoE router early and read its predicted\n"
                                                                         "experts ahead from storage (implies --prefetch-experts)"});
@@ -3793,6 +3841,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
     options.push_back({ "*",           "-hff,  --hf-file FILE",         "Hugging Face model file (default: unused)" });
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
+    options.push_back({ "*",           "-a,    --alias STRING",         "model alias (default: unknown)" });
     options.push_back({ "*", "--spec-ckpt-mode MODE",         "checkpoint strategy for speculative decoding\n"
                                                               "  auto         auto-select: per-step if CUDA full-GPU, gpu-fallback otherwise (default)\n"
                                                               "  per-step     save architecture state per draft step; no re-decode on rejection\n"
@@ -4473,6 +4522,62 @@ std::string fs_get_cache_file(const std::string & filename) {
 }
 
 
+// apply "general.sampling.*" GGUF metadata as defaults for sampling params the
+// user did not explicitly set on the command line (same behavior as mainline)
+static void llama_init_sampler_from_model(const llama_model * model, common_params_sampling & sparams) {
+    const uint64_t config = sparams.user_sampling_config;
+
+    auto get_int32 = [&](const char * key, int32_t & dst, uint64_t user_config) {
+        if (config & user_config) {
+            return;
+        }
+        char buf[64] = {0};
+        if (llama_model_meta_val_str(model, key, buf, sizeof(buf)) > 0) {
+            char * end = nullptr;
+            int32_t v = strtol(buf, &end, 10);
+            if (end && end != buf) {
+                dst = v;
+            }
+        }
+    };
+
+    auto get_float = [&](const char * key, float & dst, uint64_t user_config) {
+        if (config & user_config) {
+            return;
+        }
+        char buf[128] = {0};
+        if (llama_model_meta_val_str(model, key, buf, sizeof(buf)) > 0) {
+            char * end = nullptr;
+            float v = strtof(buf, &end);
+            if (end && end != buf) {
+                dst = v;
+            }
+        }
+    };
+
+    if (!(config & COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS)) {
+        char buf[512] = {0};
+        if (llama_model_meta_val_str(model, "general.sampling.sequence", buf, sizeof(buf)) > 0) {
+            const auto sampler_names = string_split(std::string(buf), ";");
+            if (!sampler_names.empty()) {
+                sparams.samplers_sequence = llama_sampling_types_from_names(sampler_names, true);
+            }
+        }
+    }
+
+    get_int32("general.sampling.top_k",            sparams.top_k,           COMMON_PARAMS_SAMPLING_CONFIG_TOP_K);
+    get_float("general.sampling.top_p",            sparams.top_p,           COMMON_PARAMS_SAMPLING_CONFIG_TOP_P);
+    get_float("general.sampling.min_p",            sparams.min_p,           COMMON_PARAMS_SAMPLING_CONFIG_MIN_P);
+    get_float("general.sampling.xtc_probability",  sparams.xtc_probability, COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY);
+    get_float("general.sampling.xtc_threshold",    sparams.xtc_threshold,   COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD);
+    get_float("general.sampling.temp",             sparams.temp,            COMMON_PARAMS_SAMPLING_CONFIG_TEMP);
+    get_int32("general.sampling.penalty_last_n",   sparams.penalty_last_n,  COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N);
+    get_float("general.sampling.penalty_repeat",   sparams.penalty_repeat,  COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT);
+    get_int32("general.sampling.mirostat",         sparams.mirostat,        COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT);
+    get_float("general.sampling.mirostat_tau",     sparams.mirostat_tau,    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU);
+    get_float("general.sampling.mirostat_eta",     sparams.mirostat_eta,    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA);
+}
+
 struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     llama_init_result iparams;
 
@@ -4492,6 +4597,8 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params.model.c_str());
         return iparams;
     }
+
+    llama_init_sampler_from_model(model, params.sparams);
 
     // a predictor-only MTP GGUF has no main blocks, so it cannot be the target model
     if (llama_model_mtp_package(model) == LLAMA_MTP_PACKAGE_COMPANION) {
@@ -4583,11 +4690,9 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         // some models (e.g. T5) don't have a BOS token
         if (bos != -1) {
             tmp.push_back(bos);
+        } else {
+            tmp.push_back(eos);
         }
-	else
-	{
-	    tmp.push_back(eos);
-	}
         if (llama_model_has_encoder(model)) {
             llama_encode(lctx, llama_batch_get_one(tmp.data(), tmp.size(), 0, 0));
             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
@@ -4773,6 +4878,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     auto [n_batch, n_ubatch] = get_batch_ubatch(params);
 
     cparams.n_ctx             = params.n_ctx;
+    cparams.moe_cache_size    = params.moe_cache_size;
     cparams.n_seq_max         = params.n_parallel;
     cparams.n_batch           = n_batch;
     cparams.n_ubatch          = n_ubatch;
@@ -4810,6 +4916,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.dsa               = params.dsa;
     cparams.fused_idx_topk    = params.fused_idx_topk;
     cparams.swa_compress      = params.swa_compress;
+    cparams.dsv41_replay_keep = params.dsv41_replay_keep;
     cparams.dsv4_legacy_state = params.dsv4_legacy_state;
     cparams.dsa_top_k         = params.dsa_top_k;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;

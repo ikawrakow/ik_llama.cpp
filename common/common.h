@@ -268,6 +268,10 @@ struct common_params_speculative {
 
     llama_context_params cparams_dft; // these are the parameters for the draft llama_context
 
+    // storage for the pointers in cparams_dft
+    std::string cuda_params;
+    std::vector<std::pair<int,int>> offload_policy;
+
     // draft affinity from --draft-params; empty = inherit the target
     std::vector<int32_t> cpu_affinity;
     bool cpu_affinity_configured = false; // a draft affinity was requested
@@ -327,6 +331,7 @@ struct gpt_params {
     int32_t main_gpu              =       0; // the GPU that is used for scratch and small tensors
     int32_t max_gpu               =       0; // max number of GPUs to use at a time for split mode "graph"
     int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
+    size_t moe_cache_size         =       0; // total GPU cache budget in bytes for CPU-resident MoE experts
     int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
     bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
     int32_t worst_graph_tokens    =       0; // number of tokens to use when reserving the worst graph
@@ -456,6 +461,7 @@ struct gpt_params {
     bool dsa               = false; // enable GLM DSA sparse attention (off by default; opt-in via --dsa)
     bool fused_idx_topk    = true;  // enable the fused indexer topk op (on by default; -no-fidx or --no-fused-indexer-topk turns it off)
     bool swa_compress      = false;
+    int  dsv41_replay_keep = 0;     // DeepSeek-V4.1 prefill: run the decoder layers on the last N prompt tokens only (0 = off; requires --swa-compress)
     bool dsv4_legacy_state = false; // if true, write DeepSeek-V4 state in the legacy full-slice layout (no MAGIC), byte-identical to main
     int  dsa_top_k         = -1;    // DSA top-k override (<0 => use the model's configured indexer_top_k)
     int  min_experts       = -1;

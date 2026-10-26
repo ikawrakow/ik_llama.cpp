@@ -42,6 +42,7 @@ extern "C" {
     GGML_API           size_t                         ggml_backend_buffer_get_alloc_size(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor);
     GGML_API           void                           ggml_backend_buffer_clear         (ggml_backend_buffer_t buffer, uint8_t value);
     GGML_API           bool                           ggml_backend_buffer_is_host       (ggml_backend_buffer_t buffer);
+    GGML_API GGML_CALL bool                           ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer);
     GGML_API           void                           ggml_backend_buffer_set_usage     (ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage);
     GGML_API           enum ggml_backend_buffer_usage ggml_backend_buffer_get_usage     (ggml_backend_buffer_t buffer);
     GGML_API           ggml_backend_buffer_type_t     ggml_backend_buffer_get_type      (ggml_backend_buffer_t buffer);
@@ -179,6 +180,15 @@ extern "C" {
     //
     typedef int (*ggml_backend_sched_eval_callback)(struct ggml_tensor * t, bool ask, void * user_data);
 
+    enum ggml_backend_sched_copy_phase {
+        GGML_BACKEND_SCHED_COPY_PHASE_QUERY,
+        GGML_BACKEND_SCHED_COPY_PHASE_EXECUTE,
+    };
+
+    typedef bool (*ggml_backend_sched_copy_callback)(ggml_backend_t backend,
+            const struct ggml_tensor * src, struct ggml_tensor * dst,
+            struct ggml_cgraph * graph, enum ggml_backend_sched_copy_phase phase, void * user_data);
+
     // Initialize a backend scheduler
     GGML_API ggml_backend_sched_t ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel);
     GGML_API void                 ggml_backend_sched_free(ggml_backend_sched_t sched);
@@ -210,6 +220,8 @@ extern "C" {
 
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
+    GGML_API void                 ggml_backend_sched_set_copy_callback(
+            ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data);
 
     // enable or disable op offload for a given op
     GGML_API void                 ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op op, bool on_or_off);

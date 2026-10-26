@@ -161,6 +161,12 @@ typedef sycl::half2 ggml_half2;
 #define QI_MXFP4 (QK_MXFP4 / (4 * QR_MXFP4))
 #define QR_MXFP4 2
 
+#define QI2_0 (QK2_0 / 32)
+#define QR2_0 1
+
+#define PQI2_0 (QK_PQ2_0 / (4*PQR2_0))
+#define PQR2_0 8
+
 #endif // GGML_COMMON_DECL_CUDA || GGML_COMMON_DECL_HIP
 
 #define QK4_0 32
@@ -169,6 +175,13 @@ typedef struct {
     uint8_t qs[QK4_0 / 2]; // nibbles / quants
 } block_q4_0;
 static_assert(sizeof(block_q4_0) == sizeof(ggml_half) + QK4_0 / 2, "wrong q4_0 block size/padding");
+
+#define QK2_0 64
+typedef struct {
+    ggml_half d;              // delta (scale)
+    uint8_t qs[QK2_0 / 4];    // 2 bits per element, {0,1,2,3} -> {-1,0,1,2} * d
+} block_q2_0;
+static_assert(sizeof(block_q2_0) == sizeof(ggml_half) + QK2_0 / 4, "wrong q2_0 block size/padding");
 
 #define QK4_1 32
 typedef struct {
@@ -757,6 +770,16 @@ typedef struct {
 } block_iq3_ks;
 static_assert(sizeof(block_iq3_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/8, "wrong iq3_ks block size/padding");
 
+// IQ3KS_R16: 16-row interleaved IQ3_KS-class codebook 3-bit type.
+// Block = 16 rows x 32 columns = 512 quants in 204 bytes.
+typedef struct {
+    uint32_t extra;      // bit r: scale bit 4 of row r; bit 16+r: codebook page of row r
+    uint8_t  scales[8];  // low nibble: scale bits 0..3 of rows 0..7; high nibble: rows 8..15
+    uint8_t  qs[128];    // 2 low bits of the 512 quants
+    uint8_t  qh[64];     // high bit of the 512 quants
+} block_iq3_ks_r16;
+static_assert(sizeof(block_iq3_ks_r16) == 204, "wrong iq3_ks_r16 block size/padding");
+
 typedef struct {
     ggml_half d[4];
     uint8_t extra[8];
@@ -828,6 +851,12 @@ typedef struct {
 } block_iq5_ks_r4;
 static_assert(sizeof(block_iq5_ks_r4) == 4*sizeof(block_iq5_ks), "wrong iq5_ks_r4 block size/padding");
 
+typedef struct {
+    uint8_t  scales[16];
+    uint8_t  qs[8*QK8_0];
+    uint8_t  qh[2*QK8_0];
+} block_iq5_ks_r16;
+static_assert(sizeof(block_iq5_ks_r16) == 16 + 10*QK8_0, "wrong iq5_ks_r16 block size/padding");
 
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL

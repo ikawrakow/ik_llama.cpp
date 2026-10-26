@@ -39,6 +39,12 @@ size_t quantize_iq3_ks(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
 void   dequantize_row_iq3_ks(const block_iq3_ks  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_iq3_ks_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
+size_t quantize_iq3ks_r16(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);
+void   quantize_row_iq3ks_r16_ref(const float * GGML_RESTRICT x, block_iq3_ks_r16  * GGML_RESTRICT y, int64_t k);
+void   quantize_row_iq3ks_r16(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+void   dequantize_row_iq3ks_r16(const block_iq3_ks_r16  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void   vec_dot_iq3ks_r16_q8_2(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
 void   quantize_row_iq4_k_ref(const float * GGML_RESTRICT x, block_iq4_k  * GGML_RESTRICT y, int64_t k);
 void   quantize_row_iq4_k(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 size_t quantize_iq4_k(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);
@@ -224,18 +230,28 @@ void   quantize_row_iq4_ks_r4(const float * GGML_RESTRICT x, void * GGML_RESTRIC
 size_t quantize_iq4_ks_r4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);
 void   dequantize_row_iq4_ks_r4(const block_iq4_ks_r4  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_iq4_ks_r4_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void   repack_iq4_ks(int nrows, int n_per_row, const block_iq4_ks * GGML_RESTRICT x, block_iq4_ks_r4 * GGML_RESTRICT y, bool online);
 
 void   quantize_row_iq4_ks_r16_ref(const float * GGML_RESTRICT x, block_iq4_ks_r16  * GGML_RESTRICT y, int64_t k);
 void   quantize_row_iq4_ks_r16(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 size_t quantize_iq4_ks_r16(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);
 void   dequantize_row_iq4_ks_r16(const block_iq4_ks_r16 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_iq4_ks_r16_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void   repack_iq4_ks_r16(int nrows, int n_per_row, const block_iq4_ks * GGML_RESTRICT x, block_iq4_ks_r16 * GGML_RESTRICT y, bool online, int n_per_row_stored);
 
 void   quantize_row_iq5_ks_r4_ref(const float * GGML_RESTRICT x, block_iq5_ks_r4  * GGML_RESTRICT y, int64_t k);
 void   quantize_row_iq5_ks_r4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 size_t quantize_iq5_ks_r4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);
 void   dequantize_row_iq5_ks_r4(const block_iq5_ks_r4  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_iq5_ks_r4_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void   repack_iq5_ks(int nrows, int n_per_row, const block_iq5_ks * GGML_RESTRICT x, block_iq5_ks_r4 * GGML_RESTRICT y, bool online);
+
+void   quantize_row_iq5_ks_r16_ref(const float * GGML_RESTRICT x, block_iq5_ks_r16  * GGML_RESTRICT y, int64_t k);
+void   quantize_row_iq5_ks_r16(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+size_t quantize_iq5_ks_r16(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);
+void   dequantize_row_iq5_ks_r16(const block_iq5_ks_r16 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void   vec_dot_iq5_ks_r16_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void   repack_iq5_ks_r16(int nrows, int n_per_row, const block_iq5_ks * GGML_RESTRICT x, block_iq5_ks_r16 * GGML_RESTRICT y, bool online, int n_per_row_stored);
 
 void   quantize_row_iq2_xxs_r4_ref(const float * GGML_RESTRICT x, block_iq2_xxs_r4  * GGML_RESTRICT y, int64_t k);
 void   quantize_row_iq2_xxs_r4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
@@ -369,6 +385,9 @@ bool iqk_validate_tensor(const struct ggml_tensor * src);
 
 int  iqk_kt_codebook(int type, int bank, const int ** offsets, const int ** points, const float ** values, const float ** mid);
 void iqk_kt_finish_row(int type, const void * ypad, void * qrow, int64_t n_per_row);
+void iqk_kt_pad_row(const float * src, float * dst, int64_t n_per_row);
+int  iqk_ks_index(int type, const int8_t ** index);
+int  iqk_ks_simple_index(int type, const int8_t ** index);
 
 #ifdef __cplusplus
 }

@@ -8,6 +8,14 @@
 #include "common.cuh"
 
 #define MMVQ_MAX_BATCH_SIZE 8 // Max. batch size for which to use MMVQ kernels.
+// sm_60 has no MMQ, so it uses MMVQ up to 16 columns: kernels for 9-12 columns (compiled for sm_60 only),
+// launches of at most MMVQ_MAX_BATCH_SIZE columns for 13-16.
+#define MMVQ_MAX_BATCH_SIZE_PASCAL 16
+#define MMVQ_MAX_NCOLS_PASCAL 12
+
+static inline int ggml_cuda_mmvq_max_batch_size(int cc) {
+    return cc == CC_PASCAL && ggml_cuda_highest_compiled_arch(cc) == CC_PASCAL ? MMVQ_MAX_BATCH_SIZE_PASCAL : MMVQ_MAX_BATCH_SIZE;
+}
 
 void ggml_cuda_op_mul_mat_vec_q_biased(ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const ggml_tensor * bias,

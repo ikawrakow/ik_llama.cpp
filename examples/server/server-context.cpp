@@ -579,7 +579,7 @@ void server_slot::reset() {
     ga_i = 0;
     n_past_se = 0;
     chat_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
-
+    llama_rewind_ckpt_discard(ctx, {LLAMA_CHECKPOINT_REWIND, -1}, id);
     logit_bias.clear();
     token_buffer.clear();
     rewind_count = 0;
@@ -593,10 +593,10 @@ void server_slot::reset() {
     // cache_points stay: launch_slot_with_task turns them into prev_cache_points
     cache_point_i = 0;
     do_branch_checkpoint = false;
+    do_rewind_chekpoint = false;
     if (spec != nullptr) {
         common_speculative_clear_sequence(spec, id);
     }
-
     positional_bans.clear();
     ban_phrases.clear();
     ban_regex.clear();
@@ -784,10 +784,22 @@ result_timings server_slot::get_timings() const {
 const common_chat_msg& server_slot::update_chat_msg(bool is_partial, std::vector<common_chat_msg_diff>& diffs,
     bool filter_tool_calls) {
     auto msg_prv_copy = chat_msg;
-    auto new_msg = common_chat_parse(
-        generated_text,
-        /* is_partial= */ stop != STOP_TYPE_EOS,
-        params.chat_parser_params);
+    common_chat_msg new_msg;
+    try {
+        new_msg = common_chat_parse(
+            generated_text,
+            /* is_partial= */ is_partial,
+            params.chat_parser_params);
+    } catch (const std::exception & e) {
+        // An output the chat parser rejects must not kill the server. Surface it as content so
+        // the request still completes with what the model generated.
+        LOG_ERROR("chat parse failed, returning raw text", {
+            {"id_slot", id},
+            {"error",   e.what()},
+        });
+        new_msg.role    = "assistant";
+        new_msg.content = generated_text;
+    }
     if (!new_msg.empty()) {
         //new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
         new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
@@ -1176,6 +1188,11 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     // Sampling parameter defaults are loaded from the global server context (but individual requests can still override them)
     common_params_sampling default_sparams = params_base.sparams;
+    // start each request from the defaults so per-request state that is only
+    // conditionally overwritten below (logit_bias, elb_params,
+    // dry_sequence_breakers, preserved_tokens, ...) cannot leak in from a
+    // previous request served on this slot
+    slot.sparams = default_sparams;
     auto& data = task.data;
     const llama_vocab* vocab = llama_model_get_vocab(model);
     if (data.count("__oaicompat") != 0) {
@@ -1802,7 +1819,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 slot.n_buffer = slot.n_buffer + 1; // buffer is longest string/regex + 1
             }
         }
-		slot.logit_bias = slot.sparams.logit_bias; // keep a copy to restore
+        slot.logit_bias = slot.sparams.logit_bias; // keep a copy to restore
         slot.ban_phrases_bias = json_value(data, "banned_bias", params_base.ban_phrases_bias);
         slot.banned_n = json_value(data, "banned_n", params_base.banned_n);
     }
@@ -1917,10 +1934,6 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
          llama_kv_cache_is_compacted(slot.ctx));
 
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
-        params_base.can_ban_phrases = false;
-        if (slot.n_buffer != 0) {
-            LLAMA_LOG_WARN("banned strings is not supported by recurrent model, it will be disabled.\n");
-        }
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
             LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
@@ -2224,6 +2237,7 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
         clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
         slot.checkpoint_pos = -1;
         slot.do_checkpoint = false;
+        slot.do_rewind_chekpoint = false;
         if (slot.ctx_sampling != nullptr) {
             common_sampler_reset(slot.ctx_sampling);
         }
@@ -4542,7 +4556,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     && slot.prompt_tokens[slot.n_past_prompt] == LLAMA_TOKEN_NULL) {
                     // process the image
                     size_t n_tokens_out = 0;
-                    llama_pos p1 = slot.cache_tokens.pos_next() + slot.n_past_prompt - slot.n_past; // add offset to prompt
+                    llama_pos p1 = slot.cache_tokens.pos_next();
                     server_mtp_warmup mtp_media_warmup {
                         ctx,
                         slot.uses_mtp() && slot.spec ? &slot : nullptr,
@@ -4616,7 +4630,12 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         slot.do_branch_checkpoint = true;
                         break;
                     }
-
+                    if (slot.n_prompt_tokens - slot.n_past_prompt == 1) {
+                        if (slot.n_buffer > 0 && llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+                            slot.do_rewind_chekpoint = true;
+                            break;
+                        }
+                    }
                 }
                 slot.prompt_batch_i0 = prompt_batch_i0;
                 slot.prompt_batch_i1 = batch.n_tokens;
@@ -4987,6 +5006,13 @@ inline int32_t check_ban_phrase(server_slot& slot) {
     return -1;
 }
 
+static inline void create_rewind_checkpoint(server_slot & slot) {
+    if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+        llama_rewind_ckpt_save(slot.ctx, { LLAMA_CHECKPOINT_REWIND, slot.n_past }, slot.id, slot.n_buffer);
+    }
+}
+
+
 void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.rewind_count++;
 
@@ -5039,8 +5065,16 @@ void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.cache_tokens.keep_first(n_keep_cache);
     slot.n_past = slot.cache_tokens.n_tokens();
 
-    // Remove from KV cache
-    llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
+    if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+        auto n_past = slot.cache_tokens.pos_next(slot.n_past);
+        auto result = llama_spec_ckpt_restore(slot.ctx, { LLAMA_CHECKPOINT_REWIND, n_past }, slot.id, n_past, 0); // restore recurrent layers
+        if (!result) {
+            LLAMA_LOG_ERROR("--- Restoring checkpoint for string ban failed. \n");
+        }
+    } else {
+        // Remove from KV cache
+        llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
+    }
 
     // Truncate buffer
     slot.token_buffer.resize(n_keep_buffer);
@@ -5070,7 +5104,10 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     }
 
     bool allow_rewind = true;
-
+    if (slot.n_decoded==1) {
+        // take a snapshat before generation
+        create_rewind_checkpoint(slot);
+    }
     if (ban_pos >= 0) {
         if (slot.rewind_count_max == -1) {
             // Automatic / Heuristic logic
@@ -5108,10 +5145,15 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
             // send 1 token from the front (FIFO)
             send_token_results(slot.token_buffer, slot, 1);
         }
+        create_rewind_checkpoint(slot);
+        if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+            llama_rewind_ckpt_discard(slot.ctx, { LLAMA_CHECKPOINT_REWIND,  slot.n_past - (int32_t)slot.n_buffer }, slot.id);
+        }
     }
     else {
         // buffer the result, wait for more tokens to validate string
         slot.sampled = result.tok;
+        create_rewind_checkpoint(slot);
     }
 }
 
@@ -5234,7 +5276,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             if (n_batch == 1 || ret < 0) {
                 int user_cancel = -3;
                 if (ret == user_cancel) {
-                    LLAMA_LOG_INFO("Decode process is cancelled by user.\n");
+                    LLAMA_LOG_INFO("Decode process is canceled by user.\n");
                 }
                 else {
                     // if you get here, it means the KV cache is full - try increasing it via the context size
@@ -5312,8 +5354,12 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                         }
                     } else if (slot.do_checkpoint) {
                         create_checkpoint(slot, true);
+                       
                     } else {
                         create_checkpoint_at_interval(slot);
+                    }
+                    if (slot.do_rewind_chekpoint) {
+                        create_rewind_checkpoint(slot);
                     }
                 }
                 continue; // continue loop of slots
@@ -5399,6 +5445,13 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 // create checkpoint after prompt processing ends
                 if (params_base.ctx_checkpoints_tolerance<=0 && params_base.do_checkpoint) {
                     create_checkpoint(slot, true);
+                    //if (llama_model_has_recurrent(llama_get_model(slot.ctx)) && slot.n_buffer > 0) {
+                    //    // take a snapshat before generation
+                    //    auto n_past = slot.cache_tokens.pos_next(slot.n_past);
+                    //    int32_t pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
+                    //    LLAMA_LOG_DEBUG("n_past:%d, pos_max: %d\n", slot.n_past, pos_max);
+                    //    llama_rewind_ckpt_save(slot.ctx, { LLAMA_CHECKPOINT_REWIND, pos_max }, slot.id, slot.n_buffer);
+                    //}
                 }
             }
 

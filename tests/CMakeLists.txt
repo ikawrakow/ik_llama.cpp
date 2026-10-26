@@ -129,6 +129,8 @@ llama_target_and_test(test-grammar-integration-upstream.cpp)
 target_include_directories(test-grammar-integration-upstream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
 llama_target_and_test(test-quill-grammar.cpp ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-qwen2.gguf)
 target_include_directories(test-quill-grammar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
+llama_build(test-ngram-cache.cpp)
+llama_test(test-ngram-cache)
 
 # build test-tokenizer-0 target once and add many tests
 add_executable(test-tokenizer-0 test-tokenizer-0.cpp)
@@ -228,3 +230,7 @@ llama_target_and_test(test-autorelease.cpp        LABEL "model")
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
+
+add_executable(test-moe-cache-shares test-moe-cache-shares.cpp)
+target_include_directories(test-moe-cache-shares PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME test-moe-cache-shares COMMAND $<TARGET_FILE:test-moe-cache-shares>)

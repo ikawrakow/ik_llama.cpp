@@ -121,6 +121,23 @@ enum {
     X_COMMON_PARAMS_SAMPLING
 };
 
+// tracks which sampling params the user explicitly set on the command line,
+// so model-provided "general.sampling.*" GGUF defaults do not override them
+enum common_params_sampling_config {
+    COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS        = 1 << 0,
+    COMMON_PARAMS_SAMPLING_CONFIG_TOP_K           = 1 << 1,
+    COMMON_PARAMS_SAMPLING_CONFIG_TOP_P           = 1 << 2,
+    COMMON_PARAMS_SAMPLING_CONFIG_MIN_P           = 1 << 3,
+    COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY = 1 << 4,
+    COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD   = 1 << 5,
+    COMMON_PARAMS_SAMPLING_CONFIG_TEMP            = 1 << 6,
+    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N  = 1 << 7,
+    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT  = 1 << 8,
+    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT        = 1 << 9,
+    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU    = 1 << 10,
+    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA    = 1 << 11,
+};
+
 // sampling parameters
 typedef struct common_params_sampling {
     #undef X
@@ -131,6 +148,7 @@ typedef struct common_params_sampling {
     int32_t     total_context_size    = 16840;
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
+    uint64_t    user_sampling_config  = 0;                  // bitmask of fields the user set explicitly (common_params_sampling_config)
 
     std::vector<std::string> dry_sequence_breakers = { "\n", ":", "\"", "*" };     // default sequence breakers for DRY
 

@@ -547,7 +547,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
         }
         cb(cur, "flash_attn", il);
         ggml_build_forward_expand(gf, cur);
-        // Somethiong goes wrong with thisi optimization.
+        // Something goes wrong with this optimization.
         // I guess, the cross context does not mingle well with it.
         //if (use_swa) {
         //    cur->op_params[4] = hparams.n_swa;

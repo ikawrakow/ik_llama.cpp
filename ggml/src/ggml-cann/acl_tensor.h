@@ -30,16 +30,16 @@
 #include "common.h"
 
 /**
- * @brief	Maps a ggml_type to its corresponding aclDataType.
+ * @brief   Maps a ggml_type to its corresponding aclDataType.
  *
- * @details	This function takes a ggml_type as input and returns the corresponding
- *			aclDataType. It supports mapping for various ggml_types. If the input type
- *			does not match any of the predefined ggml_types, the function returns
+ * @details This function takes a ggml_type as input and returns the corresponding
+ *          aclDataType. It supports mapping for various ggml_types. If the input type
+ *          does not match any of the predefined ggml_types, the function returns
  *          ACL_DT_UNDEFINED.
  *
- * @param	type    The ggml_type to be mapped.
- * @return	The corresponding aclDataType. If the input type is not recognized,
- *			ACL_DT_UNDEFINED is returned.
+ * @param   type    The ggml_type to be mapped.
+ * @return  The corresponding aclDataType. If the input type is not recognized,
+ *          ACL_DT_UNDEFINED is returned.
  */
 aclDataType ggml_cann_type_mapping(ggml_type type);
 

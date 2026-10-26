@@ -301,8 +301,8 @@ struct llama_mmap::impl {
         if (prefetch) { flags |= MAP_POPULATE; }
         if (use_thp) {
             size_t huge = get_default_huge_page_size();
-            auto size = huge*((file->size() + huge - 1)/huge);
-            addr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+            size_t aligned_size = huge*((file->size() + huge - 1)/huge);
+            addr = mmap(nullptr, aligned_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
             if (addr != MAP_FAILED) {
                 printf("%s: using THP with page size %zu MiB ", __func__, huge/(1024*1024));
                 fflush(stdout);
@@ -314,7 +314,7 @@ struct llama_mmap::impl {
                     tot += n_read;
                 }
                 printf(" done\n");
-                mapped_fragments.emplace_back(0, file->size());
+                mapped_fragments.emplace_back(0, aligned_size);
                 mapped_page_size = huge;
                 return;
             }

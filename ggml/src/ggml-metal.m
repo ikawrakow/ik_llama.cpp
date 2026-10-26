@@ -1220,12 +1220,14 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
                     op->src[1]->ne[0] ==  96 || op->src[1]->ne[0] == 112 ||
                     op->src[1]->ne[0] == 128 || op->src[1]->ne[0] == 256);
         case GGML_OP_MUL_MAT:
-            return ctx->support_simdgroup_reduction && op->src[0]->type != GGML_TYPE_IQ4_KT &&
+            return ctx->support_simdgroup_reduction && op->src[0]->type != GGML_TYPE_IQ1_KT && op->src[0]->type != GGML_TYPE_IQ4_KT &&
+                (op->src[0]->type != GGML_TYPE_IQ2_KT || op->src[0]->ne[0] % ggml_blck_size(GGML_TYPE_IQ2_KT) == 0) &&
                 (op->src[0]->type != GGML_TYPE_IQ3_KT || op->src[0]->ne[0] % ggml_blck_size(GGML_TYPE_IQ3_KT) == 0) &&
                 (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
                !(op->src[0]->type >= GGML_TYPE_Q4_0_R8 && op->src[0]->type <= GGML_TYPE_Q8_K_R8);
         case GGML_OP_MUL_MAT_ID:
-            return ctx->support_simdgroup_reduction && op->src[0]->type != GGML_TYPE_IQ4_KT &&
+            return ctx->support_simdgroup_reduction && op->src[0]->type != GGML_TYPE_IQ1_KT && op->src[0]->type != GGML_TYPE_IQ4_KT &&
+                (op->src[0]->type != GGML_TYPE_IQ2_KT || op->src[0]->ne[0] % ggml_blck_size(GGML_TYPE_IQ2_KT) == 0) &&
                 (op->src[0]->type != GGML_TYPE_IQ3_KT || op->src[0]->ne[0] % ggml_blck_size(GGML_TYPE_IQ3_KT) == 0) &&
                 (op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F32);
         case GGML_OP_CPY:
@@ -1261,7 +1263,8 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
                 };
             }
         case GGML_OP_GET_ROWS:
-            return op->ne[3] == 1 && op->src[0]->type != GGML_TYPE_IQ4_KT &&
+            return op->ne[3] == 1 && op->src[0]->type != GGML_TYPE_IQ1_KT && op->src[0]->type != GGML_TYPE_IQ4_KT &&
+                (op->src[0]->type != GGML_TYPE_IQ2_KT || op->src[0]->ne[0] % ggml_blck_size(GGML_TYPE_IQ2_KT) == 0) &&
                 (op->src[0]->type != GGML_TYPE_IQ3_KT || op->src[0]->ne[0] % ggml_blck_size(GGML_TYPE_IQ3_KT) == 0);
         case GGML_OP_DIAG_MASK_INF:
             {
@@ -4351,6 +4354,21 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_metal_buffer_type(void) {
     };
 
     return &ggml_backend_buffer_type_metal;
+}
+
+// unified memory: report the working set the GPU may use, not free host RAM
+void ggml_backend_metal_get_device_memory(size_t * free, size_t * total) {
+    *free  = 0;
+    *total = 0;
+    if (@available(macOS 10.12, iOS 16.0, *)) {
+        id<MTLDevice> device = ggml_backend_metal_get_device();
+        if (device != nil) {
+            *total = device.recommendedMaxWorkingSetSize;
+            size_t used = device.currentAllocatedSize;
+            *free  = *total > used ? *total - used : 0;
+        }
+        ggml_backend_metal_free_device();
+    }
 }
 
 // buffer from ptr

@@ -133,6 +133,7 @@ static void print_usage(int argc, char ** argv) {
     LOG_TEE("         --sweep-stride N         measure every Nth sweep row (default: 1)\n");
     LOG_TEE("         --sweep-memory           report RSS high-water and sampled VRAM delta\n");
     LOG_TEE("  -wb,   --warmup-batch           run a warmup batch before measurement\n");
+    LOG_TEE("  -f,    --file FNAME             feed the tokens of a text file instead of random tokens\n");
     LOG_TEE("         --output-format FORMAT    output format: table (default) or jsonl\n");
     LOG_TEE("\nexample usage:\n");
     LOG_TEE("\n    %s -m model.gguf -c 8192 -b 2048 -ub 512\n", argv[0]);
@@ -150,6 +151,15 @@ int main(int argc, char ** argv) {
     }
     if (params.nrep < 1) params.nrep = 1;
     if (params.sweep_stride < 1) params.sweep_stride = 1;
+
+    const bool use_text = !params.prompt_file.empty() && !params.prompt_is_binary;
+    if (use_text && params.prompt.empty()) {
+        fprintf(stderr, "%s: error: %s is empty\n", __func__, params.prompt_file.c_str());
+        return 1;
+    }
+    if (!use_text && !params.prompt.empty()) {
+        fprintf(stderr, "%s: warning: -p and -bf are ignored, use -f to supply a text\n", __func__);
+    }
 
     if (params.minilog) {
         llama_log_set(llama_selective_log_callback, nullptr);
@@ -226,6 +236,22 @@ int main(int argc, char ** argv) {
     const unsigned int pp = params.n_ubatch;
     const unsigned int tg = params.n_predict > 0 ? params.n_predict : params.n_ubatch / 4;
 
+    std::vector<llama_token> text;
+    if (use_text) {
+        text = common_tokenize(ctx, params.prompt, true);
+        const unsigned int n_text = text.size();
+        unsigned int n_end = 0;
+        for (unsigned int n_kv = 0, i_loop = 0; n_kv < n_kv_max; n_kv += pp, ++i_loop) {
+            n_end = std::max(n_end, n_kv + std::max(pp, i_loop % params.sweep_stride == 0 ? tg : 0u));
+        }
+        if (n_end > n_text) {
+            LOG_TEE("%s: n_text = %u tokens from %s, repeats from position %u\n", __func__, n_text, params.prompt_file.c_str(), n_text);
+        } else {
+            LOG_TEE("%s: n_text = %u tokens from %s\n", __func__, n_text, params.prompt_file.c_str());
+        }
+    }
+    const std::string text_json = use_text ? ", \"n_text\": " + std::to_string(text.size()) : "";
+
     if (!params.sweep_bench_output_jsonl) {
         LOG_TEE("\n");
         LOG_TEE("%s: n_kv_max = %d, n_batch = %d, n_ubatch = %d, flash_attn = %d, n_gpu_layers = %d, n_threads = %u, n_threads_batch = %u\n", __func__, n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch);
@@ -245,7 +271,7 @@ int main(int argc, char ** argv) {
         common_batch_clear(batch);
 
         for (unsigned int i = 0; i < pp; ++i) {
-            common_batch_add(batch, std::rand() % n_vocab, n_kv + i, { 0 }, false);
+            common_batch_add(batch, use_text ? text[(n_kv + i) % text.size()] : std::rand() % n_vocab, n_kv + i, { 0 }, false);
         }
         batch.logits[batch.n_tokens - 1] = true;
 
@@ -269,7 +295,7 @@ int main(int argc, char ** argv) {
         common_batch_clear(batch);
 
         for (unsigned int i = 0; i < params.n_ubatch; ++i) {
-            common_batch_add(batch, std::rand() % n_vocab, i, { 0 }, false);
+            common_batch_add(batch, use_text ? text[i % text.size()] : std::rand() % n_vocab, i, { 0 }, false);
         }
 
         if (!decode_helper(ctx, batch, ctx_params.n_ubatch)) {
@@ -325,7 +351,7 @@ int main(int argc, char ** argv) {
 
                 for (unsigned int i = 0; i < tg; ++i) {
                     common_batch_clear(batch);
-                    common_batch_add(batch, std::rand() % n_vocab, n_kv + i, { 0 }, true);
+                    common_batch_add(batch, use_text ? text[(n_kv + i) % text.size()] : std::rand() % n_vocab, n_kv + i, { 0 }, true);
 
                     if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
                         LOG_TEE("%s: llama_decode() failed\n", __func__);
@@ -414,16 +440,16 @@ int main(int argc, char ** argv) {
                 const std::string vram_json = format_mib(vram_delta_mib, 3, "null");
                 LOG_TEE(
                     "{\"n_kv_max\": %d, \"n_batch\": %d, \"n_ubatch\": %d, \"flash_attn\": %d, \"n_gpu_layers\": %d, \"n_threads\": %u, \"n_threads_batch\": %u, "
-                    "\"pp\": %d, \"tg\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f, \"rss_hwm_mib\": %s, \"vram_delta_mib\": %s }\n",
+                    "\"pp\": %d, \"tg\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f, \"rss_hwm_mib\": %s, \"vram_delta_mib\": %s%s }\n",
                     n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
-                    pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg, rss_json.c_str(), vram_json.c_str()
+                    pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg, rss_json.c_str(), vram_json.c_str(), text_json.c_str()
                 );
             } else {
                 LOG_TEE(
                     "{\"n_kv_max\": %d, \"n_batch\": %d, \"n_ubatch\": %d, \"flash_attn\": %d, \"n_gpu_layers\": %d, \"n_threads\": %u, \"n_threads_batch\": %u, "
-                    "\"pp\": %d, \"tg\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f }\n",
+                    "\"pp\": %d, \"tg\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f%s }\n",
                     n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
-                    pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg
+                    pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg, text_json.c_str()
                 );
             }
         } else {

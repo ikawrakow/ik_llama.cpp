@@ -56,6 +56,7 @@ struct llama_model_loader {
     bool defer_ple = false;
     // Explicit --no-mmap with deferred tables: copy dense weights out, alias deferred only.
     bool defer_copy_dense = false;
+    std::vector<ggml_backend_buffer_type_t> integrated_bufts;
 
     llama_files files;
     llama_ftype ftype;
@@ -220,7 +221,7 @@ struct llama_model_loader {
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
 
-    // Returns false if cancelled by progress_callback
+    // Returns false if canceled by progress_callback
     bool load_all_data(
             struct ggml_context * ctx,
             struct llama_model * model,

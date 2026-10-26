@@ -185,7 +185,21 @@ static __device__ __forceinline__ int __vsubss4(const int a, const int b) {
 }
 
 static __device__ __forceinline__ int __vsub4(const int a, const int b) {
-    return __vsubss4(a, b);
+    // do some small modifications to a and b to make the subtraction not underflow
+    const unsigned int a_large = a | 0x80808080;
+    const unsigned int b_small = b & 0x7f7f7f7f;
+    const unsigned int result_low_7bits = a_large - b_small;
+
+    // if two ops share the same high bit, we should flip the high bit of the result
+    const unsigned int should_flip_high_1bit = (a ^ ~b) & 0x80808080;
+
+    return result_low_7bits ^ should_flip_high_1bit;
+}
+
+static __device__ __forceinline__ unsigned int __vsub2(const unsigned int a, const unsigned int b) {
+    const unsigned int lo = (a - b) & 0x0000ffffu;
+    const unsigned int hi = ((a & 0xffff0000u) - (b & 0xffff0000u)) & 0xffff0000u;
+    return hi | lo;
 }
 
 static __device__ __forceinline__ unsigned int __vcmpeq4(unsigned int a, unsigned int b) {

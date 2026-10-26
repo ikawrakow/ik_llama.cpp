@@ -22,7 +22,7 @@ struct delta_net {
             uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb,
             bool external_residual = false, ggml_unary_op gate_op = GGML_UNARY_OP_SILU) const;
 
-    // external_residual: the caller has already normalised the input and owns the residual
+    // external_residual: the caller has already normalized the input and owns the residual
     // add, as a hyper-connection stack does. The layer then returns just its own output.
     ggml_tensor * build_layer_attn_linear(ggml_context * ctx0, ggml_cgraph * gf,
             ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb,
