@@ -55,6 +55,8 @@
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/multiadd.cuh"
 #include "ggml-cuda/hadamard.cuh"
+#include "ggml-cuda/t16-matmul.cuh"
+#include "ggml-cuda/t16-embed.cuh"
 #include "ggml-cuda/reduce.cuh"
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/delta-net.cuh"
@@ -3773,6 +3775,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_HADAMARD:
             ggml_cuda_op_hadamard(ctx, dst);
             break;
+        case GGML_OP_T16_MATMUL:
+            ggml_cuda_op_t16_matmul(ctx, dst);
+            break;
+        case GGML_OP_T16_MUL_MAT_ID:
+            ggml_cuda_op_t16_mul_mat_id(ctx, dst);
+            break;
+        case GGML_OP_T16_EMBED_GET_ROWS:
+            ggml_cuda_op_t16_embed_get_rows(ctx, dst);
+            break;
         case GGML_OP_REPEAT:
             ggml_cuda_op_repeat(ctx, dst);
             break;
@@ -5153,6 +5164,40 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 default:
                     return false;
             }
+        }
+        case GGML_OP_T16_EMBED_GET_ROWS: {
+            const ggml_tensor * w = op->src[0];
+            const ggml_tensor * s = op->src[1];
+            const ggml_tensor * i = op->src[2];
+            if (w->type != GGML_TYPE_I16 || s->type != GGML_TYPE_F16 || i->type != GGML_TYPE_I32) return false;
+            if (!ggml_is_contiguous(w) || !ggml_is_contiguous(s) || !ggml_is_contiguous(i)) return false;
+            if (op->type != GGML_TYPE_F32 || s->ne[0] != 256 || s->ne[2] != 1) return false;
+            return true;
+        }
+        case GGML_OP_T16_MATMUL: {
+            const ggml_tensor * w = op->src[0];
+            const ggml_tensor * x = op->src[1];
+            if (w->type != GGML_TYPE_I16 || !ggml_is_contiguous(w) || w->ne[3] != 1) return false;
+            const int K = (int) w->ne[0] / 16;
+            if (K < 2 || K > 6 || (int) w->ne[0] != 16*K) return false;
+            if (x->type != GGML_TYPE_F32 || !ggml_is_contiguous(x)) return false;
+            if (op->type != GGML_TYPE_F32) return false;
+            if (x->ne[0] != 16*w->ne[2] || op->ne[0] != 16*w->ne[1]) return false;
+            return true;
+        }
+        case GGML_OP_T16_MUL_MAT_ID: {
+            const ggml_tensor * w   = op->src[0];
+            const ggml_tensor * x   = op->src[1];
+            const ggml_tensor * ids = op->src[2];
+            if (w->type != GGML_TYPE_I16 || !ggml_is_contiguous(w)) return false;
+            const int K = (int) w->ne[0] / 16;
+            if (K < 2 || K > 6 || (int) w->ne[0] != 16*K) return false;
+            if (x->type != GGML_TYPE_F32 || !ggml_is_contiguous(x)) return false;
+            if (ids->type != GGML_TYPE_I32) return false;
+            if (op->type != GGML_TYPE_F32) return false;
+            if (x->ne[0] != 16*w->ne[2] || op->ne[0] != 16*w->ne[1]) return false;
+            if (op->ne[1] != ids->ne[0] || op->ne[2] != x->ne[1]) return false;
+            return true;
         }
         case GGML_OP_DUP:
         case GGML_OP_REPEAT:
