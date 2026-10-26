@@ -788,12 +788,19 @@ std::vector<int32_t> cpu_affinity_resolve_draft(const std::vector<int32_t> & cpu
     return cpu_affinity_resolve_impl(cpus, auto_detect, cpu_affinity_auto_cpus_draft());
 }
 
-void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, bool auto_detect) {
+void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, bool auto_detect, int n_threads_batch) {
     cpus = cpu_affinity_resolve(cpus, auto_detect);
     if (cpus.empty() && auto_detect) {
         fprintf(stderr, "warning: auto CPU affinity found no usable CPUs "
                         "(non-hybrid CPU, GGML_HYBRID=0, or start affinity excludes them), "
                         "pinning disabled\n");
+        return;
+    }
+    if (auto_detect && n_threads_batch > (int) cpus.size()) {
+        fprintf(stderr, "warning: auto CPU affinity provides only %zu pinned CPUs but n_threads_batch is %d; "
+                        "pinning disabled to avoid oversubscription (use -tb %zu to pin prompt processing)\n",
+                cpus.size(), n_threads_batch, cpus.size());
+        cpus.clear();
     }
 }
 
@@ -1242,7 +1249,8 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params, bool draft_af
     // Resolve once here so every example sees -ca/-cr/-cm through cparams;
     // --draft-params stays unresolved (auto = E-cores, see speculative.cpp).
     if (!draft_affinity) {
-        common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
+        const int n_threads_batch = params.n_threads_batch > 0 ? params.n_threads_batch : params.n_threads;
+        common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto, n_threads_batch);
     }
 
     return true;

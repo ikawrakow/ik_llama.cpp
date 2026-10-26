@@ -981,7 +981,11 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_threads.empty())    { params.n_threads = cmd_params_defaults.n_threads; }
     // resolve explicit -cm/-cr or the P-core auto list; either way the result is a
     // plain explicit list for all phases
-    common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
+    int n_threads_batch = 0;
+    for (const auto & t : params.n_threads) {
+        n_threads_batch = std::max(n_threads_batch, t.second);
+    }
+    common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto, n_threads_batch);
     if (!params.buft_overrides.empty()) params.buft_overrides.emplace_back(llama_model_tensor_buft_override{nullptr, nullptr});
 
     return params;

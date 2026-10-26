@@ -95,8 +95,10 @@ std::vector<int32_t> cpu_affinity_resolve(const std::vector<int32_t> & cpus, boo
 std::vector<int32_t> cpu_affinity_resolve_draft(const std::vector<int32_t> & cpus, bool auto_detect);
 
 // resolve in place: explicit lists are filtered, auto selects P-cores; an
-// empty auto result warns and leaves pinning disabled
-void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, bool auto_detect);
+// empty auto result warns and leaves pinning disabled. Automatic pinning is
+// also disabled when the batch thread count exceeds the P-core list, because
+// stacking a large prompt pool on the P-cores collapses throughput.
+void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, bool auto_detect, int n_threads_batch = -1);
 
 // install a resolved affinity on a context and log it
 void common_cpu_affinity_apply(llama_context * ctx, const std::vector<int32_t> & cpus, const char * who);

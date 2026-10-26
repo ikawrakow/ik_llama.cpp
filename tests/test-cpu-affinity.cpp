@@ -95,6 +95,18 @@ int main() {
         assert(p.cpu_affinity == cpu_affinity_resolve({0, 1}, false));
         assert(!p.cpu_affinity_auto);
     }
+    {
+        // auto pinning must not stack a large prompt pool on the P-cores
+        char arg0[] = "test";
+        char arg1[] = "-ca";
+        char arg2[] = "-tb";
+        char arg3[] = "999";
+        char * argv[] = { arg0, arg1, arg2, arg3 };
+
+        gpt_params p;
+        assert(gpt_params_parse(4, argv, p));
+        assert(p.cpu_affinity.empty());
+    }
 
     // --draft-params affinity resolved, even when empty
     {
