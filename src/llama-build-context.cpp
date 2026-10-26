@@ -977,7 +977,14 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
         cb(lctx.inp_tokens, "inp_tokens", -1);
         ggml_set_input(lctx.inp_tokens);
 
-        inpL = ggml_get_rows(ctx, tok_embd, lctx.inp_tokens);
+        if (tok_embd->type == GGML_TYPE_I16) {
+            if (lctx.model.k2_embed_signs == nullptr) {
+                GGML_ABORT("K2E: I16 token embedding without signs");
+            }
+            inpL = ggml_t16_embed_get_rows(ctx, tok_embd, lctx.model.k2_embed_signs, lctx.inp_tokens, n_embd);
+        } else {
+            inpL = ggml_get_rows(ctx, tok_embd, lctx.inp_tokens);
+        }
 
         // undo the Hadamard rotation of the embedding table
         if (auto rot = lctx.model.hadamard_rotation(tok_embd); rot != nullptr) {
@@ -1071,6 +1078,27 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
          struct ggml_context * ctx0,
           struct ggml_tensor * w,
           struct ggml_tensor * cur) {
+    if (w->type == GGML_TYPE_I16) {
+        // K2 (t16) trellis: y = sv * H_n( w_rot^T ( H_k(x * su) ) )
+        const llama_k2_t16_side * k2 = lctx.model.k2_t16_scale(w);
+        if (k2 == nullptr || k2->su == nullptr || k2->sv == nullptr) {
+            GGML_ABORT("K2 t16: I16 weight without su/sv side tensors");
+        }
+        if (!lctx.lora_adapters.empty()) {
+            GGML_ABORT("K2 t16: LoRA adapters are not supported on I16 weights");
+        }
+        const int64_t in  = w->ne[2]*16;
+        const int64_t out = w->ne[1]*16;
+        GGML_ASSERT(cur->ne[0] == in);
+        struct ggml_tensor * x = cur->type == GGML_TYPE_F32 ? cur : ggml_cast(ctx0, cur, GGML_TYPE_F32);
+        x = ggml_mul      (ctx0, x, k2->su);                 // x * su
+        x = ggml_hadamard (ctx0, x, (int) k2->block_size);   // H_k(x * su)
+        x = ggml_t16_matmul(ctx0, w, x);                     // z = w_rot^T x'
+        x = ggml_hadamard (ctx0, x, (int) k2->block_size);   // H_n(z)
+        x = ggml_mul      (ctx0, x, k2->sv);                 // H_n(z) * sv
+        GGML_ASSERT(x->ne[0] == out && x->ne[1] == cur->ne[1]);
+        return x;
+    }
     struct ggml_tensor * cur_mm = cur;
     if (auto rot = lctx.model.hadamard_rotation(w); rot != nullptr) {
         // several folded weights consume the same input activation; rotate it once per graph.
@@ -1146,6 +1174,14 @@ ggml_tensor * llm_build_context::llm_build_lora_mm_id(
             cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
             lctx.hadamard_memo[memo_key] = cur_mm;
         }
+    }
+    if (w->type == GGML_TYPE_I16) {
+        // K2 (t16) MoE: the op applies the H rotations and the per-expert scales itself,
+        // because su/sv differ per selected expert (they cannot live in the graph).
+        GGML_ASSERT(lctx.lora_adapters.empty());
+        const llama_k2_t16_side * k2 = lctx.model.k2_t16_scale(w);
+        return ggml_t16_mul_mat_id(ctx0, w, cur_mm, cache_ids ? cache_ids : ids,
+                                   k2 ? k2->su : nullptr, k2 ? k2->sv : nullptr);
     }
     struct ggml_tensor * res = ggml_mul_mat_id(ctx0, cache_w ? cache_w : w, cur_mm, cache_ids ? cache_ids : ids);
     for (auto & it : lctx.lora_adapters) {
@@ -1377,6 +1413,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     if (lctx.cparams.fused_up_gate &&
         up && gate && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
+        up->type != GGML_TYPE_I16 && gate->type != GGML_TYPE_I16 &&
         lctx.model.hadamard_rotation(up) == nullptr && lctx.model.hadamard_rotation(gate) == nullptr &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_GELU && !act_scales))) {
@@ -1749,6 +1786,9 @@ llm_expert_gating_func_type   gating_op,
     //
     //bool can_use_fmoe = !up_exps_b && !gate_exps_b && (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU);
     bool can_use_fmoe = (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU || type_op == LLM_FFN_SWIGLU_OAI);
+    if ((up_gate_exps && up_gate_exps->type == GGML_TYPE_I16) ||
+        (up_exps && up_exps->type == GGML_TYPE_I16) || (gate_exps && gate_exps->type == GGML_TYPE_I16) ||
+        (down_exps && down_exps->type == GGML_TYPE_I16)) { can_use_fmoe = false; }
 
     ggml_tensor * par;
     if (can_use_fmoe && up_gate_exps && (!cache_ids || !up_gate_exps_b)) {

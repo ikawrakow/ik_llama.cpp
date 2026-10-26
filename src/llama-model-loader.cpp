@@ -18,6 +18,7 @@
 #endif
 
 #include <set>
+#include <unordered_map>
 #include <map>
 #include <array>
 #include <charconv>
@@ -1791,4 +1792,212 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
 
     LLAMA_LOG_INFO("%s: PrismML Hadamard enabled: %zu rotated weights, %u sign widths, %zu inverse rows, block %u\n",
             __func__, weight_names.size(), (uint32_t) signs_by_width.size(), inverse_names.size(), block_size);
+}
+
+// K2 (t16) trellis: validate the metadata/tensor contract and create F32 copies of the
+// fp16 su/sv side tensors (ggml_mul needs an F32 operand in the graph). All copies are
+// batched into one context per buffer type: GGML_MAX_CONTEXTS is 64 and a model has
+// hundreds of side tensors.
+void llm_load_k2(llama_model_loader & ml, llama_model & model, bool dry_run) {
+    // K2E trellis token embedding (independent of the k2.t16 linears)
+    {
+        uint32_t ev = 0;
+        if (ml.get_key("k2.embed.version", ev, false)) {
+            if (ev != 1) {
+                throw std::runtime_error(format("%s: unsupported k2.embed.version %u", __func__, ev));
+            }
+            uint32_t K = 0, group = 0, hidden = 0, vocab = 0, groups = 0, words = 0;
+            if (!ml.get_key("k2.embed.K", K, false) || !ml.get_key("k2.embed.group", group, false) ||
+                !ml.get_key("k2.embed.hidden", hidden, false) || !ml.get_key("k2.embed.vocab", vocab, false) ||
+                !ml.get_key("k2.embed.groups", groups, false) || !ml.get_key("k2.embed.words", words, false) ||
+                group != 256 || K < 1 || K > 8 || words != 1 + 16*K || hidden > groups*256) {
+                throw std::runtime_error(format("%s: invalid k2.embed.* metadata", __func__));
+            }
+            std::unordered_map<std::string, ggml_tensor *> by_name;
+            for (const auto & kv : model.tensors_by_name) {
+                by_name.emplace(kv.first, kv.second);
+            }
+            const auto it_w = by_name.find("token_embd.weight");
+            const auto it_s = by_name.find("token_embd.weight.signs");
+            if (it_w == by_name.end() || it_s == by_name.end()) {
+                throw std::runtime_error(format("%s: K2E embedding tensors missing", __func__));
+            }
+            ggml_tensor * w = it_w->second;
+            ggml_tensor * signs = it_s->second;
+            if (w->type != GGML_TYPE_I16 || w->ne[0] != (int64_t) groups * words || w->ne[1] != vocab ||
+                signs->type != GGML_TYPE_F16 || signs->ne[0] != 256 || signs->ne[1] != groups) {
+                throw std::runtime_error(format("%s: K2E embedding shape/type mismatch", __func__));
+            }
+            model.k2_embed_signs = signs;
+            LLAMA_LOG_INFO("%s: K2E embed: vocab %u, hidden %u, groups %u, K %u, words %u\n",
+                    __func__, vocab, hidden, groups, K, words);
+        }
+    }
+
+    uint32_t version = 0;
+    if (!ml.get_key("k2.t16.version", version, false)) {
+        return;
+    }
+    if (version != 1) {
+        throw std::runtime_error(format("%s: unsupported k2.t16.version %u", __func__, version));
+    }
+    uint32_t tile = 0;
+    if (!ml.get_key("k2.t16.tile", tile, false) || tile != 16) {
+        throw std::runtime_error(format("%s: unsupported k2.t16.tile %u (expected 16)", __func__, tile));
+    }
+    uint32_t block_size = 0;
+    if (!ml.get_key("k2.hadamard.block_size", block_size, false) || block_size != 128) {
+        throw std::runtime_error(format("%s: unsupported k2.hadamard.block_size %u (expected 128)", __func__, block_size));
+    }
+    {
+        const int kid = gguf_find_key(ml.meta, "k2.t16.codebook");
+        if (kid < 0 || gguf_get_kv_type(ml.meta, kid) != GGUF_TYPE_STRING) {
+            throw std::runtime_error(format("%s: missing k2.t16.codebook", __func__));
+        }
+        const std::string codebook = gguf_get_val_str(ml.meta, kid);
+        if (codebook != "mul1") {
+            throw std::runtime_error(format("%s: unsupported k2.t16.codebook '%s' (only mul1)", __func__, codebook.c_str()));
+        }
+    }
+    const int kid = gguf_find_key(ml.meta, "k2.t16.weight_names");
+    if (kid < 0 || gguf_get_kv_type(ml.meta, kid) != GGUF_TYPE_ARRAY || gguf_get_arr_type(ml.meta, kid) != GGUF_TYPE_STRING) {
+        throw std::runtime_error(format("%s: missing k2.t16.weight_names", __func__));
+    }
+    const size_t n_names = gguf_get_arr_n(ml.meta, kid);
+    std::vector<std::string> names;
+    names.reserve(n_names);
+    for (size_t i = 0; i < n_names; ++i) {
+        names.emplace_back(gguf_get_arr_str(ml.meta, kid, i));
+    }
+    if (names.empty()) {
+        throw std::runtime_error(format("%s: empty k2.t16.weight_names", __func__));
+    }
+
+    // tensors_by_name is a vector of (name, tensor) pairs in this tree
+    std::unordered_map<std::string, ggml_tensor *> by_name;
+    by_name.reserve(model.tensors_by_name.size());
+    for (const auto & kv : model.tensors_by_name) {
+        by_name.emplace(kv.first, kv.second);
+    }
+
+    struct k2_entry {
+        std::string name;
+        ggml_tensor * su = nullptr;
+        ggml_tensor * sv = nullptr;
+        int64_t in  = 0;
+        int64_t out = 0;
+        int64_t E   = 1;
+        ggml_tensor * su_f32 = nullptr;
+        ggml_tensor * sv_f32 = nullptr;
+    };
+    std::vector<k2_entry> entries;
+    entries.reserve(names.size());
+    std::map<ggml_backend_buffer_type_t, std::vector<size_t>> groups;
+
+    int n_weights = 0;
+    int k_min = 99;
+    int k_max = 0;
+    for (const auto & name : names) {
+        const auto it = by_name.find(name);
+        if (it == by_name.end()) {
+            throw std::runtime_error(format("%s: K2 t16 weight not loaded: %s", __func__, name.c_str()));
+        }
+        ggml_tensor * w = it->second;
+        const int64_t K   = w->type == GGML_TYPE_I16 ? w->ne[0]/16 : 0;
+        const int64_t in  = w->ne[2]*16;
+        const int64_t out = w->ne[1]*16;
+        const int64_t E   = w->ne[3];   // 1 = dense, >1 = MoE experts
+        if (w->type != GGML_TYPE_I16 || E < 1 || w->ne[0] % 16 != 0 || K < 2 || K > 6 ||
+            in % 128 != 0 || out % 128 != 0) {
+            throw std::runtime_error(format("%s: invalid K2 t16 weight %s (K = %lld, in = %lld, out = %lld)",
+                    __func__, name.c_str(), (long long) K, (long long) in, (long long) out));
+        }
+        if (w->nb[1] != (size_t) w->ne[0]*2 || w->nb[2] != (size_t) w->ne[1]*w->nb[1]) {
+            throw std::runtime_error(format("%s: K2 t16 weight %s is not contiguous", __func__, name.c_str()));
+        }
+        const auto it_su = by_name.find(name + ".su");
+        const auto it_sv = by_name.find(name + ".sv");
+        if (it_su == by_name.end() || it_sv == by_name.end()) {
+            throw std::runtime_error(format("%s: K2 t16 weight %s is missing .su/.sv", __func__, name.c_str()));
+        }
+        ggml_tensor * su = it_su->second;
+        ggml_tensor * sv = it_sv->second;
+        if (su->type != GGML_TYPE_F16 || su->ne[0] != in || su->ne[1] != E ||
+            sv->type != GGML_TYPE_F16 || sv->ne[0] != out || sv->ne[1] != E) {
+            throw std::runtime_error(format("%s: K2 t16 side tensors of %s have a wrong type/shape", __func__, name.c_str()));
+        }
+        k_min = std::min(k_min, (int) K);
+        k_max = std::max(k_max, (int) K);
+        ++n_weights;
+
+        if (dry_run) {
+            continue;
+        }
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(w->buffer);
+        if (ggml_backend_buft_is_host(buft)) {
+            buft = llama_default_buffer_type_cpu(true);
+        }
+        k2_entry e;
+        e.name = name;
+        e.su = su;
+        e.sv = sv;
+        e.in = in;
+        e.out = out;
+        e.E = E;
+        entries.push_back(e);
+        groups[buft].push_back(entries.size() - 1);
+    }
+
+    if (!dry_run) {
+        for (auto & group : groups) {
+            ggml_backend_buffer_type_t buft = group.first;
+            const size_t n_tensors = 2*group.second.size();
+            ggml_init_params params = { (n_tensors + 8) * ggml_tensor_overhead(), nullptr, true };
+            ggml_context * ctx = ggml_init(params);
+            if (ctx == nullptr) {
+                throw std::runtime_error(format("%s: failed to create the K2 side context", __func__));
+            }
+            for (const size_t idx : group.second) {
+                k2_entry & e = entries[idx];
+                if (e.E == 1) {
+                    e.su_f32 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, e.in);
+                    e.sv_f32 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, e.out);
+                } else {
+                    e.su_f32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, e.in, e.E);
+                    e.sv_f32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, e.out, e.E);
+                }
+                ggml_set_name(e.su_f32, e.su->name);
+                ggml_set_name(e.sv_f32, e.sv->name);
+            }
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+            if (buf == nullptr) {
+                ggml_free(ctx);
+                throw std::runtime_error(format("%s: failed to allocate the K2 side tensors", __func__));
+            }
+            ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            for (const size_t idx : group.second) {
+                k2_entry & e = entries[idx];
+                const auto copy = [&](ggml_tensor * src, ggml_tensor * dst, int64_t n) {
+                    std::vector<ggml_fp16_t> h(n);
+                    std::vector<float> f(n);
+                    ggml_backend_tensor_get(src, h.data(), 0, n*sizeof(ggml_fp16_t));
+                    ggml_fp16_to_fp32_row(h.data(), f.data(), n);
+                    ggml_backend_tensor_set(dst, f.data(), 0, n*sizeof(float));
+                };
+                copy(e.su, e.su_f32, e.in  * e.E);
+                copy(e.sv, e.sv_f32, e.out * e.E);
+            }
+            model.ctxs.push_back(ctx);
+            model.bufs.push_back(buf);
+        }
+        for (const auto & e : entries) {
+            llama_k2_t16_side side;
+            side.su = e.su_f32;
+            side.sv = e.sv_f32;
+            side.block_size = block_size;
+            model.k2_t16_map[e.name] = side;
+        }
+    }
+    LLAMA_LOG_INFO("%s: K2 t16: %d weights, K %d..%d, block %u, codebook mul1%s\n", __func__,
+            n_weights, k_min, k_max, block_size, dry_run ? " (dry run)" : "");
 }

@@ -192,6 +192,17 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     ggml_tensor * create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags = 0,
             ggml_context ** actual_ctx = nullptr);
 
+    // K2 (t16): I16 trellis weights are created with their native 3-D dims, plus the
+    // required .su [in] / .sv [out] F16 side tensors. Everything else is unchanged.
+    ggml_tensor * create_linear(ggml_context * ctx, const std::string & name, int64_t in, int64_t out, int flags = 0);
+
+    // K2 (t16) experts: native 4-D [16*K, out/16, in/16, n_expert] + per-expert .su/.sv F16 sides.
+    ggml_tensor * create_exps(ggml_context * ctx, const std::string & name, int64_t in, int64_t out,
+            int64_t n_expert, int flags = 0);
+
+    // K2E: an I16 trellis token embedding is created as [words, vocab] + the .signs tensor.
+    ggml_tensor * create_embd(ggml_context * ctx, const std::string & name, int64_t n_embd, int64_t n_vocab, int flags = 0);
+
     ggml_context * get_context_for_tensor(ggml_context * ctx, const std::string & name);
 
     void create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias);
@@ -516,6 +527,66 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
     return tensor;
 }
 
+ggml_tensor * create_tensors_helper::create_linear(ggml_context * ctx, const std::string & name, int64_t in, int64_t out, int flags) {
+    const ggml_tensor * meta = ml.get_tensor_meta(name.c_str());
+    if (meta != nullptr && meta->type == GGML_TYPE_I16) {
+        const int64_t K = meta->ne[0]/16;
+        if (meta->ne[3] != 1 || meta->ne[0] % 16 != 0 || K < 2 || K > 6 ||
+            meta->ne[1]*16 != out || meta->ne[2]*16 != in) {
+            throw std::runtime_error(format("%s: unexpected K2 t16 shape for %s (%lld x %lld, K = %lld)",
+                    __func__, name.c_str(), (long long) meta->ne[1]*16, (long long) meta->ne[2]*16, (long long) K));
+        }
+        // pass the meta's own dims so the n_created / buffer-override accounting is unchanged
+        ggml_tensor * w = create_tensor(ctx, name, { meta->ne[0], meta->ne[1], meta->ne[2] }, flags);
+        if (w != nullptr) {
+            create_tensor(ctx, name + ".su", { in });
+            create_tensor(ctx, name + ".sv", { out });
+        }
+        return w;
+    }
+    return create_tensor(ctx, name, { in, out }, flags);
+}
+
+ggml_tensor * create_tensors_helper::create_exps(ggml_context * ctx, const std::string & name,
+        int64_t in, int64_t out, int64_t n_expert, int flags) {
+    const ggml_tensor * meta = ml.get_tensor_meta(name.c_str());
+    if (meta != nullptr && meta->type == GGML_TYPE_I16) {
+        const int64_t K = meta->ne[0]/16;
+        // [16K, out/16, in/16, n_expert]: the op reads in from ne[2], out from ne[1], E from ne[3].
+        if (meta->ne[0] % 16 != 0 || K < 2 || K > 6 || meta->ne[1]*16 != out ||
+            meta->ne[2]*16 != in || meta->ne[3] != n_expert) {
+            throw std::runtime_error(format("%s: bad K2 t16 expert shape %s (%lld x %lld x %lld, K %lld)", __func__,
+                    name.c_str(), (long long) meta->ne[1]*16, (long long) meta->ne[2]*16, (long long) meta->ne[3], (long long) K));
+        }
+        ggml_tensor * w = create_tensor(ctx, name, { meta->ne[0], meta->ne[1], meta->ne[2], meta->ne[3] }, flags);
+        if (w != nullptr) {
+            create_tensor(ctx, name + ".su", { in,  n_expert });
+            create_tensor(ctx, name + ".sv", { out, n_expert });
+        }
+        return w;
+    }
+    return create_tensor(ctx, name, { in, out, n_expert }, flags);
+}
+
+ggml_tensor * create_tensors_helper::create_embd(ggml_context * ctx, const std::string & name, int64_t n_embd, int64_t n_vocab, int flags) {
+    const ggml_tensor * meta = ml.get_tensor_meta(name.c_str());
+    if (meta != nullptr && meta->type == GGML_TYPE_I16) {
+        uint32_t version = 0;
+        uint32_t groups  = 0;
+        if (!ml.get_key("k2.embed.version", version, false) || version != 1 ||
+            !ml.get_key("k2.embed.groups", groups, false) || groups == 0 ||
+            meta->ne[1] != n_vocab || meta->ne[2] != 1 || meta->ne[3] != 1) {
+            throw std::runtime_error(format("%s: invalid K2E embedding %s", __func__, name.c_str()));
+        }
+        ggml_tensor * w = create_tensor(ctx, name, { meta->ne[0], meta->ne[1] }, flags);
+        if (w != nullptr) {
+            create_tensor(ctx, name + ".signs", { 256, (int64_t) groups });
+        }
+        return w;
+    }
+    return create_tensor(ctx, name, { n_embd, n_vocab }, flags);
+}
+
 #define LOADING_PRELUDE \
         [[maybe_unused]] const auto & hparams = model.hparams; \
         [[maybe_unused]] const int64_t n_layer       = hparams.n_layer; \
@@ -545,13 +616,13 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
 
 
 void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm, bool use_ctx_split) {
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     auto out_ctx = use_ctx_split ? ctx_output_split : ctx_output;
     if (has_norm) {
         model.output_norm = create_tensor(out_ctx, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     }
-    model.output = create_tensor(out_ctx, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+    model.output = create_linear(out_ctx, tn(LLM_TENSOR_OUTPUT,      "weight"), n_embd, n_vocab, llama_model_loader::TENSOR_NOT_REQUIRED);
 
     // if output is NULL, init from the input tok embed
     if (model.output == NULL) {
@@ -560,16 +631,16 @@ void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, in
 }
 
 void create_tensors_helper::create_std_attn(int i, const LLM_TN & tn, llama_layer & layer, int n_embd, int n_embd_gqa, ggml_context * ctx_split) {
-    layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-    layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-    layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-    layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+    layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+    layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+    layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+    layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 }
 
 void create_tensors_helper::create_std_ffn(int i, const LLM_TN & tn, llama_layer & layer, int n_ff, int n_embd, ggml_context * ctx_split) {
-    layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff});
-    layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd});
-    layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
+    layer.ffn_gate = create_linear(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), n_embd,   n_ff);
+    layer.ffn_down = create_linear(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i),   n_ff, n_embd);
+    layer.ffn_up   = create_linear(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), n_embd,   n_ff);
 }
 
 bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
@@ -889,10 +960,10 @@ bool create_tensors_helper::create_grok_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+        layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+        layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+        layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+        layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 
         layer.attn_out_norm   = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT_NORM, "weight", i), {n_embd});
 
@@ -982,10 +1053,10 @@ bool create_tensors_helper::create_baichuan_tensors(const LLM_TN & tn, bool with
             layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
         }
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+        layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+        layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+        layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+        layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
@@ -996,7 +1067,7 @@ bool create_tensors_helper::create_baichuan_tensors(const LLM_TN & tn, bool with
 
 bool create_tensors_helper::create_falcon_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -1032,7 +1103,7 @@ bool create_tensors_helper::create_falcon_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_starcoder_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
     model.pos_embd = create_tensor(ctx_input, tn(LLM_TENSOR_POS_EMBD,   "weight"), {n_embd, n_ctx_train});
 
     // output
@@ -1219,7 +1290,7 @@ bool create_tensors_helper::create_bloom_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_mpt_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
     model.pos_embd = create_tensor(ctx_input, tn(LLM_TENSOR_POS_EMBD,   "weight"), {n_embd, n_ctx_train}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
     // output
@@ -1283,10 +1354,10 @@ bool create_tensors_helper::create_stablelm_tensors(const LLM_TN & tn) {
         layer.attn_norm =   create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
         layer.attn_norm_b = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "bias", i), {n_embd});
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+        layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+        layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+        layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+        layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 
         // optional bias tensors, present in Stable LM 2 1.6B
         layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd},     llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -1312,12 +1383,12 @@ bool create_tensors_helper::create_seedoss_tensors(const LLM_TN & tn) {
     const int64_t n_qo_dim              = n_head * n_embd_head_k;
     const int64_t n_kv_dim              = n_head_kv * n_embd_head_k;
 
-     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+     model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.output      = create_linear(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), n_embd, n_vocab, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
@@ -1488,12 +1559,12 @@ bool create_tensors_helper::create_qwen_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.output      = create_linear(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), n_embd, n_vocab, llama_model_loader::TENSOR_NOT_REQUIRED);
         model.output_b    = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "bias"),   {n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
         // if output is NULL, init from the input tok embed
@@ -1510,10 +1581,10 @@ bool create_tensors_helper::create_qwen2_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+        layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+        layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+        layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+        layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 
         // optional bias tensors
         layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd});
@@ -1540,10 +1611,10 @@ bool create_tensors_helper::create_qwen2_moe_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+        layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+        layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+        layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+        layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 
         // optional bias tensors
         layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd});
@@ -1577,12 +1648,12 @@ bool create_tensors_helper::create_qwen2_moe_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.output      = create_linear(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), n_embd, n_vocab, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
@@ -1611,12 +1682,12 @@ bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.output      = create_linear(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), n_embd, n_vocab, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
@@ -1658,7 +1729,7 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_maple_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -1763,7 +1834,7 @@ bool create_tensors_helper::create_flint_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_mellum_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab});
@@ -1806,7 +1877,7 @@ bool create_tensors_helper::create_lfm2_tensors(const LLM_TN & tn) {
     const bool is_moe = model.arch == LLM_ARCH_LFM2MOE;
     const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff;
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
     model.tok_norm = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd});
     model.output_norm = nullptr;
     model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -1851,12 +1922,12 @@ bool create_tensors_helper::create_lfm2_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.output      = create_linear(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), n_embd, n_vocab, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (model.output == NULL) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
         }
@@ -2203,12 +2274,12 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.output      = create_linear(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), n_embd, n_vocab, llama_model_loader::TENSOR_NOT_REQUIRED);
         if (model.output == NULL) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
         }
@@ -2318,7 +2389,7 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -2534,7 +2605,7 @@ bool create_tensors_helper::create_mimo2_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_phi2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -2583,7 +2654,7 @@ bool create_tensors_helper::create_phi3_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     const int64_t n_embd_head = n_embd / n_head;
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -2615,7 +2686,7 @@ bool create_tensors_helper::create_phi3_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_gpt2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
     model.pos_embd = create_tensor(ctx_input, tn(LLM_TENSOR_POS_EMBD,   "weight"), {n_embd, n_ctx_train});
 
     // output
@@ -2684,7 +2755,7 @@ bool create_tensors_helper::create_codeshell_tensors(const LLM_TN & tn) {
 }
 
 void create_tensors_helper::create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias) {
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     model.output_norm   = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     if (norm_bias) {
@@ -2705,10 +2776,10 @@ bool create_tensors_helper::create_orion_tensors(const LLM_TN & tn) {
         layer.attn_norm   = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
         layer.attn_norm_b = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "bias", i),   {n_embd});
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+        layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+        layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+        layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+        layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 
         layer.ffn_norm   = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
         layer.ffn_norm_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "bias", i),   {n_embd});
@@ -2744,7 +2815,7 @@ bool create_tensors_helper::create_internlm_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_gemma_tensors(const LLM_TN & tn, int version) {
     LOADING_PRELUDE
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
@@ -3199,7 +3270,7 @@ bool create_tensors_helper::create_dflash_dsv4_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_starcoder2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -3223,10 +3294,10 @@ bool create_tensors_helper::create_starcoder2_tensors(const LLM_TN & tn) {
         layer.attn_norm   = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
         layer.attn_norm_b = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "bias", i),   {n_embd});
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+        layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+        layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+        layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+        layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 
         // optional bias tensors
         layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd});
@@ -3258,7 +3329,7 @@ bool create_tensors_helper::create_mamba_tensors(const LLM_TN & tn) {
     // only an expansion factor of 2 is supported for now
     GGML_ASSERT(2 * n_embd == d_inner);
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -3313,10 +3384,10 @@ bool create_tensors_helper::create_xverse_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+        layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+        layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+        layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+        layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
         create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
@@ -3327,7 +3398,7 @@ bool create_tensors_helper::create_xverse_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_command_r_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -3348,10 +3419,10 @@ bool create_tensors_helper::create_command_r_tensors(const LLM_TN & tn) {
             layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv}, 0);
         }
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+        layer.wq = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), n_embd, n_embd);
+        layer.wk = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), n_embd, n_embd_gqa);
+        layer.wv = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), n_embd, n_embd_gqa);
+        layer.wo = create_linear(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), n_embd, n_embd);
 
         create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
@@ -3377,7 +3448,7 @@ bool create_tensors_helper::create_olmo_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_openelm_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -3412,7 +3483,7 @@ bool create_tensors_helper::create_openelm_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_gptneox_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -3490,7 +3561,7 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
     const int64_t n_ff_exp        = hparams.n_ff_exp;
     const int64_t n_expert_shared = hparams.n_expert_shared;
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -3800,7 +3871,7 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
     const int64_t n_ff_exp        = hparams.n_ff_exp;
     const int64_t n_expert_shared = hparams.n_expert_shared;
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -3950,7 +4021,7 @@ bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
     const int64_t sink_n     = hparams.param_sink_number;   // 128
     const int64_t kernel     = 3;                           // MoME causal conv width
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -4194,7 +4265,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_bitnet_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -4235,12 +4306,12 @@ bool create_tensors_helper::create_bitnet_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_bitnet2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.output      = create_linear(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), n_embd, n_vocab, llama_model_loader::TENSOR_NOT_REQUIRED);
 
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
@@ -4323,7 +4394,7 @@ bool create_tensors_helper::create_t5_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     const auto n_rel_attn_bkts = hparams.n_rel_attn_bkts;
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -4385,7 +4456,7 @@ bool create_tensors_helper::create_tsencoder_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     const auto n_rel_attn_bkts = hparams.n_rel_attn_bkts;
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // output
     {
@@ -4421,7 +4492,7 @@ bool create_tensors_helper::create_tsencoder_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_jais_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
 
     // Output
     {
@@ -4718,7 +4789,7 @@ bool create_tensors_helper::create_bailingmoe3_tensors(const LLM_TN & tn) {
     const uint32_t n_ff_exp         = hparams.n_ff_exp;
     const uint32_t n_ff_shexp       = hparams.n_ff_shexp * hparams.n_expert_shared;
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab});
 
@@ -4829,7 +4900,7 @@ bool create_tensors_helper::create_glm5next_tensors(const LLM_TN & tn) {
     const int64_t n_ff_exp         = hparams.n_ff_exp;
     const int64_t n_ff_shexp       = hparams.n_ff_shexp * hparams.n_expert_shared;
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_embd = create_embd(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), n_embd, n_vocab);
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab},
             llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -5287,15 +5358,18 @@ bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & t
     auto ug_meta = ml.get_tensor_meta(ug_name.c_str());
     //printf("Checking for tensor %s: %s\n", ug_name.c_str(), ug_meta ? "found" : "not found");
     if (ug_meta) {
-        layer.ffn_up_gate_exps = create_tensor(ffn_ctx, ug_name, {  n_embd, 2*n_ff_exp, n_expert}, flags);
+        layer.ffn_up_gate_exps = create_exps(ffn_ctx, ug_name, n_embd, 2*n_ff_exp, n_expert, flags);
     } else {
-        merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
+        // K2 (I16) experts must not be merged: merge_up_gate_exps() builds 3-D tensor views.
+        const auto u_meta = ml.get_tensor_meta(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i).c_str());
+        const bool k2_exps = u_meta != nullptr && u_meta->type == GGML_TYPE_I16;
+        merged = flags == 0 && ml.merge_up_gate_exps && !k2_exps && merge_up_gate_exps(tn, i, 0);
         if (!merged) {
-            layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
-            layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
+            layer.ffn_up_exps   = create_exps(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), n_embd, n_ff_exp, n_expert, flags);
+            layer.ffn_gate_exps = create_exps(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), n_embd, n_ff_exp, n_expert, flags);
         }
     }
-    layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, flags);
+    layer.ffn_down_exps = create_exps(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), n_ff_exp, n_embd, n_expert, flags);
 
     return merged;
 }

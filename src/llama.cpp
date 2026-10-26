@@ -4322,6 +4322,13 @@ static bool is_prism_model(llama_model_loader & ml) {
     return ml.get_key("prism.hadamard.version", version, false);
 }
 
+// K2 (t16) trellis models: the I16 weights are consumed whole by the custom op, which is
+// not split-aware; fall back to 'layer' split like Prism.
+static bool is_k2_model(llama_model_loader & ml) {
+    uint32_t version = 0;
+    return ml.get_key("k2.t16.version", version, false);
+}
+
 struct expert_tensors {
     ggml_tensor * up = nullptr;
     ggml_tensor * gate = nullptr;
@@ -4473,6 +4480,11 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         if (!is_mla) {
             auto ttype = llm_tensor_type(model.arch, name, il);
             if (ttype == LLM_TENSOR_UNKNOWN) {
+                // K2 (t16) side scale tensors are consumed by the custom op, not by a layer op
+                if (name.size() > 3 && (name.compare(name.size() - 3, 3, ".su") == 0 ||
+                                        name.compare(name.size() - 3, 3, ".sv") == 0)) {
+                    continue;
+                }
                 LLAMA_LOG_WARN("Oops: got unknown for tensor %s\n", name.c_str());
                 continue;
             }
@@ -4637,9 +4649,9 @@ static bool llm_load_tensors(
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("===========================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
-        } else if (is_prism_model(ml)) {
+        } else if (is_prism_model(ml) || is_k2_model(ml)) {
             LLAMA_LOG_WARN("\n=======================================================\n");
-            LLAMA_LOG_WARN("Split mode 'graph' is not supported for Prism models\n");
+            LLAMA_LOG_WARN("Split mode 'graph' is not supported for Prism/K2 models\n");
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("=======================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
@@ -5615,6 +5627,9 @@ static bool llm_load_tensors(
 
     // Prism ternary Hadamard rotations
     llm_load_hadamard(ml, model);
+
+    // K2 (t16) trellis metadata + F32 su/sv copies
+    llm_load_k2(ml, model, dry_run);
 
     // loading time will be recalculate after the first eval, so
     // we take page faults deferred by mmap() into consideration

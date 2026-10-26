@@ -2995,3 +2995,11 @@ const llama_hadamard_transform * llama_model::hadamard_rotation(const struct ggm
     const auto it = hadamard_map.find(t->name);
     return it != hadamard_map.end() && it->second.block_size > 0 ? &it->second : nullptr;
 }
+
+const llama_k2_t16_side * llama_model::k2_t16_scale(const struct ggml_tensor * t) const {
+    if (!t) {
+        return nullptr;
+    }
+    const auto it = k2_t16_map.find(t->name);
+    return it != k2_t16_map.end() && it->second.su != nullptr && it->second.sv != nullptr ? &it->second : nullptr;
+}

@@ -238,6 +238,9 @@ void llm_load_hparams(llama_model_loader & ml, llama_model & model, bool ignore_
 // Prism ternary Hadamard rotations; no-op unless the GGUF declares them
 void llm_load_hadamard(llama_model_loader & ml, llama_model & model);
 
+// K2 (t16) trellis metadata + F32 su/sv scale copies; no-op unless k2.t16.* is present
+void llm_load_k2(llama_model_loader & ml, llama_model & model, bool dry_run);
+
 struct create_tensors_helper_interface {
     virtual ~create_tensors_helper_interface() = default;
     virtual bool create_tensors() = 0;

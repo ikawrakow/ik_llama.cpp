@@ -523,6 +523,13 @@ struct llama_hadamard_transform {
     int64_t perm_rep = 1;                 // GDN v-grouped reshape (repeat count)
 };
 
+// K2 (t16) trellis: F32 load-time copies of the fp16 su/sv side tensors
+struct llama_k2_t16_side {
+    struct ggml_tensor * su = nullptr; // F32 [in]  (on the weight's device)
+    struct ggml_tensor * sv = nullptr; // F32 [out] (on the weight's device)
+    int64_t block_size = 0;            // Hadamard block size (128)
+};
+
 struct llama_model {
     e_model     type  = MODEL_UNKNOWN;
     llm_arch    arch  = LLM_ARCH_UNKNOWN;
@@ -536,6 +543,13 @@ struct llama_model {
     // Prism ternary Hadamard rotations, keyed by GGUF weight name (empty for other models)
     std::unordered_map<std::string, llama_hadamard_transform> hadamard_map;
     const llama_hadamard_transform * hadamard_rotation(const struct ggml_tensor * t) const;
+
+    // K2 (t16) trellis weights and their F32 su/sv scale copies, keyed by GGUF weight name
+    std::unordered_map<std::string, llama_k2_t16_side> k2_t16_map;
+    const llama_k2_t16_side * k2_t16_scale(const struct ggml_tensor * t) const;
+
+    // K2E trellis token embedding: the signs tensor, set when k2.embed.* is present
+    struct ggml_tensor * k2_embed_signs = nullptr;
 
     struct ggml_tensor * tok_embd;
     struct ggml_tensor * type_embd;
