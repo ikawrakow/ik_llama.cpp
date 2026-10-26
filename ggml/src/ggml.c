@@ -3580,7 +3580,6 @@ inline static float ggml_compute_sqrt_softplus_f32(const float x) { return sqrtf
 inline static void ggml_vec_exp_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = expf(x[i]); }
 inline static void ggml_vec_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_softplus_f32(x[i]); }
 inline static void ggml_vec_sqrt_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_sqrt_softplus_f32(x[i]); }
-// Step-5: the official e4m3 activation round (kernel.py:501 round_activations_e4m3).
 inline static void ggml_vec_round_e4m3_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_csa_round_bf16_e4m3(x[i]); }
 // TODO: optimize performance
 inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = x[i] * fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
@@ -7602,7 +7601,6 @@ struct ggml_tensor * ggml_sqrt_softplus(
     return ggml_unary(ctx, a, GGML_UNARY_OP_SQRT_SOFTPLUS);
 }
 
-// Step-5: official e4m3 activation round (kernel.py:501).
 struct ggml_tensor * ggml_round_e4m3(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
@@ -10910,17 +10908,15 @@ struct ggml_tensor * ggml_blend(
 struct ggml_tensor * ggml_indexer_mask(
             struct ggml_context * ctx,
             struct ggml_tensor  * mask,
-            struct ggml_tensor  * topk,
-            float                 pen) {
-    return ggml_indexer_mask_own(ctx, mask, topk, NULL, pen);
+            struct ggml_tensor  * topk) {
+    return ggml_indexer_mask_own(ctx, mask, topk, NULL);
 }
 
 struct ggml_tensor * ggml_indexer_mask_own(
             struct ggml_context * ctx,
             struct ggml_tensor  * mask,
             struct ggml_tensor  * topk,
-            struct ggml_tensor  * force,
-            float                 pen) {
+            struct ggml_tensor  * force) {
     GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
     GGML_ASSERT(topk->type == GGML_TYPE_I32);
     if (force) {
@@ -10940,7 +10936,6 @@ struct ggml_tensor * ggml_indexer_mask_own(
     result->src[1] = topk;
     result->src[2] = force;  // own-region force-visible map (nullptr = off)
     result->op = GGML_OP_MASK_TOPK;
-    memcpy(&result->op_params[0], &pen, sizeof(float));
 
     return result;
 }
@@ -16790,10 +16785,6 @@ static void ggml_compute_forward_sqrt_softplus(
     }
 }
 
-// ggml_compute_forward_round_e4m3
-// Step-5: official e4m3 activation round (kernel.py:501).-- elementwise
-// F32 -> BF16 (RNE) -> E4M3FN (RN, satfinite) -> F32 via ggml_csa_round_bf16_e4m3.
-
 static void ggml_compute_forward_round_e4m3_f32(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -21215,9 +21206,6 @@ static void ggml_compute_forward_clamp_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    // NOTE: no `ith != 0` early return here -- combined with the strided loop below it
-    // would clamp only thread 0's rows (j = ith, ith+nth, ...) and silently skip the rest
-    // (found via the STEP35 CSA den clamp: NaN block_k under n_threads > 1).
     float min;
     float max;
     memcpy(&min, (float *) dst->op_params + 0, sizeof(float));
@@ -23094,7 +23082,7 @@ static inline float ggml_bicubic_interp(float p0, float p1, float p2, float p3, 
     return p0 * w0 + p1 * w1 + p2 * w2 + p3 * w3;
 }
 
-// triangle filter for antialias bilinear (== upstream std::max(1.0f - fabsf(x), 0.0f))
+// triangle filter for antialias bilinear
 static inline float ggml_triangle_filter(float x) {
     float t = 1.0f - fabsf(x);
     return t > 0.0f ? t : 0.0f;
@@ -23147,7 +23135,6 @@ static void ggml_compute_forward_upscale_f32(
             }
         }
     } else if (mode == GGML_SCALE_MODE_BILINEAR && (mode_flags & GGML_SCALE_FLAG_ANTIALIAS)) {
-        // upstream parity port (ggml-cpu/ops.cpp ggml_compute_forward_upscale_f32 antialias branch):
         // Similar to F.interpolate(..., mode="bilinear", align_corners=False, antialias=True)
         // https://github.com/pytorch/pytorch/blob/8871ff29b743948d1225389d5b7068f37b22750b/aten/src/ATen/native/cpu/UpSampleKernel.cpp
 
@@ -23166,8 +23153,7 @@ static void ggml_compute_forward_upscale_f32(
                     for (int64_t i0 = 0; i0 < ne0; i0++) {
                         const float x = ((float) i0 + pixel_offset) / sf0;
 
-                        // the range of source pixels that contribute
-                        // (upstream std::min/std::max<int64_t>: truncate float to int64_t, then clamp)
+                        // the range of source pixels that contribute (truncate, then clamp)
                         int64_t x_min = (int64_t)(x - support0 + pixel_offset); if (x_min < 0) x_min = 0;
                         int64_t x_max = (int64_t)(x + support0 + pixel_offset); if (x_max > ne00) x_max = ne00;
                         int64_t y_min = (int64_t)(y - support1 + pixel_offset); if (y_min < 0) y_min = 0;
@@ -23205,8 +23191,6 @@ static void ggml_compute_forward_upscale_f32(
             }
         }
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
-        // upstream parity port (ggml-cpu/ops.cpp plain bilinear branch; fork used to
-        // sample NEAREST for bilinear -- nearest-copy is upstream's NEAREST branch only)
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             const int64_t i03 = i3 / sf3;
             for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
@@ -25355,8 +25339,6 @@ static void ggml_compute_forward_csa_compress(
     const int head_size = dst->ne[0];
     const int n_blocks  = dst->ne[1];
 
-    // parity with the decomposed graph + kernel.py:337: z_masked = z + (vis*1e30 - 1e30), computed as
-    // the add AFTER the scale_bias -- NOT fused as z*1e30 - 1e30.
     const float * z_f32 = NULL;
     const uint16_t * z_f16 = NULL;
     if (z->type == GGML_TYPE_F32) {
@@ -29877,7 +29859,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                 } break;
             case GGML_OP_CSA_COMPRESS:
                 {
-                    cur = 0; // all reduction in registers/locals, no workspace
+                    cur = 0;
                 } break;
             case GGML_OP_DS4_COMP:
                 {

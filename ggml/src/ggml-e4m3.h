@@ -1,14 +1,8 @@
-// Step-5 CSA E4M3FN helpers: the official double round F32 -> BF16 (RNE) -> E4M3FN
-// (RN, satfinite) -> F32 (kernel.py:345). Shared by the ggml.c CPU forward and test probes.
+// Step-5 E4M3FN helpers: F32 -> BF16 (RNE) -> E4M3FN (RN, satfinite) -> F32; shared by
+// the ggml.c CPU forward and test probes. E4M3FN: bias 7, no inf, 0x7F = NaN, max 448.
 #pragma once
 
 #include "ggml-impl.h"
-
-// ---- Step-5 CSA helpers: the official double round F32 -> BF16 (RNE) -> E4M3FN
-// (RN, satfinite) -> F32 (kernel.py:345). BF16 -> F32 widening is exact (zero-bit append),
-// so rounding the widened value straight onto the E4M3 grid is bit-equivalent to converting
-// from the bf16 bits. E4M3FN: 4 exp bits (bias 7), 3 mantissa bits, no inf; 0x7F/0xFF = NaN;
-// max finite 448 = 0x7E (E=15, m=6 is VALID -- only E=15 && m=7 is NaN in the "fn" variant).
 
 static inline uint8_t ggml_f32_to_e4m3fn_bits(float f) {
     uint32_t u;
@@ -22,8 +16,7 @@ static inline uint8_t ggml_f32_to_e4m3fn_bits(float f) {
     const uint32_t mant = m32 | 0x800000;                      // 24-bit significand (e32 > 0)
     const int e4 = (int) e32 - 120;                            // value = mant * 2^(e4-30)
     if (e4 >= 1) {
-        // normal: round the 24-bit significand to 3 fraction bits (drop 20, RNE), which is the
-        // (8+m3) * 2^(E-1) grid; a carry to q4==16 bumps the exponent.
+        // normal: RNE the 24-bit significand to 3 fraction bits; carry bumps the exponent
         const uint32_t rem = mant & 0xFFFFF;
         uint32_t q4 = mant >> 20;
         if (rem > 0x80000 || (rem == 0x80000 && (q4 & 1))) q4++;   // RNE
@@ -33,10 +26,9 @@ static inline uint8_t ggml_f32_to_e4m3fn_bits(float f) {
         if (E > 15 || (E == 15 && m3 == 7)) return (uint8_t)(s | 0x7E); // satfinite -> 448 (480 is the NaN code)
         return (uint8_t)(s | ((E << 3) | m3));
     }
-    // subnormal (e4 <= 0): grid is q * 2^-9, q = round(value * 2^9) = rne(mant, 21 - e4)
+    // subnormal (e4 <= 0): q = rne(mant, 21 - e4)
     const int sh = 21 - e4;
-    if (sh >= 25) return (uint8_t) s;                          // < 2^-10 even after RNE (ties unreachable:
-                                                               // mant < 2^24 means never exactly 2^(sh-1))
+    if (sh >= 25) return (uint8_t) s;                          // < 2^-10 even after RNE
     uint32_t rem = mant & ((1u << sh) - 1);
     int q = (int)(mant >> sh);
     if (rem > (1u << (sh - 1)) || (rem == (1u << (sh - 1)) && (q & 1))) q++; // RNE
@@ -54,7 +46,6 @@ static inline float ggml_e4m3fn_bits_to_f32(uint8_t b) {
     return sgn * (1.0f + m / 8.0f) * ldexpf(1.0f, E - 7);      // E==15, m<7 valid (max 448)
 }
 
-// The full official double round as a float->float op.
 static inline float ggml_csa_round_bf16_e4m3(float x) {
     return ggml_e4m3fn_bits_to_f32(ggml_f32_to_e4m3fn_bits(GGML_BF16_TO_FP32(GGML_FP32_TO_BF16(x))));
 }

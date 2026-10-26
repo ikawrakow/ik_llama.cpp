@@ -759,8 +759,7 @@ bool llama_context::update_cache_copies() {
             c.cpy->src[1]->data = (char *) kv_self.kr_l[il]->data + c.cpy->view_offs;
             c.cpy->data         = c.cpy->src[1]->data;
         }
-        // STEP5 kz_l (z cache) write cpy: same fixup, rooted at kz_l (official CSA; entries
-        // null otherwise so this is a no-op for every other configuration).
+        // STEP5 kz_l (z cache) write cpy: same fixup, rooted at kz_l.
         for (size_t il = 0; il < dsa_z_cache_copies.size(); ++il) {
             auto & c = dsa_z_cache_copies[il];
             if (!c.cpy) continue;
@@ -798,13 +797,6 @@ bool llama_context::update_cache_copies() {
         }
         return any;
     }
-    // MTP graphs are tail-only (nextn layers); main layers' cache_copies entries belong to
-    // the last-built MAIN graph and are stale/absent under an MTP op — walking them would
-    // refuse reuse every step (layer-94 null refusal). Bound the walk to the tail range and
-    // skip null entries (tail heads not in the last-built MTP graph, e.g. heads beyond the
-    // active step in a single-head draft-gen build): nothing to patch = nothing to refuse.
-    // Cross-graph staleness is unreachable: mtp_op_type/mtp_step_idx are part of the reuse
-    // fingerprint, so a graph is only ever reused against a build of the same op/step.
     const bool mtp_graph = model.mtp && cparams.mtp_op_type != MTP_OP_NONE;
     const int n_layer_base = mtp_graph ? model.hparams.n_layer - model.hparams.nextn_predict_layers : 0;
     const int n_layer = mtp_graph ?
@@ -839,7 +831,7 @@ bool llama_context::update_cache_copies() {
                 if (!kl->splits[id]) continue;
                 size_t idx = 2*model.splits.size()*il + 2*id + 0;
                 auto& c = cache_copies[idx];
-                if (!c.cpy) continue; // layer not in the last-built graph: nothing to patch
+                if (!c.cpy) continue;
                 if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kl->splits[id]) {
                     return false;
                 }
@@ -851,7 +843,7 @@ bool llama_context::update_cache_copies() {
             for (int id = 0; id < vl->n_device; ++id) {
                 if (!vl->splits[id]) continue;
                 auto& c = cache_copies[2*model.splits.size()*il + 2*id + 1];
-                if (!c.cpy) continue; // layer not in the last-built graph: nothing to patch
+                if (!c.cpy) continue;
                 if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != vl->splits[id]) {
                     return false;
                 }
@@ -861,7 +853,7 @@ bool llama_context::update_cache_copies() {
             }
         } else {
             auto& c = cache_copies[2*il+0];
-            if (!c.cpy) continue; // layer not in the last-built graph: nothing to patch
+            if (!c.cpy) continue;
             if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) {
                 printf("%s: K has no copy or is not a copy in layer %d\n", __func__, il);
                 return false;
@@ -871,7 +863,7 @@ bool llama_context::update_cache_copies() {
             c.cpy->data = c.cpy->src[1]->data;
             if (!kv_self.v_l.empty() && kv_self.v_l[il]) {
                 auto& c = cache_copies[2*il+1];
-                if (!c.cpy) continue; // layer not in the last-built graph: nothing to patch
+                if (!c.cpy) continue;
                 if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[il]) {
                     printf("%s: V has no copy or is not a copy in layer %d\n", __func__, il);
                     return false;
@@ -1368,18 +1360,12 @@ static bool llama_kv_cache_init(
         replicate_mla = true;
     }
 
-    // Compacted (--swa-compress) caches under split mode graph/attn are HEAD-sharded: every
-    // device shard holds all cells for its head subset, so llama_kv_cache_compact_swa compacts
-    // each shard with independent row moves (no cross-device semantics). GEMMA4 was validated
-    // first (ec6fb235); STEP5 mirrors it. Replicated MLA caches stay refused (the compaction
-    // plumbing has no replica branch).
+    // Compacted (--swa-compress) caches under split mode graph/attn are HEAD-sharded.
     if (cache.any_compacted() && ((split_cache && model.arch != LLM_ARCH_GEMMA4 && !llm_arch_is_step5(model.arch)) || replicate_mla)) {
         LLAMA_LOG_ERROR("%s: --swa-compress is not supported with a replicated KV cache "
                         "(split mode graph/attn); run without --swa-compress or with a single device\n", __func__);
         return false;
     }
-    // split compaction moves are FA-only (transposed-V row moves are unplumbed); refuse at
-    // init instead of letting llama_kv_cache_compact_swa's GGML_ASSERT abort mid-generation
     if (cache.any_compacted() && split_cache && cache.v_trans) {
         LLAMA_LOG_ERROR("%s: --swa-compress with split mode graph/attn requires flash attention (-fa)\n", __func__);
         return false;
@@ -1468,8 +1454,6 @@ static bool llama_kv_cache_init(
     // pooling precedes the norm and the rotation that the other two arches fold in before caching.
     const bool has_qwen4exp_indexer =
         model.arch == LLM_ARCH_QWEN4EXP && hparams.indexer_head_size > 0;
-    // Step-5 sparse GQA indexer (STEP5): one raw proxy key per cached cell, full-attn
-    // layers only (SWA layers carry no indexer tensors).
     const bool has_step5_indexer =
         llm_arch_is_step5(model.arch) && hparams.indexer_head_size > 0;
     if (has_glm_dsa_indexer || has_openpangu_dsa_indexer || has_qwen4exp_indexer || has_step5_indexer) {
@@ -1513,16 +1497,7 @@ static bool llama_kv_cache_init(
         const bool is_mtp_tail_layer = llama_mtp_tail_uses_layer_cache(model) && i >= n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         struct ggml_context * ctx = ((split_cache || replicate_mla) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-        // Indexer-key caches (kr_l / kp_l) must NOT live in the split buffer: split-buffer
-        // tensors carry a dummy base pointer (0x1000 + offset; real per-device storage hangs
-        // off ->extra, which these freshly-created caches never get wired to). Every indexer
-        // graph op that touches the parent tensor (the hadamard de-rotation, the cache cpy,
-        // top-k) would dereference that dummy -> "illegal memory access" at first touch, and
-        // the async error surfaces a few kernels later (observed as "HADAMARD failed" under
-        // -sm graph with 2 GPUs, IK_HADAMARD default). Allocate them in the layer's regular
-        // device buffer instead: the scheduler then pins the indexer ops to that device and
-        // moves inputs across the split itself. Single-GPU / non-split runs pass the same ctx
-        // and are unaffected.
+        // Split-buffer tensors carry a dummy base pointer; allocate these in the layer's regular device buffer.
         ggml_context * ctx_idx = ((split_cache || replicate_mla) && !is_mtp_tail_layer)
             ? ctx_map.at(model.buft_layer[i].buft) : ctx;
         ggml_tensor * k = nullptr;
@@ -1695,20 +1670,13 @@ static bool llama_kv_cache_init(
                 cache.kp_l[i] = idxp;
             }
 
-            // Step-5 sparse GQA indexer (STEP5): the proxy-key cache row per cell, allocated
-            // on full-attn layers only and skipped for the MTP tail (no indexer tensors there).
-            // Mirror of llama_model::cache_size()'s STEP5 branch.
+            // STEP5 proxy-key cache row per cell (full-attn layers, MTP tail skipped).
             if (has_step5_indexer && hparams.indexer_is_full[i] && !is_mtp_tail_layer) {
                 ggml_tensor * idxk = ggml_new_tensor_2d(ctx_idx, idx_type_k, hparams.indexer_head_size, cache.rows(i));
                 ggml_format_name(idxk, "cache_kr_l%d", i);
                 cache.kr_l[i] = idxk;
 
-                // Official per-dim softmax(z)-weighted compression: cache the RAW
-                // z projection per cell too -- z is the softmax logit of the region summary
-                // (kernel.py:283) and, as a hidden-state projection, cannot be recomputed from
-                // kr_l at read-back. Same shape/type as kr_l (indexer_head_size rows per cell);
-                // precision rides -ictk: quantized z-noise feeds exp(), so keep the
-                // z cache at the KV-cache quant type rather than a lower one.
+                // Cache the raw z projection per cell.
                 if (llama_step5_csa_z_cache()) {
                     ggml_tensor * idxz = ggml_new_tensor_2d(ctx_idx, idx_type_k, hparams.indexer_head_size, cache.rows(i));
                     ggml_format_name(idxz, "cache_kz_l%d", i);
@@ -1841,12 +1809,6 @@ static bool llama_kv_cache_init(
     }
 #endif
 
-    // Invariant: kr_l / kp_l never carry split extras. They are allocated in the layer's regular
-    // device buffer (ctx_idx above), and llama_data_write/read's split stitch helpers derive
-    // shard row widths from wk/wv surrogates that cannot describe indexer-key shard layouts:
-    // a wired kr_l extra would misderive widths through state save/restore (ckpt PARTIAL_ONLY
-    // carries compacted indexer windows). compact_swa keeps a split branch for kr_l defensively,
-    // but nothing may set the extra while the stitch helpers assume wk/wv geometry.
     for (size_t il = 0; il < cache.kr_l.size(); ++il) {
         GGML_ASSERT(cache.kr_l[il] == nullptr || cache.kr_l[il]->extra == nullptr);
     }
@@ -1989,9 +1951,7 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
     }
 
     const uint32_t live = cache.live_swa();
-    // Generalized retention: keep min(W, live) rows. live >= W reproduces the old
-    // window-exact arithmetic byte-for-byte; live < W (reachable under MTP spec rewind
-    // right after a fire) is a clean no-op instead of an assert abort.
+    // keep min(W, live) rows (live < W: clean no-op).
     const uint32_t n_keep = std::min(W, live);
     const uint32_t drop   = live - n_keep;
     if (drop == 0) {
@@ -2069,9 +2029,6 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
                 if (k_split) {
                     const size_t rows_per_pos = (size_t) k_split->ne[1] / cache_rows;
                     const size_t stride = k_split->nb[1] * rows_per_pos;
-                    // n_keep, not W: matches the non-split branch below. Both coincide whenever
-                    // compaction fires (drop > 0 requires live > W, i.e. n_keep == W), but spelling
-                    // W here lets retention arithmetic diverge exactly in rewind-after-fire edges
                     copy_bytes(k_split, (size_t) src_row*stride, (size_t) dst_row*stride, (size_t) n_keep*stride);
                 }
                 auto v_split = v_extra ? v_extra->splits[is] : nullptr;
@@ -2123,13 +2080,7 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
         }
     }
 
-    // DSA indexer-key cache (kr_l): one row per cell, keys cannot be recomputed
-    // (GLM packs [key; gate] per row and the gate needs the hidden state), so the
-    // surviving window rows must MOVE with K/V here. Skipping this left kr_l
-    // row-shifted by `drop` against K/V after every SWA fire while pos_base_swa
-    // advanced — indexer scores pair queries with stale keys (= prod binding
-    // corruption from the first compress fire on). Mirrors build_defrag's kr_l
-    // move + qsa_pooled_stale marking.
+    // kr_l: one row per cell; the surviving window rows must MOVE with K/V (keys cannot be recomputed).
     for (size_t il = 0; il < cache.kr_l.size(); ++il) {
         ggml_tensor * kr = cache.kr_l[il];
         if (!cache.is_compacted((int) il) || kr == nullptr) {
@@ -2157,8 +2108,7 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
         copy_bytes(kr, src_row * stride, dst_row * stride, n_keep * stride);
     }
 
-    // kr_l rows just moved => pooled block keys (kp_l) derived from them are stale;
-    // rebuild every block on the next graph, as defrag and restore already do.
+    // kr_l rows moved => pooled block keys (kp_l) are stale; rebuild on the next graph.
     lctx.qsa_pooled_stale = lctx.qsa_pooled_stale || !cache.kp_l.empty();
 
     cache.pos_base_swa += (llama_pos) drop;
@@ -2824,11 +2774,6 @@ static bool llama_kv_cache_seq_rm(
     }
 
     // a compacted layer holds one contiguous range, so a refusal must leave the cache untouched
-    // NOTE: live_swa()==0 with pos_base_swa>0 is a LEGAL rebased-empty state
-    // (llama_kv_cache_seq_swa_rebase): the window is empty but anchored at the next write
-    // position, keeping row(pos) = sink_rows + pos - pos_base_swa aligned. cur_end == base
-    // then makes every branch below behave: trims below base refuse (no rows to lose),
-    // trims at/above base skip the compact branch, p0==0 resets to the 0-frame.
     bool      compact_apply = false;
     uint32_t  compact_head  = 0;
     llama_pos compact_base  = 0;
@@ -5805,8 +5750,6 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 throw std::runtime_error(error_msg);
             }
         }
-        // STEP5 sparse-GQA indexer keys land in an idx_type_k cache row per cell; reject
-        // unsupported -ictk types up front instead of failing at the first ggml_cpy.
         if (llm_arch_is_step5(model.arch) && model.hparams.indexer_head_size > 0) {
             std::string error_msg;
             if (!llama_openpangu_validate_indexer_cache_type(params.idx_type_k, &error_msg)) {
@@ -6066,9 +6009,6 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
     const auto & kv_self = lctx.kv_self;
 
     if (lctx.inp_kv_pos) {
-        // STEP5 sparse-GQA indexer read-back RoPE: absolute position of each cached-proxy-key cell
-        // in the scored span [0, n_kv), filled from kv_self.cells like the KQ_mask / inp_dsa_sink.
-        // Empty cells clamp to 0 -- they are masked out of the indexer scores anyway.
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_kv_pos->buffer));
         const int64_t n_kv = lctx.inp_kv_pos->ne[0];
         GGML_ASSERT(n_kv <= kv_self.size);
@@ -6080,11 +6020,6 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
     }
 
     if (lctx.inp_step5_cell_blk) {
-        // STEP5 fused indexer topk: cell -> CSA block map for the pooled-block key expand.
-        // Blocks are SLOT-ALIGNED (cell i -> block i/B) -- the same grouping as the builder's
-        // CSA pooling reshape (build_step5_indexer_score), so this is a static fill; the
-        // multi-sequence/defrag alignment caveat is the decomposed path's documented TODO and
-        // applies identically here.
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_step5_cell_blk->buffer));
         const int64_t n_kv = lctx.inp_step5_cell_blk->ne[0];
         const int64_t B = hparams.indexer_csa_block > 0 ? hparams.indexer_csa_block : 8;
@@ -11306,14 +11241,7 @@ bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llam
 }
 
 bool llama_kv_cache_seq_swa_rebase(struct llama_context * ctx, llama_seq_id seq_id, llama_pos pos) {
-    // Hard-clear the sequence and anchor the compacted SWA window so the next write lands
-    // at `pos`: pos_base_swa := pos, head_swa := sink_rows, live 0. Keeps the row mapping
-    // row(pos') = sink_rows + pos' - pos_base_swa aligned for a cache that must rejoin a
-    // sequence MID-STREAM (e.g. the MTP companion ctx after the main cache rewound below
-    // the companion's compaction floor -- its old rows are gone and can never be rebuilt,
-    // so an empty-but-anchored window is the only consistent state). Plain seq_rm cannot
-    // do this: its p0==0 reset anchors at 0, which only works for full restarts at pos 0.
-    // Single-sequence by compacted-cache construction (n_seq_max == 1 is enforced at init).
+    // Hard-clear the sequence and anchor the compacted SWA window so the next write lands at pos.
     if (!llama_kv_cache_seq_rm(ctx, seq_id, -1, -1)) {
         return false;
     }
@@ -11428,10 +11356,7 @@ bool llama_save_session_file(struct llama_context * ctx, const char * path_sessi
     return llama_state_save_file(ctx, path_session, tokens, n_token_count);
 }
 
-// Surrogate for a row-major KV-cache tensor's shard geometry: wk/wv carry split extras whose
-// shards mirror the k_l/v_l cache shard widths (each weight shard's ne[1] = shard row width).
-// ONLY valid for k_l/v_l — indexer caches kr_l/kp_l have unrelated shard layouts and must never
-// carry split extras (asserted at the end of llama_kv_cache_init).
+// Shard-geometry surrogate for k_l/v_l split extras (indexer caches never carry split extras).
 static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor, const llama_layer & l) {
     if (!l.wv) return l.wk;
     bool use_V_for_K = l.attn_k_norm && l.attn_k_norm->ne[0] == l.wk->ne[1] ? true : false;
@@ -11804,9 +11729,7 @@ struct llama_data_write {
 
         if (dsa_indexer_state != 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
-                // kr_l rides the compacted-K carve-out above: a compacted layer holds the
-                // only copy of its indexer window, so PARTIAL_ONLY has to carry it (openPangu
-                // layout excluded, see the has_k_cache note). need_kv writes full ranges.
+                // kr_l rides the compacted-K carve-out above (openPangu layout excluded).
                 const bool has_kr_cache = il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr &&
                     (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
                 if (!has_kr_cache) continue;
@@ -12712,8 +12635,6 @@ struct llama_data_read {
 
         if (dsa_indexer_state_ref != 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
-                // symmetric carve-out with write_kv_cache_data: compacted layers carry
-                // their indexer window under PARTIAL_ONLY (openPangu layout excluded)
                 const bool has_kr_cache = il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr &&
                     (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
                 if (!has_kr_cache) continue;
@@ -12739,8 +12660,6 @@ struct llama_data_read {
                 const uint32_t kr_dst     = kr_compact ? kv_self.sink_rows  : kv_self.head;
 
                 if (kr_rows) {
-                    // kr_l extras are an invariant impossibility (see the llama_kv_cache_init tail
-                    // assert); the split stitch below is scaffolding for pre-split indexer caches
                     if (kv_self.kr_l[il]->extra) {
                         read_kv_cache_data_split(ctx, kv_self.kr_l[il], read(kr_rows * kr_size_row), kr_dst, kr_size_row, kr_rows, il);
                     } else {

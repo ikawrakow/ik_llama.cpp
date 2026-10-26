@@ -941,10 +941,8 @@ extern "C" {
                        llama_pos   p1);
 
     // Hard-clear the sequence and anchor the compacted SWA window so the next write lands
-    // at `pos` (pos_base_swa := pos, live := 0). For --swa-compress caches that must rejoin
-    // a sequence mid-stream after their old rows were compacted away (e.g. a speculative
-    // companion context whose main cache rewound below the companion's rewind floor).
-    // Non-compacted caches behave like llama_kv_cache_seq_rm(ctx, seq_id, -1, -1).
+    // at `pos` (pos_base_swa := pos, live := 0). Non-compacted caches behave like
+    // llama_kv_cache_seq_rm(ctx, seq_id, -1, -1).
     LLAMA_API bool llama_kv_cache_seq_swa_rebase(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,

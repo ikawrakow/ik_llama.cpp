@@ -302,7 +302,7 @@ static ggml_tensor * build_glm5next_mla_attention(
     // cells (keeping future/padding masked via the base causal mask). Same op deepseek2 uses.
     ggml_tensor * attn_mask = KQ_mask;
     if (top_k) {
-        attn_mask = ggml_indexer_mask(ctx0, KQ_mask, top_k, 0.0f);
+        attn_mask = ggml_indexer_mask(ctx0, KQ_mask, top_k);
         cb(attn_mask, "dsa_sparse_mask", il);
     }
 

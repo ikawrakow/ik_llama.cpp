@@ -2018,12 +2018,6 @@ void llm_load_hparams(
         case LLM_ARCH_STEP35:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-                // Step-5 sparse-GQA indexer k_norm is a (non-RMS) LayerNorm built via LLM_NORM,
-                // which uses hparams.f_norm_eps in ggml_norm(). The GGUF only carries the RMS eps,
-                // so f_norm_eps stays 0 and CPU ggml_norm aborts (GGML_ASSERT(eps > 0)). On CUDA
-                // the kernel does not assert (eps=0 is numerically tolerable), so this only bites
-                // the CPU path. Mirror the RMS eps so the indexer LayerNorm gets a valid epsilon
-                // on all backends (same precedent as the GLM-DSA/DeepSeek4 case above).
                 if (hparams.f_norm_eps <= 0.0f) hparams.f_norm_eps = hparams.f_norm_rms_eps;
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
                 if (hparams.nextn_predict_layers > hparams.n_layer) {
@@ -2073,11 +2067,6 @@ void llm_load_hparams(
                 hparams.has_rope_freq_base_per_layer = ml.get_key_or_arr(LLM_KV_ROPE_FREQ_BASE_PER_LAYER,
                     hparams.rope_freq_base_per_layer, hparams.n_layer, false);
                 GGML_ASSERT(hparams.has_rope_freq_base_per_layer || have_rfb_train_swa);
-                // Step-5 sparse-GQA indexer (full-attn layers). The converter carries
-                // the tensors but emits no indexer GGUF keys, so derive proxy_dim /
-                // indexer head count from tensor shapes and mirror the HF
-                // sparse_config constants (topk, CSA block size, indexer rope dim).
-                // Absent on dense fallback files (stale Q8_0, mini) -> stays zeroed.
                 {
                     int il_full = -1;
                     for (uint32_t il = 0; il < hparams.n_layer_kv_from_start; ++il) {

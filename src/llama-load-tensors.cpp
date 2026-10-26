@@ -1461,28 +1461,12 @@ bool create_tensors_helper::create_step5_tensors(const LLM_TN & tn) {
                     tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), {n_embd}, optional_layer_flags);
         }
 
-        // Step-5 sparse-GQA indexer tensors (full-attention layers only; SWA layers
-        // and dense fallback GGUFs carry none). Contract names: blk.{i}.indexer.
-        // {q,k,z,w,q_norm,k_norm}.weight / .k_norm.bias / .ssmax_s. Shapes mirror HF
-        // sparse_config (proxy_dim=256 / 16 indexer q heads / 1 shared k head,
-        // ssmax_s granularity q_head = one scale per attention q head).
-        // Loaded eagerly (not skip-accounted) so the sparse graph can consume them;
-        // the dense fallback graph still never references them.
         if (hparams.indexer_n_head > 0 && hparams.indexer_head_size > 0 &&
                 ml.get_tensor_meta(tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i).c_str()) != nullptr) {
             const int64_t idx_head   = hparams.indexer_head_size; // proxy_dim (sparse_config.proxy_dim)
             const int64_t idx_n_head = hparams.indexer_n_head;    // sparse_config.sparse_indexer_num_heads
             const int idx_flags = optional_layer_flags;
-            // Indexer weights must NOT live in the split buffer (same rule as the kr_l/kp_l
-            // caches, llama.cpp llama_kv_cache_init comment): split-buffer tensors
-            // carry a dummy base pointer (0x1000 + offset; real per-device storage hangs off
-            // ->extra, which these tensors never get wired to -- there is no
-            // prepare_split_tensors call for them and build_step5.cpp consumes them raw via
-            // ggml_mul_mat). Under -sm graph the first indexer mul_mat would dereference the dummy
-            // base and fault at the first full-attention layer's indexer op.
-            // Allocate them in the layer's regular device buffer instead: the scheduler pins the
-            // indexer ops to that device and moves inputs across the split itself. Single-GPU /
-            // non-split runs pass the same ctx and are unaffected.
+            // Not in the split buffer: no prepare_split_tensors wiring exists for these (would fault under -sm graph).
             ggml_context * ctx_idx = ctx_for_layer(i);
             layer.indexer_q        = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), {n_embd, idx_head * idx_n_head}, idx_flags);
             layer.indexer_k        = create_tensor(ctx_idx, tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), {n_embd, idx_head}, idx_flags);

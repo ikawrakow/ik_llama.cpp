@@ -243,9 +243,7 @@ void iqk_argsort(ggml_tensor * dst, int ith, int nth) {
     int ne00 = src->ne[0];
     auto& aux = get_work_buffer(ne00);
 
-    // Step5 selection contract: ties break by ASCENDING index
-    // (order by (-score, id); prefix of the tied group at the cut). pair-greater broke
-    // them by DESCENDING index. Same for ASC (a.first < b.first, ties ascending id).
+    // ties break by ascending index (order by (-score, id))
     auto cmp_desc = [] (const std::pair<float,int>& a, const std::pair<float,int>& b) {
         return a.first > b.first || (a.first == b.first && a.second < b.second);
     };
@@ -1088,23 +1086,9 @@ void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
     int first = ith*npt;
     int last  = std::min(first + npt, nrows);
 
-    // pen <= 0 -> -INF cliff (hard); pen > 0 -> soft penalty -pen (dense mask still forces
-    // -INF on future/padding cells).
-    float pen;
-    memcpy(&pen, &dst->op_params[0], sizeof(float));
-    float fill = pen > 0.0f ? -pen : -INFINITY;
-    // Step-5 own-region force-append: src[2] (optional) is an F32 force-visible map with
-    // the mask's {n_kv, n_tok} layout -- cells with force > 0.5 are unmasked (written 0) in
-    // addition to the topk indices. Built graph-side from the dense causal mask (the query
-    // token's own region = cells [B*floor(own/B), own], own = max visible cell of the column)
-    // -- official semantics: own region EXCLUDED from top-k competition (a -BIG band added to
-    // the topk's causal seed graph-side) and FORCE-APPENDED after selection
-    // (kernel.py _append_current_region_kernel). Applied AFTER the topk unmask, BEFORE the
-    // dense mask add (own-band cells are causal-visible by construction, so the add is a
-    // no-op on them).
     const auto * force = dst->src[2];
 
-    auto hinf  = GGML_FP32_TO_FP16(fill);
+    auto hinf  = GGML_FP32_TO_FP16(-INFINITY);
     auto hzero = GGML_FP32_TO_FP16(0.0f);
 
     int n = dst->ne[0];
@@ -1133,7 +1117,7 @@ void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
             auto x = (const float *)((const char *)mask->data + mask->nb[1]*i1 + mask->nb[2]*i2 + mask->nb[3]*i3);
             auto y = (float *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
             if (i1 < topk->ne[1]) {
-                for (int j = 0; j < n; ++j) y[j] = fill;
+                for (int j = 0; j < n; ++j) y[j] = -INFINITY;
                 for (int j = 0; j < nidx; ++j) y[idx[j]] = 0.0f;
                 if (force) {
                     auto fv = (const float *)((const char *)force->data + force->nb[1]*i1 + force->nb[2]*i2 + force->nb[3]*i3);

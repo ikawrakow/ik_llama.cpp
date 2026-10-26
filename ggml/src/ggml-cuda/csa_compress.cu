@@ -1,38 +1,15 @@
-// Step-5 CSA region compress, fused: per-(region, dim) softmax(z)-weighted mean of the
-// proxy keys over each region's tokens, with the official BF16->E4M3 double round in the
-// store epilogue. Official semantics: _official/inference/kernel.py:_csa_compress_regions_kernel
-// (one program per (region, head) there; one thread per (region, dim) here -- the softmax and
-// the sum run over the region's tokens only, so no cross-thread reduction is needed at all).
-//
-// Masking follows the graph semantics of the decomposed path, not the reference prefill's
-// ragged-tail skip: padded slots get z - 1e30 pre-softmax (their weight is exp(-1e30 - max)
-// == 0) and partial blocks still summarize. The masked z is computed as z + (vis*1e30 - 1e30)
-// -- the add AFTER the scale-bias -- exactly like the graph's ggml_add(ggml_scale_bias(vis)).
-//
-// round_e4m3: 0 = plain F32 summary, 1 = kernel.py:345 double round
-// F32 -> BF16 (RNE) -> E4M3 (RN, satfinite) widened back to F32. Widening the E4M3 result to
-// F32 is byte-equivalent to the reference widening E4M3 -> bf16 before the score matmul
-// (kernel.py:2136), since BF16 exactly represents every E4M3 value.
-//
-// Normalization mirrors ggml's softmax: w = exp(z - max) * (1/sum) -- inv-sum multiply, not
-// divide (ggml-cuda/softmax.cu). Residual ~1 ulp divergence from the decomposed graph is
-// possible (its block-reduce sums in a different order); validation is the E4M3-byte
-// replay and behavioral tests, not byte-identity with the decomposed chain.
+// Step-5 CSA region compress: per-(region, dim) softmax(z)-weighted mean of the proxy keys
+// over each region's tokens; padded slots get a -1e30 pre-softmax bias. See ggml.h.
 
 #include "csa_compress.cuh"
 
 #include <cuda_fp8.h>
 
 __device__ __forceinline__ float csa_round_bf16_e4m3(float x) {
-    // 1. F32 -> BF16, RNE (matches Triton/PyTorch .to(bfloat16) and ggml's
-    //    ggml_compute_fp32_to_bf16; the intermediate round can move a value onto an E4M3
-    //    midpoint -- kernel.py:341).
+    // F32 -> BF16 (RNE) -> E4M3FN (RN, satfinite: clamps at +-448, no NaN byte) -> F32.
     const __nv_bfloat16 bf = __float2bfloat16_rn(x);
-    // 2. BF16 -> E4M3FN, RN + satfinite (matches .to(float8e4nv) == cvt.rn.satfinite.e4m3x2:
-    //    clamps at +-448 instead of producing the NaN byte).
     const __nv_fp8_storage_t fp8 = __nv_cvt_bfloat16raw_to_fp8(
             __nv_bfloat16_raw(__bfloat16_as_ushort(bf)), __NV_SATFINITE, __NV_E4M3);
-    // 3. Dequantize E4M3 -> F32 for the downstream F32 score GEMM.
     __nv_fp8_e4m3 q;
     q.__x = fp8;
     return (float) q;
@@ -86,7 +63,7 @@ void ggml_cuda_op_csa_compress(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     const int n_blocks   = dst->ne[1];
     GGML_ASSERT(n_blocks == k->ne[1]/B);
 
-    // head_size == proxy_dim == 256 in practice; generic thread count, still one wave.
+    // head_size == proxy_dim (256 in practice); generic thread count.
     const int threads = ((head_size + 31)/32)*32;
     GGML_ASSERT(threads <= 1024);
 

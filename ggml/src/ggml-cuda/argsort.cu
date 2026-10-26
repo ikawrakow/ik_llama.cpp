@@ -497,10 +497,7 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
 
     size_t temp_storage_bytes = 0;
 
-    // Always take the DeviceSegmentedRadixSort path: radix sort is STABLE, so equal keys
-    // keep ascending index order -- exactly the reference (-score, id) tie contract for the
-    // Step5 indexer selection (kernel.py:692). DeviceSegmentedSort is NOT guaranteed stable.
-    // (Radix is also what the CUDA-graph path used; SegmentedSort was the non-capture branch.)
+    // Radix sort is stable (equal keys keep index order); SegmentedSort is not, so always radix.
 
     if (order == GGML_SORT_ORDER_ASC) {
         if (nrows == 1) {

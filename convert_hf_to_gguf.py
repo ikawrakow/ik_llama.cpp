@@ -7126,7 +7126,6 @@ class Step5Model(Model):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # multimodal wrapper: merge text_config over the top-level config
         tc = self.hparams.get("text_config")
         if isinstance(tc, dict):
             self.hparams = {**self.hparams, **tc}
@@ -7137,11 +7136,7 @@ class Step5Model(Model):
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
-        # This checkpoint ships redundant physical copies: stray shards not in
-        # the index (model-mtp3-00001.safetensors) and trunk-layer copies inside
-        # other shards (layer 92 in model-00024). The index's weight_map is
-        # authoritative, so skip any tensor whose canonical copy lives in a
-        # different shard.
+        # weight_map is authoritative: skip redundant shard copies
         index_path = self.dir_model / "model.safetensors.index.json"
         if not index_path.is_file():
             yield from super().get_tensors()
@@ -7199,10 +7194,7 @@ class Step5Model(Model):
         self.gguf_writer.add_sliding_window(int(hparams["sliding_window"]))
         self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in layer_types])
 
-        # RoPE: per-layer theta (sliding 10k / full 10M). Partial rotary factors:
-        # full_attention layers rotate only head_dim/3 (64 of 192 dims), sliding
-        # layers rotate the full head. The llama3 rope_scaling in the config is a
-        # no-op (factor 1.0), so no rope factor tensors are needed.
+        # per-layer rope theta; partial rotary = head_dim/3 on full-attention layers
         rope_theta = hparams["rope_theta"]
         assert len(rope_theta) == self.block_count
         prf = hparams.get("partial_rotary_factors") or [1.0] * self.block_count
@@ -7230,9 +7222,6 @@ class Step5Model(Model):
         self.gguf_writer.add_array(f"{arch}.swiglu_limits", [float(v) for v in hparams["swiglu_limits"]])
         self.gguf_writer.add_array(f"{arch}.swiglu_limits_shared", [float(v) for v in hparams["swiglu_limits_shared"]])
 
-        # Sparse-config KVs: mirror official text_config.sparse_config verbatim
-        # (documentation for loaders/tools; the C++ hparams read the same facts
-        # from dedicated KVs). Presence of these marks a Step-5 sparse GGUF.
         sc = (self.hparams.get("text_config") or self.hparams).get("sparse_config") or {}
         if sc:
             p = f"{arch}.sparse."
@@ -7448,10 +7437,7 @@ class LFM2MoeModel(LFM2Model):
 @Model.register("Step3p7ForConditionalGeneration") # Step-3.7-Flash
 @Model.register("Step4ForCausalLM")                # older Step-3.5-Preview checkpoints
 class Step35Model(Step5Model):
-    # Ecosystem Step-3.5/3.7-Flash family -> GGUF arch "step35" (LLM_ARCH_STEP35).
-    # Same family graph as STEP5 (build_step5); Flash GGUFs carry no sparse_config /
-    # indexer tensors, so the loader runs them dense. Step-5-Preview itself stays on
-    # STEP5 ("step5") via Step5Model above.
+    # Step-3.5/3.7-Flash family -> arch "step35" (no sparse tensors, runs dense)
     model_arch = gguf.MODEL_ARCH.STEP35
 
 

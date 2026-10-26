@@ -387,9 +387,6 @@ void IMatrixCollector::print_layer_importance() {
 bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
 
-    // The sched eval callback fires for EVERY node; leaf nodes (ARANGE etc.) have
-    // src[0] == NULL and must be skipped before the name deref below. First exposed
-    // by the arange leaf of a sparse-attention mask in an imatrix run.
     if (t->src[0] == nullptr) {
         return false;
     }
@@ -403,9 +400,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     if (ask) {
         if (t->op == GGML_OP_MUL_MAT_ID ||
             t->op == GGML_OP_FUSED_UP_GATE ||
-            t->op == GGML_OP_MOE_FUSED_UP_GATE) {
-            return true; // collect all indirect matrix multiplications
-        }
+            t->op == GGML_OP_MOE_FUSED_UP_GATE) return true; // collect all indirect matrix multiplications
         if (t->op != GGML_OP_MUL_MAT) return false;
         // why are small batches ignored (<16 tokens)?
         if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
@@ -734,10 +729,7 @@ void IMatrixCollector::save_imatrix(int ncall) const {
     }
 
     if (m_params.verbosity > 0) {
-        // NOTE: m_last_call is a max over per-entry collection-call counts, NOT a chunk count.
-        // Entries collected more than once per decode (e.g. a compressed-key projection
-        // matmuls twice) make this exceed n_chunks -- do not label it "chunks".
-        fprintf(stderr, "\n%s: stored collected data after %d collection calls (NOT chunks) in %s\n", __func__, m_last_call, fname.c_str());
+        fprintf(stderr, "\n%s: stored collected data after %d chunks in %s\n", __func__, m_last_call, fname.c_str());
     }
 }
 

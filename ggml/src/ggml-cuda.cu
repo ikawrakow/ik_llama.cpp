@@ -5338,11 +5338,6 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
     auto ctx = (ggml_backend_cuda_context *)backend->context;
     int min_batch_size = ctx->offload_batch_size; // originally: GGML_CUDA_MIN_BATCH_OFFLOAD;
 
-    // Host-resident weights: offloading the op to CUDA would stream the weights over
-    // PCIe on every pass (catastrophic for host-weight MoE configs, e.g. -ot exps=CPU
-    // or -ngl 13 on very large models). The batch-size heuristics below only look at
-    // batch arithmetic and NEVER at weight location, so without this check large
-    // ubatches silently pin host-weight MUL_MAT_ID to the GPU. Never offload those.
     if (op->src[0] && op->src[0]->buffer && ggml_backend_buffer_is_host(op->src[0]->buffer)) {
         return false;
     }

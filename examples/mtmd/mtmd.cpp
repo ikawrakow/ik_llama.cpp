@@ -270,7 +270,7 @@ struct mtmd_context {
             tok_sli_img_end   = {lookup_token("<patch_end>")};
             tok_row_end       = {lookup_token("<patch_newline>")};
             tok_row_end_trail = false;
-            ov_img_first      = false; // patches first, overview last
+            ov_img_first      = false;
         }
 
         // set boi/eoi

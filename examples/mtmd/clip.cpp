@@ -38,7 +38,6 @@
 
 #include "stb/stb_image_resize2.h"
 
-// upstream parity: mainline tools/mtmd/clip-graph.h DEFAULT_INTERPOLATION_MODE
 #define DEFAULT_INTERPOLATION_MODE ((int)GGML_SCALE_MODE_BILINEAR | (int)GGML_SCALE_FLAG_ANTIALIAS)
 
 // TODO: allow to pass callback from user code
@@ -2681,8 +2680,7 @@ struct clip_graph {
         return gf;
     }
 
-    // Step3VL (Step-5 vision): CLIP ViT + 2 stride-2 conv downsamplers + linear projector
-    // verbatim port of mainline tools/mtmd/models/step3vl.cpp
+    // Step3VL (Step-5 vision): port of mainline tools/mtmd/models/step3vl.cpp
     ggml_cgraph * build_step3vl() {
         GGML_ASSERT(model.class_embedding == nullptr);
         GGML_ASSERT(model.patch_embeddings_0 != nullptr);
@@ -3940,14 +3938,13 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_STEP3VL:
                     {
-                        hparams.n_merge = 4; // two stride-2 downsamplers after patching
+                        hparams.n_merge = 4;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
                         if (hparams.image_longest_edge == 0) {
                             hparams.image_longest_edge = 3024;
                         }
-                        // note: step3vl preprocessor slices on a fixed window grid, no custom min/max image tokens
                         hparams.warmup_image_size = hparams.image_size;
                     } break;
                 case PROJECTOR_TYPE_LLAMA4:
@@ -5359,10 +5356,6 @@ private:
     }
 };
 
-//
-// Step3VL preprocessor (ported from mainline mtmd-image.cpp mtmd_image_preprocessor_step3vl)
-//
-
 static constexpr int   STEP3VL_LONGEST_EDGE_DEFAULT = 3024;
 static constexpr int   STEP3VL_CROP_SIZE            = 504;
 static constexpr float STEP3VL_SMALL_AR             = 1.5f;
@@ -5462,7 +5455,6 @@ static clip_image_u8 step3vl_crop_with_black_padding(const clip_image_u8 & image
     return dst;
 }
 
-// custom bilinear resize + normalize in one pass (mainline img_u8_resize_bilinear_to_f32 verbatim)
 static void step3vl_resize_bilinear_to_f32(
         const clip_image_u8 & src,
         clip_image_f32 & dst,
@@ -5518,7 +5510,6 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     std::max(prepared.nx, prepared.ny),
                     std::min(prepared.nx, prepared.ny));
 
-                // overview is ALWAYS the first entry (mtmd assembly assumes chunks.front()==overview)
                 clip_image_f32_ptr overview(clip_image_f32_init());
                 step3vl_resize_bilinear_to_f32(prepared, *overview,
                     params.image_size, params.image_size, params.image_mean, params.image_std);

@@ -658,16 +658,11 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
     // effect and cannot produce NaN). So -BIG masks the key on BOTH paths.
     const float BIG = 1e30f;
 
-    // rank-based penalty vector: pen[rank] = 0 for rank < n_top_k, -BIG for EVERY rank
-    // past the cutoff (hard cliff -- no soft gate; the
-    // reference code has zero lambda/soft refs). {n_kv} F32. -BIG is ADDITIVE on attention
-    // logits, NOT on indexer scores. -BIG (vs -INF) keeps the softmax finite (no -inf*0 =
-    // NaN) on the -fa 0 path while still zeroing the key; the F16 cast on -fa 1 saturates
-    // to ~6.5e4, likewise a large-enough negative bias.
-    ggml_tensor * rank = ggml_arange(ctx0, 0.0f, (float) n_kv_local, 1.0f);          // {n_kv} F32
+    // rank-based penalty vector: pen[rank] = 0 for rank < n_top_k, else -BIG.  {n_kv}
     // sel = step(n_top_k - 0.5 - rank) = 1 for rank <= n_top_k-1, else 0
-    ggml_tensor * sel = ggml_step(ctx0, ggml_scale_bias(ctx0, rank, -1.0f, (float) n_top_k - 0.5f));
-    ggml_tensor * pen = ggml_scale_bias(ctx0, sel, BIG, -BIG);                       // 0 or -BIG (hard cliff)
+    ggml_tensor * rank = ggml_arange(ctx0, 0.0f, (float) n_kv_local, 1.0f);          // {n_kv} F32
+    ggml_tensor * sel  = ggml_step(ctx0, ggml_scale_bias(ctx0, rank, -1.0f, (float) n_top_k - 0.5f));
+    ggml_tensor * pen  = ggml_scale_bias(ctx0, sel, BIG, -BIG);                       // 0 or -BIG
 
     // shape penalty to {1, n_kv, n_tok} (broadcast the per-rank value across all query columns)
     pen = ggml_reshape_3d(ctx0, pen, 1, n_kv_local, 1);
@@ -675,13 +670,8 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
     pen_b = ggml_repeat(ctx0, pen, pen_b);                                            // {1, n_kv, n_tok}
 
     // destination base {1, n_kv, n_tok} (contents irrelevant — fully overwritten by set_rows).
-    // CALLER-PROVIDED base_leaf (optional): a fresh leaf here is a graph LEAF (op NONE, no src),
-    // and ggml_gallocr allocates every leaf up-front (ggml-alloc.c "allocate leafs" loop) — a
-    // per-layer leaf pins {n_kv, n_tok} F32 for the WHOLE graph even though its consumer runs
-    // in the same layer (measured: linear n_layer x {kv,ub} growth, _leaf_liveness_test).
-    // Callers building this mask per layer pass one shared leaf; graph order serializes the
-    // fills, so a single {1, n_kv, n_tok} buffer serves all layers (1 equiv persistent instead
-    // of n_layer equiv pinned at t=0).
+    // base_leaf: optional caller-owned leaf reused across per-layer calls, so gallocr pins
+    // one buffer instead of n_layer (a fresh per-layer leaf pins {n_kv, n_tok} for the graph).
     ggml_tensor * base = base_leaf;
     if (base) {
         GGML_ASSERT(base->type == GGML_TYPE_F32 && base->ne[0] == 1 &&
@@ -840,7 +830,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                         dsa_last_full_sorted = build_deepseek2_dsa_indexer(gf, il, q, cur, KQ_mask, inp_pos);
                         if (dsa_last_full_sorted && !dsa_fast_path) {
                             if (lctx.cparams.flash_attn) {
-                                last_sparse_mask_fa = ggml_indexer_mask(ctx0, KQ_mask, dsa_last_full_sorted, 0.0f);
+                                last_sparse_mask_fa = ggml_indexer_mask(ctx0, KQ_mask, dsa_last_full_sorted);
                             } else {
                                 last_sparse_mask = build_deepseek2_dsa_sparse_mask(dsa_last_full_sorted, KQ_mask);
                             }

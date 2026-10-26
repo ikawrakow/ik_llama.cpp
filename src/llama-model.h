@@ -435,8 +435,7 @@ struct llama_layer {
     struct ggml_tensor * indexer_k_proj   = nullptr;
     struct ggml_tensor * indexer_q_norm   = nullptr;
 
-    // step5 sparse-GQA indexer (full-attn layers only); norms reuse
-    // indexer_q_norm / indexer_k_norm(_b) from the DSA/QSA blocks above.
+    // step5 sparse-GQA indexer (full-attn layers only).
     struct ggml_tensor * indexer_q        = nullptr; // blk.{i}.indexer.q.weight {n_embd, proxy*n_head}
     struct ggml_tensor * indexer_k        = nullptr; // blk.{i}.indexer.k.weight {n_embd, proxy}
     struct ggml_tensor * indexer_z        = nullptr; // blk.{i}.indexer.z.weight {n_embd, proxy}
@@ -726,7 +725,7 @@ struct llama_model {
         return arch == LLM_ARCH_OPENPANGU || llm_arch_is_dsv4(arch)
             || arch == LLM_ARCH_LAGUNA    || arch == LLM_ARCH_GEMMA4
             || arch == LLM_ARCH_MAPLE     || arch == LLM_ARCH_FLINT
-            || arch == LLM_ARCH_MIMO2     || llm_arch_is_step5(arch)
+            || llm_arch_is_step5(arch)
             || supports_dflash_swa_compress() ;
     }
 

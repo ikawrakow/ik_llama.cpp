@@ -9,8 +9,7 @@
 
 #include <cuda_fp8.h>
 
-// Step-5: official e4m3 activation round (kernel.py:501) -- same double round as the
-// csa_compress store epilogue (csa_compress.cu:csa_round_bf16_e4m3).
+// same double round as csa_compress.cu:csa_round_bf16_e4m3
 static __device__ __forceinline__ float op_round_e4m3(float x) {
     const __nv_bfloat16 bf = __float2bfloat16_rn(x);
     const __nv_fp8_storage_t fp8 = __nv_cvt_bfloat16raw_to_fp8(
