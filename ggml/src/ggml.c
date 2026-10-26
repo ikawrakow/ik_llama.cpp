@@ -15630,6 +15630,26 @@ static void ggml_compute_forward_repeat_f32(
     int ith = params->ith;
     int nth = params->nth;
 
+    if (n_repeated_dims == 1 && repeated_dim > 0 && src0->nb[0] == sizeof(float) && dst->nb[0] == sizeof(float)) {
+        const int64_t nr  = ggml_nrows(dst);
+        const int64_t dr  = (nr + nth - 1)/nth;
+        const int64_t ir0 = dr*ith;
+        const int64_t ir1 = MIN(ir0 + dr, nr);
+        const int64_t n1 = dst->ne[1], n2 = dst->ne[2];
+        for (int64_t ir = ir0; ir < ir1; ++ir) {
+            int64_t i[4];
+            i[0] = 0;
+            i[3] = ir/(n2*n1);
+            i[2] = (ir - i[3]*n2*n1)/n1;
+            i[1] = ir - i[3]*n2*n1 - i[2]*n1;
+            char * dst_ptr = (char *)dst->data + i[1]*dst->nb[1] + i[2]*dst->nb[2] + i[3]*dst->nb[3];
+            i[repeated_dim] %= src0->ne[repeated_dim];
+            const char * src_ptr = (const char *)src0->data + i[1]*src0->nb[1] + i[2]*src0->nb[2] + i[3]*src0->nb[3];
+            memcpy(dst_ptr, src_ptr, dst->ne[0]*sizeof(float));
+        }
+        return;
+    }
+
     if (n_repeated_dims == 1) {
         GGML_ASSERT(repeated_dim >= 0 && repeated_dim < GGML_MAX_DIMS);
         int nrows = 1;

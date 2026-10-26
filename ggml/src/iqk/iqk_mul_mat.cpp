@@ -580,6 +580,36 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
 
     if (Nx/nth < k_min_step) {
+        if (auto dequant_type = MulMat::is_dequant_better(ggml_type(typeA), Ny); Ny >= 64 && dequant_type != ggml_type(typeA) &&
+                Nx%MulMat::num_rows(dequant_type) == 0 && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
+            constexpr int k_y_step = 64;
+            const int x_step  = std::max(16, MulMat::num_rows(dequant_type));
+            const int ntile_x = (Nx + x_step - 1)/x_step;
+            const int ntile_y = (Ny + k_y_step - 1)/k_y_step;
+            const int ntile   = ntile_x*ntile_y;
+            const int npt     = (ntile + nth - 1)/nth;
+            const int first   = ith*npt;
+            const int last    = std::min(ntile, first + npt);
+            size_t row_size_dq = ggml_row_size(dequant_type, ne00);
+            auto& f = thread_local_work_buffer();
+            int converted_ix = -1;
+            for (int itile = first; itile < last; ++itile) {
+                int ix = (itile / ntile_y) * x_step;
+                int iy = (itile % ntile_y) * k_y_step;
+                int nrc_x = std::min<int>(x_step, Nx - ix);
+                int nrc_y = std::min<int>(k_y_step, Ny - iy);
+                if (ix != converted_ix) {
+                    if (f.size() < row_size_dq*nrc_x) f.resize(row_size_dq*nrc_x);
+                    if (!iqk_convert_repack(typeA, ne00, (const char *)A + ix*strideA, strideA, f.data(), ne00, nrc_x)) {
+                        GGML_ABORT("Fatal error");
+                    }
+                    converted_ix = ix;
+                }
+                DataInfo info{C + ix, (const char *)B, (size_t)stride_C, row_size_qy, iy, 1, nullptr, 0};
+                mm.mul_mat_NxM(ne00, f.data(), row_size_dq, info, nrc_x, iy + nrc_y);
+            }
+            return true;
+        }
         if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
             return false;
         }
