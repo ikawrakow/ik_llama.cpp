@@ -6563,7 +6563,9 @@ struct ggml_tensor * ggml_reduce(
         if (a[j]) { ++nhave; last = a[j]; }
     }
     GGML_ASSERT(last);
-    GGML_ASSERT(nhave > 1);
+    if (nhave == 1) {
+        return last;
+    }
     struct ggml_tensor * result = ggml_view_tensor(ctx, last);
     for (int j = 0; j < n; ++j) {
         result->src[j] = a[j];
