@@ -10988,11 +10988,10 @@ bool llama_rewind_ckpt_save(struct llama_context * ctx, llama_ckpt_data ckpt_typ
     return success;
 }
 
-bool llama_rewind_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id) {
+bool llama_rewind_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_type, [[maybe_unused]] llama_seq_id seq_id) {
     auto & m = ctx->kv_self.ckpt_rewind_map;
     for (auto it = m.begin(); it != m.end(); ) {
         if (it->first < ckpt_type.pos || ckpt_type.pos <0) {
-            auto & ckpt = *it->second;
             auto new_type = ckpt_type;
             new_type.pos = it->first;
             llama_spec_ckpt_discard(ctx, new_type);
@@ -11004,7 +11003,7 @@ bool llama_rewind_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_
     return true;
 }
 
-bool llama_rewind_ckpt_release(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id) {
+bool llama_rewind_ckpt_release(struct llama_context * ctx, llama_ckpt_data ckpt_type, [[maybe_unused]] llama_seq_id seq_id) {
     auto & m = ctx->kv_self.ckpt_rewind_map;
     for (auto it = m.begin(); it != m.end(); ) {
         if (it->first < ckpt_type.pos || ckpt_type.pos < 0) {
