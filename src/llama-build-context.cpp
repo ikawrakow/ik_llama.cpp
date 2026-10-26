@@ -1474,10 +1474,13 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         case LLM_FFN_SITU:
             {
                 const auto & hp = lctx.model.hparams;
-                auto situ = [&](ggml_tensor * x, float beta) {
+                auto situ_gate = [&](ggml_tensor * x, float beta) {
                     return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
                 };
-                cur = ggml_mul(ctx, situ(cur, hp.situ_beta), situ(tmp, hp.situ_linear_beta));
+                auto situ_up = [&](ggml_tensor * x, float beta) {
+                    return ggml_softcap(ctx, x, 1.0f/beta, beta);
+                };
+                cur = ggml_mul(ctx, situ_gate(cur, hp.situ_beta), situ_up(tmp, hp.situ_linear_beta));
                 type_gate = LLM_FFN_SEQ;
                 cb(cur, "ffn_situ", il);
             } break;
@@ -1795,10 +1798,13 @@ llm_expert_gating_func_type   gating_op,
             par = ggml_swiglu_oai(ctx, gate, up, 1.702f, 7.0f);
         } else if (type_op == LLM_FFN_SITU) {
             const auto & hp = lctx.model.hparams;
-            auto situ = [&](ggml_tensor * x, float beta) {
+            auto situ_gate = [&](ggml_tensor * x, float beta) {
                 return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
             };
-            par = ggml_mul(ctx, situ(gate, hp.situ_beta), situ(up, hp.situ_linear_beta));
+            auto situ_up = [&](ggml_tensor * x, float beta) {
+                return ggml_softcap(ctx, x, 1.0f/beta, beta);
+            };
+            par = ggml_mul(ctx, situ_gate(gate, hp.situ_beta), situ_up(up, hp.situ_linear_beta));
         } else {
             GGML_ABORT("fatal error");
         }
@@ -1853,10 +1859,13 @@ llm_expert_gating_func_type   gating_op,
             par = ggml_swiglu_oai(ctx, gate, up, alpha, limit);
         } else if (type_op == LLM_FFN_SITU) {
             const auto & hp = lctx.model.hparams;
-            auto situ = [&](ggml_tensor * x, float beta) {
+            auto situ_gate = [&](ggml_tensor * x, float beta) {
                 return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
             };
-            par = ggml_mul(ctx, situ(gate, hp.situ_beta), situ(up, hp.situ_linear_beta));
+            auto situ_up = [&](ggml_tensor * x, float beta) {
+                return ggml_softcap(ctx, x, 1.0f/beta, beta);
+            };
+            par = ggml_mul(ctx, situ_gate(gate, hp.situ_beta), situ_up(up, hp.situ_linear_beta));
         }
         else {
             GGML_ABORT("fatal error");
