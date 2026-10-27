@@ -3684,11 +3684,80 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             ))
             .run();
 
-        // Python tool with multiline code in string
+        // Python tool with multiline code in string: the \n escape in the Python literal decodes to a
+        // real newline (JSON "\n"), not to a literal backslash + n
         tst.test("<|tool_call_start|>[python(code=\"def hello():\\n    print('hey')\")]<|tool_call_end|>")
             .tools({ python_tool })
             .expect_tool_calls({
-                { "python", R"#({"code": "def hello():\\n    print('hey')"})#", "" }
+                { "python", R"#({"code": "def hello():\n    print('hey')"})#", "" }
+            })
+            .run();
+
+        // Same with a single-quoted literal (what the LFM2 chat template itself renders), including \' and \t
+        tst.test("<|tool_call_start|>[python(code='it\\'s\\n\\tok \"q\"')]<|tool_call_end|>")
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", R"#({"code": "it's\n\tok \"q\""})#", "" }
+            })
+            .run();
+
+        // Escaped quotes and backslashes survive the round-trip
+        tst.test("<|tool_call_start|>[python(code=\"print(\\\"hi\\\") # C:\\\\tmp\")]<|tool_call_end|>")
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", R"#({"code": "print(\"hi\") # C:\\tmp"})#", "" }
+            })
+            .run();
+
+        // \uXXXX is kept, a raw newline inside the literal is escaped (JSON strings cannot hold control characters)
+        tst.test("<|tool_call_start|>[python(code='\\u00e9 it\\'s\nline2')]<|tool_call_end|>")
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", R"#({"code": "\u00e9 it's\nline2"})#", "" }
+            })
+            .run();
+
+        // Python booleans / None become JSON literals (the model writes remind=True)
+        tst.test("<|tool_call_start|>[toggle(enabled=True)]<|tool_call_end|>")
+            .tools({ toggle_tool })
+            .expect_tool_calls({
+                { "toggle", R"({"enabled": true})", {} },
+            })
+            .run();
+        tst.test("<|tool_call_start|>[toggle(enabled=False)]<|tool_call_end|>")
+            .tools({ toggle_tool })
+            .expect_tool_calls({
+                { "toggle", R"({"enabled": false})", {} },
+            })
+            .run();
+        tst.test("<|tool_call_start|>[set_nullable(value=None)]<|tool_call_end|>")
+            .tools({ nullable_tool })
+            .expect_tool_calls({
+                { "set_nullable", R"({"value": null})", {} },
+            })
+            .run();
+
+        // JSON-cased literals are accepted as well
+        tst.test("<|tool_call_start|>[toggle(enabled=true)]<|tool_call_end|>")
+            .tools({ toggle_tool })
+            .expect_tool_calls({
+                { "toggle", R"({"enabled": true})", {} },
+            })
+            .run();
+
+        // Python literals and quotes inside containers
+        tst.test("<|tool_call_start|>[set_config(config={'debug': True, 'level': None, 'name': 'a\\'b', 'tags': ['x', False]})]<|tool_call_end|>")
+            .tools({ config_tool })
+            .expect_tool_calls({
+                { "set_config", R"({"config": {"debug": true, "level": null, "name": "a'b", "tags": ["x", false]}})", {} },
+            })
+            .run();
+
+        // Mixed string / int / bool arguments in one call
+        tst.test("<|tool_call_start|>[special_function_with_opt(arg1=1, arg2=2)]<|tool_call_end|>")
+            .tools({ special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
             })
             .run();
 
