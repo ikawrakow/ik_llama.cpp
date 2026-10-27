@@ -85,6 +85,162 @@ static __global__ void k_copy_topk(const int * __restrict__ sorted, int * dst, c
     }
 }
 
+#if !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
+
+static __device__ __forceinline__ uint32_t topk_float_to_key(float x) {
+    const uint32_t b = __float_as_uint(x) == 0x80000000u ? 0u : __float_as_uint(x);
+    return b ^ ((uint32_t)((int32_t)b >> 31) | 0x80000000u);
+}
+
+template <int block_size>
+static __device__ __forceinline__ int topk_block_exclusive_sum(int v, int * scratch, int & total) {
+    const int lane = threadIdx.x % WARP_SIZE;
+    const int warp = threadIdx.x / WARP_SIZE;
+    int sum = v;
+#pragma unroll
+    for (int offset = 1; offset < WARP_SIZE; offset *= 2) {
+        const int t = __shfl_up_sync(0xffffffff, sum, offset, WARP_SIZE);
+        if (lane >= offset) sum += t;
+    }
+    if (lane == WARP_SIZE - 1) scratch[warp] = sum;
+    __syncthreads();
+    int before = 0;
+    total = 0;
+#pragma unroll
+    for (int w = 0; w < block_size/WARP_SIZE; ++w) {
+        const int s = scratch[w];
+        before += w < warp ? s : 0;
+        total  += s;
+    }
+    __syncthreads();
+    return before + sum - v;
+}
+
+// radix select of the k largest values per row, sorted by value (-0 equal to +0), lower column first on ties
+template <int block_size>
+static __global__ void k_topk_select(const float * __restrict__ x, int * __restrict__ dst, const int ncols, const int k, const int P) {
+    constexpr int nbins = 256;
+    constexpr int unroll = 4;
+    extern __shared__ uint64_t sel[];
+
+    const int tid = threadIdx.x;
+    x   += int64_t(ncols)*blockIdx.x;
+    dst += int64_t(k)*blockIdx.x;
+
+    __shared__ int hist[nbins];
+    __shared__ int scratch[block_size/WARP_SIZE];
+    __shared__ uint32_t s_prefix;
+    __shared__ int s_rank;
+
+    uint32_t prefix = 0, prefix_mask = 0;
+    int rank = k;
+    for (int shift = 32 - 8; shift >= 0; shift -= 8) {
+        for (int i = tid; i < nbins; i += block_size) hist[i] = 0;
+        __syncthreads();
+        for (int i0 = 0; i0 < ncols; i0 += unroll*block_size) {
+            uint32_t key[unroll];
+#pragma unroll
+            for (int u = 0; u < unroll; ++u) {
+                const int i = i0 + u*block_size + tid;
+                key[u] = i < ncols ? topk_float_to_key(x[i]) : 0;
+            }
+#pragma unroll
+            for (int u = 0; u < unroll; ++u) {
+                const int i = i0 + u*block_size + tid;
+                if (i < ncols && (key[u] & prefix_mask) == prefix) atomicAdd(&hist[(key[u] >> shift) & (nbins - 1)], 1);
+            }
+        }
+        __syncthreads();
+        if (tid < WARP_SIZE) {
+            int local[8], sum = 0;
+#pragma unroll
+            for (int j = 0; j < 8; ++j) { local[j] = hist[nbins - 1 - 8*tid - j]; sum += local[j]; }
+            int incl = sum;
+#pragma unroll
+            for (int offset = 1; offset < WARP_SIZE; offset *= 2) {
+                const int t = __shfl_up_sync(0xffffffff, incl, offset, WARP_SIZE);
+                if (tid >= offset) incl += t;
+            }
+            int owner = incl >= rank ? tid : WARP_SIZE - 1;
+#pragma unroll
+            for (int offset = WARP_SIZE/2; offset > 0; offset /= 2) {
+                owner = min(owner, __shfl_xor_sync(0xffffffff, owner, offset, WARP_SIZE));
+            }
+            if (tid == owner) {
+                int above = incl - sum, j = 0;
+                for (; j < 7 && above + local[j] < rank; ++j) above += local[j];
+                s_prefix = prefix | ((uint32_t)(nbins - 1 - 8*tid - j) << shift);
+                s_rank   = rank - above;
+            }
+        }
+        __syncthreads();
+        prefix = s_prefix;
+        rank   = s_rank;
+        prefix_mask |= (uint32_t)(nbins - 1) << shift;
+    }
+
+    // prefix is now the key of the smallest selected value, and rank values equal to it are taken
+    for (int i = k + tid; i < P; i += block_size) sel[i] = 0;
+    int n_eq = 0, n_out = 0;
+    for (int i0 = 0; i0 < ncols; i0 += unroll*block_size) {
+        uint32_t key[unroll];
+#pragma unroll
+        for (int u = 0; u < unroll; ++u) {
+            const int i = i0 + u*block_size + tid;
+            key[u] = i < ncols ? topk_float_to_key(x[i]) : 0;
+        }
+#pragma unroll
+        for (int u = 0; u < unroll; ++u) {
+            const int i = i0 + u*block_size + tid;
+            const bool gt = i < ncols && key[u] >  prefix;
+            const bool eq = i < ncols && key[u] == prefix;
+            int total;
+            const int before = topk_block_exclusive_sum<block_size>((int(gt) << 16) | int(eq), scratch, total);
+            const int eq_left = max(rank - n_eq, 0);
+            if (gt || (eq && (before & 0xffff) < eq_left)) {
+                sel[n_out + (before >> 16) + min(before & 0xffff, eq_left)] = (uint64_t(key[u]) << 32) | uint32_t(~i);
+            }
+            n_out += (total >> 16) + min(total & 0xffff, eq_left);
+            n_eq  += total & 0xffff;
+        }
+    }
+
+    for (int size = 2; size <= P; size *= 2) {
+        for (int stride = size/2; stride > 0; stride /= 2) {
+            __syncthreads();
+            for (int i = tid; i < P/2; i += block_size) {
+                const int lo = 2*i - (i & (stride - 1));
+                const int hi = lo + stride;
+                const uint64_t a = sel[lo], b = sel[hi];
+                if ((a < b) == ((lo & size) == 0)) { sel[lo] = b; sel[hi] = a; }
+            }
+        }
+    }
+    __syncthreads();
+    for (int i = tid; i < k; i += block_size) dst[i] = ~uint32_t(sel[i]);
+}
+
+#endif
+
+static void indexer_select_top_k(ggml_backend_cuda_context & ctx, const float * score, int * sorted, int * dst,
+        int ncols, int nrows, int n_top_k) {
+#if !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
+    constexpr int max_sorted = 4096; // P*8 bytes of shared memory
+    int P = 1;
+    while (P < n_top_k) P *= 2;
+    // a single row is faster on the CUB radix sort
+    if (nrows > 1 && P <= max_sorted) {
+        k_topk_select<512><<<nrows, 512, P*sizeof(uint64_t), ctx.stream()>>>(score, dst, ncols, n_top_k, P);
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    }
+#endif
+    argsort_f32_i32_cuda_cub(ctx.pool(), score, sorted, ncols, nrows, GGML_SORT_ORDER_DESC, ctx.stream());
+    CUDA_CHECK(cudaGetLastError());
+    k_copy_topk<<<nrows, 256, 0, ctx.stream()>>>(sorted, dst, ncols, n_top_k);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     auto op = ggml_unary_op(dst->op_params[0]);
     GGML_ASSERT(op == GGML_UNARY_OP_RELU);
@@ -203,12 +359,8 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                 CUDA_CHECK(cudaGetLastError());
             }
 
-            argsort_f32_i32_cuda_cub(ctx.pool(), score.get(), sorted.get(), n_kv, nrows, GGML_SORT_ORDER_DESC, ctx.stream());
-            CUDA_CHECK(cudaGetLastError());
-
-            k_copy_topk<<<nrows, k_block_size, 0, ctx.stream()>>>(sorted.get(),
-                    (int *)((char *)dst->data + first_row*dst->nb[1]), n_kv, dst->ne[0]);
-            CUDA_CHECK(cudaGetLastError());
+            indexer_select_top_k(ctx, score.get(), sorted.get(), (int *)((char *)dst->data + first_row*dst->nb[1]),
+                    n_kv, nrows, dst->ne[0]);
         }
 
         return;
@@ -281,12 +433,8 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         }
         CUDA_CHECK(cudaGetLastError());
 
-        argsort_f32_i32_cuda_cub(ctx.pool(), score.get(), sorted.get(), k->ne[1], nrows, GGML_SORT_ORDER_DESC, ctx.stream());
-        CUDA_CHECK(cudaGetLastError());
-
-        k_copy_topk<<<nrows, k_block_size, 0, ctx.stream()>>>(sorted.get(), (int *)((char *)dst->data + first*dst->nb[1]),
-                k->ne[1], dst->ne[0]);
-        CUDA_CHECK(cudaGetLastError());
+        indexer_select_top_k(ctx, score.get(), sorted.get(), (int *)((char *)dst->data + first*dst->nb[1]),
+                k->ne[1], nrows, dst->ne[0]);
     }
 
 }
