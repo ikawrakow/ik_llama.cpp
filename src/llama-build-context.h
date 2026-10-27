@@ -12,6 +12,7 @@ struct llama_context;
 struct llama_cparams;
 struct llama_batch;
 struct llama_kv_cache;
+struct llama_layer;
 
 struct ggml_cgraph;
 struct ggml_tensor;
@@ -44,6 +45,38 @@ struct post_norm_data {
     float         f_rms_eps;
 };
 
+struct mla_params {
+    explicit mla_params(const llama_layer & l) : layer(l) {}
+    const llama_layer & layer;
+    ggml_tensor * inp = nullptr;
+    ggml_cgraph * gf = nullptr;
+    ggml_tensor * qr = nullptr;
+    ggml_tensor * q = nullptr;
+    ggml_tensor * q_expanded = nullptr;
+    ggml_tensor * k_row = nullptr;
+    ggml_tensor * attn_out = nullptr;
+    ggml_tensor * wkv_b = nullptr;
+    ggml_tensor * KQ_mask = nullptr;
+    ggml_tensor * top_k = nullptr;
+    ggml_tensor * output_gate = nullptr;
+    ggml_tensor * cache = nullptr;
+    ggml_tensor * output_wv_b = nullptr;
+    ggml_tensor * dsa_last_full_sorted = nullptr;
+    int il = -1;
+    int64_t n_head = 0;
+    int64_t n_embd_head_k = 0;
+    int64_t n_embd_head_v = 0;
+    int64_t n_extra = 0;
+    int64_t kv_lora_rank = 0;
+    float kq_scale = 0.0f;
+    bool inp_is_normed = false, use_v_cache_trans = false;
+    bool expanded_pp = false, write_cache = true;
+    bool apply_output = true, permute_output = true;
+    bool force_flash_kq_f32 = false, flash_kq_f32_if_small = true;
+    bool force_matmul_kq_f32 = false, fused_output_gate = true;
+    bool apply_wo = true, expand_before_wo = false;
+    int post_attn_hadamard = 0;
+};
 struct llm_build_context {
     const llama_model    & model;
           llama_context  & lctx;
@@ -478,6 +511,8 @@ struct llm_build_context {
             ggml_tensor * output, ggml_tensor * input, ggml_tensor * gate_w,
             int64_t head_dim, int64_t n_head, int il, const llm_build_cb & cb);
 
+    ggml_tensor * build_mla_attention(const mla_params & p);
+
     static ggml_tensor * llm_build_lora_mm_id(llama_context & lctx, ggml_context * ctx0,
           ggml_tensor * w, ggml_tensor * cur, ggml_tensor * ids,
           ggml_tensor * cache_w = nullptr, ggml_tensor * cache_ids = nullptr);
@@ -681,4 +716,7 @@ llm_expert_gating_func_type   gating_op,
     );
 
     ggml_cgraph * new_graph_custom();
+
+private:
+    ggml_tensor * build_mla_expanded_pp(const mla_params & p, ggml_tensor * q, ggml_tensor * cache);
 };

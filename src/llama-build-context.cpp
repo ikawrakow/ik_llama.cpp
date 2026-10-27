@@ -1104,6 +1104,240 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
     return res;
 }
 
+ggml_tensor * llm_build_context::build_mla_expanded_pp(const mla_params & p, ggml_tensor * q, ggml_tensor * cache) {
+    GGML_ASSERT(p.wkv_b && q);
+    const int64_t n_tokens = this->n_tokens;
+    const int64_t n_kv     = this->n_kv;
+    const int64_t n_extra  = p.n_extra;
+    const int64_t nope     = p.n_embd_head_k - n_extra;
+    GGML_ASSERT(p.n_head > 0);
+    const int64_t n_per_head = p.wkv_b->ne[1] / p.n_head;
+    GGML_ASSERT(n_per_head == nope + p.n_embd_head_v);
+    auto kv_cache_nope = ggml_view_2d(ctx0, cache, p.kv_lora_rank, n_kv,
+            cache->nb[1], ggml_row_size(cache->type, n_extra));
+    const int64_t kv_f32_size = p.wkv_b->ne[1] * n_kv * sizeof(float) / (1024 * 1024);
+    int n_max_head = p.n_head;
+    if (lctx.cparams.attn_max_batch > 0 && kv_f32_size > lctx.cparams.attn_max_batch) {
+        n_max_head = 1;
+        for (int niter = 2; niter < p.n_head; ++niter) {
+            if (p.n_head % niter == 0 && kv_f32_size / niter <= lctx.cparams.attn_max_batch) {
+                n_max_head = p.n_head / niter;
+                break;
+            }
+        }
+    }
+    auto kv_type = lctx.backends.size() == 1 && lctx.backends.front() == lctx.backend_cpu
+        ? cache->type : GGML_TYPE_F16;
+    ggml_tensor * k_rope = nullptr;
+    if (n_extra > 0) {
+        auto kv_cache_rope = ggml_view_3d(ctx0, cache, n_extra, n_kv, 1,
+                cache->nb[1], cache->nb[2], 0);
+        ggml_tensor repeater = {};
+        repeater.ne[0] = n_extra; repeater.ne[1] = n_kv; repeater.ne[2] = n_max_head; repeater.ne[3] = 1;
+        if (kv_cache_rope->type == kv_type) {
+            k_rope = ggml_repeat(ctx0, kv_cache_rope, &repeater);
+        } else {
+            k_rope = ggml_repeat(ctx0, ggml_cast(ctx0, kv_cache_rope, GGML_TYPE_F16), &repeater);
+        }
+    }
+    ggml_tensor * cur = nullptr;
+    for (int iter = 0; iter < p.n_head / n_max_head; ++iter) {
+        auto wkv_b = ggml_view_2d(ctx0, p.wkv_b, p.wkv_b->ne[0], n_per_head * n_max_head,
+                p.wkv_b->nb[1], p.wkv_b->nb[1] * n_per_head * n_max_head * iter);
+        auto kv_f32 = ggml_mul_mat(ctx0, wkv_b, kv_cache_nope);
+        auto v_f32 = ggml_view_3d(ctx0, kv_f32, p.n_embd_head_v, n_kv, n_max_head,
+                ggml_row_size(kv_f32->type, n_max_head * n_per_head),
+                ggml_row_size(kv_f32->type, n_per_head),
+                ggml_row_size(kv_f32->type, nope));
+        auto k_nope_f32 = ggml_view_3d(ctx0, kv_f32, nope, n_kv, n_max_head,
+                ggml_row_size(kv_f32->type, n_max_head * n_per_head),
+                ggml_row_size(kv_f32->type, n_per_head), 0);
+        auto v = ggml_cast(ctx0, v_f32, kv_type);
+        auto k_nope = ggml_cast(ctx0, k_nope_f32, kv_type);
+        auto k = k_rope ? ggml_concat(ctx0, k_rope, k_nope, 0) : k_nope;
+        if (p.gf) {
+            ggml_build_forward_expand(p.gf, k);
+        }
+        auto q_iter = ggml_view_3d(ctx0, q, q->ne[0], q->ne[1], n_max_head,
+                q->nb[1], q->nb[2], q->nb[2] * n_max_head * iter);
+        auto kqv = ggml_flash_attn_ext(ctx0, q_iter, k, v, p.KQ_mask, p.kq_scale,
+                hparams.f_max_alibi_bias, 0.f);
+        if (p.force_flash_kq_f32 || q->ne[1] <= 8) {
+            ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
+        }
+        if (p.dsa_last_full_sorted) {
+            kqv->src[5] = p.dsa_last_full_sorted;
+        }
+        auto kqv_2d = ggml_reshape_2d(ctx0, kqv, p.n_embd_head_v * n_max_head, n_tokens);
+        if (cur == nullptr) {
+            cur = kqv_2d;
+        } else {
+            cur = ggml_concat(ctx0, cur, kqv_2d, 0);
+        }
+        if (p.gf) {
+            ggml_build_forward_expand(p.gf, cur);
+        }
+    }
+    return cur;
+}
+ggml_tensor * llm_build_context::build_mla_attention(const mla_params & p) {
+    const auto & layer = p.layer;
+    auto & kv_self = lctx.kv_self;
+    const int64_t n_tokens = this->n_tokens;
+    const int64_t n_head   = p.n_head;
+    const int64_t head_k   = p.n_embd_head_k;
+    const int64_t head_v   = p.n_embd_head_v;
+    const int64_t n_extra  = p.n_extra;
+    const int64_t kv_lora  = p.kv_lora_rank;
+    const int64_t n_nope   = head_k - n_extra;
+    auto cur = p.inp;
+    if (!p.inp_is_normed) {
+        cur = llm_build_norm(ctx0, cur, hparams, layer.attn_norm, nullptr, LLM_NORM_RMS, cb, p.il);
+    }
+    auto Qcur = p.q;
+    auto q_expanded = p.q_expanded;
+    auto finish = [&](ggml_tensor * kqv, bool preprojected) -> ggml_tensor * {
+        if (!preprojected) {
+            auto wv_b = p.output_wv_b ? p.output_wv_b : layer.wv_b;
+            if (wv_b->ne[1] != head_v) {
+                wv_b = ggml_reshape_3d(ctx0, wv_b, kv_lora, head_v, n_head);
+            }
+            kqv = ggml_mul_mat(ctx0, wv_b, kqv);
+            if (p.permute_output && n_tokens > 1) {
+                kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
+            }
+            kqv = ggml_reshape_2d(ctx0, kqv, head_v * n_head, n_tokens);
+        }
+        if (!p.apply_output) {
+            return kqv;
+        }
+        if (p.output_gate) {
+            if (p.fused_output_gate) {
+                kqv = build_mla_output_gate(lctx, ctx0, kqv, cur, p.output_gate, head_v, n_head, p.il, cb);
+            } else {
+                auto gate = ggml_mul_mat(ctx0, p.output_gate, cur);
+                gate = ggml_reshape_2d(ctx0, gate, head_v * n_head, n_tokens);
+                kqv = ggml_mul(ctx0, kqv, ggml_sigmoid(ctx0, gate));
+            }
+        }
+        if (p.expand_before_wo && p.gf) {
+            ggml_build_forward_expand(p.gf, kqv);
+        }
+        if (p.apply_wo) {
+            kqv = llm_build_lora_mm(lctx, ctx0, layer.wo, kqv);
+        }
+        cb(kqv, "kqv_out", p.il);
+        return kqv;
+    };
+
+    if (p.attn_out) {
+        return finish(p.attn_out, false);
+    }
+
+    if (!Qcur && !(p.expanded_pp && q_expanded)) {
+        auto qr = p.qr;
+        if (qr == nullptr) {
+            qr = ggml_mul_mat(ctx0, layer.wq_a, cur);
+            qr = llm_build_norm(ctx0, qr, hparams, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, cb, p.il);
+        }
+        auto q = ggml_mul_mat(ctx0, layer.wq_b, qr);
+        q = ggml_reshape_3d(ctx0, q, head_k, n_head, n_tokens);
+        q = ggml_permute(ctx0, q, 0, 2, 1, 3);
+        auto q_nope = ggml_view_3d(ctx0, q, n_nope, n_tokens, n_head, q->nb[1], q->nb[2], 0);
+        auto Qcur_nope = ggml_mul_mat(ctx0, layer.wk_b, q_nope); // [kv_lora, n_tokens, n_head]
+        Qcur = Qcur_nope;
+        if (n_extra > 0) {
+            auto q_extra = ggml_view_3d(ctx0, q, n_extra, n_tokens, n_head,
+                    q->nb[1], q->nb[2], n_nope*q->nb[0]);
+            Qcur = ggml_concat(ctx0, q_extra, Qcur_nope, 0); // [kv_lora + n_extra, n_tokens, n_head]
+            if (!q_expanded) {
+                q_expanded = ggml_concat(ctx0, q_extra, q_nope, 0); // [n_embd_head_k, n_tokens, n_head]
+            }
+        } else if (!q_expanded) {
+            q_expanded = q_nope;
+        }
+    }
+    auto k_row = p.k_row;
+    ggml_tensor * latent = nullptr;
+    if (!k_row) {
+        auto kv = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur); // [kv_lora + n_extra, n_tokens]
+        latent = ggml_view_2d(ctx0, kv, kv_lora, n_tokens, kv->nb[1], 0);
+        latent = llm_build_norm(ctx0, latent, hparams, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, cb, p.il);
+        k_row = latent;
+        if (n_extra > 0) {
+            auto extra = ggml_view_2d(ctx0, kv, n_extra, n_tokens, kv->nb[1], kv_lora*kv->nb[0]);
+            k_row = ggml_concat(ctx0, extra, latent, 0); // [kv_lora + n_extra, n_tokens]
+        }
+    } else {
+        latent = ggml_view_2d(ctx0, k_row, kv_lora, n_tokens, k_row->nb[1],
+                ggml_row_size(k_row->type, n_extra));
+    }
+    auto cache = p.cache ? p.cache : kv_self.k_l[p.il];
+    const auto row_size = ggml_row_size(cache->type, kv_lora + n_extra);
+    if (p.write_cache) {
+        auto k_cache_write = ggml_view_2d(ctx0, cache, kv_lora + n_extra, n_tokens,
+                row_size, row_size * this->kv_head);
+        lctx.cache_copies[2 * p.il + 0].cpy  = ggml_cpy(ctx0, k_row, k_cache_write);
+        lctx.cache_copies[2 * p.il + 0].step = row_size;
+        if (p.gf) {
+            ggml_build_forward_expand(p.gf, lctx.cache_copies[2 * p.il + 0].cpy);
+        }
+    }
+    auto K_cache = ggml_view_2d(ctx0, cache, kv_lora + n_extra, this->n_kv, row_size, 0);
+    ggml_tensor * attn_mask = p.KQ_mask;
+    if (p.top_k) {
+        attn_mask = ggml_indexer_mask(ctx0, p.KQ_mask, p.top_k);
+    }
+    if (p.expanded_pp) {
+        return finish(build_mla_expanded_pp(p, q_expanded, cache), true);
+    }
+    ggml_tensor * kqv = nullptr;
+    if (lctx.cparams.flash_attn) {
+        auto V_cache = ggml_view_2d(ctx0, cache, kv_lora, this->n_kv, row_size,
+                ggml_row_size(K_cache->type, n_extra));
+        kqv = ggml_flash_attn_ext(ctx0, Qcur, K_cache, V_cache, attn_mask,
+                p.kq_scale, hparams.f_max_alibi_bias, 0.f);
+        if (p.top_k) {
+            const int n_selected_padded = GGML_PAD(p.top_k->ne[0], 256);
+            if (n_selected_padded < attn_mask->ne[0]) {
+                auto selected = ggml_mask_to_index(ctx0, attn_mask, n_selected_padded);
+                kqv->src[5] = selected;
+            }
+        }
+        if (p.force_flash_kq_f32 || (p.flash_kq_f32_if_small && K_cache->ne[1] < 256)) {
+            ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
+        }
+        if (p.post_attn_hadamard > 0) {
+            kqv = ggml_hadamard(ctx0, kqv, p.post_attn_hadamard);
+        }
+        kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3); // [kv_lora, n_tokens, n_head]
+    } else {
+        ggml_tensor * V_cache_trans = nullptr;
+        if (p.use_v_cache_trans && kv_self.v_l[p.il]) {
+            auto v_cache_trans_view = ggml_view_2d(ctx0, kv_self.v_l[p.il], this->n_tokens, kv_lora,
+                    ggml_row_size(kv_self.v_l[p.il]->type, kv_self.size),
+                    ggml_row_size(kv_self.v_l[p.il]->type, this->kv_head));
+            ggml_build_forward_expand(p.gf, ggml_cpy(ctx0, ggml_transpose(ctx0, latent), v_cache_trans_view));
+            V_cache_trans = ggml_view_2d(ctx0, kv_self.v_l[p.il], this->n_kv, kv_lora,
+                    ggml_row_size(kv_self.v_l[p.il]->type, kv_self.size), 0);
+        } else {
+            auto V_cache = ggml_view_2d(ctx0, cache, kv_lora, this->n_kv, row_size,
+                    ggml_row_size(K_cache->type, n_extra));
+            V_cache_trans = ggml_cont(ctx0, ggml_transpose(ctx0, V_cache));
+        }
+        auto kq = ggml_mul_mat(ctx0, K_cache, Qcur); // [n_kv, n_tokens, n_head]
+        if (p.force_matmul_kq_f32 || K_cache->ne[1] < 256) {
+            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        }
+        kq = ggml_soft_max_ext(ctx0, kq, attn_mask, p.kq_scale, hparams.f_max_alibi_bias);
+        kqv = ggml_mul_mat(ctx0, V_cache_trans, kq);
+        if (p.post_attn_hadamard > 0) {
+            kqv = ggml_hadamard(ctx0, kqv, p.post_attn_hadamard);
+        }
+    }
+    return finish(kqv, false);
+}
+
 ggml_tensor * llm_build_context::build_mla_output_gate(
         llama_context & lctx,
         ggml_context * ctx0,
