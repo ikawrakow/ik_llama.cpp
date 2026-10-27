@@ -61,6 +61,19 @@ static inline float32x4_t v_silu(float32x4_t x) {
     const float32x4_t one_plus_exp_neg_x = vaddq_f32(one, exp_neg_x);
     return vdivq_f32(x, one_plus_exp_neg_x);
 }
+static inline float32x4_t v_situ(float32x4_t x, float beta) {
+    const float32x4_t b = vdupq_n_f32(beta);
+    const float32x4_t inv_b = vdupq_n_f32(1.0f/beta);
+    const float32x4_t one = vdupq_n_f32(1.0f);
+    const float32x4_t soft = vmulq_f32(b, v_tanh(vmulq_f32(x, inv_b)));
+    const float32x4_t sig = vdivq_f32(one, vaddq_f32(one, v_expf(vsubq_f32(vdupq_n_f32(0.0f), x))));
+    return vmulq_f32(soft, sig);
+}
+static inline float32x4_t v_situ_up(float32x4_t x, float beta) {
+    const float32x4_t b = vdupq_n_f32(beta);
+    const float32x4_t inv_b = vdupq_n_f32(1.0f/beta);
+    return vmulq_f32(b, v_tanh(vmulq_f32(x, inv_b)));
+}
 static inline float32x4_t v_silu_oai(float32x4_t x, float32x4_t alpha) {
     const float32x4_t one = vdupq_n_f32(1.0f);
     const float32x4_t neg_x = vmulq_f32(alpha, x);
@@ -148,6 +161,19 @@ static inline __m512 v_silu(__m512 x) {
     const __m512 one_plus_exp_neg_x = _mm512_add_ps(one, exp_neg_x);
     return _mm512_div_ps(x, one_plus_exp_neg_x);
 }
+static inline __m512 v_situ(__m512 x, float beta) {
+    const __m512 b = _mm512_set1_ps(beta);
+    const __m512 inv_b = _mm512_set1_ps(1.0f/beta);
+    const __m512 one = _mm512_set1_ps(1.0f);
+    const __m512 soft = _mm512_mul_ps(b, v_tanh(_mm512_mul_ps(x, inv_b)));
+    const __m512 sig = _mm512_div_ps(one, _mm512_add_ps(one, v_expf(_mm512_sub_ps(_mm512_setzero_ps(), x))));
+    return _mm512_mul_ps(soft, sig);
+}
+static inline __m512 v_situ_up(__m512 x, float beta) {
+    const __m512 b = _mm512_set1_ps(beta);
+    const __m512 inv_b = _mm512_set1_ps(1.0f/beta);
+    return _mm512_mul_ps(b, v_tanh(_mm512_mul_ps(x, inv_b)));
+}
 static inline __m512 v_silu_oai(__m512 x, __m512 alpha) {
     const __m512 one = _mm512_set1_ps(1);
     const __m512 neg_x = _mm512_mul_ps(alpha, x);
@@ -228,6 +254,19 @@ static inline __m256 v_silu(__m256 x) {
     const __m256 exp_neg_x = v_expf(neg_x);
     const __m256 one_plus_exp_neg_x = _mm256_add_ps(one, exp_neg_x);
     return _mm256_div_ps(x, one_plus_exp_neg_x);
+}
+static inline __m256 v_situ(__m256 x, float beta) {
+    const __m256 b = _mm256_set1_ps(beta);
+    const __m256 inv_b = _mm256_set1_ps(1.0f/beta);
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 soft = _mm256_mul_ps(b, v_tanh(_mm256_mul_ps(x, inv_b)));
+    const __m256 sig = _mm256_div_ps(one, _mm256_add_ps(one, v_expf(_mm256_sub_ps(_mm256_setzero_ps(), x))));
+    return _mm256_mul_ps(soft, sig);
+}
+static inline __m256 v_situ_up(__m256 x, float beta) {
+    const __m256 b = _mm256_set1_ps(beta);
+    const __m256 inv_b = _mm256_set1_ps(1.0f/beta);
+    return _mm256_mul_ps(b, v_tanh(_mm256_mul_ps(x, inv_b)));
 }
 static inline __m256 v_silu_oai(__m256 x, __m256 alpha) {
     const __m256 one = _mm256_set1_ps(1);

@@ -752,6 +752,7 @@ extern "C" {
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_SOFTPLUS,
         GGML_UNARY_OP_SQRT_SOFTPLUS,
+        GGML_UNARY_OP_SITU_GLU,
 
         GGML_UNARY_OP_COUNT,
     };

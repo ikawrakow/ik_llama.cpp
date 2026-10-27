@@ -1291,10 +1291,11 @@ ggml_tensor * llm_build_context::llm_build_ffn(
 
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
         up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
-        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_GELU && !act_scales))) {
+        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :
-                        type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI;
+                        type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :
+                        type_op == LLM_FFN_SITU ? GGML_UNARY_OP_SITU_GLU : GGML_UNARY_OP_SWIGLU_OAI;
         auto u = (ggml_split_tensor_t *)up->extra;
         auto g = (ggml_split_tensor_t *)gate->extra;
         auto d = (ggml_split_tensor_t *)down->extra;
@@ -1319,6 +1320,8 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             cur = ggml_fused_up_gate(ctx, split_u, split_g, cur, unary_op);
             cb(cur, "ffn_up_gate", il_cb);
             *(float *)(cur->op_params + 1) = lctx.model.swiglu_limit(il, lctx.model.arch == LLM_ARCH_BAILINGMOE3);
+            *(float *)(cur->op_params + 2) = lctx.model.hparams.situ_beta;
+            *(float *)(cur->op_params + 3) = lctx.model.hparams.situ_linear_beta;
             cur = llm_build_lora_mm(lctx, ctx, split_d, cur);
             cb(cur, "ffn_down", il_cb);
             if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
@@ -1379,13 +1382,16 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
         lctx.model.hadamard_rotation(up) == nullptr && lctx.model.hadamard_rotation(gate) == nullptr &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
-        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_GELU && !act_scales))) {
+        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :
-                        type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI;
+                        type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :
+                        type_op == LLM_FFN_SITU ? GGML_UNARY_OP_SITU_GLU : GGML_UNARY_OP_SWIGLU_OAI;
         cur = ggml_fused_up_gate(ctx, up, gate, cur, unary_op);
         cb(cur, "ffn_up_gate", il);
         *(float *)(cur->op_params + 1) = lctx.model.swiglu_limit(il, true);
+        *(float *)(cur->op_params + 2) = lctx.model.hparams.situ_beta;
+        *(float *)(cur->op_params + 3) = lctx.model.hparams.situ_linear_beta;
         if (down) {
             cur = llm_build_lora_mm(lctx, ctx, down, cur);
             cb(cur, "ffn_down", il);
@@ -1761,22 +1767,27 @@ llm_expert_gating_func_type   gating_op,
     // Hence, if we have biases, we cannot use fmoe.
     //
     //bool can_use_fmoe = !up_exps_b && !gate_exps_b && (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU);
-    bool can_use_fmoe = (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU || type_op == LLM_FFN_SWIGLU_OAI);
+    bool can_use_fmoe = (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU ||
+                         type_op == LLM_FFN_SWIGLU_OAI ||
+                         (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0));
 
     ggml_tensor * par;
     if (can_use_fmoe && up_gate_exps && (!cache_ids || !up_gate_exps_b)) {
         ggml_tensor * weight = cached_up_gate ? cached_up_gate : up_gate_exps;
         ggml_tensor * expert_ids = cache_ids ? cache_ids : selected_experts;
-        if (up_gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI) {
+        if (up_gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI || type_op == LLM_FFN_SITU) {
             par = ggml_moe_up_gate_ext(ctx, weight, nullptr, cur, expert_ids, up_gate_exps_b, nullptr,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
+                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :
+                    type_op == LLM_FFN_SITU ? GGML_UNARY_OP_SITU_GLU : GGML_UNARY_OP_SWIGLU_OAI);
         } else {
             GGML_ASSERT(type_op != LLM_FFN_SWIGLU_OAI);
             par = ggml_moe_up_gate(ctx, weight, nullptr, cur, expert_ids,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
         }
         *((float *)(par->op_params + 1)) = lctx.model.swiglu_limit(il, false);
+        *((float *)(par->op_params + 2)) = lctx.model.hparams.situ_beta;
+        *((float *)(par->op_params + 3)) = lctx.model.hparams.situ_linear_beta;
     } else {
     if (up_gate_exps) {
         GGML_ASSERT(cache_ids && cached_up_gate);
@@ -1817,16 +1828,19 @@ llm_expert_gating_func_type   gating_op,
         ggml_tensor * up_weight = cached_up ? cached_up : up_exps;
         ggml_tensor * gate_weight = cached_gate ? cached_gate : gate_exps;
         ggml_tensor * expert_ids = cache_ids ? cache_ids : selected_experts;
-        if (up_exps_b || gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI) {
+        if (up_exps_b || gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI || type_op == LLM_FFN_SITU) {
             par = ggml_moe_up_gate_ext(ctx, up_weight, gate_weight, cur, expert_ids, up_exps_b, gate_exps_b,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
+                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :
+                    type_op == LLM_FFN_SITU ? GGML_UNARY_OP_SITU_GLU : GGML_UNARY_OP_SWIGLU_OAI);
         } else {
             GGML_ASSERT(type_op != LLM_FFN_SWIGLU_OAI);
             par = ggml_moe_up_gate(ctx, up_weight, gate_weight, cur, expert_ids,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
         }
         *(float *)(par->op_params + 1) = lctx.model.swiglu_limit(il, false);
+        *(float *)(par->op_params + 2) = lctx.model.hparams.situ_beta;
+        *(float *)(par->op_params + 3) = lctx.model.hparams.situ_linear_beta;
     } else {
         ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts, cached_up, cache_ids); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);

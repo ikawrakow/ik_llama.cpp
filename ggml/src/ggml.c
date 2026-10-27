@@ -4861,9 +4861,10 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "EXP",
     "SOFTPLUS",
     "SQRT_SOFTPLUS",
+    "SITU_GLU",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 19, "GGML_UNARY_OP_COUNT != 19");
+static_assert(GGML_UNARY_OP_COUNT == 20, "GGML_UNARY_OP_COUNT != 20");
 
 
 static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
@@ -19089,6 +19090,8 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     ggml_barrier(params->shared);
 
     const float limit = *(const float *)(dst->op_params + 1);
+    const float situ_beta = *(const float *)(dst->op_params + 2);
+    const float situ_beta_linear = *(const float *)(dst->op_params + 3);
 
     const void * wdata_ug    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
     const size_t row_size_ug = ggml_row_size(vec_dot_type, ne10);
@@ -19142,7 +19145,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata_ug, row_size_ug,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, local_chunk, chunks_per_expert_ug)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, local_chunk, chunks_per_expert_ug)) GGML_ABORT("fatal error");
 
         chunk_id_ug = atomic_fetch_add(&params->shared->current_chunk, 1);
     }
@@ -19152,6 +19155,8 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     ggml_barrier(params->shared);
 
     const float limit = *(const float *)(dst->op_params + 1);
+    const float situ_beta = *(const float *)(dst->op_params + 2);
+    const float situ_beta_linear = *(const float *)(dst->op_params + 3);
 
     // so GGML_TENSOR_BINARY_OP_LOCALS works
 
@@ -19190,7 +19195,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata, row_size,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, ith, nth)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, ith, nth)) GGML_ABORT("fatal error");
 
     }
 #endif
@@ -19256,6 +19261,8 @@ static void ggml_compute_forward_mul_mat_up_gate(
     ggml_barrier(params->shared);
 
     float limit = *(const float *)(dst->op_params + 1);
+    const float situ_beta = *(const float *)(dst->op_params + 2);
+    const float situ_beta_linear = *(const float *)(dst->op_params + 3);
 
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
@@ -19264,7 +19271,7 @@ static void ggml_compute_forward_mul_mat_up_gate(
                          vec_dot_type, (const char *)wdata, row_size,
                          NULL, NULL,
                          (float *)dst->data, nb1, nb2,
-                         NULL, limit, ith, nth)) GGML_ABORT("fatal error");
+                         NULL, limit, situ_beta, situ_beta_linear, ith, nth)) GGML_ABORT("fatal error");
 
 }
 #endif
