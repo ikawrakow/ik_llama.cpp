@@ -1,5 +1,6 @@
 #include "sumrows.cuh"
 
+template <bool is_mean>
 static __global__ void k_sum_rows_f32(const float * x, float * dst, const int ncols) {
     const int row = blockIdx.x;
     const int col = threadIdx.x;
@@ -12,7 +13,11 @@ static __global__ void k_sum_rows_f32(const float * x, float * dst, const int nc
     sum = warp_reduce_sum(sum);
 
     if (col == 0) {
-        dst[row] = sum;
+        if constexpr (is_mean) {
+            dst[row] = sum/ncols;
+        } else {
+            dst[row] = sum;
+        }
     }
 }
 
@@ -76,10 +81,17 @@ static __global__ void k_sum_rows_clamp_div_f32(const float * __restrict__ x, fl
     }
 }
 
-void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
+static void sum_rows_f32_cuda_impl(const float * x, float * dst, const int ncols, const int nrows, bool is_mean, cudaStream_t stream) {
     const dim3 block_dims(WARP_SIZE, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
-    k_sum_rows_f32<<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
+    if (is_mean) {
+        k_sum_rows_f32<true><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
+    } else {
+        k_sum_rows_f32<false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
+    }
+}
+void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
+    sum_rows_f32_cuda_impl(x, dst, ncols, nrows, false, stream);
 }
 static void sum_rows_f32_cuda_nc(const char * x, char * dst, int ne0, int ne1, int ne2, int ne3,
         size_t nb00, size_t nb01, size_t nb02, size_t nb03, size_t nb1, size_t nb2, size_t nb3, cudaStream_t stream) {
@@ -190,8 +202,22 @@ void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    sum_rows_f32_cuda(src0_d, dst_d, ncols, nrows, stream);
+    sum_rows_f32_cuda_impl(src0_d, dst_d, ncols, nrows, false, stream);
 
+}
+
+void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+
+    const float * src0_d = (const float *)src0->data;
+    float * dst_d = (float *)dst->data;
+    const int64_t ncols = src0->ne[0];
+    const int64_t nrows = ggml_nrows(src0);
+
+    sum_rows_f32_cuda_impl(src0_d, dst_d, ncols, nrows, true, ctx.stream());
 }
 
 void ggml_cuda_op_sum_rows_nc(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

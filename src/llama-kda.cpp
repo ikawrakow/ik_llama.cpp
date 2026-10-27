@@ -8,11 +8,13 @@
 
 static std::pair<ggml_tensor *, ggml_tensor *> build_kda_qkvz(llama_context & lctx, ggml_context * ctx0,
         ggml_tensor * wq, ggml_tensor * wk, ggml_tensor * wv, ggml_tensor * ssm_g_a, ggml_tensor * ssm_g_b,
-        ggml_tensor * input, int il, const llm_build_cb & cb, ggml_cgraph * gf) {
+        ggml_tensor * input, int il, const llm_build_cb & cb, ggml_cgraph * gf, ggml_tensor * ssm_g = nullptr) {
     auto q = llm_build_context::llm_build_lora_mm(lctx, ctx0, wq, input);
     auto k = llm_build_context::llm_build_lora_mm(lctx, ctx0, wk, input);
     auto v = llm_build_context::llm_build_lora_mm(lctx, ctx0, wv, input);
-    auto z = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_g_a, input);
+    auto z = ssm_g
+        ? llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_g, input)
+        : llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_g_a, input);
     if (ssm_g_b) {
         // GLM-5.3-Flash / kimi-k3 low-rank KDA: g = g_b(g_a(x)), two chained projections
         z = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_g_b, z);
@@ -38,6 +40,7 @@ static std::pair<ggml_tensor *, ggml_tensor *> build_kda_beta_gate(llama_context
 
     auto beta = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_beta, input);
     beta = ggml_reshape_4d(ctx0, beta, n_head, 1, n_tok, 1);
+    // Raw logits: ggml_delta_net applies sigmoid(beta); RDA needs them unmodified.
     cb(beta, "beta", il);
 
     auto raw = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_f_a, input);
@@ -135,8 +138,8 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
             const int64_t n_head = ssm_out->ne[0] / head_dim;
             auto split_opt = [&split](ggml_tensor * t) { return t ? split(t) : nullptr; };
             auto [qkv_mixed, z] = build_kda_qkvz(lctx, ctx0,
-                    split(layer.wq), split(layer.wk), split(layer.wv), split(layer.ssm_g_a), split_opt(layer.ssm_g_b),
-                    cur, il_cb, cb, gf);
+                    split(layer.wq), split(layer.wk), split(layer.wv), split_opt(layer.ssm_g_a), split_opt(layer.ssm_g_b),
+                    cur, il_cb, cb, gf, split_opt(layer.ssm_g));
             auto [beta, log_decay] = build_kda_beta_gate(lctx, ctx0,
                     split(layer.ssm_beta), split(layer.ssm_f_a), split_opt(layer.ssm_f_b), split(layer.ssm_dt_b), split(layer.ssm_a),
                     cur, head_dim, n_head, hparams.kda_gate_lower_bound, il_cb, cb, gf);
@@ -151,12 +154,18 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
                                  id < (int) kv_self.ckpt.per_step_conv[il].size()
                                ? kv_self.ckpt.per_step_conv[il][id] : nullptr;
 
+            ggml_tensor * rda_delta = nullptr;
+            if (layer.ssm_rda) {
+                rda_delta = llm_build_context::llm_build_lora_mm(lctx, ctx0, split(layer.ssm_rda), cur);
+                rda_delta = ggml_reshape_4d(ctx0, rda_delta, n_head, 1, n_tok, 1);
+            }
+
             const uint32_t qnext_state_slots = split_s_l->splits[id]->ne[1];
             auto output = build_qkv(ctx0, split_s_l->splits[id], conv, qkv_mixed,
                     inp_s_seq_qnext, beta, log_decay,
                     head_dim, n_head, head_dim, n_head, hparams.ssm_d_conv,
                     state_seq_id_local, qnext_state_slots, reset_state_local,
-                    hparams.f_norm_rms_eps, 1, il_cb, cb, gf, per_step_ckpt, per_step_conv);
+                    hparams.f_norm_rms_eps, 1, il_cb, cb, gf, per_step_ckpt, per_step_conv, rda_delta);
 
             auto gated_output = build_kda_gated_output(lctx, ctx0, split(layer.ssm_norm), ssm_out, output, z,
                     head_dim, n_head, n_tok, il_cb, cb);
@@ -204,10 +213,15 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
 
     const int64_t n_head = hparams.ssm_dt_rank;
     auto [qkv_mixed, z] = build_kda_qkvz(lctx, ctx0,
-            layer.wq, layer.wk, layer.wv, layer.ssm_g_a, layer.ssm_g_b, cur, il, cb, gf);
+            layer.wq, layer.wk, layer.wv, layer.ssm_g_a, layer.ssm_g_b, cur, il, cb, gf, layer.ssm_g);
     auto [beta, log_decay] = build_kda_beta_gate(lctx, ctx0,
             layer.ssm_beta, layer.ssm_f_a, layer.ssm_f_b, layer.ssm_dt_b, layer.ssm_a,
             cur, head_dim, n_head, hparams.kda_gate_lower_bound, il, cb, gf);
+    ggml_tensor * rda_delta = nullptr;
+    if (layer.ssm_rda) {
+        rda_delta = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.ssm_rda, cur);
+        rda_delta = ggml_reshape_4d(ctx0, rda_delta, n_head, 1, n_tok, 1);
+    }
     auto conv = build_kda_conv(ctx0, layer.ssm_conv1d_q, layer.ssm_conv1d_k, layer.ssm_conv1d_v);
 
     ggml_tensor * per_step_ckpt = nullptr;
@@ -222,7 +236,7 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
             inp_s_seq_qnext, beta, log_decay,
             head_dim, n_head, head_dim, n_head, hparams.ssm_d_conv,
             state_seq_id_local, qnext_state_slots, reset_state_local,
-            hparams.f_norm_rms_eps, 1, il, cb, gf, per_step_ckpt, per_step_conv);
+            hparams.f_norm_rms_eps, 1, il, cb, gf, per_step_ckpt, per_step_conv, rda_delta);
     auto gated_output = build_kda_gated_output(lctx, ctx0, layer.ssm_norm, layer.ssm_out, output, z,
             head_dim, n_head, n_tok, il, cb);
 
@@ -244,7 +258,7 @@ ggml_tensor * delta_net::build_layer_attn_kda(ggml_context * ctx0, ggml_cgraph *
     GGML_ASSERT(lctx.model.hparams.is_recurrent(il));
     GGML_ASSERT(layer.wq && layer.wk && layer.wv);
     GGML_ASSERT(layer.ssm_conv1d_q && layer.ssm_conv1d_k && layer.ssm_conv1d_v);
-    GGML_ASSERT(layer.ssm_f_a && layer.ssm_g_a && layer.ssm_beta);
+    GGML_ASSERT(layer.ssm_f_a && (layer.ssm_g_a || layer.ssm_g) && layer.ssm_beta);
     GGML_ASSERT(layer.ssm_a && layer.ssm_dt_b && layer.ssm_norm && layer.ssm_out);
 
     if (all_same_seq) {

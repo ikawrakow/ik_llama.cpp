@@ -405,6 +405,9 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_RAON:
+                regex_exprs = {" ?[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+| ?(?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+(?: (?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+)*|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"};
+                break;
             case LLAMA_VOCAB_PRE_TYPE_PORO:
             case LLAMA_VOCAB_PRE_TYPE_BLOOM:
             case LLAMA_VOCAB_PRE_TYPE_GPT3_FINNISH:
@@ -2075,6 +2078,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                     tokenizer_pre == "qwen35") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN35;
+                clean_spaces = false;
+            } else if (tokenizer_pre == "raon") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_RAON;
                 clean_spaces = false;
             } else if (
                 tokenizer_pre == "stablelm2") {

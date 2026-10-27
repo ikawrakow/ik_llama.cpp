@@ -10349,6 +10349,9 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_QWEN4EXP:
             return LLAMA_ROPE_TYPE_IMROPE;
 
+        case LLM_ARCH_RAON1:
+            return LLAMA_ROPE_TYPE_NONE;
+
         // all model arches should be listed explicitly here
         case LLM_ARCH_UNKNOWN:
             GGML_ABORT("unknown architecture");

@@ -1471,6 +1471,19 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     else {
 
     switch (type_op) {
+        case LLM_FFN_SITU:
+            {
+                const auto & hp = lctx.model.hparams;
+                auto situ_gate = [&](ggml_tensor * x, float beta) {
+                    return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
+                };
+                auto situ_up = [&](ggml_tensor * x, float beta) {
+                    return beta > 0.0f ? ggml_softcap(ctx, x, 1.0f/beta, beta) : x;
+                };
+                cur = ggml_mul(ctx, situ_gate(cur, hp.situ_beta), situ_up(tmp, hp.situ_linear_beta));
+                type_gate = LLM_FFN_SEQ;
+                cb(cur, "ffn_situ", il);
+            } break;
         case LLM_FFN_SILU:
             {
                 if (lctx.model.arch == LLM_ARCH_STEP35 || lctx.model.arch == LLM_ARCH_BAILINGMOE3) {
@@ -1783,6 +1796,15 @@ llm_expert_gating_func_type   gating_op,
             *((float *)(par->op_params + 1)) = lctx.model.swiglu_limit(il, false);
         } else if (type_op == LLM_FFN_SWIGLU_OAI) {
             par = ggml_swiglu_oai(ctx, gate, up, 1.702f, 7.0f);
+        } else if (type_op == LLM_FFN_SITU) {
+            const auto & hp = lctx.model.hparams;
+            auto situ_gate = [&](ggml_tensor * x, float beta) {
+                return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
+            };
+            auto situ_up = [&](ggml_tensor * x, float beta) {
+                return beta > 0.0f ? ggml_softcap(ctx, x, 1.0f/beta, beta) : x;
+            };
+            par = ggml_mul(ctx, situ_gate(gate, hp.situ_beta), situ_up(up, hp.situ_linear_beta));
         } else {
             GGML_ABORT("fatal error");
         }
@@ -1835,6 +1857,15 @@ llm_expert_gating_func_type   gating_op,
             constexpr float alpha = 1.702f;
             constexpr float limit = 7.0f;
             par = ggml_swiglu_oai(ctx, gate, up, alpha, limit);
+        } else if (type_op == LLM_FFN_SITU) {
+            const auto & hp = lctx.model.hparams;
+            auto situ_gate = [&](ggml_tensor * x, float beta) {
+                return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
+            };
+            auto situ_up = [&](ggml_tensor * x, float beta) {
+                return beta > 0.0f ? ggml_softcap(ctx, x, 1.0f/beta, beta) : x;
+            };
+            par = ggml_mul(ctx, situ_gate(gate, hp.situ_beta), situ_up(up, hp.situ_linear_beta));
         }
         else {
             GGML_ABORT("fatal error");
@@ -3241,6 +3272,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_GLM5NEXT:
             {
                 result = llm.build_glm5next();
+            } break;
+        case LLM_ARCH_RAON1:
+            {
+                result = llm.build_raon1();
             } break;
         case LLM_ARCH_MINIMAX_M2:
             {

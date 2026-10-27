@@ -290,7 +290,7 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
         int64_t head_k_dim, int64_t num_k_heads, int64_t head_v_dim, int64_t num_v_heads, int64_t ssm_d_conv,
         int64_t state_seq_id_local, uint32_t qnext_state_slots, bool reset_state_local,
         float eps_norm, int repeat_type, int il, const llm_build_cb & cb, ggml_cgraph * gf,
-        ggml_tensor * per_step_ckpt, ggml_tensor * per_step_conv) {
+        ggml_tensor * per_step_ckpt, ggml_tensor * per_step_conv, ggml_tensor * rda_delta) {
     const int64_t key_dim        = head_k_dim * num_k_heads;
     const int64_t value_dim      = head_v_dim * num_v_heads;
     const int64_t conv_dim       = key_dim * 2 + value_dim;
@@ -374,6 +374,17 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     }
     cb(q_conv, "q_conv_normed", il);
     cb(k_conv, "k_conv_normed", il);
+
+    if (rda_delta) {
+        // RDA: beta is raw; the kernel sigmoids it. V *= write/erase gives
+        // S' = S(I - erase k k^T) + write v k^T exactly.
+        auto beta_v  = ggml_reshape_4d(ctx0, beta,      1, num_v_heads, n_seq_tokens, n_seqs);
+        auto delta_v = ggml_reshape_4d(ctx0, rda_delta, 1, num_v_heads, n_seq_tokens, n_seqs);
+        auto erase = ggml_softplus(ctx0, ggml_neg(ctx0, beta_v));
+        auto write = ggml_softplus(ctx0, ggml_neg(ctx0, ggml_add(ctx0, beta_v, delta_v)));
+        v_conv = ggml_mul(ctx0, v_conv, ggml_exp(ctx0, ggml_sub(ctx0, erase, write)));
+        cb(v_conv, "rda_v_scaled", il);
+    }
 
     auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb, repeat_type,
             per_step_ckpt);

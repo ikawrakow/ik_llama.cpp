@@ -22,6 +22,7 @@
 #include "ggml-cuda/cpy.cuh"
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/diagmask.cuh"
+#include "ggml-cuda/diag.cuh"
 #include "ggml-cuda/dmmv.cuh"
 #include "ggml-cuda/fattn.cuh"
 #include "ggml-cuda/fill.cuh"
@@ -32,6 +33,7 @@
 #include "ggml-cuda/norm.cuh"
 #include "ggml-cuda/pad.cuh"
 #include "ggml-cuda/pool2d.cuh"
+#include "ggml-cuda/pool1d.cuh"
 #include "ggml-cuda/quantize.cuh"
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/scale.cuh"
@@ -4164,6 +4166,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
                 break;
+        case GGML_OP_DIAG:
+            ggml_cuda_op_diag(ctx, dst);
+            break;
         case GGML_OP_DIAG_MASK_INF:
             ggml_cuda_op_diag_mask_inf(ctx, dst);
             break;
@@ -4263,6 +4268,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_POOL_2D:
             ggml_cuda_op_pool2d(ctx, dst);
             break;
+        case GGML_OP_POOL_1D:
+            ggml_cuda_op_pool1d(ctx, dst);
+            break;
         case GGML_OP_SUM_ROWS:
             if (fusion && i + 2 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_SCALE &&
@@ -4291,6 +4299,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             } else {
                 ggml_cuda_op_sum_rows(ctx, dst);
             }
+            break;
+        case GGML_OP_MEAN:
+            ggml_cuda_op_mean(ctx, dst);
             break;
         case GGML_OP_CUMSUM:
             ggml_cuda_op_cumsum(ctx, dst);
@@ -5202,6 +5213,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_CLAMP:
         case GGML_OP_CONT:
         case GGML_OP_DIAG_MASK_INF:
+        case GGML_OP_DIAG:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_CAP_MAX:
         case GGML_OP_ROPE:
@@ -5229,6 +5241,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             }
         case GGML_OP_IM2COL:
         case GGML_OP_POOL_2D:
+        case GGML_OP_POOL_1D:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_GROUPED_TOPK:
         case GGML_OP_ACC:
@@ -5239,6 +5252,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_LEAKY_RELU:
             return true;
+        case GGML_OP_MEAN:
         case GGML_OP_CUMSUM:
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_TRI:
