@@ -1,4 +1,5 @@
 #include "llama-spec-features.h"
+#include "llama-spec-features-dflash.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -7,6 +8,18 @@
 
 #include "llama-model.h"
 #include "llama-context.h"
+
+ggml_tensor * llama_dflash_hc_mean_for_capture(ggml_context * ctx, ggml_tensor * tensor, int32_t hc_count) {
+    GGML_ASSERT(ctx != nullptr && tensor != nullptr);
+    GGML_ASSERT(hc_count > 0 && tensor->ne[1] == hc_count && tensor->ne[2] > 0);
+
+    ggml_tensor * mean = ggml_view_2d(ctx, tensor, tensor->ne[0], tensor->ne[2], tensor->nb[2], 0);
+    for (int32_t hc = 1; hc < hc_count; ++hc) {
+        mean = ggml_add(ctx, mean,
+                ggml_view_2d(ctx, tensor, tensor->ne[0], tensor->ne[2], tensor->nb[2], hc * tensor->nb[1]));
+    }
+    return ggml_scale(ctx, mean, 1.0f / (float) hc_count);
+}
 
 void llama_reset_dflash_kv_cache_state(struct llama_context * ctx) {
     if (ctx == nullptr) {

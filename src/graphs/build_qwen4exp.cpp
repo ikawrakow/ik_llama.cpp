@@ -2,6 +2,7 @@
 #include "../llama-model.h"
 #include "../llama-context.h"
 #include "../llama-delta-net.h"
+#include "../llama-spec-features-dflash.h"
 
 #include <optional>
 
@@ -694,7 +695,14 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
 
         res_hc = qwen4exp_hc_combine(ctx0, hparams, res_hc, cur, inject, n_embd, il, cb);
         res_hc = lctx.cvec.apply_to(ctx0, res_hc, il);
-        cb(res_hc, "l_out", il);
+        if (!is_mtp && lctx.dflash.capture &&
+                llama_dflash_capture_layer_requested(lctx.dflash.capture->layer_ids, il)) {
+            ggml_tensor * capture = llama_dflash_hc_mean_for_capture(ctx0, res_hc, hparams.dsv4_hc_mult);
+            cb(capture, "l_out", il);
+            ggml_build_forward_expand(gf, capture);
+        } else {
+            cb(res_hc, "l_out", il);
+        }
     }
 
     if (is_mtp) {

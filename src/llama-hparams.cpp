@@ -104,6 +104,15 @@ static bool load_dflash_target_layer_ids(
     return true;
 }
 
+static void llama_hparams_normalize_dflash_target_layer_ids(llama_hparams & hparams, const char * model_kind) {
+    for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+        if (hparams.dflash_target_layer_ids[i] == 0) {
+            throw std::runtime_error(format("%s: target_layers must use one-based IDs", model_kind));
+        }
+        --hparams.dflash_target_layer_ids[i];
+    }
+}
+
 static void validate_dflash_hparams(llama_hparams & hparams, llm_arch arch) {
     if (hparams.dflash_block_size <= 1) {
         throw std::runtime_error(format("%s: dflash block_size must be > 1", llama_model_arch_name(arch)));
@@ -2082,11 +2091,7 @@ void llm_load_hparams(
                         LLM_KV(model.arch)(LLM_KV_DFLASH_TARGET_LAYERS),
                         hparams,
                         true);
-                for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
-                    if (hparams.dflash_target_layer_ids[i] == 0) {
-                        throw std::runtime_error("dflash2: target_layers must use one-based IDs");
-                    }
-                }
+                llama_hparams_normalize_dflash_target_layer_ids(hparams, "dflash2");
                 hparams.dflash_n_target_features = hparams.n_embd * hparams.dflash_n_target_layers;
                 if (hparams.dflash_selector_top_k == 0 ||
                         hparams.n_embd < hparams.dflash_selector_top_k * (hparams.dflash_selector_top_k + 1)) {
@@ -2134,12 +2139,7 @@ void llm_load_hparams(
                     hparams.dflash_backbone_rotary_base = hparams.rope_freq_base_train;
                     hparams.dflash_laguna = false;
 
-                    for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
-                        if (hparams.dflash_target_layer_ids[i] == 0) {
-                            throw std::runtime_error("dflash: target_layers must use one-based IDs");
-                        }
-                        --hparams.dflash_target_layer_ids[i];
-                    }
+                    llama_hparams_normalize_dflash_target_layer_ids(hparams, "dflash");
                     validate_dflash_hparams(hparams, model.arch);
 
                     hparams.n_layer_kv_from_start = hparams.n_layer;
