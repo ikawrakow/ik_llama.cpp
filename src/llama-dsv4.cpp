@@ -1949,7 +1949,11 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
         dsv4_set_input_tensor(inputs.state_write_idxs_lid, plan.state_write_idxs_lid);
         dsv4_set_input_tensor(inputs.state_write_pos, plan.state_write_pos);
         if (set_mask) {
-            dsv4_set_mask_tensor(inputs.kq_mask, plan, batch.n_tokens);
+            if (inputs.n_visible) {
+                dsv4_set_input_tensor(inputs.n_visible, plan.n_visible);
+            } else {
+                dsv4_set_mask_tensor(inputs.kq_mask, plan, batch.n_tokens);
+            }
             dsv4_set_cand_pin(inputs.cand_pin, plan, batch.n_tokens);
         }
     };

@@ -1858,11 +1858,17 @@ bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int repeat_ty
 namespace {
 constexpr int k_indexer_chunks = 64;
 constexpr int k_n_bucket = 64;
+// an I32 mask holds the visible count of each row
+int iqk_indexer_n_kv(const struct ggml_tensor * dst) {
+    auto m = dst->src[3];
+    auto c = dst->src[4];
+    return m->type != GGML_TYPE_I32 ? m->ne[0] : c ? c->ne[0] : dst->src[0]->ne[1];
+}
 size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth) {
     auto k = dst->src[0];
     auto q = dst->src[1];
-    auto m = dst->src[3];
     auto c = dst->src[4];
+    auto n_kv = iqk_indexer_n_kv(dst);
     if (q->ne[2] >= nth) {
         size_t size = 0;
         auto tt = ggml_internal_get_type_traits(k->type);
@@ -1876,8 +1882,8 @@ size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth)
         }
 #endif
         size += k_indexer_chunks * q->ne[1] * sizeof(float);
-        size += m->ne[0] * sizeof(float);
-        size += m->ne[0] * sizeof(int32_t);
+        size += n_kv * sizeof(float);
+        size += n_kv * sizeof(int32_t);
         if (c) size += k->ne[1] * sizeof(float);
 #ifdef __AVX2__
         if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && k->ne[1] % 32 == 0 && q->ne[1] % 8 == 0) {
@@ -1897,6 +1903,17 @@ size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth)
 inline void iqk_f16_to_f32(int n, const ggml_fp16_t * x, float * y) {
     for (int i = 0; i < n; ++i) {
         y[i] = GGML_FP16_TO_FP32(x[i]);
+    }
+}
+void iqk_indexer_mask_row(const struct ggml_tensor * m, int iq, int first, int n, float * y) {
+    auto row = (const char *)m->data + iq*m->nb[1];
+    if (m->type == GGML_TYPE_F32) {
+        std::memcpy(y, (const float *)row + first, n*sizeof(float));
+    } else if (m->type == GGML_TYPE_F16) {
+        iqk_f16_to_f32(n, (const ggml_fp16_t *)row + first, y);
+    } else {
+        auto n_visible = *(const int32_t *)row;
+        for (int j = 0; j < n; ++j) y[j] = first + j < n_visible ? 0.0f : -INFINITY;
     }
 }
 
@@ -2084,7 +2101,6 @@ template <int nrc_y> inline void iqk_mul_f32_f32_r(int n_per_row, int n_rows, si
 size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread) {
     auto k = dst->src[0];
     auto q = dst->src[1];
-    auto m = dst->src[3];
     if (q->ne[2] >= nthread) {
         size_t common_size = 0;
         auto requant_type = MulMat::is_dequant_better(k->type, q->ne[1]);
@@ -2107,10 +2123,11 @@ size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread
         size = ggml_row_size(GGML_TYPE_F16, q->ne[0]) * q->ne[1] * q->ne[2];
     }
 #endif
-    size += m->ne[0] * q->ne[1] * sizeof(float);
-    size += m->ne[0] * sizeof(float);
-    size += m->ne[0] * sizeof(int32_t);
-    size += (2*m->ne[0] + k_n_bucket)*sizeof(int);
+    auto n_kv = iqk_indexer_n_kv(dst);
+    size += n_kv * q->ne[1] * sizeof(float);
+    size += n_kv * sizeof(float);
+    size += n_kv * sizeof(int32_t);
+    size += (size_t(2)*n_kv + k_n_bucket)*sizeof(int);
     return size;
 }
 
@@ -2129,13 +2146,13 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     auto m = dst->src[3];
     auto c = dst->src[4];
     if (k->ne[2] != 1 || k->ne[3] != 1) return false;
-    int n_kv = m->ne[0];
+    int n_kv = iqk_indexer_n_kv(dst);
     if (c) {
         GGML_ASSERT(c->type == GGML_TYPE_I32);
         GGML_ASSERT(ggml_nrows(c) == 1);
-        GGML_ASSERT(c->ne[0] == m->ne[0]);
+        GGML_ASSERT(c->ne[0] == n_kv);
     } else {
-        if (k->ne[1] != m->ne[0]) return false;
+        if (k->ne[1] != n_kv) return false;
     }
     if (n_kv <= n_top_k) return false;
     if (k->ne[0] != q->ne[0]) return false;
@@ -2143,7 +2160,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     if (q->ne[1] != w->ne[0]) return false;
     if (q->ne[2] != w->ne[1]) return false;
     if (q->type != GGML_TYPE_F32) return false;
-    if (m->type != GGML_TYPE_F32 && m->type != GGML_TYPE_F16) return false;
+    if (m->type != GGML_TYPE_F32 && m->type != GGML_TYPE_F16 && m->type != GGML_TYPE_I32) return false;
 
     auto work_size = iqk_idx_topk_work_wbs_per_thread(dst, nth);
     auto work_all = (char *)work_buffer;
@@ -2226,7 +2243,6 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
         //auto counts  = idx_aux + k->ne[1];
         for (int iq = ith; iq < q->ne[2]; iq += nth) {
             auto this_q = (const char *)q->data + iq*q->nb[2];
-            auto this_m = (const char *)m->data + iq*m->nb[1];
             auto this_w = (const float *)((const char *)w->data + w->nb[1]*iq);
             bool done = false;
 #ifdef __AVX2__
@@ -2242,14 +2258,15 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
                     __m256 acc[4];
                     if (c) {
                         for (int i = 0; i < 4; ++i) acc[i] = _mm256_setzero_ps();
+                    } else if (m->type == GGML_TYPE_I32) {
+                        iqk_indexer_mask_row(m, iq, ik, 32, score + ik);
+                        for (int k = 0; k < 4; ++k) acc[k] = _mm256_loadu_ps(score + ik + 8*k);
+                    } else if (m->type == GGML_TYPE_F32) {
+                        auto m32 = (const float *)((const char *)m->data + iq*m->nb[1]) + ik;
+                        for (int k = 0; k < 4; ++k) acc[k] = _mm256_loadu_ps(m32 + 8*k);
                     } else {
-                        if (m->type == GGML_TYPE_F32) {
-                            auto m32 = (const float *)this_m + ik;
-                            for (int k = 0; k < 4; ++k) acc[k] = _mm256_loadu_ps(m32 + 8*k);
-                        } else {
-                            auto m16 = (const ggml_fp16_t *)this_m + ik;
-                            for (int k = 0; k < 4; ++k) acc[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)m16 + k));
-                        }
+                        auto m16 = (const ggml_fp16_t *)((const char *)m->data + iq*m->nb[1]) + ik;
+                        for (int k = 0; k < 4; ++k) acc[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)m16 + k));
                     }
                     auto kq_i = kq_local;
                     for (int i = 0; i < int(q->ne[1]); ++i) {
@@ -2280,11 +2297,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
                 auto this_score = score + i_step*k_indexer_chunks;
 
                 if (!c) {
-                    if (m->type == GGML_TYPE_F32) {
-                        std::memcpy(this_score, (const float *)this_m + i_step*k_indexer_chunks, nk*sizeof(float));
-                    } else {
-                        iqk_f16_to_f32(nk, (const ggml_fp16_t *)this_m + i_step*k_indexer_chunks, this_score);
-                    }
+                    iqk_indexer_mask_row(m, iq, i_step*k_indexer_chunks, nk, this_score);
                 } else {
                     for (int i = 0; i < nk; ++i) this_score[i] = 0;
                 }
@@ -2323,11 +2336,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
 
             for (int j = 0; j < n_kv; ++j) sorted[j] = j;
             if (c) {
-                if (m->type == GGML_TYPE_F32) {
-                    std::memcpy(score_c, this_m, n_kv*sizeof(float));
-                } else {
-                    iqk_f16_to_f32(n_kv, (const ggml_fp16_t *)this_m, score_c);
-                }
+                iqk_indexer_mask_row(m, iq, 0, n_kv, score_c);
                 auto idx = (const int32_t *)c->data;
                 for (int j = 0; j < n_kv; ++j) score_c[j] += score[idx[j]];
                 std::partial_sort(sorted, sorted + n_top_k, sorted + n_kv, [score_c] (int32_t l, int32_t r) -> bool { return score_c[l] > score_c[r]; });
@@ -2384,16 +2393,11 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     for (int iq = 0; iq < q->ne[2]; ++iq) {
         if (n_this_thread > 0) {
             auto this_q = q_data + iq*qnb2;
-            auto this_m = (const char *)m->data + iq*m->nb[1];
             auto this_w = (const float *)((const char *)w->data + w->nb[1]*iq);
             DataInfo info{kq_th, this_q, (size_t)n_this_thread, (size_t)row_size_q, 0, 1, nullptr, 0};
             mm.mul_mat_NxM(k->ne[0], (const char *)k->data + first*k->nb[1], k->nb[1], info, n_this_thread, q->ne[1]);
             if (!c) {
-                if (m->type == GGML_TYPE_F32) {
-                    std::memcpy(score_th, this_m + first*sizeof(float), n_this_thread*sizeof(float));
-                } else {
-                    iqk_f16_to_f32(n_this_thread, (const ggml_fp16_t *)this_m + first, score_th);
-                }
+                iqk_indexer_mask_row(m, iq, first, n_this_thread, score_th);
             } else {
                 for (int j = 0; j < n_this_thread; ++j) score_th[j] = 0.0f;
             }
@@ -2410,11 +2414,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
         barrier(barrier_data);
         if (ith == 0) {
             if (c) {
-                if (m->type == GGML_TYPE_F32) {
-                    std::memcpy(score_c, (const char *)m->data + iq*m->nb[1], n_kv*sizeof(float));
-                } else {
-                    iqk_f16_to_f32(n_kv, (const ggml_fp16_t *)((const char *)m->data + iq*m->nb[1]), score_c);
-                }
+                iqk_indexer_mask_row(m, iq, 0, n_kv, score_c);
                 auto idx = (const int32_t *)c->data;
                 for (int j = 0; j < n_kv; ++j) score_c[j] += score[idx[j]];
             }

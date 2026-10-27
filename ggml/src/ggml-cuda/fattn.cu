@@ -36,6 +36,16 @@ static inline bool is_pascal_hs512(const int cc, const ggml_tensor * K, const gg
     return cc >= CC_PASCAL && cc < CC_VOLTA && K->ne[0] == 512 && V->ne[0] == 512;
 }
 
+static __global__ void k_index_to_mask(const int * __restrict__ idx, half * __restrict__ mask, const int n_idx, const int s1, const int n_kv) {
+    idx  += int64_t(s1)*blockIdx.x;
+    mask += int64_t(n_kv)*blockIdx.x;
+    for (int j = threadIdx.x; j < n_kv; j += blockDim.x) mask[j] = __float2half(-INFINITY);
+    __syncthreads();
+    for (int j = threadIdx.x; j < n_idx; j += blockDim.x) {
+        if (idx[j] >= 0) mask[idx[j]] = __float2half(0.0f);
+    }
+}
+
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV  = dst;
     const ggml_tensor * Q    = dst->src[0];
@@ -48,9 +58,29 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const int32_t precision = KQV->op_params[3];
     const int32_t n_swa = KQV->op_params[4];
 
+    ggml_cuda_pool_alloc<half> idx_mask(ctx.pool());
+    ggml_tensor idx_dst, Mi;
     if (dst->src[5]) {
         if (ggml_cuda_flash_attn_ext_mma_new_sparse(ctx, dst)) {
             return;
+        }
+        if (!mask) {
+            const ggml_tensor * kv_idx = dst->src[5];
+            Mi = *kv_idx;
+            Mi.type  = GGML_TYPE_F16;
+            Mi.ne[0] = K->ne[1];
+            Mi.nb[0] = sizeof(half);
+            Mi.nb[1] = Mi.ne[0]*Mi.nb[0];
+            Mi.nb[2] = Mi.ne[1]*Mi.nb[1];
+            Mi.nb[3] = Mi.ne[2]*Mi.nb[2];
+            Mi.data  = idx_mask.alloc(ggml_nelements(&Mi));
+            k_index_to_mask<<<ggml_nrows(&Mi), 256, 0, ctx.stream()>>>((const int *)kv_idx->data, (half *)Mi.data,
+                    kv_idx->ne[0], kv_idx->nb[1]/sizeof(int), Mi.ne[0]);
+            CUDA_CHECK(cudaGetLastError());
+            idx_dst = *dst;
+            idx_dst.src[3] = &Mi;
+            dst  = &idx_dst;
+            mask = &Mi;
         }
         if (ggml_cuda_dsa_attn_ext(ctx, dst)) {
             return;

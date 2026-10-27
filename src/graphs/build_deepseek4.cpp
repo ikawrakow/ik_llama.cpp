@@ -25,7 +25,7 @@ static ggml_tensor * dsv4_get_mask_view(
         int64_t n_kv,
         int64_t n_tokens,
         int64_t n_stream) {
-    GGML_ASSERT(mask != nullptr && (mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32));
+    GGML_ASSERT(mask != nullptr && (mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32 || mask->type == GGML_TYPE_I32));
     GGML_ASSERT(n_kv > 0 && n_tokens > 0);
     n_stream = std::max<int64_t>(1, n_stream);
     GGML_ASSERT(n_tokens % n_stream == 0);
@@ -168,7 +168,7 @@ static void dsv4_build_plan_inputs(
         const char * tag,
         int64_t n_tokens,
         bool create_mask = true, bool flash_attn = true,
-        uint32_t cand_block = 0, uint32_t cand_topk = 0) {
+        uint32_t cand_block = 0, uint32_t cand_topk = 0, bool visible_count = false) {
     dsv4_new_i32_input(ctx, &inputs.state_pos, (int64_t) plan.state_pos.size(), (std::string(tag) + "_state_pos").c_str());
     dsv4_new_i32_input(ctx, &inputs.state_persist_src_idxs, (int64_t) plan.state_persist_src_idxs.size(), (std::string(tag) + "_persist_src").c_str());
     dsv4_new_i32_input(ctx, &inputs.state_persist_dst_idxs, (int64_t) plan.state_persist_dst_idxs.size(), (std::string(tag) + "_persist_dst").c_str());
@@ -179,7 +179,16 @@ static void dsv4_build_plan_inputs(
         dsv4_new_i64_input(ctx, &inputs.state_write_idxs_lid, (int64_t) plan.state_write_idxs_lid.size(), (std::string(tag) + "_state_write_lid").c_str());
     }
     dsv4_new_i32_input(ctx, &inputs.state_write_pos, (int64_t) plan.state_write_pos.size(), (std::string(tag) + "_write_pos").c_str());
-    if (create_mask) {
+    inputs.n_visible = nullptr;
+    if (create_mask && visible_count) {
+        // the dense mask is computed only for the consumers that need it
+        auto type = flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+        inputs.n_visible = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, std::max<int64_t>(1, n_tokens));
+        ggml_set_input(inputs.n_visible);
+        ggml_set_name(inputs.n_visible, (std::string(tag) + "_n_visible").c_str());
+        inputs.kq_mask = ggml_visible_mask(ctx, inputs.n_visible, std::max<int64_t>(1, plan.n_kv), type);
+        ggml_set_name(inputs.kq_mask, (std::string(tag) + "_kq_mask").c_str());
+    } else if (create_mask) {
         auto type = flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
         dsv4_new_mask_input(ctx, &inputs.kq_mask, std::max<int64_t>(1, plan.n_kv), n_tokens, (std::string(tag) + "_kq_mask").c_str(), type);
     } else {
@@ -594,7 +603,8 @@ static ggml_tensor * dsv4_build_attn(
         const llm_build_cb & cb,
         int            il,
         int            n_compressed,
-        ggml_cgraph  * gf) {
+        ggml_cgraph  * gf,
+        ggml_tensor  * kv_idx = nullptr) {
     const bool v_trans = v->nb[1] > v->nb[2];
     const int64_t n_stream = k->ne[3];
 
@@ -652,12 +662,12 @@ static ggml_tensor * dsv4_build_attn(
             v = ggml_cast(ctx, v, GGML_TYPE_F16);
         }
 
-        if (kq_mask->type == GGML_TYPE_F32) {
+        if (kq_mask && kq_mask->type == GGML_TYPE_F32) {
             kq_mask = ggml_cast(ctx, kq_mask, GGML_TYPE_F16);
         }
 
-        ggml_tensor * selected = nullptr;
-        if (n_compressed > 0) {
+        ggml_tensor * selected = kv_idx;
+        if (!selected && n_compressed > 0) {
             int n_compressed_padded = GGML_PAD(n_compressed, 256);
             if (n_compressed_padded < kq_mask->ne[0]) {
                 selected = ggml_mask_to_index(ctx, kq_mask, n_compressed_padded);
@@ -904,7 +914,8 @@ static ggml_tensor * dsv4_build_lid_top_k(
         ggml_tensor * lid_cache = nullptr,
         const llama_context::dsv4_runtime::comp_context * lid_ctx_in = nullptr,
         int64_t n_lid_in = -1,
-        ggml_tensor * lid_kq_mask = nullptr) {
+        ggml_tensor * lid_kq_mask = nullptr,
+        ggml_tensor * lid_n_visible = nullptr) {
     const auto & hparams = llm.hparams;
     const auto & layer = llm.model.layers[il];
     const int64_t n_embd_indexer_head = hparams.indexer_head_size;
@@ -914,7 +925,10 @@ static ggml_tensor * dsv4_build_lid_top_k(
     // under shared streams the index keys live on the key owner, under the reader's plan
     if (!lid_cache)   lid_cache   = llm.lctx.dsv4.cache.lid_k[il];
     const auto & lid_ctx = lid_ctx_in ? *lid_ctx_in : llm.lctx.dsv4.lid_ctx;
-    if (!lid_kq_mask) lid_kq_mask = llm.lctx.dsv4.inputs.csa.kq_mask;
+    if (!lid_kq_mask) {
+        lid_kq_mask   = llm.lctx.dsv4.inputs.csa.kq_mask;
+        lid_n_visible = llm.lctx.dsv4.inputs.csa.n_visible;
+    }
     const int64_t n_lid = n_lid_in > 0 ? n_lid_in : llm.lctx.dsv4.lid_plan.n_kv;
     const int hadamard_block = llama_model::hadamard_size((int) n_embd_indexer_head);
 
@@ -966,8 +980,9 @@ static ggml_tensor * dsv4_build_lid_top_k(
             lid_kq_mask, nullptr, n_lid, n_tokens, n_stream, cb, il);
     const uint32_t n_top_k = (uint32_t) std::min<int64_t>(n_lid, hparams.indexer_top_k);
     if (llm.cparams.fused_idx_topk && n_lid > n_top_k) {
+        ggml_tensor * lid_visible = lid_n_visible ? dsv4_get_mask_view(ctx0, mask_views, lid_n_visible, 1, n_tokens, n_stream) : lid_mask;
         if (ggml_tensor * selected = dsv4_build_lid_top_k_shared(ctx0,
-                    indexer_k, indexer_q, indexer_weights, lid_mask, mask_views, (int) n_top_k, cb)) {
+                    indexer_k, indexer_q, indexer_weights, lid_visible, mask_views, (int) n_top_k, cb)) {
             if (selected) {
                 ggml_build_forward_expand(gf, selected);
                 llm.cb(selected, "lid_top_k", il);
@@ -1398,7 +1413,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
 
     auto build_the_attn = [&] (ggml_tensor * raw_k, ggml_tensor * raw_mask, ggml_tensor * extra_mask,
             ggml_tensor * cache, const auto & extra_ctx,
-            const std::string & tag, int n_swa_eff) {
+            const std::string & tag, int n_swa_eff, ggml_tensor * top_k, ggml_tensor * n_visible) {
         auto n_stream = std::max<uint32_t>(1, lctx.dsv4.cache.n_stream);
         auto extra_k = cache;
         if (extra_k->ne[1] > 1) {
@@ -1429,13 +1444,22 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             cb(extra_k, (tag + "_k_cast").c_str(), il);
         }
         ggml_tensor * k_all = ggml_concat(ctx0, raw_k, extra_k, 2);
-        ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, extra_mask, 0);
         cb(extra_k, (tag + "_k").c_str(), il);
         cb(k_all, (tag + "_k_all").c_str(), il);
-        cb(kq_mask, (tag + "_kq_mask").c_str(), il);
+
+        ggml_tensor * kq_mask = nullptr;
+        ggml_tensor * kv_idx  = nullptr;
+        const int n_idx = GGML_PAD(n_swa_eff, 256);
+        if (cparams.flash_attn && top_k && n_visible && extra_k->ne[3] == 1 && n_idx < raw_mask->ne[0] + extra_mask->ne[0]) {
+            kv_idx = ggml_mask_to_index_topk(ctx0, raw_mask, top_k, n_visible, n_idx);
+            cb(kv_idx, (tag + "_kv_idx").c_str(), il);
+        } else {
+            kq_mask = ggml_concat(ctx0, raw_mask, extra_mask, 0);
+            cb(kq_mask, (tag + "_kq_mask").c_str(), il);
+        }
 
         auto attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_mask,
-                model.layers[il].attn_sinks, kq_scale, cb, il, n_swa_eff, gf);
+                model.layers[il].attn_sinks, kq_scale, cb, il, n_swa_eff, gf, kv_idx);
         return attn;
     };
 
@@ -1457,7 +1481,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         if (hparams.dsv41_is_index_source(il) && lctx.dsv4.cache.lid_k[il] != nullptr &&
                 hparams.indexer_top_k < slot_in.kq_mask->ne[0]) {
             shared_top_k = dsv4_build_lid_top_k(ctx0, llm, mask_views, qr, cur, inp_pos, il, gf, cb,
-                    lctx.dsv4.cache.lid_k[il], &slot_ctx, slot_plan.n_kv, slot_in.kq_mask);
+                    lctx.dsv4.cache.lid_k[il], &slot_ctx, slot_plan.n_kv, slot_in.kq_mask, slot_in.n_visible);
             have_new_top_k = true;
         }
         int n_eff = hparams.n_swa + (int) slot_plan.n_kv;
@@ -1488,7 +1512,8 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             }
             n_eff = hparams.n_swa + (int) shared_top_k->ne[0];
         }
-        attn = build_the_attn(raw_k, raw_mask, comp_mask, comp_kv, slot_ctx, is_a ? "csa" : "hca", n_eff);
+        attn = build_the_attn(raw_k, raw_mask, comp_mask, comp_kv, slot_ctx, is_a ? "csa" : "hca", n_eff,
+                n_tokens > 1 ? shared_top_k : nullptr, slot_in.n_visible);
         cb(attn, "attn_shared", il);
     } else if (!shared && ratio == hparams.dsv4_csa_ratio &&
             lctx.dsv4.inputs.csa.kq_mask != nullptr &&
@@ -1497,8 +1522,9 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             !cparams.k_cache_hadamard) {
         auto csa_mask = lctx.dsv4.inputs.csa.kq_mask;
         auto csa_kv   = lctx.dsv4.cache.csa_k[il];
+        ggml_tensor * top_k = nullptr;
         if (hparams.indexer_top_k < lctx.dsv4.inputs.csa.kq_mask->ne[0]) {
-            auto top_k = dsv4_build_lid_top_k(ctx0, llm, mask_views, qr, cur, inp_pos, il, gf, cb);
+            top_k = dsv4_build_lid_top_k(ctx0, llm, mask_views, qr, cur, inp_pos, il, gf, cb);
             if (n_tokens == 1) {
                 // When we are dealing with a single token, we can just use ggml_get_rows_ext to get the
                 // selected rows from the CSA cache and setup the corresponding mask. This makes the
@@ -1514,7 +1540,8 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             }
         }
         int n_csa = hparams.n_swa + hparams.indexer_top_k;
-        attn = build_the_attn(raw_k, raw_mask, csa_mask, csa_kv, lctx.dsv4.csa_ctx, "csa", n_csa);
+        attn = build_the_attn(raw_k, raw_mask, csa_mask, csa_kv, lctx.dsv4.csa_ctx, "csa", n_csa,
+                n_tokens > 1 ? top_k : nullptr, lctx.dsv4.inputs.csa.n_visible);
         cb(attn, "attn_csa", il);
     } else if (!shared && ratio == hparams.dsv4_hca_ratio &&
             lctx.dsv4.inputs.hca.kq_mask != nullptr &&
@@ -1525,7 +1552,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         ggml_tensor * hca_mask = dsv4_build_raw_mask_view(llm, mask_views, lctx.dsv4.inputs.hca.kq_mask, nullptr,
                 lctx.dsv4.hca_plan.n_kv, n_tokens, num_streams(lctx.dsv4.hca_ctx), cb, il);
         int n_hca = hparams.n_swa + (n_kv + hparams.dsv4_hca_ratio - 1)/hparams.dsv4_hca_ratio;
-        attn = build_the_attn(raw_k, raw_mask, hca_mask, lctx.dsv4.cache.hca_k[il], lctx.dsv4.hca_ctx, "hca", n_hca);
+        attn = build_the_attn(raw_k, raw_mask, hca_mask, lctx.dsv4.cache.hca_k[il], lctx.dsv4.hca_ctx, "hca", n_hca, nullptr, nullptr);
         cb(attn, "attn_hca", il);
     } else {
         attn = dsv4_build_attn(ctx0, hparams, cparams, q, raw_k, raw_k, raw_mask, model.layers[il].attn_sinks, kq_scale, cb, il, -1, gf);
@@ -1590,8 +1617,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
     dsv4_new_i32_input(ctx0, &lctx.dsv4.inputs.raw_k_write_src_idxs, (int64_t) lctx.dsv4.raw.write_src_idxs.size(), "dsv4_raw_k_write_src_idxs");
     dsv4_new_i32_input(ctx0, &lctx.dsv4.inputs.raw_k_write_idxs, (int64_t) lctx.dsv4.raw.write_dst_idxs.size(), "dsv4_raw_k_write_idxs");
     dsv4_new_i32_input(ctx0, &lctx.dsv4.inputs.raw_k_read_idxs, (int64_t) lctx.dsv4.raw.read_dst_idxs.size(), "dsv4_raw_k_read_idxs");
-    dsv4_build_plan_inputs(ctx0, lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, "dsv4_csa", n_tokens, true, lctx.cparams.flash_attn);
-    dsv4_build_plan_inputs(ctx0, lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, "dsv4_hca", n_tokens, true, lctx.cparams.flash_attn);
+    dsv4_build_plan_inputs(ctx0, lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, "dsv4_csa", n_tokens, true, lctx.cparams.flash_attn, 0, 0, true);
+    dsv4_build_plan_inputs(ctx0, lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, "dsv4_hca", n_tokens, true, lctx.cparams.flash_attn, 0, 0, true);
     dsv4_build_plan_inputs(ctx0, lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, "dsv4_lid", n_tokens, false, lctx.cparams.flash_attn);
 
     ggml_tensor * inp_pos = build_inp_pos();

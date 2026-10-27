@@ -620,6 +620,7 @@ struct llama_context {
             struct ggml_tensor * cand_pin = nullptr;
             struct ggml_tensor * state_write_pos = nullptr;
             struct ggml_tensor * kq_mask = nullptr;
+            struct ggml_tensor * n_visible = nullptr;
         };
 
         struct storage {
