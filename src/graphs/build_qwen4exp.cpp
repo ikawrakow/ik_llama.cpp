@@ -6,8 +6,6 @@
 
 #include <optional>
 
-// the [hc_dim] gamma is wider than the per-stream reduction, so ggml_fused_rms_norm cannot
-// express this and the two ops stay separate
 static ggml_tensor * qwen4exp_grouped_rms(
         ggml_context        * ctx0,
         const llama_hparams & hparams,
@@ -15,9 +13,8 @@ static ggml_tensor * qwen4exp_grouped_rms(
         ggml_tensor         * w,
         int32_t               hc_dim,
         int32_t               nt) {
-    ggml_tensor * t = ggml_rms_norm(ctx0, x, hparams.f_norm_rms_eps);
-    t = ggml_reshape_2d(ctx0, t, hc_dim, nt);
-    return ggml_mul(ctx0, t, w);
+    ggml_tensor * t = ggml_reshape_2d(ctx0, x, hc_dim, nt);
+    return ggml_fused_grouped_rms_norm(ctx0, t, w, hparams.f_norm_rms_eps, hc_dim / x->ne[0]);
 }
 
 // the low-rank down/up pair is a gate over the normalized streams, not a mixing matrix
