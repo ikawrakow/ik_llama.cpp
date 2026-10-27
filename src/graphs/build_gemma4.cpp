@@ -238,7 +238,6 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
                 GGML_ASSERT(inpL->op == GGML_OP_REDUCE);
                 auto cur = llm_build_context::get_input_tensor_sm_graph(ctx0, inpL, id);
                 if (is_moe) {
-                    GGML_ASSERT(inpL_moe && inpL_moe->op == GGML_OP_REDUCE);
                     auto cur_moe = llm_build_context::get_input_tensor_sm_graph(ctx0, inpL_moe, id);
                     auto post_norm_1 = (ggml_split_tensor_t *)model.layers[il-1].ffn_post_norm_1->extra;
                     auto post_norm_2 = (ggml_split_tensor_t *)model.layers[il-1].ffn_post_norm_2->extra;
@@ -413,6 +412,11 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
         auto ffn_down = (const ggml_split_tensor_t *)l.ffn_down->extra;
         GGML_ASSERT(ffn_up && ffn_gate && ffn_down);
 
+        // routed experts left on the CPU (--n-cpu-moe, -ot exps=CPU) have no split, so they are evaluated once
+        bool split_exps = is_moe && l.ffn_down_exps->extra;
+        int nmoe = 0;
+        ggml_tensor * moe_last = nullptr;
+
         for (int id = 0; id < n_device; ++id) {
             GGML_ASSERT((ffn_up->splits[id] && ffn_gate->splits[id] && ffn_down->splits[id]) ||
                     (!ffn_up->splits[id] && !ffn_gate->splits[id] && !ffn_down->splits[id]));
@@ -455,7 +459,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             ggml_build_forward_expand(gf, cur);
             ffn_out[id] = cur;
 
-            if (is_moe) {
+            if (is_moe && (split_exps || !moe_last)) {
                 cur = llm_build_context::do_split_norm(ctx0, ffn_inp[id], model.layers[il].ffn_pre_norm_2, hparams, cb, id, il_cb, false);
                 cb(cur, "ffn_moe_inp", il_cb);
                 auto tmp = ggml_fused_rms_norm(ctx0, ffn_inp[id],
@@ -465,21 +469,25 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
                 cb(logits, "logits", il_cb);
                 ggml_build_forward_expand(gf, logits);
 
+                auto down_exps    = split_exps ? ((const ggml_split_tensor_t *)l.ffn_down_exps->extra)->splits[id] : l.ffn_down_exps;
+                auto up_gate_exps = split_exps ? ((const ggml_split_tensor_t *)l.ffn_up_gate_exps->extra)->splits[id] : l.ffn_up_gate_exps;
+                auto down_exps_s  = l.ffn_down_exps_s->extra ? ((const ggml_split_tensor_t *)l.ffn_down_exps_s->extra)->splits[id] : l.ffn_down_exps_s;
                 auto moe = llm. llm_build_moe_ffn(ctx0, lctx, cur,
                         nullptr, nullptr, nullptr,
-                        ((const ggml_split_tensor_t *)model.layers[il].ffn_down_exps->extra)->splits[id], nullptr,
+                        down_exps, nullptr,
                         llm.n_expert, llm.n_expert_used,
                         LLM_FFN_GELU, true, false, 0.0f,
                         LLM_EXPERT_GATING_FUNC_SOFTMAX,
                         cb, il, gf, false,
-                        ((const ggml_split_tensor_t *)model.layers[il].ffn_up_gate_exps->extra)->splits[id],
-                        nullptr, logits, ((const ggml_split_tensor_t *)model.layers[il].ffn_down_exps_s->extra)->splits[id]);
+                        up_gate_exps,
+                        nullptr, logits, down_exps_s);
                 if (moe->ne[1] > 32 && cparams.reduce_type != GGML_TYPE_F32) {
                     moe = ggml_cast(ctx0, moe, cparams.reduce_type);
                     cb(moe, "ffn_moe_cast", il_cb);
                 }
                 ggml_build_forward_expand(gf, moe);
-                ffn_out_moe[id] = moe;
+                ffn_out_moe[id] = moe_last = moe;
+                ++nmoe;
             }
 
         }
@@ -489,7 +497,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
         ggml_build_forward_expand(gf, inpL);
 
         if (is_moe) {
-            inpL_moe = ggml_reduce(ctx0, ffn_out_moe.data(), n_device, GGML_OP_ADD);
+            inpL_moe = nmoe > 1 ? ggml_reduce(ctx0, ffn_out_moe.data(), n_device, GGML_OP_ADD) : moe_last;
             cb(inpL_moe, "ffn_moe_reduce", il);
             ggml_build_forward_expand(gf, inpL_moe);
         }
@@ -506,7 +514,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
 
     auto post_norm   = (const ggml_split_tensor_t *)model.layers[hparams.n_layer-1].ffn_post_norm->extra;
     if (is_moe) {
-        auto cur_moe = inpL_moe->src[idx];
+        auto cur_moe = inpL_moe->op == GGML_OP_REDUCE ? inpL_moe->src[idx] : inpL_moe;
         if (!cur_moe) {
             cur_moe = inpL_moe->view_src;
         }
