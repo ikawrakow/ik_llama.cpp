@@ -29213,9 +29213,13 @@ static void set_cpu_thread_affinity(const struct ggml_cplan * cplan, int thread_
     }
 
     if (!SetThreadGroupAffinity(GetCurrentThread(), &ga, NULL)) {
-        const DWORD err = GetLastError();
-        fprintf(stderr, "warning: SetThreadGroupAffinity() failed (cpu %d, group %u): %lu\n",
-            cpu, (unsigned) ga.Group, (unsigned long) err);
+        static bool warned_set = false;
+        if (!warned_set) {
+            warned_set = true;
+            const DWORD err = GetLastError();
+            fprintf(stderr, "warning: SetThreadGroupAffinity() failed (cpu %d, group %u): %lu\n",
+                cpu, (unsigned) ga.Group, (unsigned long) err);
+        }
     }
 }
 
@@ -29726,6 +29730,9 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     const struct ggml_cplan  * cplan  = state->shared->cplan;
 
     set_numa_thread_affinity(state->ith);
+    // affinity is applied at worker entry, once per graph: n+1 set + 1 get
+    // calls, not per node. OpenMP reuses its pool, so a cached pin would have
+    // to detect affinity-list changes; the per-graph call keeps it simple.
     set_cpu_thread_affinity(cplan, state->ith); // explicit affinity takes precedence over NUMA
 
     struct ggml_compute_params params = {
