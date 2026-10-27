@@ -243,12 +243,12 @@ void iqk_argsort(ggml_tensor * dst, int ith, int nth) {
     int ne00 = src->ne[0];
     auto& aux = get_work_buffer(ne00);
 
-    // ties break by ascending index (order by (-score, id))
-    auto cmp_desc = [] (const std::pair<float,int>& a, const std::pair<float,int>& b) {
-        return a.first > b.first || (a.first == b.first && a.second < b.second);
+    const bool tie_low = dst->op_params[2] != 0;
+    auto cmp_desc = [tie_low] (const std::pair<float,int>& a, const std::pair<float,int>& b) {
+        return tie_low && a.first == b.first ? a.second < b.second : a.first > b.first;
     };
-    auto cmp_asc = [] (const std::pair<float,int>& a, const std::pair<float,int>& b) {
-        return a.first < b.first || (a.first == b.first && a.second < b.second);
+    auto cmp_asc = [tie_low] (const std::pair<float,int>& a, const std::pair<float,int>& b) {
+        return tie_low && a.first == b.first ? a.second < b.second : a.first < b.first;
     };
 
     for (int ir = first; ir < last; ++ir) {

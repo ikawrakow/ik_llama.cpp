@@ -480,6 +480,7 @@ ggml_cgraph * llm_build_context::build_step5() {
                 attn_mask = fused_mask;
             } else if (idx_score) {
             ggml_tensor * sorted = ggml_argsort(ctx0, idx_score, GGML_SORT_ORDER_DESC);
+            sorted->op_params[2] = 1;
             cb(sorted, "step5_indexer_sorted", il);
             // Block-grain selection: topk = 512 regions x 8 region_block_size = 4096 kept slots;
             // kept-count is a multiple of B so the rank cutoff snaps to whole blocks.
