@@ -65,6 +65,7 @@
 #include "ggml-cuda/latent_attn.cuh"
 #include "ggml-cuda/blend.cuh"
 #include "ggml-cuda/indexer_topk.cuh"
+#include "ggml-cuda/csa_compress.cuh"
 #include "ggml-cuda/ds4_comp.cuh"
 
 #include <algorithm>
@@ -3968,6 +3969,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_SQRT_SOFTPLUS:
                     ggml_cuda_op_sqrt_softplus(ctx, dst);
                     break;
+                case GGML_UNARY_OP_ROUND_E4M3:
+                    ggml_cuda_op_round_e4m3(ctx, dst);
+                    break;
                 default:
                     return -1;
             }
@@ -4372,6 +4376,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_INDEXER_TOPK:
             ggml_cuda_op_indexer_topk(ctx, dst);
+            break;
+        case GGML_OP_CSA_COMPRESS:
+            ggml_cuda_op_csa_compress(ctx, dst);
             break;
         case GGML_OP_MASK_TOPK:
             ggml_cuda_op_indexer_mask(ctx, dst);
@@ -4947,6 +4954,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_SQRT_SOFTPLUS:
+                case GGML_UNARY_OP_ROUND_E4M3:
                 case GGML_UNARY_OP_NEG:
                     return ggml_is_contiguous(op->src[0]);
                 default:
@@ -5287,6 +5295,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                    op->src[3]->ne[0] == op->src[0]->ne[2];
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
+        case GGML_OP_CSA_COMPRESS:
         case GGML_OP_MASK_TOPK:
         case GGML_OP_MASK_TO_IDX:
         case GGML_OP_DS4_COMP:
@@ -5328,6 +5337,10 @@ GGML_CALL static bool ggml_backend_cuda_supports_buft(ggml_backend_t backend, gg
 GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const ggml_tensor * op) {
     auto ctx = (ggml_backend_cuda_context *)backend->context;
     int min_batch_size = ctx->offload_batch_size; // originally: GGML_CUDA_MIN_BATCH_OFFLOAD;
+
+    if (op->src[0] && op->src[0]->buffer && ggml_backend_buffer_is_host(op->src[0]->buffer)) {
+        return false;
+    }
 
     // Why do we want to do this? The heuristics that the batch must have more than min_batch_size tokens to be worth it
     // offloading the required model weights comes from dense models. For MoE models, the average number of tokens

@@ -38,7 +38,7 @@
 
 #include "stb/stb_image_resize2.h"
 
-#define DEFAULT_INTERPOLATION_MODE ((int)GGML_SCALE_MODE_BILINEAR | (int)GGML_SCALE_FLAG_ALIGN_CORNERS)
+#define DEFAULT_INTERPOLATION_MODE ((int)GGML_SCALE_MODE_BILINEAR | (int)GGML_SCALE_FLAG_ANTIALIAS)
 
 // TODO: allow to pass callback from user code
 struct clip_logger_state g_logger_state = {GGML_LOG_LEVEL_CONT, clip_log_callback_default, NULL};
@@ -2680,6 +2680,87 @@ struct clip_graph {
         return gf;
     }
 
+    // Step3VL (Step-5 vision): port of mainline tools/mtmd/models/step3vl.cpp
+    ggml_cgraph * build_step3vl() {
+        GGML_ASSERT(model.class_embedding == nullptr);
+        GGML_ASSERT(model.patch_embeddings_0 != nullptr);
+        GGML_ASSERT(model.position_embeddings != nullptr);
+
+        norm_type norm_t = NORM_TYPE_NORMAL;
+
+        ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(pos_h, "pos_h");
+        ggml_set_input(pos_h);
+
+        ggml_tensor * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(pos_w, "pos_w");
+        ggml_set_input(pos_w);
+
+        ggml_tensor * inp = build_inp();
+        ggml_tensor * learned_pos_embd = resize_position_embeddings();
+
+        auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+            return build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
+        };
+
+        auto add_spatial_bias = [&](ggml_tensor * cur, ggml_tensor * bias) {
+            if (bias == nullptr) {
+                return cur;
+            }
+
+            const int64_t width    = cur->ne[0];
+            const int64_t height   = cur->ne[1];
+            const int64_t channels = cur->ne[2];
+
+            cur = ggml_reshape_2d(ctx0, cur, width * height, channels);
+            cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+            cur = ggml_add(ctx0, cur, bias);
+            cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+            cur = ggml_reshape_3d(ctx0, cur, width, height, channels);
+
+            return cur;
+        };
+
+        ggml_tensor * cur = build_vit(
+            inp,
+            n_patches,
+            norm_t,
+            hparams.ffn_op,
+            learned_pos_embd,
+            add_pos);
+        cb(cur, "vit_out", -1);
+
+        // [n_embd, n_patches] -> [w, h, n_embd] for spatial downsampling convolutions.
+        cur = ggml_permute(ctx0, cur, 1, 0, 2, 3);
+        cur = ggml_cont_3d(ctx0, cur, n_patches_x, n_patches_y, n_embd);
+
+        // First downsampler: Conv2d(1536 -> 3072, k=3, s=2, p=1)
+        cur = ggml_conv_2d(ctx0, model.mm_0_w, cur, 2, 2, 1, 1, 1, 1);
+        cur = add_spatial_bias(cur, model.mm_0_b);
+        cb(cur, "downsample_0", -1);
+
+        // Second downsampler: Conv2d(3072 -> 6144, k=3, s=2, p=1)
+        cur = ggml_conv_2d(ctx0, model.mm_1_w, cur, 2, 2, 1, 1, 1, 1);
+        cur = add_spatial_bias(cur, model.mm_1_b);
+        cb(cur, "downsample_1", -1);
+
+        // [w, h, c] -> [c, w*h]
+        {
+            const int64_t w = cur->ne[0];
+            const int64_t h = cur->ne[1];
+            cur = ggml_reshape_3d(ctx0, cur, w * h, cur->ne[2], cur->ne[3]);
+            cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 1, 0, 2, 3));
+        }
+        cb(cur, "downsample_flatten", -1);
+
+        // Final projector: Linear(6144 -> projection_dim)
+        cur = ggml_mul_mat(ctx0, model.mm_model_proj, cur);
+        cb(cur, "projector_out", -1);
+
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
+
 private:
     //
     // utility functions
@@ -3363,6 +3444,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 res = graph.build_gemma4();
             } break;
+        case PROJECTOR_TYPE_STEP3VL:
+            {
+                res = graph.build_step3vl();
+            } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
                 res = graph.build_minicpmv();
@@ -3851,6 +3936,17 @@ struct clip_model_loader {
                         hparams.set_limit_image_tokens(252, 280);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
+                case PROJECTOR_TYPE_STEP3VL:
+                    {
+                        hparams.n_merge = 4;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
+                        if (hparams.image_longest_edge == 0) {
+                            hparams.image_longest_edge = 3024;
+                        }
+                        hparams.warmup_image_size = hparams.image_size;
+                    } break;
                 case PROJECTOR_TYPE_LLAMA4:
                     {
                         hparams.rope_theta = 10000.0f;
@@ -4218,6 +4314,14 @@ struct clip_model_loader {
                     model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 4, "bias"));
                     model.mm_3_w = get_tensor(string_format(TN_LLAVA_PROJ, 6, "weight"));
                     model.mm_3_b = get_tensor(string_format(TN_LLAVA_PROJ, 6, "bias"));
+                } break;
+            case PROJECTOR_TYPE_STEP3VL:
+                {
+                    model.mm_0_w        = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b        = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"), false);
+                    model.mm_1_w        = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b        = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_model_proj = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                 } break;
             case PROJECTOR_TYPE_GEMMA3:
                 {
@@ -5252,11 +5356,193 @@ private:
     }
 };
 
+static constexpr int   STEP3VL_LONGEST_EDGE_DEFAULT = 3024;
+static constexpr int   STEP3VL_CROP_SIZE            = 504;
+static constexpr float STEP3VL_SMALL_AR             = 1.5f;
+static constexpr float STEP3VL_WIDE_AR              = 4.0f;
+static constexpr float STEP3VL_ROUND_THRESH         = 0.2f;
+
+static int step3vl_get_longest_edge(const clip_hparams & params) {
+    return params.image_longest_edge > 0 ? params.image_longest_edge : STEP3VL_LONGEST_EDGE_DEFAULT;
+}
+
+static int step3vl_determine_window_size(const clip_hparams & params, int longer, int shorter) {
+    const float aspect_ratio = static_cast<float>(longer) / shorter;
+    if (longer <= params.image_size) {
+        return aspect_ratio > STEP3VL_SMALL_AR ? shorter : 0;
+    }
+    return aspect_ratio > STEP3VL_WIDE_AR ? std::min(shorter, STEP3VL_CROP_SIZE) : STEP3VL_CROP_SIZE;
+}
+
+static int step3vl_calc_crop_extent(int length, int window_size) {
+    const float ratio = static_cast<float>(length) / window_size;
+    if (ratio < 1.0f) {
+        return length;
+    }
+    const float decimal = ratio - std::floor(ratio);
+    const int rounded = decimal > STEP3VL_ROUND_THRESH
+        ? static_cast<int>(std::floor(ratio)) + 1
+        : static_cast<int>(std::floor(ratio));
+    return window_size * rounded;
+}
+
+static std::vector<int> step3vl_calc_grid(int length, int window_size) {
+    const int n = length <= window_size
+        ? 1
+        : static_cast<int>(std::ceil(static_cast<float>(length - window_size) / window_size + 1.0f));
+    std::vector<int> starts(n);
+    for (int i = 0; i < n; ++i) {
+        starts[i] = window_size * i;
+    }
+    if (n > 1 && starts.back() + window_size > length) {
+        starts.back() = length - window_size;
+    }
+    return starts;
+}
+
+static clip_image_u8 step3vl_prepare_image(const clip_image_u8 & img, const clip_hparams & params) {
+    clip_image_u8 resized = img;
+    const float aspect_ratio = img.ny > 0 ? static_cast<float>(img.nx) / img.ny : 1.0f;
+    if (std::min(img.nx, img.ny) < 32 &&
+        (aspect_ratio > STEP3VL_WIDE_AR || aspect_ratio < 1.0f / STEP3VL_WIDE_AR)) {
+        const int square_size = std::max(img.nx, img.ny);
+        clip_image_u8 padded;
+        padded.nx = square_size;
+        padded.ny = square_size;
+        padded.buf.assign(3 * (size_t)square_size * (size_t)square_size, 0);
+        img_tool::composite(padded, img, 0, 0);
+        resized = std::move(padded);
+    }
+
+    const int max_image_size = step3vl_get_longest_edge(params);
+    if (std::max(resized.nx, resized.ny) > max_image_size) {
+        const float scale = static_cast<float>(max_image_size) / std::max(resized.nx, resized.ny);
+        const clip_image_size new_size = {
+            std::max(1, static_cast<int>(std::floor(resized.nx  * scale))),
+            std::max(1, static_cast<int>(std::floor(resized.ny * scale))),
+        };
+        clip_image_u8 scaled;
+        img_tool::resize(resized, scaled, new_size, img_tool::RESIZE_ALGO_BILINEAR, false);
+        resized = std::move(scaled);
+    }
+    return resized;
+}
+
+static clip_image_u8 step3vl_crop_with_black_padding(const clip_image_u8 & image, int x, int y, int w, int h) {
+    clip_image_u8 dst;
+    dst.nx = w;
+    dst.ny = h;
+    dst.buf.assign(3 * (size_t)w * (size_t)h, 0);
+
+    const int src_x0 = std::max(0, x);
+    const int src_y0 = std::max(0, y);
+    const int src_x1 = std::min(image.nx, x + w);
+    const int src_y1 = std::min(image.ny, y + h);
+    if (src_x0 >= src_x1 || src_y0 >= src_y1) {
+        return dst;
+    }
+    const int dst_x0 = src_x0 - x;
+    const int dst_y0 = src_y0 - y;
+    for (int yy = 0; yy < src_y1 - src_y0; ++yy) {
+        for (int xx = 0; xx < src_x1 - src_x0; ++xx) {
+            const size_t si = 3 * ((size_t)(src_y0 + yy) * image.nx + (src_x0 + xx));
+            const size_t di = 3 * ((size_t)(dst_y0 + yy) * w + (dst_x0 + xx));
+            dst.buf[di + 0] = image.buf[si + 0];
+            dst.buf[di + 1] = image.buf[si + 1];
+            dst.buf[di + 2] = image.buf[si + 2];
+        }
+    }
+    return dst;
+}
+
+static void step3vl_resize_bilinear_to_f32(
+        const clip_image_u8 & src,
+        clip_image_f32 & dst,
+        int target_width,
+        int target_height,
+        const float mean[3],
+        const float std_v[3]) {
+    dst.nx = target_width;
+    dst.ny = target_height;
+    dst.buf.resize((size_t)3 * (size_t)target_width * (size_t)target_height);
+
+    const float scale_x = static_cast<float>(src.nx) / target_width;
+    const float scale_y = static_cast<float>(src.ny) / target_height;
+
+    for (int y = 0; y < target_height; ++y) {
+        const float src_y = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
+        const int y0_floor = static_cast<int>(std::floor(src_y));
+        const int y0 = std::max(0, std::min(y0_floor,     src.ny - 1));
+        const int y1 = std::max(0, std::min(y0_floor + 1, src.ny - 1));
+        const float ly = src_y - y0_floor;
+
+        for (int x = 0; x < target_width; ++x) {
+            const float src_x = (static_cast<float>(x) + 0.5f) * scale_x - 0.5f;
+            const int x0_floor = static_cast<int>(std::floor(src_x));
+            const int x0 = std::max(0, std::min(x0_floor,     src.nx - 1));
+            const int x1 = std::max(0, std::min(x0_floor + 1, src.nx - 1));
+            const float lx = src_x - x0_floor;
+
+            for (int c = 0; c < 3; ++c) {
+                const float v00 = (static_cast<float>(src.buf[3*((size_t)y0*src.nx+x0)+c]) / 255.0f - mean[c]) / std_v[c];
+                const float v01 = (static_cast<float>(src.buf[3*((size_t)y0*src.nx+x1)+c]) / 255.0f - mean[c]) / std_v[c];
+                const float v10 = (static_cast<float>(src.buf[3*((size_t)y1*src.nx+x0)+c]) / 255.0f - mean[c]) / std_v[c];
+                const float v11 = (static_cast<float>(src.buf[3*((size_t)y1*src.nx+x1)+c]) / 255.0f - mean[c]) / std_v[c];
+
+                const float top = v00 + (v01 - v00) * lx;
+                const float bot = v10 + (v11 - v10) * lx;
+                dst.buf[(size_t)3*((size_t)y*target_width+x)+c] = top + (bot - top) * ly;
+            }
+        }
+    }
+}
+
 bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, struct clip_image_f32_batch * res_imgs) {
     clip_image_size original_size{img->nx, img->ny};
     auto & params = ctx->model.hparams;
 
     switch (ctx->proj_type()) {
+        case PROJECTOR_TYPE_STEP3VL:
+            {
+                clip_image_u8 prepared = step3vl_prepare_image(*img, params);
+                const int window_size = step3vl_determine_window_size(
+                    params,
+                    std::max(prepared.nx, prepared.ny),
+                    std::min(prepared.nx, prepared.ny));
+
+                clip_image_f32_ptr overview(clip_image_f32_init());
+                step3vl_resize_bilinear_to_f32(prepared, *overview,
+                    params.image_size, params.image_size, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(overview));
+
+                if (window_size > 0) {
+                    const int crop_w = step3vl_calc_crop_extent(prepared.nx, window_size);
+                    const int crop_h = step3vl_calc_crop_extent(prepared.ny, window_size);
+
+                    clip_image_u8 img_for_crop = prepared;
+                    if (crop_w != prepared.nx || crop_h != prepared.ny) {
+                        clip_image_u8 refined;
+                        img_tool::resize(prepared, refined, {crop_w, crop_h}, img_tool::RESIZE_ALGO_BILINEAR, false);
+                        img_for_crop = std::move(refined);
+                    }
+
+                    const std::vector<int> xs = step3vl_calc_grid(crop_w, window_size);
+                    const std::vector<int> ys = step3vl_calc_grid(crop_h, window_size);
+                    for (int y : ys) {
+                        for (int x : xs) {
+                            clip_image_u8 patch = step3vl_crop_with_black_padding(img_for_crop, x, y, window_size, window_size);
+                            clip_image_f32_ptr patch_f32(clip_image_f32_init());
+                            step3vl_resize_bilinear_to_f32(patch, *patch_f32,
+                                STEP3VL_CROP_SIZE, STEP3VL_CROP_SIZE, params.image_mean, params.image_std);
+                            res_imgs->entries.push_back(std::move(patch_f32));
+                        }
+                    }
+
+                    res_imgs->grid_x = (int)xs.size();
+                    res_imgs->grid_y = (int)ys.size();
+                }
+            } break;
+
         case PROJECTOR_TYPE_MINICPMV:
             {
                 auto const inst = llava_uhd::get_slice_instructions(ctx, original_size);
@@ -5726,6 +6012,9 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
     if (ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN3VL || ctx->proj_type() == PROJECTOR_TYPE_LING3VL || ctx->proj_type() == PROJECTOR_TYPE_MINIMAX_M3_VL) {
         return img->nx / (params.patch_size * 2);
     }
+    if (ctx->proj_type() == PROJECTOR_TYPE_STEP3VL) {
+        return img->nx / (params.patch_size * params.n_merge);
+    }
     return n_total;
 }
 
@@ -5733,6 +6022,9 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
     const auto & params = ctx->model.hparams;
     if (ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN3VL || ctx->proj_type() == PROJECTOR_TYPE_LING3VL || ctx->proj_type() == PROJECTOR_TYPE_MINIMAX_M3_VL) {
         return img->ny / (params.patch_size * 2);
+    }
+    if (ctx->proj_type() == PROJECTOR_TYPE_STEP3VL) {
+        return img->ny / (params.patch_size * params.n_merge);
     }
     return 1;
 }
@@ -5795,6 +6087,12 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 // dynamic size (2 conv, so double patch size)
                 int x_patch = img->nx / (params.patch_size * 2);
                 int y_patch = img->ny / (params.patch_size * 2);
+                n_patches = x_patch * y_patch;
+            } break;
+        case PROJECTOR_TYPE_STEP3VL:
+            {
+                int x_patch = img->nx / (params.patch_size * params.n_merge);
+                int y_patch = img->ny / (params.patch_size * params.n_merge);
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_GEMMA3:
@@ -6410,6 +6708,19 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_i32("positions", positions);
             } break;
+        case PROJECTOR_TYPE_STEP3VL:
+            {
+                // 2D RoPE positions for the ViT patch grid
+                std::vector<int32_t> pos_data(n_pos);
+                for (int i = 0; i < n_pos; i++) {
+                    pos_data[i] = i / pos_w;
+                }
+                set_input_i32("pos_h", pos_data);
+                for (int i = 0; i < n_pos; i++) {
+                    pos_data[i] = i % pos_w;
+                }
+                set_input_i32("pos_w", pos_data);
+            } break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -6490,6 +6801,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_INTERNVL:
             return ctx->model.mm_3_w->ne[1];
+        case PROJECTOR_TYPE_STEP3VL:
         case PROJECTOR_TYPE_LLAMA4:
             return ctx->model.mm_model_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2A:

@@ -636,11 +636,13 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
 // partially-written CUDA destination keeps uninitialized (garbage) rows.
 ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
         ggml_tensor * sorted,
-        ggml_tensor * KQ_mask) {
+        ggml_tensor * KQ_mask,
+        int64_t n_top_k_override,
+        ggml_tensor * base_leaf) {
     const int64_t n_kv_local = KQ_mask->ne[0];
     const int64_t n_tok      = sorted->ne[1];
 
-    int64_t n_top_k = (int64_t) hparams.indexer_top_k;
+    int64_t n_top_k = n_top_k_override >= 0 ? n_top_k_override : (int64_t) hparams.indexer_top_k;
     // Tuning knob: --dsa-top-k (cparams.dsa_top_k) lets us vary the kept-key count to characterize
     // selection quality. <0 means use the model's configured top_k. With the model's configured
     // top_k (2048) on heavily-quantized (IQ2_M) weights the indexer currently under-ranks some
@@ -667,8 +669,16 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
     ggml_tensor * pen_b = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_kv_local, n_tok);
     pen_b = ggml_repeat(ctx0, pen, pen_b);                                            // {1, n_kv, n_tok}
 
-    // destination base {1, n_kv, n_tok} (contents irrelevant — fully overwritten by set_rows)
-    ggml_tensor * base = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_kv_local, n_tok);
+    // destination base {1, n_kv, n_tok} (contents irrelevant — fully overwritten by set_rows).
+    // base_leaf: optional caller-owned leaf reused across per-layer calls, so gallocr pins
+    // one buffer instead of n_layer (a fresh per-layer leaf pins {n_kv, n_tok} for the graph).
+    ggml_tensor * base = base_leaf;
+    if (base) {
+        GGML_ASSERT(base->type == GGML_TYPE_F32 && base->ne[0] == 1 &&
+                base->ne[1] == n_kv_local && base->ne[2] == n_tok);
+    } else {
+        base = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_kv_local, n_tok);
+    }
     base = ggml_fill(ctx0, base, -BIG);
 
     // indices: {n_kv, n_tok, 1}. scatter pen_b[:, rank, j] into base[:, sorted[rank,j], j].

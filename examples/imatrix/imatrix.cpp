@@ -387,6 +387,10 @@ void IMatrixCollector::print_layer_importance() {
 bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
 
+    if (t->src[0] == nullptr) {
+        return false;
+    }
+
     const struct ggml_tensor * src0 = t->src[0];
     const struct ggml_tensor * src1 = t->op == GGML_OP_FUSED_UP_GATE || t->op == GGML_OP_MOE_FUSED_UP_GATE ? t->src[2] : t->src[1];
     std::string wname = filter_tensor_name(src0->name);

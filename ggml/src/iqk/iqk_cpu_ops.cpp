@@ -243,20 +243,28 @@ void iqk_argsort(ggml_tensor * dst, int ith, int nth) {
     int ne00 = src->ne[0];
     auto& aux = get_work_buffer(ne00);
 
+    const bool tie_low = dst->op_params[2] != 0;
+    auto cmp_desc = [tie_low] (const std::pair<float,int>& a, const std::pair<float,int>& b) {
+        return tie_low && a.first == b.first ? a.second < b.second : a.first > b.first;
+    };
+    auto cmp_asc = [tie_low] (const std::pair<float,int>& a, const std::pair<float,int>& b) {
+        return tie_low && a.first == b.first ? a.second < b.second : a.first < b.first;
+    };
+
     for (int ir = first; ir < last; ++ir) {
         auto data = (const float *)((const char *)src->data + ir*src->nb[1]);
         for (int j = 0; j < ne00; ++j) aux[j] = {data[j], j};
         if (nk < ne00) {
             if (order == GGML_SORT_ORDER_DESC) {
-                std::partial_sort(aux.begin(), aux.begin() + nk, aux.begin() + ne00, std::greater<std::pair<float,int>>{});
+                std::partial_sort(aux.begin(), aux.begin() + nk, aux.begin() + ne00, cmp_desc);
             } else {
-                std::partial_sort(aux.begin(), aux.begin() + nk, aux.begin() + ne00);
+                std::partial_sort(aux.begin(), aux.begin() + nk, aux.begin() + ne00, cmp_asc);
             }
         } else {
             if (order == GGML_SORT_ORDER_DESC) {
-                std::sort(aux.begin(), aux.begin() + ne00, std::greater<std::pair<float,int>>{});
+                std::sort(aux.begin(), aux.begin() + ne00, cmp_desc);
             } else {
-                std::sort(aux.begin(), aux.begin() + ne00);
+                std::sort(aux.begin(), aux.begin() + ne00, cmp_asc);
             }
         }
         auto y = (int32_t *)((char *)dst->data + ir*dst->nb[1]);
@@ -1078,6 +1086,8 @@ void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
     int first = ith*npt;
     int last  = std::min(first + npt, nrows);
 
+    const auto * force = dst->src[2];
+
     auto hinf  = GGML_FP32_TO_FP16(-INFINITY);
     auto hzero = GGML_FP32_TO_FP16(0.0f);
 
@@ -1095,6 +1105,10 @@ void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
             if (i1 < topk->ne[1]) {
                 for (int j = 0; j < n; ++j) y[j] = hinf;
                 for (int j = 0; j < nidx; ++j) y[idx[j]] = hzero;
+                if (force) {
+                    auto fv = (const float *)((const char *)force->data + force->nb[1]*i1 + force->nb[2]*i2 + force->nb[3]*i3);
+                    for (int j = 0; j < n; ++j) if (fv[j] > 0.5f) y[j] = hzero;
+                }
                 iqk_add_f16(n, x, y);
             } else {
                 for (int j = 0; j < n; ++j) y[j] = x[j];
@@ -1105,6 +1119,10 @@ void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
             if (i1 < topk->ne[1]) {
                 for (int j = 0; j < n; ++j) y[j] = -INFINITY;
                 for (int j = 0; j < nidx; ++j) y[idx[j]] = 0.0f;
+                if (force) {
+                    auto fv = (const float *)((const char *)force->data + force->nb[1]*i1 + force->nb[2]*i2 + force->nb[3]*i3);
+                    for (int j = 0; j < n; ++j) if (fv[j] > 0.5f) y[j] = 0.0f;
+                }
                 for (int j = 0; j < n; ++j) y[j] += x[j];
             } else {
                 for (int j = 0; j < n; ++j) y[j] = x[j];

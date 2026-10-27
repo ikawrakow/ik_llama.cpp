@@ -3524,6 +3524,12 @@ void server_context::context_shift_find_n_tokens(llama_context* ctx, const serve
 }
 
 void server_context::context_shift_prompt(llama_context* ctx, server_slot& slot, bool exact) {
+    if (llama_kv_cache_is_compacted(slot.ctx)) {
+        LOG_INFO("context shift skipped: compacted SWA cache", {
+                             {"id_slot", slot.id},
+                     });
+        return;
+    }
     int n_keep = std::max(0, slot.params.n_keep + add_bos_token);
     const int n_left = slot.n_ctx - n_keep;
     int n_discard = slot.params.n_discard ? slot.params.n_discard : (n_left / 2);
@@ -3626,7 +3632,13 @@ void server_context::context_shift() {
                 int32_t n_kept;
                 int32_t n_discard_cache;
                 adjust_n_to_support_context_shift(slot.cache_tokens, n_keep, n_discard);
-                if (n_discard > 0 && tokens_support_context_shift(slot.cache_tokens, n_keep, n_discard)) {
+                if (llama_kv_cache_is_compacted(slot.ctx)) {
+                    LOG_INFO("slot context shift skipped: compacted SWA cache", {
+                                         {"id_slot",   slot.id},
+                                         {"n_past",    slot.n_past},
+                                         {"n_ctx",     n_ctx},
+                                 });
+                } else if (n_discard > 0 && tokens_support_context_shift(slot.cache_tokens, n_keep, n_discard)) {
                     context_shift_find_n_tokens(ctx, slot.prompt_tokens, slot.cache_tokens, n_keep,
                         n_discard, n_kept, n_discard_cache);
                     LOG_INFO("slot context shift", {
@@ -4809,6 +4821,21 @@ void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
         n_keep_cache = slot.cache_tokens.size();
     }
 
+    // clamp rewind to the compacted SWA floor
+    const llama_pos swa_floor = llama_kv_cache_swa_rewind_floor(slot.ctx);
+    if (swa_floor > 0 && (int32_t) slot.cache_tokens.pos_next((int32_t) n_keep_cache) < swa_floor) {
+        while (n_keep_cache < slot.cache_tokens.size() &&
+               (int32_t) slot.cache_tokens.pos_next((int32_t) n_keep_cache) < swa_floor) {
+            n_keep_cache++;
+        }
+        LOG_INFO("rewind clamped to the compacted SWA floor", {
+                             {"id_slot",   slot.id},
+                             {"ban_pos",   ban_pos},
+                             {"swa_floor", (int) swa_floor},
+                             {"n_keep_cache", (int) n_keep_cache},
+                     });
+    }
+
     if (n_keep_cache < slot.cache_tokens.size()) {
         slot.sampled = slot.cache_tokens[n_keep_cache];
     } else {
@@ -4827,7 +4854,16 @@ void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
         }
     } else {
         // Remove from KV cache
-        llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
+        if (!llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1)) {
+            LOG_WARNING("KV cache rewind refused (compacted SWA cache); clearing the slot cache for a full reprocess", {
+                                 {"id_slot", slot.id},
+                                 {"n_past",  slot.n_past},
+                         });
+            llama_kv_cache_seq_rm(slot.ctx, slot.id, -1, -1);
+            slot.cache_tokens.keep_first(0);
+            slot.n_past = 0;
+            slot.sampled = 0;
+        }
     }
 
     // Truncate buffer

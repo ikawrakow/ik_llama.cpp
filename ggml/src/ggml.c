@@ -8,6 +8,7 @@
 #define _USE_MATH_DEFINES // For M_PI on MSVC
 
 #include "ggml-impl.h"
+#include "ggml-e4m3.h"
 #include "ggml-utils.h"
 #include "ggml-quants.h"
 #include "ggml.h"
@@ -3579,6 +3580,7 @@ inline static float ggml_compute_sqrt_softplus_f32(const float x) { return sqrtf
 inline static void ggml_vec_exp_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = expf(x[i]); }
 inline static void ggml_vec_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_softplus_f32(x[i]); }
 inline static void ggml_vec_sqrt_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_sqrt_softplus_f32(x[i]); }
+inline static void ggml_vec_round_e4m3_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_csa_round_bf16_e4m3(x[i]); }
 // TODO: optimize performance
 inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = x[i] * fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
 inline static void ggml_vec_hardsigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
@@ -4713,9 +4715,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "MASK_TO_IDX",
     "LATENT_ATTN",
     "DS4_COMP",
+    "CSA_COMPRESS",
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4842,10 +4845,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "mask_to_idx(masl)",
     "latent_attn_prefix(q,c,pk,pv,mask)",
     "ds4_comp(state, score, idx)",
+    "csa_compress(z,k,vis)",
 
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4870,9 +4874,10 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "EXP",
     "SOFTPLUS",
     "SQRT_SOFTPLUS",
+    "ROUND_E4M3",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 19, "GGML_UNARY_OP_COUNT != 19");
+static_assert(GGML_UNARY_OP_COUNT == 20, "GGML_UNARY_OP_COUNT != 20");
 
 
 static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
@@ -7594,6 +7599,12 @@ struct ggml_tensor * ggml_sqrt_softplus(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary(ctx, a, GGML_UNARY_OP_SQRT_SOFTPLUS);
+}
+
+struct ggml_tensor * ggml_round_e4m3(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_ROUND_E4M3);
 }
 
 struct ggml_tensor * ggml_sqrt_softplus_inplace(
@@ -10677,6 +10688,33 @@ struct ggml_tensor * ggml_indexer_topk(
 }
 
 
+struct ggml_tensor * ggml_csa_compress(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * z,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * vis,
+        int                   B,
+        int                   round_e4m3) {
+    GGML_ASSERT(z->type == GGML_TYPE_F16 || z->type == GGML_TYPE_F32);
+    GGML_ASSERT(k->type == GGML_TYPE_F32);
+    GGML_ASSERT(vis->type == GGML_TYPE_F32);
+    GGML_ASSERT(z->ne[0] == k->ne[0] && z->ne[1] == k->ne[1]); // [head_size, n_kv]
+    GGML_ASSERT(vis->ne[0] == k->ne[1]);                       // [n_kv, 1]
+    GGML_ASSERT(B > 0 && k->ne[1] % B == 0);                   // slot-aligned blocks
+    GGML_ASSERT(ggml_is_contiguous(z) && ggml_is_contiguous(k) && ggml_is_contiguous(vis));
+
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k->ne[0], k->ne[1]/B);
+    result->op = GGML_OP_CSA_COMPRESS;
+    result->op_params[0] = B;
+    result->op_params[1] = round_e4m3;
+    result->src[0] = z;
+    result->src[1] = k;
+    result->src[2] = vis;
+
+    return result;
+}
+
+
 struct ggml_tensor * ggml_sinkhorn(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -10871,8 +10909,20 @@ struct ggml_tensor * ggml_indexer_mask(
             struct ggml_context * ctx,
             struct ggml_tensor  * mask,
             struct ggml_tensor  * topk) {
+    return ggml_indexer_mask_own(ctx, mask, topk, NULL);
+}
+
+struct ggml_tensor * ggml_indexer_mask_own(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk,
+            struct ggml_tensor  * force) {
     GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
     GGML_ASSERT(topk->type == GGML_TYPE_I32);
+    if (force) {
+        GGML_ASSERT(force->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_are_same_shape(force, mask));
+    }
     // The mask may be padded along dim 1, so topk->ne[1] must be <= mask->ne[1]
     if (topk->ne[1] > mask->ne[1] || topk->ne[2] != mask->ne[2] || topk->ne[3] != mask->ne[3]) {
         printf("%s: Oops. topk is %ld x %ld x %ld x %ld, mask is %ld x %ld x %ld x %ld\n", __func__,
@@ -10884,6 +10934,7 @@ struct ggml_tensor * ggml_indexer_mask(
     struct ggml_tensor * result = ggml_dup_tensor(ctx, mask);
     result->src[0] = mask;
     result->src[1] = topk;
+    result->src[2] = force;  // own-region force-visible map (nullptr = off)
     result->op = GGML_OP_MASK_TOPK;
 
     return result;
@@ -16734,6 +16785,51 @@ static void ggml_compute_forward_sqrt_softplus(
     }
 }
 
+static void ggml_compute_forward_round_e4m3_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    assert(ggml_is_contiguous_1(src0));
+    assert(ggml_is_contiguous_1(dst));
+    assert(ggml_are_same_shape(src0, dst));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src0->ne[0];
+    const int nr = ggml_nrows(src0);
+
+    const int dr = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int i1 = ir0; i1 < ir1; i1++) {
+        ggml_vec_round_e4m3_f32(nc,
+                (float *) ((char *) dst->data  + i1*( dst->nb[1])),
+                (float *) ((char *) src0->data + i1*(src0->nb[1])));
+    }
+}
+
+static void ggml_compute_forward_round_e4m3(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_round_e4m3_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_gelu
 
 static void ggml_compute_forward_gelu_f32(
@@ -21110,10 +21206,6 @@ static void ggml_compute_forward_clamp_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    if (params->ith != 0) {
-        return;
-    }
-
     float min;
     float max;
     memcpy(&min, (float *) dst->op_params + 0, sizeof(float));
@@ -22990,6 +23082,12 @@ static inline float ggml_bicubic_interp(float p0, float p1, float p2, float p3, 
     return p0 * w0 + p1 * w1 + p2 * w2 + p3 * w3;
 }
 
+// triangle filter for antialias bilinear
+static inline float ggml_triangle_filter(float x) {
+    float t = 1.0f - fabsf(x);
+    return t > 0.0f ? t : 0.0f;
+}
+
 static void ggml_compute_forward_upscale_f32(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
@@ -23018,7 +23116,7 @@ static void ggml_compute_forward_upscale_f32(
         sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
     }
 
-    if (mode == GGML_SCALE_MODE_NEAREST || mode == GGML_SCALE_MODE_BILINEAR) {
+    if (mode == GGML_SCALE_MODE_NEAREST) {
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             const int64_t i03 = i3 / sf3;
             for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
@@ -23032,6 +23130,103 @@ static void ggml_compute_forward_upscale_f32(
                               float * y = (float *)((char *)  dst->data +  i0*nb0  +  i1*nb1  +  i2*nb2  +  i3*nb3);
 
                         *y = *x;
+                    }
+                }
+            }
+        }
+    } else if (mode == GGML_SCALE_MODE_BILINEAR && (mode_flags & GGML_SCALE_FLAG_ANTIALIAS)) {
+        // Similar to F.interpolate(..., mode="bilinear", align_corners=False, antialias=True)
+        // https://github.com/pytorch/pytorch/blob/8871ff29b743948d1225389d5b7068f37b22750b/aten/src/ATen/native/cpu/UpSampleKernel.cpp
+
+        // support and invscale, minimum 1 pixel for bilinear
+        const float support1  = 1.0f / sf1 > 1.0f ? 1.0f / sf1 : 1.0f;
+        const float invscale1 = 1.0f / support1;
+        const float support0  = 1.0f / sf0 > 1.0f ? 1.0f / sf0 : 1.0f;
+        const float invscale0 = 1.0f / support0;
+
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            const int64_t i03 = i3 / sf3;
+            for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+                const int64_t i02 = i2 / sf2;
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    const float y = ((float) i1 + pixel_offset) / sf1;
+                    for (int64_t i0 = 0; i0 < ne0; i0++) {
+                        const float x = ((float) i0 + pixel_offset) / sf0;
+
+                        // the range of source pixels that contribute (truncate, then clamp)
+                        int64_t x_min = (int64_t)(x - support0 + pixel_offset); if (x_min < 0) x_min = 0;
+                        int64_t x_max = (int64_t)(x + support0 + pixel_offset); if (x_max > ne00) x_max = ne00;
+                        int64_t y_min = (int64_t)(y - support1 + pixel_offset); if (y_min < 0) y_min = 0;
+                        int64_t y_max = (int64_t)(y + support1 + pixel_offset); if (y_max > ne01) y_max = ne01;
+
+                        // bilinear filter with antialiasing
+                        float val = 0.0f;
+                        float total_weight = 0.0f;
+
+                        for (int64_t sy = y_min; sy < y_max; sy++) {
+                            const float weight_y = ggml_triangle_filter((sy - y + pixel_offset) * invscale1);
+
+                            for (int64_t sx = x_min; sx < x_max; sx++) {
+                                const float weight_x = ggml_triangle_filter((sx - x + pixel_offset) * invscale0);
+                                const float weight = weight_x * weight_y;
+
+                                if (weight <= 0.0f) {
+                                    continue;
+                                }
+
+                                const float pixel = *(const float *)((const char *)src0->data + sx*nb00 + sy*nb01 + i02*nb02 + i03*nb03);
+                                val += pixel * weight;
+                                total_weight += weight;
+                            }
+                        }
+
+                        if (total_weight > 0.0f) {
+                            val /= total_weight;
+                        }
+
+                        float * dst_ptr = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+                        *dst_ptr = val;
+                    }
+                }
+            }
+        }
+    } else if (mode == GGML_SCALE_MODE_BILINEAR) {
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            const int64_t i03 = i3 / sf3;
+            for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+                const int64_t i02 = i2 / sf2;
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    const float y = ((float)i1 + pixel_offset) / sf1 - pixel_offset;
+                    int64_t y0 = (int64_t)floorf(y);
+                    int64_t y1 = y0 + 1;
+
+                    y0 = GGML_CLAMP(y0, 0, ne01 - 1);
+                    y1 = GGML_CLAMP(y1, 0, ne01 - 1);
+
+                    float dy = y - (float)y0;
+                    dy = GGML_CLAMP(dy, 0.0f, 1.0f);
+
+                    for (int64_t i0 = 0; i0 < ne0; i0++) {
+                        const float x = ((float)i0 + pixel_offset) / sf0 - pixel_offset;
+                        int64_t x0 = (int64_t)floorf(x);
+                        int64_t x1 = x0 + 1;
+
+                        x0 = GGML_CLAMP(x0, 0, ne00 - 1);
+                        x1 = GGML_CLAMP(x1, 0, ne00 - 1);
+
+                        float dx = x - (float)x0;
+                        dx = GGML_CLAMP(dx, 0.0f, 1.0f);
+
+                        // fetch the four surrounding pixel values and interpolate
+                        const float a = *(const float *)((const char *)src0->data + x0*nb00 + y0*nb01 + i02*nb02 + i03*nb03);
+                        const float b = *(const float *)((const char *)src0->data + x1*nb00 + y0*nb01 + i02*nb02 + i03*nb03);
+                        const float c = *(const float *)((const char *)src0->data + x0*nb00 + y1*nb01 + i02*nb02 + i03*nb03);
+                        const float d = *(const float *)((const char *)src0->data + x1*nb00 + y1*nb01 + i02*nb02 + i03*nb03);
+
+                        const float val = a*(1 - dx)*(1 - dy) + b*dx*(1 - dy) + c*(1 - dx)*dy + d*dx*dy;
+
+                        float * y_dst = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+                        *y_dst = val;
                     }
                 }
             }
@@ -25130,6 +25325,62 @@ static void ggml_compute_forward_hc_pre(
     }
 }
 
+#include "ggml-e4m3.h"
+
+static void ggml_compute_forward_csa_compress(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * z   = dst->src[0]; // [head_size, n_kv] F16/F32 raw softmax logits
+    const struct ggml_tensor * k   = dst->src[1]; // [head_size, n_kv, 1] F32 proxy keys
+    const struct ggml_tensor * vis = dst->src[2]; // [n_kv, 1] F32 0/1 slot validity
+
+    const int B         = dst->op_params[0];
+    const int round_e4m3 = dst->op_params[1];
+    const int head_size = dst->ne[0];
+    const int n_blocks  = dst->ne[1];
+
+    const float * z_f32 = NULL;
+    const uint16_t * z_f16 = NULL;
+    if (z->type == GGML_TYPE_F32) {
+        z_f32 = (const float *) z->data;
+    } else {
+        z_f16 = (const uint16_t *) z->data;
+    }
+    const float * kd   = (const float *) k->data;
+    const float * visd = (const float *) vis->data;
+    float * outd = (float *) dst->data;
+
+    for (int b = params->ith; b < n_blocks; b += params->nth) {
+        const int base = b*B;
+        for (int d = 0; d < head_size; ++d) {
+            float mx = -INFINITY;
+            for (int t = 0; t < B; ++t) {
+                const float bias = visd[base + t]*1e30f - 1e30f;
+                const float zv = z_f32 ? z_f32[d + (base + t)*head_size]
+                                       : GGML_FP16_TO_FP32(z_f16[d + (base + t)*head_size]);
+                mx = mx > zv + bias ? mx : zv + bias;
+            }
+            float denom = 0.0f;
+            for (int t = 0; t < B; ++t) {
+                const float bias = visd[base + t]*1e30f - 1e30f;
+                const float zv = z_f32 ? z_f32[d + (base + t)*head_size]
+                                       : GGML_FP16_TO_FP32(z_f16[d + (base + t)*head_size]);
+                denom += expf(zv + bias - mx);
+            }
+            const float inv_sum = 1.0f / denom;
+            float num = 0.0f;
+            for (int t = 0; t < B; ++t) {
+                const float bias = visd[base + t]*1e30f - 1e30f;
+                const float zv = z_f32 ? z_f32[d + (base + t)*head_size]
+                                       : GGML_FP16_TO_FP32(z_f16[d + (base + t)*head_size]);
+                const float w = expf(zv + bias - mx) * inv_sum;
+                num += w * kd[d + (base + t)*head_size];
+            }
+            outd[d + b*head_size] = round_e4m3 ? ggml_csa_round_bf16_e4m3(num) : num;
+        }
+    }
+}
+
 static void ggml_compute_forward_mask_to_idx(const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
     struct ggml_tensor * src = dst->src[0];
@@ -25817,6 +26068,10 @@ static void ggml_compute_forward_unary(
         case GGML_UNARY_OP_SQRT_SOFTPLUS:
             {
                 ggml_compute_forward_sqrt_softplus(params, dst);
+            } break;
+        case GGML_UNARY_OP_ROUND_E4M3:
+            {
+                ggml_compute_forward_round_e4m3(params, dst);
             } break;
         default:
             {
@@ -27379,6 +27634,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_mask_to_idx(params, tensor);
             } break;
+        case GGML_OP_CSA_COMPRESS:
+            {
+                ggml_compute_forward_csa_compress(params, tensor);
+            } break;
         case GGML_OP_LATENT_ATTN:
             {
                 ggml_compute_forward_latent_attn(params, tensor);
@@ -28470,6 +28729,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_MASK_TO_IDX:
         case GGML_OP_LATENT_ATTN:
         case GGML_OP_DS4_COMP:
+        case GGML_OP_CSA_COMPRESS:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -28606,6 +28866,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                             GGML_ABORT("fatal error"); // TODO: not implemented
                         }
                     case GGML_UNARY_OP_SQRT_SOFTPLUS:
+                        {
+                            GGML_ABORT("fatal error"); // TODO: not implemented
+                        }
+                    case GGML_UNARY_OP_ROUND_E4M3:
                         {
                             GGML_ABORT("fatal error"); // TODO: not implemented
                         }
@@ -29195,6 +29459,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_SQRT_SOFTPLUS:
+                case GGML_UNARY_OP_ROUND_E4M3:
                 case GGML_UNARY_OP_SWIGLU:
                 case GGML_UNARY_OP_SWIGLU_OAI:
                     {
@@ -29252,6 +29517,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MASK_TO_IDX:
         case GGML_OP_LATENT_ATTN:
         case GGML_OP_DS4_COMP:
+        case GGML_OP_CSA_COMPRESS:
             {
                 n_tasks = n_threads;
             } break;
@@ -29590,6 +29856,10 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
             case GGML_OP_INDEXER_TOPK:
                 {
                     cur = iqk_idx_topk_work_buffer_size(node, n_tasks);
+                } break;
+            case GGML_OP_CSA_COMPRESS:
+                {
+                    cur = 0;
                 } break;
             case GGML_OP_DS4_COMP:
                 {

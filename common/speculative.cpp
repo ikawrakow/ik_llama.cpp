@@ -147,7 +147,7 @@ static bool common_speculative_are_compatible(
 }
 
 static bool common_speculative_target_has_appended_mtp_contract(const llama_model * model) {
-    return llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
+    return llama_model_is_step5(model) || llama_model_is_deepseek4(model) ||
            llama_model_is_qwen35_family(model) || llama_model_is_qwen4exp(model);
 }
 
@@ -2171,8 +2171,8 @@ bool common_speculative_prepare_mtp_runtime(
         return false;
     }
 
-    if (llama_model_is_step35(model) && has_embedded_mtp &&
-        !llama_model_step35_has_nextn_weights(model)) {
+    if (llama_model_is_step5(model) && has_embedded_mtp &&
+        !llama_model_step5_has_nextn_weights(model)) {
         LOG_ERR("%s: Step target is missing one or more complete MTP heads\n", __func__);
         return false;
     }
@@ -2198,6 +2198,7 @@ bool common_speculative_prepare_mtp_runtime(
             : params_base.cpu_affinity;
         params.cparams_dft.cpu_affinity   = cpu_affinity_dft.empty() ? nullptr : cpu_affinity_dft.data();
         params.cparams_dft.n_cpu_affinity = (int32_t) cpu_affinity_dft.size();
+        params.cparams_dft.swa_compress = params_base.swa_compress;
     }
 
     params.cparams_dft.mtp         = true;
@@ -2312,8 +2313,8 @@ bool common_speculative_finalize_startup(
                 return false;
             }
 
-            if (llama_model_is_step35(model)) {
-                if (!llama_model_is_step35(companion)) {
+            if (llama_model_is_step5(model)) {
+                if (!llama_model_is_step5(companion)) {
                     LOG_ERR("%s: Step MTP requires a Step companion\n", __func__);
                     return false;
                 }
@@ -2325,7 +2326,7 @@ bool common_speculative_finalize_startup(
                     return false;
                 }
 
-                if (!llama_model_step35_has_nextn_weights(companion)) {
+                if (!llama_model_step5_has_nextn_weights(companion)) {
                     LOG_ERR("%s: Step MTP companion is missing required predictor tensors\n", __func__);
                     return false;
                 }
@@ -2855,7 +2856,12 @@ bool common_speculative_commit(
         }
     }
 
-    llama_kv_cache_seq_rm(ctx, seq_id, pos_base + (llama_pos) (ids.size() - 1), -1);
+    if (!llama_kv_cache_seq_rm(ctx, seq_id, pos_base + (llama_pos) (ids.size() - 1), -1)) {
+        LOG_ERR("%s: compacted SWA cache refused the post-accept trim at pos %d\n",
+                __func__, (int) (pos_base + (llama_pos) (ids.size() - 1)));
+        common_speculative_checkpoint_discard(ckpt, ctx);
+        return false;
+    }
     common_speculative_checkpoint_discard(ckpt, ctx);
     return true;
 }
@@ -3086,7 +3092,10 @@ bool common_speculative_trim_sequence(
         llama_pos pos_begin) {
     const bool target_trimmed = llama_kv_cache_seq_rm(ctx, seq_id, pos_begin, -1);
     if (auto * ctx_mtp = common_speculative_get_companion_ctx(spec); ctx_mtp != nullptr) {
-        return target_trimmed && llama_kv_cache_seq_rm(ctx_mtp, seq_id, pos_begin, -1);
+        if (!llama_kv_cache_seq_rm(ctx_mtp, seq_id, pos_begin, -1)) {
+            // drafter compression rebase swa on rewinds
+            llama_kv_cache_seq_swa_rebase(ctx_mtp, seq_id, pos_begin);
+        }
     }
 
     return target_trimmed;
@@ -3479,7 +3488,11 @@ int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch
     llama_pos    start_pos = batch.pos[0];
 
     if (llama_kv_cache_seq_pos_max(ctx, seq_id) >= start_pos) {
-        llama_kv_cache_seq_rm(ctx, seq_id, start_pos, -1);
+        if (!llama_kv_cache_seq_rm(ctx, seq_id, start_pos, -1)) {
+            LOG_ERR("%s: KV cache rewind to pos %d refused (compacted SWA cache); degrading this round\n",
+                    __func__, (int) start_pos);
+            return -1;
+        }
     }
 
     LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens for seq_id %d from pos %d...\n",
