@@ -744,6 +744,9 @@ class Model:
         if chkhsh == "ccc2ef013c104be7bae2965776d611e1d7a8a2a9c547dd93a682c9a9fc80352e":
             # ref: https://huggingface.co/openai/gpt-oss-20b
             res = "gpt-4o"
+        if chkhsh == "0a766d034107bc736a3f2dc4968fd62e54a3570f1454443e0c5a4cc6bd7941ed":
+            # ref: https://huggingface.co/XHToken/Spark-X2.5-1.7B
+            res = "spark2_5"
         if chkhsh == "d5420e601e979078c670bc503d9ac411c311fa76b76a76267c31e0d6ba816637":
             # ref: https://huggingface.co/RecursiveSI/flint-preview
             res = "flint"
@@ -2869,6 +2872,62 @@ class DFlash2DraftModel(DFlashDraftModel):
         if top_level_name == "hidden_norm.weight":
             return [("enc.output_norm.weight", data_torch)]
         return super().modify_tensors(data_torch, self.normalize_tensor_name(name), bid)
+
+
+@Model.register("Spark2_5ForCausalLM")
+class Spark2_5Model(Model):
+    model_arch = gguf.MODEL_ARCH.SPARK2_5
+
+    def set_gguf_parameters(self) -> None:
+        super().set_gguf_parameters()
+
+        hparams = self.hparams
+        layer_types = hparams["layer_types"]
+        if len(layer_types) != self.block_count:
+            raise ValueError(
+                f"Spark2_5 layer_types length {len(layer_types)} != num_hidden_layers {self.block_count}"
+            )
+        if any(layer_type not in ("sliding_attention", "full_attention") for layer_type in layer_types):
+            raise ValueError(f"Spark2_5 has unsupported layer_types: {layer_types}")
+        if hparams.get("gate_attn_act_mode") != "sigmoid" or hparams.get("headwise_attn_output_gate") is not True:
+            raise ValueError("Spark2_5 conversion requires head-wise sigmoid attention gates")
+        if hparams.get("hidden_act") != "gelu":
+            raise ValueError(f"Spark2_5 conversion requires GELU, got {hparams.get('hidden_act')!r}")
+
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        if (sliding_window := hparams.get("sliding_window")) is not None:
+            self.gguf_writer.add_sliding_window(sliding_window)
+        self.gguf_writer.add_sliding_window_pattern(
+            [layer_type == "sliding_attention" for layer_type in layer_types]
+        )
+
+        # Layer-type-dependent RoPE (full vs sliding).
+        rope_parameters = hparams.get("rope_parameters") or {}
+        head_dim = hparams["head_dim"]
+        if (full_rope := rope_parameters.get("full_attention")) is not None:
+            if (rope_theta := full_rope.get("rope_theta")) is not None:
+                self.gguf_writer.add_rope_freq_base(rope_theta)
+            self.gguf_writer.add_rope_dimension_count(
+                int(head_dim * float(full_rope.get("partial_rotary_factor", 1.0)))
+            )
+        if (swa_rope := rope_parameters.get("sliding_attention")) is not None:
+            if (rope_theta_swa := swa_rope.get("rope_theta")) is not None:
+                self.gguf_writer.add_rope_freq_base_swa(rope_theta_swa)
+            n_rot_swa = int(head_dim * float(swa_rope.get("partial_rotary_factor", 1.0)))
+            self.gguf_writer.add_rope_dimension_count_swa(n_rot_swa)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Tensor names are mapped by gguf-py; validate the gate width.
+        if name.endswith(".self_attn.g_proj.weight"):
+            if bid is None:
+                raise ValueError(f"Spark2_5 attention gate tensor has no block id: {name}")
+            expected = self.hparams["num_attention_heads"]
+            if data_torch.shape[0] != expected:
+                raise ValueError(
+                    f"Spark2_5 layer {bid} attention gate width {data_torch.shape[0]} != head count {expected}"
+                )
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @Model.register("Qwen3DSparkModel")

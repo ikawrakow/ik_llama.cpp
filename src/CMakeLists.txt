@@ -143,6 +143,7 @@ add_library(llama
             graphs/build_minimaxm2.cpp
             graphs/build_minimaxm3.cpp
             graphs/build_smollm3.cpp
+            graphs/build_spark2_5.cpp
             )
 
 target_include_directories(llama PUBLIC . ../include)

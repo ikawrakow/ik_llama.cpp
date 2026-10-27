@@ -163,6 +163,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "layers.{bid}.attention.wqkv",
+            "model.layers.{bid}.self_attn.q_k_v_proj",                             # spark2_5
         ),
 
         # Attention query

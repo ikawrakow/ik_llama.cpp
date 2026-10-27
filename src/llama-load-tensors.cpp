@@ -181,6 +181,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_smollm3_tensors(const LLM_TN & tn);
 
+    bool create_spark2_5_tensors(const LLM_TN & tn);
+
     bool create_mimo2_tensors(const LLM_TN & tn);
 
     bool create_seedoss_tensors(const LLM_TN & tn);
@@ -5307,6 +5309,30 @@ bool create_tensors_helper::create_smollm3_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
+bool create_tensors_helper::create_spark2_5_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    create_embd_output(tn, n_embd, n_vocab);
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context* ctx_layer = ctx_for_layer(i);
+        ggml_context* ctx_split = ctx_for_layer_split(i);
+        auto & layer = model.layers[i];
+
+        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+
+        layer.wqkv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_QKV, "weight", i),
+                { n_embd, (n_head + 2*n_head_kv) * n_embd_head_k }, 0);
+        layer.wqkv_gate = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_GATE, "weight", i), { n_embd, n_head }, 0);
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i),
+                { n_head * n_embd_head_v, n_embd }, 0);
+
+        layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+    }
+    return use_mmap_buffer;
+}
+
 bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bias) {
     ggml_context * ctx_split = ctx_for_layer_split(i);
 
@@ -6271,6 +6297,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_minimaxm3_tensors(tn); break;
         case LLM_ARCH_SMOLLM3:
             use_mmap_buffer = create_smollm3_tensors(tn); break;
+        case LLM_ARCH_SPARK2_5:
+            use_mmap_buffer = create_spark2_5_tensors(tn); break;
         case LLM_ARCH_MIMO2:
             use_mmap_buffer = create_mimo2_tensors(tn); break;
         case LLM_ARCH_SEED_OSS:

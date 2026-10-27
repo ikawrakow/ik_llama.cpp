@@ -3289,6 +3289,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_smollm3();
             } break;
+        case LLM_ARCH_SPARK2_5:
+            {
+                result = llm.build_spark2_5();
+            } break;
         case LLM_ARCH_MISTRAL3:
             {
                 result = llm.build_mistral3();
