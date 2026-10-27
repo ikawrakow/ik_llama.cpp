@@ -1056,6 +1056,15 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_Q8_0_R16] = {
+        .type_name                = "q8_0_r16",
+        .blck_size                = QK8_0,
+        .type_size                = sizeof(block_q8_0_r16)/16,
+        .is_quantized             = true,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_Q8_K_R16] = {
         .type_name                = "q8_k_r16",
         .blck_size                = QK_K,
@@ -2214,7 +2223,7 @@ ggml_type_traits_t ggml_internal_get_type_traits(enum ggml_type type) {
 }
 
 static inline int ggml_packed_rows(enum ggml_type type) {
-    return type == GGML_TYPE_BF16_R16 || type == GGML_TYPE_Q8_K_R16 || type == GGML_TYPE_IQ3_KS_R16 ? 16
+    return type == GGML_TYPE_BF16_R16 || type == GGML_TYPE_Q8_K_R16 || type == GGML_TYPE_IQ3_KS_R16 || type == GGML_TYPE_Q8_0_R16 ? 16
          : type == GGML_TYPE_Q8_K_R8 || type == GGML_TYPE_Q8_KV_R8 ||
            type == GGML_TYPE_Q8_0_R8 || type == GGML_TYPE_Q4_0_R8 ||
            type == GGML_TYPE_IQ4_XS_R8 ? 8
@@ -21170,6 +21179,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_Q6_K_R4:
         case GGML_TYPE_Q8_K_R8:
+        case GGML_TYPE_Q8_0_R16:
         case GGML_TYPE_Q8_K_R16:
         case GGML_TYPE_IQ3_KS_R16:
         case GGML_TYPE_Q8_KV_R8:
