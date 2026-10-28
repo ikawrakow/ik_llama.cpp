@@ -10286,14 +10286,14 @@ int32_t llama_memory_breakdown(
                 res.add_model_buffer((*derived[j])->buffer);
             }
         }
-        for (size_t j = 0; j < l.computed_wk_b_replicas.size(); ++j) {
-            res.add_model_buffer(l.computed_wk_b_replicas[j]->buffer);
-        }
-        for (size_t j = 0; j < l.computed_wk_b_pp_replicas.size(); ++j) {
-            res.add_model_buffer(l.computed_wk_b_pp_replicas[j]->buffer);
-        }
-        for (size_t j = 0; j < l.computed_wv_b_replicas.size(); ++j) {
-            res.add_model_buffer(l.computed_wv_b_replicas[j]->buffer);
+        // The MLA loader sizes these to the device count and leaves a null entry for a device with no split.
+        const std::vector<std::shared_ptr<ggml_tensor>> * replicas[] = { &l.computed_wk_b_replicas, &l.computed_wk_b_pp_replicas, &l.computed_wv_b_replicas };
+        for (int j = 0; j < 3; ++j) {
+            for (const std::shared_ptr<ggml_tensor> & t : *replicas[j]) {
+                if (t) {
+                    res.add_model_buffer(t->buffer);
+                }
+            }
         }
     }
     for (size_t i = 0; i < ctx->kv_self.bufs.size(); ++i) {
