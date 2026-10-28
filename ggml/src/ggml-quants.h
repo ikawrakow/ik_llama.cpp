@@ -171,6 +171,12 @@ void ggml_gemm_ptq1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void
 void ggml_gemv_pq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_pq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 
+// TQK6 / TQK7 (bit-packed trellis, group 128)
+void dequantize_row_tqk6(const block_tqk6 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void dequantize_row_tqk7(const block_tqk7 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void ggml_vec_dot_tqk6_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void ggml_vec_dot_tqk7_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
 void iq2xs_init_impl(enum ggml_type type);
 void iq2xs_free_impl(enum ggml_type type);
 void iq3xs_init_impl(int grid_size);
