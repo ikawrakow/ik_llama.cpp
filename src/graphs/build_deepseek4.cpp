@@ -2460,8 +2460,7 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
                 cb(hca_kv, "hca_kv_getrows", il);
                 hca_mask = ggml_get_rows_ext(ctx0, hca_mask, top_k, true, true);
             } else {
-                hca_mask = build_top_k_mask(ctx0, dsv4_build_raw_mask_view(llm, mask_views, lctx.dsv4.inputs.hca.kq_mask, nullptr,
-                            lctx.dsv4.hca_plan.n_kv, n_tokens, num_streams(lctx.dsv4.hca_ctx), cb, il), top_k);
+                hca_mask = build_top_k_mask(ctx0, hca_mask, top_k);
                 cb(hca_mask, "hca_mask", il);
             }
         }
