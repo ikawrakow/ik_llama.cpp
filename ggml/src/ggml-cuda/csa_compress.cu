@@ -31,19 +31,15 @@ static __global__ void k_csa_compress(const z_t * __restrict__ z,
         const float bias = vis[base + t]*1e30f - 1e30f;
         mx = fmaxf(mx, (float) z[d + (base + t)*head_size] + bias);
     }
-    float denom = 0.0f;
+    float num = 0.0f, denom = 0.0f;
     for (int t = 0; t < B; ++t) {
         const float bias = vis[base + t]*1e30f - 1e30f;
-        denom += expf((float) z[d + (base + t)*head_size] + bias - mx);
-    }
-    const float inv_sum = 1.0f / denom;
-    float num = 0.0f;
-    for (int t = 0; t < B; ++t) {
-        const float bias = vis[base + t]*1e30f - 1e30f;
-        const float w = expf((float) z[d + (base + t)*head_size] + bias - mx) * inv_sum;
+        const float w = expf((float) z[d + (base + t)*head_size] + bias - mx);
+        denom += w;
         num += w * k[d + (base + t)*head_size];
     }
-    dst[d + b*head_size] = round_e4m3 ? csa_round_bf16_e4m3(num) : num;
+    const float value = num/denom;
+    dst[d + b*head_size] = round_e4m3 ? csa_round_bf16_e4m3(value) : value;
 }
 
 void ggml_cuda_op_csa_compress(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

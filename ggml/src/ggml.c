@@ -23336,7 +23336,7 @@ static void ggml_compute_forward_pad_f32(
         for (int ib = ith; ib < nblocks; ib += nth) {
             int first = ib*k_block_size;
             int last  = MIN(first + k_block_size, nelem);
-            // 
+            //
             //int ii = first;
             //int i3 = ii/(ne0*ne1*ne2); ii -= i3*ne0*ne1*ne2;
             //int i2 = ii/(ne0*ne1    ); ii -= i2*ne0*ne1;
@@ -25360,23 +25360,17 @@ static void ggml_compute_forward_csa_compress(
                                        : GGML_FP16_TO_FP32(z_f16[d + (base + t)*head_size]);
                 mx = mx > zv + bias ? mx : zv + bias;
             }
-            float denom = 0.0f;
+            float num = 0.0f, denom = 0.0f;
             for (int t = 0; t < B; ++t) {
                 const float bias = visd[base + t]*1e30f - 1e30f;
                 const float zv = z_f32 ? z_f32[d + (base + t)*head_size]
                                        : GGML_FP16_TO_FP32(z_f16[d + (base + t)*head_size]);
-                denom += expf(zv + bias - mx);
-            }
-            const float inv_sum = 1.0f / denom;
-            float num = 0.0f;
-            for (int t = 0; t < B; ++t) {
-                const float bias = visd[base + t]*1e30f - 1e30f;
-                const float zv = z_f32 ? z_f32[d + (base + t)*head_size]
-                                       : GGML_FP16_TO_FP32(z_f16[d + (base + t)*head_size]);
-                const float w = expf(zv + bias - mx) * inv_sum;
+                const float w = expf(zv + bias - mx);
+                denom += w;
                 num += w * kd[d + (base + t)*head_size];
             }
-            outd[d + b*head_size] = round_e4m3 ? ggml_csa_round_bf16_e4m3(num) : num;
+            const float value = num/denom;
+            outd[d + b*head_size] = round_e4m3 ? ggml_csa_round_bf16_e4m3(value) : value;
         }
     }
 }

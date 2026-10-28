@@ -1,5 +1,3 @@
-#include <cstring>
-
 #include "indexer_topk.cuh"
 #include "mmq.cuh"
 #include "quantize.cuh"
