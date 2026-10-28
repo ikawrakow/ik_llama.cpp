@@ -250,6 +250,8 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
         info.devices[id].cc = 100*prop.major + 10*prop.minor + CC_OFFSET_AMD;
+        // gfx900 (Vega10) reports 9.0 like gfx906/908/90a but has no v_dot4 instructions
+        info.devices[id].no_dp4a = strncmp(prop.gcnArchName, "gfx900", 6) == 0;
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
