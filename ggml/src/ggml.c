@@ -18717,14 +18717,18 @@ static void ggml_compute_forward_mul_mat_id(
         assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                               (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                               ne10);
-                }
-            }
+        const int64_t nr1  = ne11*ne12*ne13;
+        const int64_t dr1  = (nr1 + nth - 1)/nth;
+        const int64_t ir10 = dr1*ith;
+        const int64_t ir11 = MIN(ir10 + dr1, nr1);
+
+        for (int64_t ir1 = ir10; ir1 < ir11; ++ir1) {
+            const int64_t i13 = ir1/(ne11*ne12);
+            const int64_t i12 = (ir1 - i13*ne11*ne12)/ne11;
+            const int64_t i11 = ir1 - i13*ne11*ne12 - i12*ne11;
+            from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                       (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                       ne10);
         }
     }
 
@@ -19046,14 +19050,18 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                               (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                               ne10);
-                }
-            }
+        const int64_t nr1  = ne11*ne12*ne13;
+        const int64_t dr1  = (nr1 + nth - 1)/nth;
+        const int64_t ir10 = dr1*ith;
+        const int64_t ir11 = MIN(ir10 + dr1, nr1);
+
+        for (int64_t ir1 = ir10; ir1 < ir11; ++ir1) {
+            const int64_t i13 = ir1/(ne11*ne12);
+            const int64_t i12 = (ir1 - i13*ne11*ne12)/ne11;
+            const int64_t i11 = ir1 - i13*ne11*ne12 - i12*ne11;
+            from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                       (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                       ne10);
         }
     }
 
