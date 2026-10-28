@@ -11,6 +11,7 @@
 #include "vecdotq.cuh"
 #include "mma.cuh"
 #include "iqk_cuda_common.h"
+#include "tq.cuh"
 
 #include <climits>
 #include <cstdint>
@@ -241,6 +242,12 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
         case GGML_TYPE_IQ2_KT  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ3_KT  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_KT  : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_TQ2_T          : return MMQ_DP4A_TXS_Q8_0_16;
+        case GGML_TYPE_TQK6           : return MMQ_DP4A_TXS_Q8_0_16;
+        case GGML_TYPE_TQK7           : return MMQ_DP4A_TXS_Q8_0_16;
+        case GGML_TYPE_TQP5           : return MMQ_DP4A_TXS_Q8_0_16;
+        case GGML_TYPE_TQP6           : return MMQ_DP4A_TXS_Q8_0_16;
+        case GGML_TYPE_TQP7           : return MMQ_DP4A_TXS_Q8_0_16;
         default                : return tile_x_sizes{0, 0, 0};
     }
 }
@@ -306,6 +313,12 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_IQ2_KT  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ3_KT  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_KT  : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_TQ2_T          : return MMQ_MMA_TILE_X_K_Q3_K;
+        case GGML_TYPE_TQK6           : return MMQ_MMA_TILE_X_K_Q3_K;
+        case GGML_TYPE_TQK7           : return MMQ_MMA_TILE_X_K_Q3_K;
+        case GGML_TYPE_TQP5           : return MMQ_MMA_TILE_X_K_Q3_K;
+        case GGML_TYPE_TQP6           : return MMQ_MMA_TILE_X_K_Q3_K;
+        case GGML_TYPE_TQP7           : return MMQ_MMA_TILE_X_K_Q3_K;
         default                : return 0;
     }
 }
@@ -2636,6 +2649,58 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 #endif // INT8_MMA_AVAILABLE
 }
 
+template <ggml_type type, int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_tq(
+    const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, [[maybe_unused]] int blocks_per_ne00) {
+
+    typedef typename tq_block_info<type>::block_t block_t;
+
+#ifdef INT8_MMA_AVAILABLE
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + WARP_SIZE*2);
+#else
+    constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q8_0_16;
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + txs.qs);
+#endif // INT8_MMA_AVAILABLE
+
+    // one thread per lane of one 128-weight block: 2 blocks x TQ_LANES lanes = 16 threads per row
+    constexpr int threads_per_row = (MMQ_ITER_K / QK_TQK) * TQ_LANES;
+    static_assert(WARP_SIZE % threads_per_row == 0, "bad warp size");
+    constexpr int nrows = WARP_SIZE / threads_per_row;
+    const int kqsx = threadIdx.x % threads_per_row;
+    const int kbx  = kqsx / TQ_LANES;
+    const int lane = kqsx % TQ_LANES;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * nrows) {
+        int i = i0 + threadIdx.y*nrows + threadIdx.x/threads_per_row;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_t * bxi = (const block_t *)(x + i*stride) + kbx0 + kbx;
+
+        int q[TQ_STEPS_LANE];
+        const float dq = tq_lane_to_q8<type>(bxi, lane, q);
+
+#pragma unroll
+        for (int k = 0; k < TQ_STEPS_LANE; ++k) {
+#ifdef INT8_MMA_AVAILABLE
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 4*kqsx + k] = q[k];
+#else
+            x_qs[i*(2*WARP_SIZE + 1)     + 4*kqsx + k] = q[k];
+#endif // INT8_MMA_AVAILABLE
+        }
+
+#ifdef INT8_MMA_AVAILABLE
+        x_df[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx] = dq;
+#else
+        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + kqsx] = dq;
+#endif // INT8_MMA_AVAILABLE
+    }
+}
+
 template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq3_xxs(
     const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, [[maybe_unused]] int blocks_per_ne00) {
 
@@ -4340,6 +4405,48 @@ struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ2_XS> {
 };
 
 template <int mmq_x, int mmq_y, int nwarps, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_TQ2_T> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_tq<GGML_TYPE_TQ2_T, mmq_y, nwarps, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y, nwarps>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
+};
+
+template <int mmq_x, int mmq_y, int nwarps, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_TQK6> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_tq<GGML_TYPE_TQK6, mmq_y, nwarps, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y, nwarps>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
+};
+
+template <int mmq_x, int mmq_y, int nwarps, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_TQK7> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_tq<GGML_TYPE_TQK7, mmq_y, nwarps, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y, nwarps>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
+};
+
+template <int mmq_x, int mmq_y, int nwarps, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_TQP5> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_tq<GGML_TYPE_TQP5, mmq_y, nwarps, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y, nwarps>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
+};
+
+template <int mmq_x, int mmq_y, int nwarps, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_TQP6> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_tq<GGML_TYPE_TQP6, mmq_y, nwarps, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y, nwarps>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
+};
+
+template <int mmq_x, int mmq_y, int nwarps, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_TQP7> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_tq<GGML_TYPE_TQP7, mmq_y, nwarps, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y, nwarps>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
+};
+
+template <int mmq_x, int mmq_y, int nwarps, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ2_S> {
     static constexpr bool             requant      = mmq_x >= 40;
     static constexpr load_tiles_mmq_t load_tiles   = requant ? load_tiles_iq2_s_q8<mmq_y, nwarps, need_check>
@@ -5034,6 +5141,12 @@ extern DECL_MMQ_CASE(GGML_TYPE_IQ3_KT);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_KT);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_KS_R16);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ5_KS_R16);
+extern DECL_MMQ_CASE(GGML_TYPE_TQ2_T);
+extern DECL_MMQ_CASE(GGML_TYPE_TQK6);
+extern DECL_MMQ_CASE(GGML_TYPE_TQK7);
+extern DECL_MMQ_CASE(GGML_TYPE_TQP5);
+extern DECL_MMQ_CASE(GGML_TYPE_TQP6);
+extern DECL_MMQ_CASE(GGML_TYPE_TQP7);
 
 // -------------------------------------------------------------------------------------------------------------------------
 

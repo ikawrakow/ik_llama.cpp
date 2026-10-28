@@ -7,6 +7,7 @@
 
 #include "convert.cuh"
 #include "dequantize.cuh"
+#include "tq.cuh"
 
 #define CUDA_Q8_0_NE_ALIGN 2048
 
@@ -2203,8 +2204,61 @@ static void convert_to_bf16_cuda(const void * __restrict__ vx, nv_bfloat16 * __r
     convert_to_bf16<<<num_blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>((const src_t *)vx, y, k);
 }
 
+// Trellis types: CUDA_TQ_DEQUANT_THREADS threads, TQ_LANES per 128-weight block, each CTA
+// copies the codebook to shared memory once and then dequantizes CUDA_TQ_DEQUANT_BLOCKS
+// consecutive blocks (in row-major block order over all rows of the contiguous src).
+#define CUDA_TQ_DEQUANT_THREADS 256
+#define CUDA_TQ_DEQUANT_BLOCKS  256
+
+template <ggml_type type, typename dst_t>
+static __global__ void dequantize_block_tq(const void * __restrict__ vx, dst_t * __restrict__ y, const uint32_t nblocks) {
+    typedef typename tq_block_info<type>::block_t block_t;
+    __shared__ uint32_t lut[TQ_LUT_POINTS];
+    tq_lut_load_shared(lut, threadIdx.x, blockDim.x);
+
+    const int lane = threadIdx.x % TQ_LANES;
+    const uint32_t g0 = blockIdx.x*CUDA_TQ_DEQUANT_BLOCKS + threadIdx.x/TQ_LANES;
+
+#pragma unroll 2
+    for (int it = 0; it < CUDA_TQ_DEQUANT_BLOCKS; it += CUDA_TQ_DEQUANT_THREADS/TQ_LANES) {
+        const uint32_t g = g0 + it; // block index in the contiguous input
+        if (g >= nblocks) {
+            break;
+        }
+
+        float v[16];
+        tq_dequant_lane<type>((const block_t *) vx + g, lane, lut, v);
+
+        dst_t * yb = y + (int64_t) g*QK_TQK + 16*lane;
+#pragma unroll
+        for (int j = 0; j < 16; ++j) {
+            yb[j] = ggml_cuda_cast<dst_t>(v[j]);
+        }
+    }
+}
+
+template <ggml_type type, typename dst_t>
+static void dequantize_row_tq_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    GGML_ASSERT(n_per_row % QK_TQK == 0);
+    const uint32_t nb = (nrows * n_per_row) / QK_TQK;
+    const int64_t ncta = (nb + CUDA_TQ_DEQUANT_BLOCKS - 1) / CUDA_TQ_DEQUANT_BLOCKS;
+    dequantize_block_tq<type, dst_t><<<ncta, CUDA_TQ_DEQUANT_THREADS, 0, stream>>>(vx, y, nb);
+}
+
 to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
     switch (type) {
+        case GGML_TYPE_TQ2_T:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQ2_T>;
+        case GGML_TYPE_TQK6:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQK6>;
+        case GGML_TYPE_TQK7:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQK7>;
+        case GGML_TYPE_TQP5:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQP5>;
+        case GGML_TYPE_TQP6:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQP6>;
+        case GGML_TYPE_TQP7:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQP7>;
         case GGML_TYPE_F32:
             return convert_to_bf16_cuda<float>;
         case GGML_TYPE_F16:
@@ -2260,6 +2314,18 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
 
 to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
     switch (type) {
+        case GGML_TYPE_TQ2_T:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQ2_T>;
+        case GGML_TYPE_TQK6:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQK6>;
+        case GGML_TYPE_TQK7:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQK7>;
+        case GGML_TYPE_TQP5:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQP5>;
+        case GGML_TYPE_TQP6:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQP6>;
+        case GGML_TYPE_TQP7:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQP7>;
         case GGML_TYPE_Q2_0:
             return dequantize_row_q2_0_cuda;
         case GGML_TYPE_Q4_0:
@@ -2376,6 +2442,18 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
 
 to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
     switch (type) {
+        case GGML_TYPE_TQ2_T:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQ2_T>;
+        case GGML_TYPE_TQK6:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQK6>;
+        case GGML_TYPE_TQK7:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQK7>;
+        case GGML_TYPE_TQP5:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQP5>;
+        case GGML_TYPE_TQP6:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQP6>;
+        case GGML_TYPE_TQP7:
+            return dequantize_row_tq_cuda<GGML_TYPE_TQP7>;
         case GGML_TYPE_Q2_0:
             return dequantize_row_q2_0_cuda;
         case GGML_TYPE_Q4_0:
