@@ -1477,6 +1477,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     if (lctx.cparams.fused_up_gate &&
         up && gate && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
+        up->type != GGML_TYPE_TQK6 && up->type != GGML_TYPE_TQK7 &&
         lctx.model.hadamard_rotation(up) == nullptr && lctx.model.hadamard_rotation(gate) == nullptr &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
@@ -1919,7 +1920,9 @@ llm_expert_gating_func_type   gating_op,
     } else {
     GGML_ASSERT(!up_gate_exps_b);
 
+    // iqk has no fused kernel for the trellis types; the generic mul_mat_id path falls back to vec_dot
     if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type &&
+        up_exps->type != GGML_TYPE_TQK6 && up_exps->type != GGML_TYPE_TQK7 &&
             lctx.model.hadamard_rotation(up_exps) == nullptr && lctx.model.hadamard_rotation(gate_exps) == nullptr &&
             (!cache_ids || (!up_exps_b && !gate_exps_b))) {
         ggml_tensor * up_weight = cached_up ? cached_up : up_exps;

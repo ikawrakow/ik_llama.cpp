@@ -2626,6 +2626,8 @@ std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_PQ2_0_R8: return "PQ2_0_R8 - 2.13 bpw ternary (Prism)";
         case LLAMA_FTYPE_MOSTLY_PTQ1_0:   return "PTQ1_0 - 1.75 bpw ternary (Prism)";
         case LLAMA_FTYPE_MOSTLY_PTQ1_0_R8:return "PTQ1_0_R8 - 1.75 bpw ternary (Prism)";
+        case LLAMA_FTYPE_MOSTLY_TQK6:     return "TQK6 - 1.625 bpw trellis (group 128)";
+        case LLAMA_FTYPE_MOSTLY_TQK7:     return "TQK7 - 1.875 bpw trellis (group 128)";
         case LLAMA_FTYPE_MOSTLY_IQ2_KT:   return "IQ2_KT - 2.125 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_KT:   return "IQ3_KT - 3.125 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KT:   return "IQ4_KT - 4.0 bpw";
@@ -3089,7 +3091,8 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
 }
 
 const llama_hadamard_transform * llama_model::hadamard_rotation(const struct ggml_tensor * t) const {
-    if (!t || arch != LLM_ARCH_QWEN35) {
+    // qwen4exp (Gyro) uses the same prism.hadamard kvs as qwen35 (Prism)
+    if (!t || (arch != LLM_ARCH_QWEN35 && arch != LLM_ARCH_QWEN4EXP)) {
         return nullptr;
     }
     const auto it = hadamard_map.find(t->name);

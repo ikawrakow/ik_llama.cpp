@@ -630,6 +630,28 @@ typedef struct {
     block_iq1_bn qs[QK_PTQ1_0_R8_ROWS*QK_PTQ1_0/QK_IQ1BN];
 } block_ptq1_0_r8;
 static_assert(sizeof(block_ptq1_0_r8) == QK_PTQ1_0_R8_ROWS*sizeof(block_ptq1_0), "wrong ptq1_0_r8 block size/padding");
+
+// Trellis bit-packed formats (Agention TQK6 / TQK7, group 128).
+// Same codebook as the fork's TQ2_T; the state of step t is a 16-bit circular window of
+// the bit-packed stream (tqk_state in ggml-quants.c). On-disk GGUFs use type ids
+// 145/146, which gguf_init_from_file remaps to GGML_TYPE_TQK6/TQK7.
+#define QK_TQK 128
+typedef struct {
+    ggml_half d;              // scale
+    uint8_t   qs[4*6];        // 32 steps x 6 bits
+} block_tqk6;
+static_assert(sizeof(block_tqk6) == sizeof(ggml_half) + 4*6, "wrong tqk6 block size/padding");
+typedef struct {
+    ggml_half d;              // scale
+    uint8_t   qs[4*7];        // 32 steps x 7 bits
+} block_tqk7;
+static_assert(sizeof(block_tqk7) == sizeof(ggml_half) + 4*7, "wrong tqk7 block size/padding");
+
+// Trellis states are TQ_STATE_BITS (15) wide: every decoder reads a 16-bit window and the
+// index function masks it. Files record the width as agention.trellis.state_bits.
+#define TQ_STATE_BITS 15
+#define TQ_STATE_MASK ((1u << TQ_STATE_BITS) - 1u)
+
 //
 // Bitnet and TriLM - implemented as 2.0 bpw
 //
