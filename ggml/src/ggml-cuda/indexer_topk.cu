@@ -3,6 +3,7 @@
 #include "quantize.cuh"
 #include "convert.cuh"
 #include "argsort.cuh"
+#include "mma_new.cuh"
 
 template <typename mask_t>
 static __device__ __forceinline__ float indexer_mask_value(const mask_t * m, int col) {
@@ -83,6 +84,133 @@ static __global__ void k_fused_relu_mul_sum_rows_3(const kq_t * __restrict__ kq,
         this_kq += ncols_kq;
     }
     dst[ncols*row + col] = sum;
+}
+
+template <bool k_q8_0, typename mask_t>
+static __global__ void __launch_bounds__(8*WARP_SIZE, 2) k_indexer_score(const half2 * __restrict__ q, const char * __restrict__ k,
+        const float * __restrict__ w, const mask_t * __restrict__ m, float * __restrict__ dst,
+        const size_t nbk1, const size_t nbm, const int ncols, const int nrows, const int nhead, const int rows_per_block) {
+#ifdef INT8_MMA_AVAILABLE
+    using namespace ggml_cuda_mma;
+    typedef tile<16, 8, half2> tile_A;
+    typedef tile< 8, 8, half2> tile_B;
+    typedef tile<16, 8, float> tile_C;
+
+    constexpr int nwarps   = 8;
+    constexpr int D2       = 64;
+    constexpr int D2_pad   = D2 + 4;
+    constexpr int nc_warp  = WARP_SIZE;
+    constexpr int nc_pad   = nc_warp + 8;
+    constexpr int max_head = 64;
+
+    __shared__ half2 q_s[max_head][D2_pad];
+    __shared__ float kq_s[nwarps][tile_A::I][nc_pad];
+
+    const int lane = threadIdx.x;
+    const int warp = threadIdx.y;
+    const int tid  = warp*WARP_SIZE + lane;
+    const int col0 = blockIdx.x*nwarps*nc_warp + warp*nc_warp;
+
+    for (int i = nhead*D2_pad + tid; i < max_head*D2_pad; i += nwarps*WARP_SIZE) {
+        ((half2 *)q_s)[i] = make_half2(0.0f, 0.0f);
+    }
+
+    tile_B B[nc_warp/tile_B::I][D2/tile_B::J];
+#pragma unroll
+    for (int n = 0; n < nc_warp/tile_B::I; ++n) {
+        const int col = col0 + n*tile_B::I + tile_B::get_i(0);
+        if (col >= ncols) {
+            continue;
+        }
+        const char * k_row = k + col*nbk1;
+#pragma unroll
+        for (int ks = 0; ks < D2/tile_B::J; ++ks) {
+#pragma unroll
+            for (int l = 0; l < tile_B::ne; ++l) {
+                const int i2 = ks*tile_B::J + tile_B::get_j(l);
+                if constexpr (k_q8_0) {
+                    const block_q8_0 * b = (const block_q8_0 *)k_row + i2/(QK8_0/2);
+                    const char2 qs = ((const char2 *)b->qs)[i2 % (QK8_0/2)];
+                    B[n][ks].x[l] = __hmul2(make_half2(qs.x, qs.y), __half2half2(b->d));
+                } else {
+                    B[n][ks].x[l] = ((const half2 *)k_row)[i2];
+                }
+            }
+        }
+    }
+
+    const int col = col0 + lane;
+    const int row_end = min(nrows, (blockIdx.y + 1)*rows_per_block);
+    for (int row = blockIdx.y*rows_per_block; row < row_end; ++row) {
+        __syncthreads();
+        const int4 * q_row = (const int4 *)(q + (size_t)row*nhead*D2);
+        for (int i = tid; i < nhead*D2/4; i += nwarps*WARP_SIZE) {
+            *(int4 *)&q_s[i/(D2/4)][4*(i%(D2/4))] = q_row[i];
+        }
+        __syncthreads();
+
+        auto this_m = (const mask_t *)((const char *)m + nbm*row);
+        float sum = col < ncols ? indexer_mask_value(this_m, col) : 0.0f;
+        if constexpr (std::is_same_v<mask_t, int>) {
+            if (col0 >= *this_m) {
+                if (col < ncols) {
+                    dst[(size_t)ncols*row + col] = sum;
+                }
+                continue;
+            }
+        }
+        const float * this_w = w + nhead*row;
+        for (int h0 = 0; h0 < nhead; h0 += tile_A::I) {
+            tile_C C[nc_warp/tile_B::I];
+#pragma unroll
+            for (int ks = 0; ks < D2/tile_A::J; ++ks) {
+                tile_A A;
+                load_ldmatrix(A, &q_s[h0][ks*tile_A::J], D2_pad);
+#pragma unroll
+                for (int n = 0; n < nc_warp/tile_B::I; ++n) {
+                    mma(C[n], A, B[n][ks]);
+                }
+            }
+#pragma unroll
+            for (int n = 0; n < nc_warp/tile_B::I; ++n) {
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; l += 2) {
+                    *(float2 *)&kq_s[warp][tile_C::get_i(l)][n*tile_B::I + tile_C::get_j(l)] = make_float2(C[n].x[l], C[n].x[l + 1]);
+                }
+            }
+            __syncwarp();
+            const int nh = min(tile_A::I, nhead - h0);
+            for (int h = 0; h < nh; ++h) {
+                float relu = kq_s[warp][h][lane];
+                relu = relu > 0.0f ? relu : 0.0f;
+                sum += relu * this_w[h0 + h];
+            }
+            __syncwarp();
+        }
+        if (col < ncols) {
+            dst[(size_t)ncols*row + col] = sum;
+        }
+    }
+#else
+    GGML_UNUSED(q); GGML_UNUSED(k); GGML_UNUSED(w); GGML_UNUSED(m); GGML_UNUSED(dst);
+    GGML_UNUSED(nbk1); GGML_UNUSED(nbm); GGML_UNUSED(ncols); GGML_UNUSED(nrows); GGML_UNUSED(nhead); GGML_UNUSED(rows_per_block);
+    NO_DEVICE_CODE;
+#endif // INT8_MMA_AVAILABLE
+}
+
+template <typename mask_t>
+static void indexer_score_cuda(const half2 * q, const ggml_tensor * k, const float * w, const mask_t * m,
+        float * dst, size_t nbm, int ncols, int nrows, int nhead, cudaStream_t stream) {
+    constexpr int nwarps = 8;
+    constexpr int rows_per_block = 32;
+    const dim3 grid((ncols + nwarps*WARP_SIZE - 1)/(nwarps*WARP_SIZE), (nrows + rows_per_block - 1)/rows_per_block, 1);
+    const dim3 block(WARP_SIZE, nwarps, 1);
+    if (k->type == GGML_TYPE_Q8_0) {
+        k_indexer_score<true><<<grid, block, 0, stream>>>(q, (const char *)k->data, w, m, dst, k->nb[1], nbm, ncols, nrows, nhead, rows_per_block);
+    } else {
+        k_indexer_score<false><<<grid, block, 0, stream>>>(q, (const char *)k->data, w, m, dst, k->nb[1], nbm, ncols, nrows, nhead, rows_per_block);
+    }
+    CUDA_CHECK(cudaGetLastError());
 }
 
 static __global__ void k_copy_topk(const int * __restrict__ sorted, int * dst, const int ncols, const int n_top_k) {
@@ -288,20 +416,24 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     constexpr int k_block_size = 256;
 
     if ((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0) && q->type == GGML_TYPE_F32) {
+        const bool use_mma = new_mma_available(ggml_cuda_info().devices[ctx.device].cc) && q->ne[0] == 128 && q->ne[1] <= 64 && !c;
         constexpr size_t k_max_buf_size = 1 << 28;
-        size_t per_row = size_t(n_kv)*(q->ne[1]*sizeof(half) + sizeof(int) + sizeof(float)) + q->ne[0]*q->ne[1]*sizeof(half);
+        size_t per_row = size_t(n_kv)*((use_mma ? 0 : q->ne[1]*sizeof(half)) + sizeof(int) + sizeof(float)) + q->ne[0]*q->ne[1]*sizeof(half);
         int max_rows = (k_max_buf_size + per_row - 1)/per_row;
         max_rows = std::min<int>(max_rows, q->ne[2]);
         int nstep = (q->ne[2] + max_rows - 1)/max_rows;
 
-        ggml_cuda_pool_alloc<float> kq(ctx.pool(), k->ne[1]*q->ne[1]*max_rows);
+        ggml_cuda_pool_alloc<float> kq(ctx.pool());
+        if (!use_mma) {
+            kq.alloc(k->ne[1]*q->ne[1]*max_rows);
+        }
         ggml_cuda_pool_alloc<float> score(ctx.pool(), int64_t(n_kv)*max_rows);
         ggml_cuda_pool_alloc<int>   sorted(ctx.pool(), int64_t(n_kv)*max_rows);
         ggml_cuda_pool_alloc<half>  q_f16(ctx.pool(), q->ne[0]*q->ne[1]*max_rows);
         ggml_cuda_pool_alloc<half>  k_f16(ctx.pool());
 
         auto k_data = (const half *)k->data;
-        if (k->type == GGML_TYPE_Q8_0) {
+        if (k->type == GGML_TYPE_Q8_0 && !use_mma) {
             k_f16.alloc(k->ne[0]*k->ne[1]);
             auto to_fp16_cuda = ggml_get_to_fp16_cuda(k->type);
             GGML_ASSERT(to_fp16_cuda);
@@ -326,6 +458,22 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
             to_fp16_cuda((const float *)q->data + q->ne[0]*q->ne[1]*first_row, q_f16.get(), q->ne[0]*q->ne[1]*nrows, 1, ctx.stream());
             CUDA_CHECK(cudaGetLastError());
+
+            if (use_mma) {
+                auto q_data = (const half2 *)q_f16.get();
+                auto w_data = (const float *)w->data + first_row*q->ne[1];
+                auto m_data = (const char *)m->data + first_row*m->nb[1];
+                if (m->type == GGML_TYPE_F32) {
+                    indexer_score_cuda(q_data, k, w_data, (const float *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], ctx.stream());
+                } else if (m->type == GGML_TYPE_I32) {
+                    indexer_score_cuda(q_data, k, w_data, (const int   *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], ctx.stream());
+                } else {
+                    indexer_score_cuda(q_data, k, w_data, (const half  *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], ctx.stream());
+                }
+                indexer_select_top_k(ctx, score.get(), sorted.get(), (int *)((char *)dst->data + first_row*dst->nb[1]),
+                        n_kv, nrows, dst->ne[0]);
+                continue;
+            }
 
             CUBLAS_CHECK(cublasGemmEx(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
