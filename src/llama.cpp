@@ -10236,6 +10236,12 @@ struct llama_memory_rows {
         find(ggml_backend_buffer_get_type(buf)).model += ggml_backend_buffer_get_size(buf);
     }
 
+    void add_context_buffer(ggml_backend_buffer_t buf) {
+        if (buf) {
+            find(ggml_backend_buffer_get_type(buf)).context += ggml_backend_buffer_get_size(buf);
+        }
+    }
+
     llama_memory_row & find(ggml_backend_buffer_type_t buft) {
         for (size_t i = 0; i < i_host; ++i) {
             if (bufts[i] == buft) {
@@ -10301,6 +10307,17 @@ int32_t llama_memory_breakdown(
     }
     if (ctx->buf_output) {
         res.find(ggml_backend_buffer_get_type(ctx->buf_output)).context += ggml_backend_buffer_get_size(ctx->buf_output);
+    }
+    for (ggml_backend_buffer_t buf : ctx->dsv4.cache.cache_bufs) {
+        res.add_context_buffer(buf);
+    }
+    for (ggml_backend_buffer_t buf : ctx->dflash.kv.cache_bufs) {
+        res.add_context_buffer(buf);
+    }
+    if (ctx->moe_cache) {
+        for (const auto & [buft, size] : ctx->moe_cache->memory_breakdown()) {
+            res.find(buft).context += size;
+        }
     }
     if (ctx->sched) {
         for (size_t i = 0; i < ctx->backends.size(); ++i) {

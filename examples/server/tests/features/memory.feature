@@ -72,3 +72,22 @@ Feature: Per-device memory use
     Then  the server is healthy
     Given a memory report is fetched
     Then  the output buffer is counted in the context memory
+
+  Scenario: The MoE expert cache is counted in the context memory
+    Given a model file stories15M_MOE-Q8_0.gguf
+    And   1 slots
+    And   99 GPU offloaded layers
+    And   the MoE weights kept in CPU memory
+    And   memory endpoint exposed
+    Then  the server is starting
+    Then  the server is healthy
+    Given a memory report is fetched
+    Then  a device row carries model memory
+    And   the context memory is recorded
+    Then  shutting the server down
+    And   8 MiB of MoE expert cache
+    Then  the server is starting
+    Then  the server is healthy
+    Given a memory report is fetched
+    # the cache holds whole expert slots, one slot of this model is under 1 MiB
+    Then  the context memory grows by at least 7 MiB

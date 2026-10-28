@@ -67,6 +67,8 @@ def step_server_config(context, server_fqdn: str, server_port: str):
     context.server_metrics = False
     context.server_memory = False
     context.mmproj_file = None
+    context.cpu_moe = False
+    context.moe_cache_mib = None
     context.server_process = None
     context.seed = None
     context.draft = None
@@ -188,6 +190,16 @@ def step_server_memory(context):
 @step('a multimodal projector file {mmproj_file}')
 def step_mmproj_file(context, mmproj_file: str):
     context.mmproj_file = mmproj_file
+
+
+@step('the MoE weights kept in CPU memory')
+def step_cpu_moe(context):
+    context.cpu_moe = True
+
+
+@step('{mib:d} MiB of MoE expert cache')
+def step_moe_cache_mib(context, mib: int):
+    context.moe_cache_mib = mib
 
 
 @step('Jinja templating enabled')
@@ -870,6 +882,12 @@ def step_stop_server(context):
     context.server_process = None
 
 
+@step('the context memory grows by at least {mib:d} MiB')
+def step_memory_context_grows(context, mib: int):
+    grown = sum(row['context'] for row in context.memory['data']) - context.recorded_context
+    assert grown >= mib * 1024 * 1024, f"context memory grew by {grown} bytes, expected {mib} MiB"
+
+
 @step('the output buffer is counted in the context memory')
 @async_run_until_complete
 async def step_memory_output_buffer(context):
@@ -1462,6 +1480,10 @@ def start_server_background(context):
         server_args.append('--memory')
     if context.mmproj_file:
         server_args.extend(['--mmproj', context.mmproj_file])
+    if context.cpu_moe:
+        server_args.append('--cpu-moe')
+    if context.moe_cache_mib:
+        server_args.extend(['--moe-cache-mib', context.moe_cache_mib])
     if context.model_alias:
         server_args.extend(['--alias', context.model_alias])
     if context.n_ctx:
