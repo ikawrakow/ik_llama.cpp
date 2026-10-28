@@ -1,9 +1,12 @@
 #pragma once
 
 #include "ggml.h"
+#include "ggml-backend.h"
 
 #include <stddef.h>
 #include <stdint.h>
+#include <utility>
+#include <vector>
 
 // !!! Internal header, to be used by mtmd only !!!
 
@@ -46,6 +49,8 @@ struct clip_init_result {
 struct clip_init_result clip_init(const char * fname, struct clip_context_params ctx_params);
 
 void clip_free(struct clip_ctx * ctx);
+
+std::vector<std::pair<ggml_backend_buffer_type_t, size_t>> clip_get_mem_usage(const struct clip_ctx * ctx);
 
 size_t clip_embd_nbytes(const struct clip_ctx * ctx);
 size_t clip_embd_nbytes_by_img(const struct clip_ctx * ctx, int img_w, int img_h);

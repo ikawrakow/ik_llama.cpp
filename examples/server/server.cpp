@@ -470,6 +470,41 @@ static void log_prompt(const gpt_params & params_base, const json & body) {
     }
 }
 
+static std::string render_memory_metrics(const json & memory_data) {
+    static const char * keys[] = { "model", "context", "compute", "mmproj", "total", "free" };
+    static const char * helps[] = {
+        "Memory allocated for the model weights, in bytes.",
+        "Memory allocated for the KV cache, in bytes.",
+        "Memory allocated for compute buffers, in bytes.",
+        "Memory allocated for the multimodal projector, in bytes.",
+        "Total memory of the device, in bytes.",
+        "Free memory of the device, in bytes.",
+    };
+
+    std::stringstream prometheus;
+    for (int k = 0; k < 6; ++k) {
+        const std::string name = std::string("memory_") + keys[k] + "_bytes";
+        bool described = false;
+        for (size_t i = 0; i < memory_data.size(); ++i) {
+            const json & entry = memory_data[i];
+            if (!entry.contains(keys[k])) {
+                continue;
+            }
+            if (!described) {
+                prometheus << "# HELP llamacpp:" << name << " " << helps[k] << "\n"
+                           << "# TYPE llamacpp:" << name << " gauge\n";
+                described = true;
+            }
+            std::string device = entry.at("name").get<std::string>();
+            string_replace_all(device, "\\", "\\\\");
+            string_replace_all(device, "\"", "\\\"");
+            string_replace_all(device, "\n", "\\n");
+            prometheus << "llamacpp:" << name << "{device=\"" << device << "\"} " << entry.at(keys[k]).dump() << "\n";
+        }
+    }
+    return prometheus.str();
+}
+
 int main(int argc, char ** argv) {
 #if SERVER_VERBOSE != 1
     log_disable();
@@ -867,6 +902,7 @@ int main(int argc, char ** argv) {
         task.id_multi  = -1;
         task.id_target = -1;
         task.type = SERVER_TASK_TYPE_METRICS;
+        task.metrics_memory = true;
         task.data.push_back({{"reset_bucket", true}});
 
         ctx_server.queue_results.add_waiting_task_id(task.id);
@@ -949,11 +985,39 @@ int main(int argc, char ** argv) {
             }
         }
 
+        prometheus << render_memory_metrics(data.at("memory"));
+
         const int64_t t_start = data.at("t_start");
         res.set_header("Process-Start-Time-Unix", std::to_string(t_start));
 
         res.set_content(prometheus.str(), "text/plain; version=0.0.4");
         res.status = 200; // HTTP OK
+    };
+
+    const auto handle_memory = [&](const httplib::Request &, httplib::Response & res) {
+        if (!params.endpoint_memory) {
+            res_err(res, format_error_response("This server does not support memory endpoint. Start it with `--memory`", ERROR_TYPE_NOT_SUPPORTED));
+            return;
+        }
+
+        server_task task;
+        task.id = ctx_server.queue_tasks.get_new_id();
+        task.id_multi  = -1;
+        task.id_target = -1;
+        task.type = SERVER_TASK_TYPE_METRICS;
+        task.metrics_memory = true;
+
+        ctx_server.queue_results.add_waiting_task_id(task.id);
+        ctx_server.queue_tasks.post(std::move(task));
+
+        server_task_result result = ctx_server.queue_results.recv(task.id);
+        ctx_server.queue_results.remove_waiting_task_id(task.id);
+
+        res.set_content(json {
+            { "n_layer", result.data.at("n_layer") },
+            { "data",    result.data.at("memory")  },
+        }.dump(), "application/json");
+        res.status = 200;
     };
 
     const auto handle_slots_save = [&ctx_server, &params](const httplib::Request & req, httplib::Response & res, int id_slot) {
@@ -2235,6 +2299,7 @@ int main(int argc, char ** argv) {
     // register API routes
     svr->Get ("/health",              handle_health);
     svr->Get ("/metrics",             handle_metrics);
+    svr->Get ("/memory",              handle_memory);
     svr->Get ("/props",               handle_props);
     svr->Get("/v1/props",             handle_props_simple);
     svr->Get ("/v1/models",           handle_models);

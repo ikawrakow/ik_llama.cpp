@@ -524,45 +524,47 @@ ggml_backend_buffer_type_t llama_model::default_buffer_type_offload(int device) 
     return llama_default_buffer_type_offload(*this, device);
 }
 
-static size_t llama_get_device_memory(const llama_model & model, int device) {
+static bool llama_get_device_memory_info(const llama_model & model, int device, size_t & free, size_t & total) {
+    GGML_UNUSED(model);
 #if defined(GGML_USE_RPC)
     int dev_count = (int)llama_get_device_count(model);
     int rpc_count = (int)model.rpc_servers.size();
     if (device >= dev_count - rpc_count) {
-        size_t total;
-        size_t free;
         rpc_device rpc = model.rpc_servers[device - dev_count + rpc_count];
         const char * endpoint = rpc.endpoint.c_str();
         ggml_backend_rpc_get_device_memory(endpoint, rpc.device, &free, &total);
-        return free;
+        return true;
     }
 #endif
 #if defined(GGML_USE_CUDA)
-    size_t total;
-    size_t free;
     ggml_backend_cuda_get_device_memory(device, &free, &total);
-    return free;
+    return true;
 #elif defined(GGML_USE_SYCL)
-    size_t total;
-    size_t free;
     ggml_backend_sycl_get_device_memory(device, &free, &total);
-    return free;
+    return true;
 #elif defined(GGML_USE_VULKAN)
-    size_t total;
-    size_t free;
     ggml_backend_vk_get_device_memory(device, &free, &total);
-    return free;
+    return true;
 #elif defined(GGML_USE_CANN)
-    size_t total;
-    size_t free;
     ggml_backend_cann_get_device_memory(device, &free, &total);
-    return free;
+    return true;
 #elif defined(GGML_USE_METAL)
-    size_t total;
-    size_t free;
     ggml_backend_metal_get_device_memory(&free, &total);
-    return free;
+    return true;
 #else
+    GGML_UNUSED(device);
+    GGML_UNUSED(free);
+    GGML_UNUSED(total);
+    return false;
+#endif
+}
+
+static size_t llama_get_device_memory(const llama_model & model, int device) {
+    size_t free  = 0;
+    size_t total = 0;
+    if (llama_get_device_memory_info(model, device, free, total)) {
+        return free;
+    }
     // CPU-only build: report free host RAM instead of the 1-byte placeholder.
 #if defined(_WIN32)
     MEMORYSTATUSEX st = {};
@@ -586,7 +588,6 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     }
 #endif
     return 1;
-#endif
     GGML_UNUSED(model);
     GGML_UNUSED(device);
 }
@@ -10204,6 +10205,123 @@ const struct llama_vocab* llama_model_get_vocab(const struct llama_model* model)
 
 const struct llama_model * llama_get_model(const struct llama_context * ctx) {
     return &ctx->model;
+}
+
+struct llama_memory_rows {
+    std::vector<llama_memory_row> rows;
+    std::vector<ggml_backend_buffer_type_t> bufts;
+    size_t i_host = 0;
+
+    llama_memory_row & add(const char * name, ggml_backend_buffer_type_t buft, bool is_device) {
+        llama_memory_row row = {};
+        snprintf(row.name, sizeof(row.name), "%s", name);
+        row.is_device = is_device;
+        rows.push_back(row);
+        bufts.push_back(buft);
+        return rows.back();
+    }
+
+    std::vector<ggml_backend_buffer_t> seen;
+
+    void add_model_buffer(ggml_backend_buffer_t buf) {
+        if (!buf) {
+            return;
+        }
+        for (size_t i = 0; i < seen.size(); ++i) {
+            if (seen[i] == buf) {
+                return;
+            }
+        }
+        seen.push_back(buf);
+        find(ggml_backend_buffer_get_type(buf)).model += ggml_backend_buffer_get_size(buf);
+    }
+
+    llama_memory_row & find(ggml_backend_buffer_type_t buft) {
+        for (size_t i = 0; i < i_host; ++i) {
+            if (bufts[i] == buft) {
+                return rows[i];
+            }
+        }
+        if (ggml_backend_buft_is_host(buft)) {
+            return rows[i_host];
+        }
+        for (size_t i = i_host + 1; i < rows.size(); ++i) {
+            if (bufts[i] == buft) {
+                return rows[i];
+            }
+        }
+        return add(ggml_backend_buft_name(buft), buft, false);
+    }
+};
+
+int32_t llama_memory_breakdown(
+        const struct llama_context * ctx,
+        const struct llama_memory_buft * mmproj,
+                               int32_t   n_mmproj,
+              struct llama_memory_row * rows,
+                               int32_t   n_rows) {
+    const llama_model & model = ctx->model;
+
+    llama_memory_rows res;
+    const ggml_backend_buffer_type_t cpu_buft = llama_default_buffer_type_cpu(true);
+    for (size_t i = 0; i < model.devices.size(); ++i) {
+        ggml_backend_buffer_type_t buft = llama_default_buffer_type_offload(model, model.devices[i]);
+        if (buft == cpu_buft || buft == ggml_backend_cpu_buffer_type()) {
+            continue;
+        }
+        llama_memory_row & row = res.add(ggml_backend_buft_name(buft), buft, true);
+        llama_get_device_memory_info(model, model.devices[i], row.free, row.total);
+    }
+    res.i_host = res.rows.size();
+    res.add("Host", nullptr, false);
+
+    for (size_t i = 0; i < model.bufs.size(); ++i) {
+        res.add_model_buffer(model.bufs[i]);
+    }
+    for (size_t i = 0; i < model.layers.size(); ++i) {
+        const llama_layer & l = model.layers[i];
+        const std::shared_ptr<ggml_tensor> * derived[] = { &l.computed_wk_b, &l.computed_wk_b_pp, &l.computed_wv_b, &l.computed_wkv_b };
+        for (int j = 0; j < 4; ++j) {
+            if (*derived[j]) {
+                res.add_model_buffer((*derived[j])->buffer);
+            }
+        }
+        for (size_t j = 0; j < l.computed_wk_b_replicas.size(); ++j) {
+            res.add_model_buffer(l.computed_wk_b_replicas[j]->buffer);
+        }
+        for (size_t j = 0; j < l.computed_wk_b_pp_replicas.size(); ++j) {
+            res.add_model_buffer(l.computed_wk_b_pp_replicas[j]->buffer);
+        }
+        for (size_t j = 0; j < l.computed_wv_b_replicas.size(); ++j) {
+            res.add_model_buffer(l.computed_wv_b_replicas[j]->buffer);
+        }
+    }
+    for (size_t i = 0; i < ctx->kv_self.bufs.size(); ++i) {
+        res.find(ggml_backend_buffer_get_type(ctx->kv_self.bufs[i])).context += ggml_backend_buffer_get_size(ctx->kv_self.bufs[i]);
+    }
+    if (ctx->buf_output) {
+        res.find(ggml_backend_buffer_get_type(ctx->buf_output)).context += ggml_backend_buffer_get_size(ctx->buf_output);
+    }
+    if (ctx->sched) {
+        for (size_t i = 0; i < ctx->backends.size(); ++i) {
+            ggml_backend_t backend = ctx->backends[i];
+            ggml_backend_buffer_type_t buft = ggml_backend_is_cpu(backend) ? cpu_buft : ggml_backend_get_default_buffer_type(backend);
+            const size_t size = ggml_backend_sched_get_buffer_size(ctx->sched, backend);
+            if (size > 1) {
+                res.find(buft).compute += size;
+            }
+        }
+    }
+    for (int32_t i = 0; i < n_mmproj; ++i) {
+        if (mmproj[i].size > 0) {
+            res.find(mmproj[i].buft).mmproj += mmproj[i].size;
+        }
+    }
+
+    for (int32_t i = 0; i < n_rows && i < (int32_t) res.rows.size(); ++i) {
+        rows[i] = res.rows[i];
+    }
+    return (int32_t) res.rows.size();
 }
 
 const struct llama_vocab * llama_get_vocab(const struct llama_context * ctx) {

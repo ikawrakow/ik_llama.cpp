@@ -712,6 +712,31 @@ extern "C" {
     // Returns the total size of all the tensors in the model in bytes
     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
 
+    struct llama_memory_buft {
+        ggml_backend_buffer_type_t buft;
+        size_t                     size;
+    };
+
+    struct llama_memory_row {
+        char   name[96];
+        bool   is_device;
+        size_t model;
+        size_t context;
+        size_t compute;
+        size_t mmproj;
+        size_t total;
+        size_t free;
+    };
+
+    // Fills one row per offload device, then the host, then one row per other buffer type in use.
+    // Returns the number of rows, which can be larger than n_rows.
+    LLAMA_API int32_t llama_memory_breakdown(
+            const struct llama_context * ctx,
+            const struct llama_memory_buft * mmproj,
+                                   int32_t   n_mmproj,
+                  struct llama_memory_row * rows,
+                                   int32_t   n_rows);
+
     // Returns the total number of parameters in the model
     LLAMA_API uint64_t llama_model_n_params(const struct llama_model * model);
 

@@ -6568,6 +6568,20 @@ projector_type clip_get_projector_type(const struct clip_ctx * ctx) {
     return ctx->proj_type();
 }
 
+std::vector<std::pair<ggml_backend_buffer_type_t, size_t>> clip_get_mem_usage(const struct clip_ctx * ctx) {
+    std::vector<std::pair<ggml_backend_buffer_type_t, size_t>> usage;
+    if (ctx->buf) {
+        usage.emplace_back(ggml_backend_buffer_get_type(ctx->buf.get()), ggml_backend_buffer_get_size(ctx->buf.get()));
+    }
+    for (size_t i = 0; i < ctx->backend_ptrs.size(); ++i) {
+        const size_t size = ggml_backend_sched_get_buffer_size(ctx->sched.get(), ctx->backend_ptrs[i]);
+        if (size > 1) {
+            usage.emplace_back(ctx->backend_buft[i], size);
+        }
+    }
+    return usage;
+}
+
 void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel, int n_frames, float * mel) {
     clip_image_f32 * audio = new clip_image_f32;
     audio->nx = n_frames;
