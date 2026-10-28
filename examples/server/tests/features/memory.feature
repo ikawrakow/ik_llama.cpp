@@ -49,3 +49,26 @@ Feature: Per-device memory use
     Then  the server is healthy
     Given a memory report is fetched
     Then  the memory report counts at least 1 bytes of mmproj
+
+  Scenario: The device buffers are not folded into the host row
+    Given 99 GPU offloaded layers
+    And   memory endpoint exposed
+    Then  the server is starting
+    Then  the server is healthy
+    Given a memory report is fetched
+    Then  a device row carries model memory
+
+  Scenario: The output buffer is counted in the context memory
+    Given 1 slots
+    And   2048 KV cache size
+    And   memory endpoint exposed
+    Then  the server is starting
+    Then  the server is healthy
+    Given a memory report is fetched
+    Then  the context memory is recorded
+    Then  shutting the server down
+    And   4096 KV cache size
+    Then  the server is starting
+    Then  the server is healthy
+    Given a memory report is fetched
+    Then  the output buffer is counted in the context memory

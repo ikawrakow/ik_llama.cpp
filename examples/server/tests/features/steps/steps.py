@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -842,6 +843,45 @@ def step_memory_model_size(context, low: float, high: float):
     file_size = os.path.getsize(context.model_file)
     model_bytes = sum(row['model'] for row in context.memory['data'])
     assert low * file_size <= model_bytes <= high * file_size, f"model memory {model_bytes}, file {file_size}"
+
+
+@step('a device row carries model memory')
+def step_memory_device_row_has_model(context):
+    devices = [row for row in context.memory['data'] if 'total' in row]
+    if not context.n_gpu_layer or not devices:
+        context.scenario.skip("no GPU offload on this build or run")
+        return
+    assert any(row['model'] > 0 for row in devices), f"no device row has model memory: {devices}"
+
+
+@step('the context memory is recorded')
+def step_memory_record_context(context):
+    context.recorded_context = sum(row['context'] for row in context.memory['data'])
+
+
+@step('shutting the server down')
+def step_stop_server(context):
+    context.server_process.send_signal(signal.SIGINT)
+    try:
+        context.server_process.wait(10)
+    except subprocess.TimeoutExpired:
+        context.server_process.kill()
+        context.server_process.wait()
+    context.server_process = None
+
+
+@step('the output buffer is counted in the context memory')
+@async_run_until_complete
+async def step_memory_output_buffer(context):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f'{context.base_url}/v1/models') as response:
+            assert response.status == 200
+            n_vocab = (await response.json())['data'][0]['meta']['n_vocab']
+    # the KV cache doubles with the context size, the output buffer does not
+    smaller = context.recorded_context
+    larger = sum(row['context'] for row in context.memory['data'])
+    output_buffer = 2 * smaller - larger
+    assert output_buffer >= n_vocab * 4, f"output buffer {output_buffer} bytes, vocabulary {n_vocab}"
 
 
 @step('every memory row has an exact gauge in the metrics')
