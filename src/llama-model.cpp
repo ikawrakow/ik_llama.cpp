@@ -2567,6 +2567,7 @@ std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q6_K:     return "Q6_K";
         case LLAMA_FTYPE_MOSTLY_Q6_K_R4:  return "Q6_K_R4";
         case LLAMA_FTYPE_MOSTLY_Q8_K_R8:  return "Q8_K_R8";
+        case LLAMA_FTYPE_MOSTLY_Q8_K_R16: return "Q8_K_R16";
         case LLAMA_FTYPE_MOSTLY_Q8_KV_R8: return "Q8_KV_R8";
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS:  return "IQ2_XXS - 2.0625 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4:return "IQ2_XXS_R4 - 2.0625 bpw";
