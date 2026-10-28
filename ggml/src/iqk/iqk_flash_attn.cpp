@@ -160,6 +160,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
             auto row_size_v = ggml_row_size(ggml_type(int_type_v   ), Dv)*nek2;
             auto work_size  = (row_size_k + row_size_v + 64) * indexer->ne[0];
             ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
+            ggml_fp16_t h_zero = ggml_fp32_to_fp16(0.0f);
             int  nkv = indexer->ne[0];
             if (neq1 == 1) {
                 GGML_ASSERT(neq2 <= 256);
@@ -184,7 +185,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 for (int j = 0; j < nkv; ++j) {
                     if (idx[j] >= 0) {
                         last_found = j;
-                        work_m[j] = M[idx[j]];
+                        work_m[j] = M ? M[idx[j]] : h_zero;
                         if (j % nth == ith) {
                             std::memcpy(work_k + row_size_k*j, ((const char *)k + idx[j]*stride_k), row_size_k);
                             if (k != v) {
@@ -231,7 +232,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
             auto work_m = (ggml_fp16_t *)(work_v + row_size_v*indexer->ne[0]);
             for (int iq = first; iq < first + neq1_this_thread; ++iq) {
                 auto idx = (const int *)((const char *)indexer->data + iq*indexer->nb[1]);
-                auto M = (const ggml_fp16_t *)((const char *)mask + iq*stride_m);
+                auto M = mask ? (const ggml_fp16_t *)((const char *)mask + iq*stride_m) : nullptr;
                 int last_found = -1;
                 for (int j = 0; j < nkv; ++j) {
                     if (idx[j] >= 0) {
@@ -239,7 +240,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                         if (k != v) {
                             std::memcpy(work_v + row_size_v*j, ((const char *)v + idx[j]*stride_v), row_size_v);
                         }
-                        work_m[j] = M[idx[j]];
+                        work_m[j] = M ? M[idx[j]] : h_zero;
                         last_found = j;
                     } else {
                         std::memset(work_k + row_size_k*j, 0, row_size_k);

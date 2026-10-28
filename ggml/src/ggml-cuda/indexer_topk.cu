@@ -4,6 +4,16 @@
 #include "convert.cuh"
 #include "argsort.cuh"
 
+template <typename mask_t>
+static __device__ __forceinline__ float indexer_mask_value(const mask_t * m, int col) {
+    return (float)m[col];
+}
+
+template <>
+__device__ __forceinline__ float indexer_mask_value(const int * m, int col) {
+    return col < *m ? 0.0f : -INFINITY;
+}
+
 template <typename kq_t, typename mask_t>
 static __global__ void k_fused_relu_mul_sum_rows(const kq_t * __restrict__ kq, const float * __restrict__ w, const mask_t * __restrict__ m, float * __restrict__ dst, const int ncols, const int nhead, size_t nbm) {
     const int row = blockIdx.x;
@@ -14,7 +24,7 @@ static __global__ void k_fused_relu_mul_sum_rows(const kq_t * __restrict__ kq, c
     auto this_m  = (const mask_t *)((const char *)m + nbm*row);
 
     for (int i = col; i < ncols; i += blockDim.x) {
-        float sum = (float)this_m[i];
+        float sum = indexer_mask_value(this_m, i);
         auto this_kq = kq + blockIdx.x * step;
         for (int head = 0; head < nhead; ++head) {
             float relu = (float)this_kq[i];
@@ -38,7 +48,7 @@ static __global__ void k_fused_relu_mul_sum_rows_2(const kq_t * __restrict__ kq,
     auto this_w  = w + blockIdx.x*nhead;
     auto this_m  = (const mask_t *)((const char *)m + nbm*row);
 
-    float sum = (float)this_m[col];
+    float sum = indexer_mask_value(this_m, col);
     auto this_kq = kq + row * step;
     for (int head = 0; head < nhead; ++head) {
         float relu = (float)this_kq[col];
@@ -64,7 +74,7 @@ static __global__ void k_fused_relu_mul_sum_rows_3(const kq_t * __restrict__ kq,
 
     int col_kq = cell_idx[col];
 
-    float sum = (float)this_m[col];
+    float sum = indexer_mask_value(this_m, col);
     auto this_kq = kq + row * step;
     for (int head = 0; head < nhead; ++head) {
         float relu = (float)this_kq[col_kq];
@@ -250,7 +260,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     auto m = dst->src[3];
     auto c = dst->src[4];
     int n_top_k = dst->ne[0];
-    int n_kv    = m->ne[0];
+    int n_kv    = m->type != GGML_TYPE_I32 ? m->ne[0] : c ? c->ne[0] : k->ne[1];
     int n_head  = q->ne[1];
     //if (k->type != GGML_TYPE_F16 && !ggml_is_quantized(k->type)) printf("%s: K is %s?\n", __func__, ggml_type_name(k->type));
     GGML_ASSERT(k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_BF16 ||
@@ -260,18 +270,18 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     if (c) {
         GGML_ASSERT(c->type == GGML_TYPE_I32);
         GGML_ASSERT(ggml_nrows(c) == 1);
-        GGML_ASSERT(c->ne[0] == m->ne[0]);
+        GGML_ASSERT(c->ne[0] == n_kv);
         //printf("Using cell_idx: k = %ld x %ld, c = %ld, n_kv = %d\n", k->ne[0], k->ne[1], c->ne[0], n_kv);
     } else {
         GGML_ASSERT(k->ne[1] > n_top_k);
-        GGML_ASSERT(k->ne[1] == m->ne[0]);
+        GGML_ASSERT(k->ne[1] == n_kv);
     }
     GGML_ASSERT(q->ne[2] == m->ne[1]);
     GGML_ASSERT(q->ne[1] == w->ne[0]);
     GGML_ASSERT(q->ne[2] == w->ne[1]);
     GGML_ASSERT(q->type == GGML_TYPE_F32);
     GGML_ASSERT(w->type == GGML_TYPE_F32);
-    GGML_ASSERT(m->type == GGML_TYPE_F32 || m->type == GGML_TYPE_F16);
+    GGML_ASSERT(m->type == GGML_TYPE_F32 || m->type == GGML_TYPE_F16 || m->type == GGML_TYPE_I32);
     GGML_ASSERT(dst->type == GGML_TYPE_I32);
     GGML_ASSERT(ggml_is_contiguous(w));
 
@@ -334,6 +344,12 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                             (const float *)((const char *)m->data + first_row*m->nb[1]),
                             (const int *)c->data,
                             score.get(), n_kv, k->ne[1], q->ne[1], m->nb[1]);
+                } else if (m->type == GGML_TYPE_I32) {
+                    k_fused_relu_mul_sum_rows_3<<<grid, k_block_size, 0, ctx.stream()>>>(kq.get(),
+                            (const float *)w->data + first_row*q->ne[1],
+                            (const int   *)((const char *)m->data + first_row*m->nb[1]),
+                            (const int *)c->data,
+                            score.get(), n_kv, k->ne[1], q->ne[1], m->nb[1]);
                 } else {
                     k_fused_relu_mul_sum_rows_3<<<grid, k_block_size, 0, ctx.stream()>>>(kq.get(),
                             (const float *)w->data + first_row*q->ne[1],
@@ -349,6 +365,11 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                     k_fused_relu_mul_sum_rows_2<<<grid, k_block_size, 0, ctx.stream()>>>(kq.get(),
                             (const float *)w->data + first_row*q->ne[1],
                             (const float *)((const char *)m->data + first_row*m->nb[1]),
+                            score.get(), k->ne[1], q->ne[1], m->nb[1]);
+                } else if (m->type == GGML_TYPE_I32) {
+                    k_fused_relu_mul_sum_rows_2<<<grid, k_block_size, 0, ctx.stream()>>>(kq.get(),
+                            (const float *)w->data + first_row*q->ne[1],
+                            (const int   *)((const char *)m->data + first_row*m->nb[1]),
                             score.get(), k->ne[1], q->ne[1], m->nb[1]);
                 } else {
                     k_fused_relu_mul_sum_rows_2<<<grid, k_block_size, 0, ctx.stream()>>>(kq.get(),
@@ -427,6 +448,9 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         if (m->type == GGML_TYPE_F32) {
             k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const float *)m_data,
                     score.get(), k->ne[1], q->ne[1], m->nb[1]);
+        } else if (m->type == GGML_TYPE_I32) {
+            k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const int   *)m_data,
+                    score.get(), k->ne[1], q->ne[1], m->nb[1]);
         } else {
             k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const half  *)m_data,
                     score.get(), k->ne[1], q->ne[1], m->nb[1]);
@@ -474,9 +498,24 @@ static __global__ void k_indexer_mask(int ne0, int ne1, int ne2, int ntopk, int 
 
 }
 
+template <typename mask_t>
+static __global__ void k_visible_mask(int ne0, const int * n_visible, mask_t * dst) {
+    const int n = n_visible[blockIdx.x];
+    dst += int64_t(ne0)*blockIdx.x;
+    for (int j = threadIdx.x; j < ne0; j += blockDim.x) dst[j] = j < n ? 0.0f : -INFINITY;
+}
+
 void ggml_cuda_op_indexer_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     auto mask = dst->src[0];
     auto topk = dst->src[1];
+    if (mask->type == GGML_TYPE_I32) {
+        if (dst->type == GGML_TYPE_F16) {
+            k_visible_mask<<<ggml_nrows(dst), 256, 0, ctx.stream()>>>(dst->ne[0], (const int *)mask->data, (half *)dst->data);
+        } else {
+            k_visible_mask<<<ggml_nrows(dst), 256, 0, ctx.stream()>>>(dst->ne[0], (const int *)mask->data, (float *)dst->data);
+        }
+        return;
+    }
     GGML_ASSERT(mask->ne[0] >= topk->ne[0]);
     GGML_ASSERT(mask->ne[1] >= topk->ne[1] && mask->ne[2] == topk->ne[2] && mask->ne[3] == topk->ne[3]);
     GGML_ASSERT(ggml_are_same_shape(mask, dst));
@@ -543,10 +582,81 @@ static __global__ void k_mask_to_index(int ne00, [[maybe_unused]] int ne0,
     }
 }
 
+// the list of k_mask_to_index for the mask concat(mask, visible top-k columns), in its order: column % WARP_SIZE, then column
+template <typename mask_t>
+static __global__ void k_mask_topk_to_index(int ne00, int ne0, int ntopk, int ntok, int P,
+        size_t nb01, size_t nb11, size_t nb21, size_t nb1,
+        const mask_t * __restrict__ mask, const int * __restrict__ topk, const char * __restrict__ n_visible, int * __restrict__ idx) {
+    extern __shared__ uint32_t keys[];
+    __shared__ int n_on;
+
+    const int row = blockIdx.x;
+    const mask_t * mask_r = (const mask_t *)((const char *)mask + row*nb01);
+    int * idx_r = (int *)((char *)idx + row*nb1);
+
+    mask_t zero;
+    if constexpr (std::is_same_v<mask_t, half>) {
+        zero = __float2half(0.0f);
+    } else {
+        zero = 0.0f;
+    }
+
+    if (threadIdx.x == 0) n_on = 0;
+    for (int i = threadIdx.x; i < P; i += blockDim.x) keys[i] = 0xffffffff;
+    __syncthreads();
+
+    for (int j = threadIdx.x; j < ne00; j += blockDim.x) {
+        if (mask_r[j] == zero) {
+            const int s = atomicAdd(&n_on, 1);
+            if (s < P) keys[s] = (uint32_t(j % WARP_SIZE) << 26) | uint32_t(j / WARP_SIZE);
+        }
+    }
+    if (row < ntok) {
+        const int * t = (const int *)((const char *)topk + row*nb11);
+        const int n = *(const int *)(n_visible + row*nb21);
+        for (int j = threadIdx.x; j < ntopk; j += blockDim.x) {
+            if (t[j] < n) {
+                const int c = ne00 + t[j];
+                const int s = atomicAdd(&n_on, 1);
+                if (s < P) keys[s] = (uint32_t(c % WARP_SIZE) << 26) | uint32_t(c / WARP_SIZE);
+            }
+        }
+    }
+
+    for (int size = 2; size <= P; size *= 2) {
+        for (int stride = size/2; stride > 0; stride /= 2) {
+            __syncthreads();
+            for (int i = threadIdx.x; i < P/2; i += blockDim.x) {
+                const int lo = 2*i - (i & (stride - 1));
+                const int hi = lo + stride;
+                const uint32_t a = keys[lo], b = keys[hi];
+                if ((a > b) == ((lo & size) == 0)) { keys[lo] = b; keys[hi] = a; }
+            }
+        }
+    }
+    __syncthreads();
+    for (int j = threadIdx.x; j < ne0; j += blockDim.x) idx_r[j] = keys[j] == 0xffffffff ? -1 : int((keys[j] & 0x3ffffff)*WARP_SIZE + (keys[j] >> 26));
+}
+
 void ggml_cuda_op_mask_to_index(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     auto src = dst->src[0];
     GGML_ASSERT(dst->type == GGML_TYPE_I32);
     GGML_ASSERT(src->type == GGML_TYPE_F32 || src->type == GGML_TYPE_F16);
+    if (auto topk = dst->src[1]) {
+        auto vis = dst->src[2];
+        int P = 1;
+        while (P < dst->ne[0]) P *= 2;
+        if (src->type == GGML_TYPE_F16) {
+            k_mask_topk_to_index<<<dst->ne[1], 256, P*sizeof(uint32_t), ctx.stream()>>>(src->ne[0], dst->ne[0], topk->ne[0], topk->ne[1], P,
+                    src->nb[1], topk->nb[1], vis->nb[1], dst->nb[1],
+                    (const half *)src->data, (const int *)topk->data, (const char *)vis->data, (int *)dst->data);
+        } else {
+            k_mask_topk_to_index<<<dst->ne[1], 256, P*sizeof(uint32_t), ctx.stream()>>>(src->ne[0], dst->ne[0], topk->ne[0], topk->ne[1], P,
+                    src->nb[1], topk->nb[1], vis->nb[1], dst->nb[1],
+                    (const float *)src->data, (const int *)topk->data, (const char *)vis->data, (int *)dst->data);
+        }
+        return;
+    }
     GGML_ASSERT(src->ne[1] == dst->ne[1] && src->ne[2] == dst->ne[2] && src->ne[3] == dst->ne[3]);
     GGML_ASSERT(src->ne[0] >= dst->ne[0]);
 

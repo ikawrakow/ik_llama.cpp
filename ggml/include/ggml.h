@@ -2474,6 +2474,13 @@ extern "C" {
             struct ggml_tensor  * mask,
             struct ggml_tensor  * topk);
 
+    // n_visible is I32 [1, n_rows]; row i of the result is 0 in its first n_visible[i] columns, -INFINITY after
+    GGML_API struct ggml_tensor * ggml_visible_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * n_visible,
+            int64_t               n_kv,
+            enum ggml_type        type);
+
 
     // sort rows
     enum ggml_sort_order {
@@ -2738,6 +2745,14 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_mask_to_index(
             struct ggml_context * ctx,
             struct ggml_tensor  * mask,
+            int                   max_row_size);
+
+    // ggml_mask_to_index(concat(mask, ggml_indexer_mask(ggml_visible_mask(n_visible), topk), 0), max_row_size) without the concat
+    GGML_API struct ggml_tensor * ggml_mask_to_index_topk(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk,
+            struct ggml_tensor  * n_visible,
             int                   max_row_size);
 
     GGML_API struct ggml_tensor * ggml_ds4_comp(
