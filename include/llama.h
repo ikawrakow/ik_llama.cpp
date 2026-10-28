@@ -222,6 +222,10 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_PTQ1_0_R8     = 162, // except 1d tensors (Prism ternary, base-3)
         LLAMA_FTYPE_MOSTLY_TQK6          = 163, // except 1d tensors (trellis, group-128)
         LLAMA_FTYPE_MOSTLY_TQK7          = 164, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_TQ2_T         = 165, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_TQP5          = 166, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_TQP6          = 167, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_TQP7          = 168, // except 1d tensors (trellis, group-128)
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q5_0_R4       = 208, // except 1d tensors

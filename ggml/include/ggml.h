@@ -466,6 +466,10 @@ extern "C" {
 
         GGML_TYPE_TQK6       = 162, // trellis-coded K=6, group 128 (Agention; on-disk id 145, remapped at load)
         GGML_TYPE_TQK7       = 163, // trellis-coded K=7, group 128 (Agention; on-disk id 146, remapped at load)
+        GGML_TYPE_TQ2_T      = 164, // trellis-coded 2.125 bpw (Agention; on-disk id 144, remapped at load)
+        GGML_TYPE_TQP5       = 165, // pair trellis K=5, group 128 (Agention; on-disk id 147, remapped at load)
+        GGML_TYPE_TQP6       = 166, // pair trellis K=6, group 128 (Agention; on-disk id 148, remapped at load)
+        GGML_TYPE_TQP7       = 167, // pair trellis K=7, group 128 (Agention; on-disk id 149, remapped at load)
 
         GGML_TYPE_Q4_0_R8    = 202,
         GGML_TYPE_Q5_0_R4    = 206,
@@ -573,6 +577,10 @@ extern "C" {
         GGML_FTYPE_MOSTLY_PTQ1_0  = 149, // except 1d tensors (Prism ternary)
         GGML_FTYPE_MOSTLY_TQK6    = 150, // except 1d tensors (trellis, group-128)
         GGML_FTYPE_MOSTLY_TQK7    = 151, // except 1d tensors (trellis, group-128)
+        GGML_FTYPE_MOSTLY_TQ2_T   = 152, // except 1d tensors (trellis, group-128)
+        GGML_FTYPE_MOSTLY_TQP5    = 153, // except 1d tensors (trellis, group-128)
+        GGML_FTYPE_MOSTLY_TQP6    = 154, // except 1d tensors (trellis, group-128)
+        GGML_FTYPE_MOSTLY_TQP7    = 155, // except 1d tensors (trellis, group-128)
                                          //
         GGML_FTYPE_MOSTLY_Q4_0_R8   = 202, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q8_0_R8   = 207, // except 1d tensors

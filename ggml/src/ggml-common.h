@@ -652,6 +652,38 @@ static_assert(sizeof(block_tqk7) == sizeof(ggml_half) + 4*7, "wrong tqk7 block s
 #define TQ_STATE_BITS 15
 #define TQ_STATE_MASK ((1u << TQ_STATE_BITS) - 1u)
 
+// TQ2_T: trellis-coded 2.125 bpw (QTIP-style bitshift trellis, L=16 K=8 V=4, group 128).
+// The 32 qs bytes are the low bytes of a tail-biting 16-bit state path: step t
+// (weights 4t..4t+3) has state s = qs[(t+31) % 32] << 8 | qs[t]. Encoding (Viterbi) is
+// done offline; decode is the format definition.
+#define QK_TQ2_T 128
+typedef struct {
+    ggml_half d;              // scale
+    uint8_t   qs[QK_TQ2_T/4]; // one trellis byte per 4 weights
+} block_tq2_t;
+static_assert(sizeof(block_tq2_t) == sizeof(ggml_half) + QK_TQ2_T/4, "wrong tq2_t block size/padding");
+
+// TQP5 / TQP6 / TQP7: pair trellis (L=16, K = 5 / 6 / 7 new bits per step, V=2, group 128).
+// qs is a circular 64*K-bit stream; step t (weights 2t, 2t+1) has state s = the 16 stream
+// bits starting at bit (63 - t)*K (tqp_state in ggml-quants.c), and weight 2t+j is the
+// first codebook pair of state s. Same codebook as TQ2_T / TQK6 / TQK7.
+#define QK_TQP 128
+typedef struct {
+    ggml_half d;              // scale
+    uint8_t   qs[8*5];        // 64 steps x 5 bits
+} block_tqp5;
+static_assert(sizeof(block_tqp5) == sizeof(ggml_half) + 8*5, "wrong tqp5 block size/padding");
+typedef struct {
+    ggml_half d;              // scale
+    uint8_t   qs[8*6];        // 64 steps x 6 bits
+} block_tqp6;
+static_assert(sizeof(block_tqp6) == sizeof(ggml_half) + 8*6, "wrong tqp6 block size/padding");
+typedef struct {
+    ggml_half d;              // scale
+    uint8_t   qs[8*7];        // 64 steps x 7 bits
+} block_tqp7;
+static_assert(sizeof(block_tqp7) == sizeof(ggml_half) + 8*7, "wrong tqp7 block size/padding");
+
 //
 // Bitnet and TriLM - implemented as 2.0 bpw
 //

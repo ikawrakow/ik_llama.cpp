@@ -502,6 +502,10 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
             case GGML_TYPE_PTQ1_0_R8:ftype = LLAMA_FTYPE_MOSTLY_PTQ1_0;break;
             case GGML_TYPE_TQK6:     ftype = LLAMA_FTYPE_MOSTLY_TQK6;  break;
             case GGML_TYPE_TQK7:     ftype = LLAMA_FTYPE_MOSTLY_TQK7;  break;
+            case GGML_TYPE_TQ2_T:    ftype = LLAMA_FTYPE_MOSTLY_TQ2_T; break;
+            case GGML_TYPE_TQP5:     ftype = LLAMA_FTYPE_MOSTLY_TQP5;  break;
+            case GGML_TYPE_TQP6:     ftype = LLAMA_FTYPE_MOSTLY_TQP6;  break;
+            case GGML_TYPE_TQP7:     ftype = LLAMA_FTYPE_MOSTLY_TQP7;  break;
             case GGML_TYPE_IQ2_KT:  ftype = LLAMA_FTYPE_MOSTLY_IQ2_KT;  break;
             case GGML_TYPE_IQ3_KT:  ftype = LLAMA_FTYPE_MOSTLY_IQ3_KT;  break;
             case GGML_TYPE_IQ4_KT:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_KT;  break;

@@ -1879,6 +1879,58 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_TQ2_T] = {
+        .type_name                = "tq2_t",
+        .blck_size                = QK_TQ2_T,
+        .type_size                = sizeof(block_tq2_t),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tq2_t,
+        .from_float               = NULL,
+        .from_float_ref           = NULL,
+        .vec_dot                  = ggml_vec_dot_tq2_t_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_TQP5] = {
+        .type_name                = "tqp5",
+        .blck_size                = QK_TQP,
+        .type_size                = sizeof(block_tqp5),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tqp5,
+        .from_float               = NULL,
+        .from_float_ref           = NULL,
+        .vec_dot                  = ggml_vec_dot_tqp5_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_TQP6] = {
+        .type_name                = "tqp6",
+        .blck_size                = QK_TQP,
+        .type_size                = sizeof(block_tqp6),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tqp6,
+        .from_float               = NULL,
+        .from_float_ref           = NULL,
+        .vec_dot                  = ggml_vec_dot_tqp6_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_TQP7] = {
+        .type_name                = "tqp7",
+        .blck_size                = QK_TQP,
+        .type_size                = sizeof(block_tqp7),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tqp7,
+        .from_float               = NULL,
+        .from_float_ref           = NULL,
+        .vec_dot                  = ggml_vec_dot_tqp7_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_IQ3_K] = {
         .type_name                = "iq3_k",
         .blck_size                = QK_K,
@@ -5390,6 +5442,10 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_PTQ1_0:        wtype = GGML_TYPE_PTQ1_0;  break;
         case GGML_FTYPE_MOSTLY_TQK6:          wtype = GGML_TYPE_TQK6;    break;
         case GGML_FTYPE_MOSTLY_TQK7:          wtype = GGML_TYPE_TQK7;    break;
+        case GGML_FTYPE_MOSTLY_TQ2_T:         wtype = GGML_TYPE_TQ2_T;   break;
+        case GGML_FTYPE_MOSTLY_TQP5:          wtype = GGML_TYPE_TQP5;    break;
+        case GGML_FTYPE_MOSTLY_TQP6:          wtype = GGML_TYPE_TQP6;    break;
+        case GGML_FTYPE_MOSTLY_TQP7:          wtype = GGML_TYPE_TQP7;    break;
         case GGML_FTYPE_MOSTLY_IQ3_K:         wtype = GGML_TYPE_IQ3_K;    break;
         case GGML_FTYPE_MOSTLY_IQ3_KS:        wtype = GGML_TYPE_IQ3_KS;   break;
         case GGML_FTYPE_MOSTLY_IQ2_KL:        wtype = GGML_TYPE_IQ2_KL;   break;
@@ -20686,6 +20742,10 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_PTQ1_0:
         case GGML_TYPE_TQK6:
         case GGML_TYPE_TQK7:
+        case GGML_TYPE_TQ2_T:
+        case GGML_TYPE_TQP5:
+        case GGML_TYPE_TQP6:
+        case GGML_TYPE_TQP7:
             {
                 ggml_compute_forward_get_rows_q(params, dst);
             } break;
@@ -21469,6 +21529,10 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_PTQ1_0_R8:
         case GGML_TYPE_TQK6:
         case GGML_TYPE_TQK7:
+        case GGML_TYPE_TQ2_T:
+        case GGML_TYPE_TQP5:
+        case GGML_TYPE_TQP6:
+        case GGML_TYPE_TQP7:
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
@@ -32346,9 +32410,10 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
         }
     }
 
-    // Agention trellis GGUFs store TQK6/TQK7 under the fork's type ids (145/146), which
-    // collide with IQ2_KS/IQ4_KSS here; the file's state_bits kv disambiguates them and
-    // the decoder assumes 15 (TQ_STATE_BITS), so reject any other width.
+    // Agention trellis GGUFs store the TQK/TQ2_T/TQP types under the fork's type ids
+    // (144-149), which collide with IQ4_KS/IQ2_KS/IQ4_KSS/Q8_K16/Q8_K32/Q8_KR8 here;
+    // the file's state_bits kv disambiguates them and the decoder assumes 15
+    // (TQ_STATE_BITS), so reject any other width.
     if (ctx->header.n_tensors > 0) {
         const int trellis_idx = gguf_find_key(ctx, "agention.trellis.state_bits");
         if (trellis_idx != -1) {
@@ -32365,6 +32430,14 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
                     info->type = GGML_TYPE_TQK6;
                 } else if (info->type == GGML_TYPE_IQ4_KSS) {
                     info->type = GGML_TYPE_TQK7;
+                } else if (info->type == GGML_TYPE_IQ4_KS) {
+                    info->type = GGML_TYPE_TQ2_T;
+                } else if (info->type == GGML_TYPE_Q8_K16) {
+                    info->type = GGML_TYPE_TQP5;
+                } else if (info->type == GGML_TYPE_Q8_K32) {
+                    info->type = GGML_TYPE_TQP6;
+                } else if (info->type == GGML_TYPE_Q8_KR8) {
+                    info->type = GGML_TYPE_TQP7;
                 }
             }
         }

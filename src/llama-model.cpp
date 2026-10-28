@@ -2628,6 +2628,10 @@ std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_PTQ1_0_R8:return "PTQ1_0_R8 - 1.75 bpw ternary (Prism)";
         case LLAMA_FTYPE_MOSTLY_TQK6:     return "TQK6 - 1.625 bpw trellis (group 128)";
         case LLAMA_FTYPE_MOSTLY_TQK7:     return "TQK7 - 1.875 bpw trellis (group 128)";
+        case LLAMA_FTYPE_MOSTLY_TQ2_T:    return "TQ2_T - 2.125 bpw trellis (group 128)";
+        case LLAMA_FTYPE_MOSTLY_TQP5:     return "TQP5 - 2.625 bpw pair trellis (group 128)";
+        case LLAMA_FTYPE_MOSTLY_TQP6:     return "TQP6 - 3.125 bpw pair trellis (group 128)";
+        case LLAMA_FTYPE_MOSTLY_TQP7:     return "TQP7 - 3.625 bpw pair trellis (group 128)";
         case LLAMA_FTYPE_MOSTLY_IQ2_KT:   return "IQ2_KT - 2.125 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_KT:   return "IQ3_KT - 3.125 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KT:   return "IQ4_KT - 4.0 bpw";
