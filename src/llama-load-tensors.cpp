@@ -6737,18 +6737,31 @@ bool create_tensors_helper::create_tensors() {
                 if (auto it = split_tensors.find(layer.ffn_gate_inp); it != split_tensors.end()) {
                     auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, cur_splits, mem_used);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp, layer.split_ffn_gate_inp, shared_split, mem_used);
+                } else if (!ffn_split.empty() &&
+                    std::find(overridden_split_tensors.begin(), overridden_split_tensors.end(), layer.ffn_gate_inp) != overridden_split_tensors.end()) {
+                    throw std::runtime_error(format("split mode graph: layer %d has %s overridden but not the routed experts", il, layer.ffn_gate_inp->name));
                 }
+            }
+            if (layer.ffn_gate_inp_s && !ffn_split.empty() &&
+                std::find(overridden_split_tensors.begin(), overridden_split_tensors.end(), layer.ffn_gate_inp_s) != overridden_split_tensors.end()) {
+                throw std::runtime_error(format("split mode graph: layer %d has %s overridden but not the routed experts", il, layer.ffn_gate_inp_s->name));
             }
             if (layer.ffn_gate_inp_b) {
                 if (auto it = split_tensors.find(layer.ffn_gate_inp_b); it != split_tensors.end()) {
                     auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp_b), -1, cur_splits, mem_used);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_b, layer.split_ffn_gate_inp_b, shared_split, mem_used);
+                } else if (!ffn_split.empty() &&
+                    std::find(overridden_split_tensors.begin(), overridden_split_tensors.end(), layer.ffn_gate_inp_b) != overridden_split_tensors.end()) {
+                    throw std::runtime_error(format("split mode graph: layer %d has %s overridden but not the routed experts", il, layer.ffn_gate_inp_b->name));
                 }
             }
             if (layer.ffn_exp_probs_b) {
                 if (auto it = split_tensors.find(layer.ffn_exp_probs_b); it != split_tensors.end()) {
                     auto shared_split = create_split(ggml_nrows(layer.ffn_exp_probs_b), -1, cur_splits, mem_used);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
+                } else if (!ffn_split.empty() &&
+                    std::find(overridden_split_tensors.begin(), overridden_split_tensors.end(), layer.ffn_exp_probs_b) != overridden_split_tensors.end()) {
+                    throw std::runtime_error(format("split mode graph: layer %d has %s overridden but not the routed experts", il, layer.ffn_exp_probs_b->name));
                 }
             }
 
