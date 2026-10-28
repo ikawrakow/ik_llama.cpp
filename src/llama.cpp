@@ -2634,6 +2634,7 @@ bool llama_kv_cache::per_step_restore(ggml_backend_sched_t sched,llama_ckpt_data
 static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     for (int32_t i = 0; i < (int32_t) cache.size; ++i) {
         cache.cells[i].pos = -1;
+        cache.cells[i].tok = -1;
         cache.cells[i].src = i;
         cache.cells[i].seq_id.clear();
     }
@@ -11225,8 +11226,11 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
 }
 
 static constexpr uint32_t DSV4_STATE_MAGIC = 0x34565344u;
-static constexpr uint32_t DSV4_STATE_VER = 2; // used-rows layout with compression ratios and shared-streams flag
-static constexpr uint32_t DSV4_STATE_VER_SHARED = 3;
+static constexpr uint32_t DSV4_STATE_VER = 4; // used-rows layout with compression ratios and shared-streams flag, then the cell tokens
+static constexpr uint32_t DSV4_STATE_VER_SHARED = 5;
+// the same layouts without the cell tokens; still read, the restored cells keep tok = -1
+static constexpr uint32_t DSV4_STATE_VER_NO_TOK = 2;
+static constexpr uint32_t DSV4_STATE_VER_SHARED_NO_TOK = 3;
 
 static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint32_t kv_rows) {
     const uint64_t n_rows = ((uint64_t) std::max<llama_pos>(0, pos_max) + 1) / (ratio ? ratio : 1);
@@ -11701,6 +11705,15 @@ struct llama_data_write {
                     write_dsv4_cache(ctx, il, dsv4_stream_idx, dsv4_n_rows_csa, dsv4_n_rows_hca, dsv4_n_rows_lid);
                 }
             }
+
+            // the token of each saved cell: the DeepSeek-V4.1 engram reads the predecessors of a batch from the cells
+            if (!dsv4_legacy_state) {
+                for (const auto & range : cell_ranges) {
+                    for (uint32_t i = range.first; i < range.second; ++i) {
+                        write(&kv_self.cells[i].tok, sizeof(llama_token));
+                    }
+                }
+            }
         }
     }
 
@@ -11975,6 +11988,7 @@ struct llama_data_read {
                 if (i > 0 && pos < batch.pos[i - 1]) {
                     disordered = true;
                 }
+                batch.token[i] = -1;
                 batch.pos[i] = pos;
                 batch.n_seq_id[i] = 1;
                 batch.seq_id[i][0] = dest_seq_id;
@@ -12539,7 +12553,8 @@ struct llama_data_read {
             uint32_t dsv4_n_layer = 0;
             if (dsv4_ver2) {
                 read_to(&dsv4_ver, sizeof(dsv4_ver));
-                if (dsv4_ver != DSV4_STATE_VER && dsv4_ver != DSV4_STATE_VER_SHARED) {
+                if (dsv4_ver != DSV4_STATE_VER && dsv4_ver != DSV4_STATE_VER_SHARED &&
+                    dsv4_ver != DSV4_STATE_VER_NO_TOK && dsv4_ver != DSV4_STATE_VER_SHARED_NO_TOK) {
                     LLAMA_LOG_ERROR("%s: DSV4 state version mismatch (%u)\n", __func__, dsv4_ver);
                     return false;
                 }
@@ -12609,8 +12624,8 @@ struct llama_data_read {
             // Destination stream: when restoring per-stream, write to seq_id's slot
             const int32_t dsv4_dst_stream = dsv4_single_stream ? (int32_t)seq_id : -1;
 
-            const bool dsv4_restores_streams = !ctx->model.hparams.dsv4_shared_streams ||
-                    dsv4_ver == DSV4_STATE_VER_SHARED;
+            const bool dsv4_shared_layout = dsv4_ver == DSV4_STATE_VER_SHARED || dsv4_ver == DSV4_STATE_VER_SHARED_NO_TOK;
+            const bool dsv4_restores_streams = !ctx->model.hparams.dsv4_shared_streams || dsv4_shared_layout;
             if (dsv4_ver2 && dsv4_restores_streams) {
                 llama_reset_dsv4_state(ctx, dsv4_dst_stream);
             }
@@ -12640,7 +12655,7 @@ struct llama_data_read {
                     }
                 };
 
-                if (dsv4_ver == DSV4_STATE_VER_SHARED) {
+                if (dsv4_shared_layout) {
                     if (layer_type & 1u) {
                         set_tensor_stream(cache.csa_k[il], dsv4_n_rows_csa);
                         set_tensor_stream(cache.csa_state_kv[il]);
@@ -12670,6 +12685,12 @@ struct llama_data_read {
                 }
                 if (!set_ok) {
                     return false;
+                }
+            }
+
+            if (dsv4_ver == DSV4_STATE_VER || dsv4_ver == DSV4_STATE_VER_SHARED) {
+                for (uint32_t i = 0; i < cell_count; ++i) {
+                    read_to(&kv_self.cells[kv_self.head + i].tok, sizeof(llama_token));
                 }
             }
         }
