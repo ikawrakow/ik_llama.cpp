@@ -10,8 +10,10 @@
 
     It is intended as fusion of softmax->top-k->get_rows pipeline for MoE models
 */
+static constexpr int topk_moe_rows_per_block = 4;
+
 template <size_t n_experts, bool normalize>
-__launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * logits,
+__launch_bounds__(topk_moe_rows_per_block * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * logits,
                                                                   float *       weights,
                                                                   int32_t *     ids,
                                                                   const float * bias,
@@ -35,6 +37,9 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
         const int expert        = i + threadIdx.x;
         logits_r[i / WARP_SIZE] = expert < n_experts ? logits[expert] + (bias ? bias[expert] : 0.0f) : -INFINITY;
     }
+
+    // the outputs may overlap the logits of other rows in this block
+    __syncthreads();
 
     float max_val = logits_r[0];
 
@@ -159,7 +164,7 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
                                  const int                   n_rows,
                                  const int                   n_expert,
                                  const int                   n_expert_used) {
-    const int    rows_per_block = 4;
+    const int    rows_per_block = topk_moe_rows_per_block;
     dim3         grid_dims((n_rows + rows_per_block - 1) / rows_per_block, 1, 1);
     dim3         block_dims(WARP_SIZE, rows_per_block, 1);
     cudaStream_t stream = ctx.stream();
@@ -231,11 +236,27 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
 
     cudaStream_t stream = ctx.stream();
 
-    if (weights->op == GGML_OP_DIV) {
-        const int n_expert_used = weights->ne[0];
+    const bool normalize     = weights->op == GGML_OP_DIV;
+    const int  n_expert_used = normalize ? weights->ne[0] : weights->ne[1];
+
+    // the allocator may place weights or ids on the logits, and only topk_moe_cuda in one block reads them all first
+    ggml_cuda_pool_alloc<float> logits_copy(ctx.pool());
+    if (n_rows > topk_moe_rows_per_block || n_expert_used == n_experts) {
+        const size_t nbytes = ggml_nbytes(logits->src[0]);
+        auto overlaps = [logits_d, nbytes](const ggml_tensor * t) {
+            const char * l = (const char *) logits_d;
+            const char * d = (const char *) t->data;
+            return d < l + nbytes && l < d + ggml_nbytes(t);
+        };
+        if (overlaps(weights) || overlaps(ids)) {
+            CUDA_CHECK(cudaMemcpyAsync(logits_copy.alloc(ggml_nelements(logits->src[0])), logits_d, nbytes, cudaMemcpyDeviceToDevice, stream));
+            logits_d = logits_copy.get();
+        }
+    }
+
+    if (normalize) {
         launch_topk_moe_cuda<true >(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used);
     } else {
-        const int n_expert_used = weights->ne[1];
         launch_topk_moe_cuda<false>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used);
     }
 }
