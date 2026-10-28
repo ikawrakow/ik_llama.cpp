@@ -424,11 +424,7 @@ ggml_tensor * delta_net::build_gated_output(llama_context & lctx, ggml_context *
 
     ggml_tensor * attn_out_norm = llm_build_context::llm_build_norm(ctx0, attn_out_2d, lctx.model.hparams, ssm_norm, nullptr, LLM_NORM_RMS, cb, il);
     cb(attn_out_norm, "attn_rms_norm", il);
-    // the fused form only takes SILU when both operands share a shape, so the sigmoid
-    // gate is spelled out
-    attn_out_norm = gate_op == GGML_UNARY_OP_SIGMOID
-        ? ggml_mul(ctx0, attn_out_norm, ggml_sigmoid(ctx0, z_2d))
-        : ggml_fused_mul_unary(ctx0, z_2d, attn_out_norm, gate_op);
+    attn_out_norm = ggml_fused_mul_unary(ctx0, z_2d, attn_out_norm, gate_op);
     cb(attn_out_norm, "attn_out_norm", il);
 
     ggml_tensor * final_output = ggml_reshape_2d(ctx0, attn_out_norm, head_v_dim*num_v_heads, n_tok);
