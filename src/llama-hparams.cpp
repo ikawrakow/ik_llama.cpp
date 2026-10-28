@@ -1207,6 +1207,19 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                }
             } break;
+        case LLM_ARCH_SPARK2_5:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa, false);
+
+                switch (hparams.n_layer) {
+                    case 28: model.type = hparams.n_embd == 2048 ? e_model::MODEL_1_7B : e_model::MODEL_UNKNOWN; break;
+                    case 36: model.type = hparams.n_embd == 2560 ? e_model::MODEL_4B   : e_model::MODEL_UNKNOWN; break;
+                    default: model.type = e_model::MODEL_UNKNOWN; break;
+                }
+            } break;
         case LLM_ARCH_GEMMA3:
             {
                 hparams.n_swa_pattern = 6;

@@ -111,6 +111,7 @@ models = [
     {"name": "openpangu",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/openpangu/openPangu-2.0-Flash", "chkhsh": "65df2fe396b537a53433301848c0a739f56d56f67ad3d35eba27961ac33c12bb", },  # primary source: https://gitcode.com/ascend-tribe/openPangu-2.0-Flash
     {"name": "lfm2",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LiquidAI/LFM2-Tokenizer"},
     {"name": "lfm2",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LiquidAI/LFM2.5-8B-A1B"},
+    {"name": "spark2_5",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/XHToken/Spark-X2.5-1.7B", "chkhsh": "0a766d034107bc736a3f2dc4968fd62e54a3570f1454443e0c5a4cc6bd7941ed", },
     # raon: NFC normalizer + CJK-aware split regex
     {"name": "raon",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/KRAFTON/Raon-1-mini-preview", "chkhsh": "ffdae2f611dc6903980be2fbb108467cb97376d7d03cd332bb7e2602f87fa1f1"},
 ]

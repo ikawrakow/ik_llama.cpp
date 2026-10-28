@@ -449,6 +449,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_smollm3();
 
+    ggml_cgraph * build_spark2_5();
+
     ggml_cgraph * build_mimo2();
 
     ggml_cgraph * build_flint();

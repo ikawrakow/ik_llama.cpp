@@ -100,6 +100,7 @@ enum llm_arch {
     LLM_ARCH_LFM2,
     LLM_ARCH_LFM2MOE,
     LLM_ARCH_MAPLE,
+    LLM_ARCH_SPARK2_5,
     LLM_ARCH_RAON1,
     LLM_ARCH_UNKNOWN,
 };
