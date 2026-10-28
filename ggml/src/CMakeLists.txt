@@ -315,6 +315,10 @@ if (GGML_CUDA)
             add_compile_definitions(GGML_CUDA_FORCE_DMMV)
         endif()
 
+        if (GGML_CUDA_USE_DMMV)
+            add_compile_definitions(GGML_CUDA_USE_DMMV)
+        endif()
+
         if (GGML_CUDA_FORCE_MMQ)
             add_compile_definitions(GGML_CUDA_FORCE_MMQ)
         endif()
@@ -503,6 +507,10 @@ if (GGML_HIPBLAS)
 
     if (GGML_CUDA_FORCE_DMMV)
         add_compile_definitions(GGML_CUDA_FORCE_DMMV)
+    endif()
+
+    if (GGML_CUDA_USE_DMMV)
+        add_compile_definitions(GGML_CUDA_USE_DMMV)
     endif()
 
     if (GGML_CUDA_FORCE_MMQ)

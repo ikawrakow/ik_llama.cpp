@@ -117,11 +117,12 @@ option(GGML_IQK_MUL_MAT                     "ggml: use optimized iqk matrix mult
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
 option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
 option(GGML_CUDA_FORCE_DMMV                 "ggml: use dmmv instead of mmvq CUDA kernels"     OFF)
+option(GGML_CUDA_USE_DMMV                   "ggml: use dmmv instead of mmvq when appropriate" OFF)
 option(GGML_CUDA_FORCE_MMQ                  "ggml: use mmq kernels instead of cuBLAS"         OFF)
 option(GGML_CUDA_FORCE_CUBLAS               "ggml: always use cuBLAS instead of mmq kernels"  OFF)
 option(GGML_CUDA_IQK_FORCE_BF16             "ggml: use bf16 cuBLAS when no MMQ kernel is available"  OFF)
 set   (GGML_CUDA_DMMV_X   "32" CACHE STRING "ggml: x stride for dmmv CUDA kernels")
-set   (GGML_CUDA_MMV_Y     "1" CACHE STRING "ggml: y block size for mmv CUDA kernels")
+set   (GGML_CUDA_MMV_Y     "4" CACHE STRING "ggml: y block size for mmv CUDA kernels")
 option(GGML_CUDA_F16                        "ggml: use 16 bit floats for some calculations"   OFF)
 set   (GGML_CUDA_KQUANTS_ITER "2" CACHE STRING
                                             "ggml: iters./thread per block for Q2_K/Q6_K")
