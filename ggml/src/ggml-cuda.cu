@@ -2761,6 +2761,13 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
     bool              use_mul_mat_q =  ggml_is_quantized(src0->type) && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
+#ifdef GGML_CUDA_USE_DMMV
+    if (use_dequantize_mul_mat_vec && src0->ne[1] >= 16*src0->ne[0]) {
+        ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_dequantize_mul_mat_vec, nullptr);
+        return node_n;
+    }
+#endif
+
     // if mmvq is available it's a better choice than dmmv:
 #ifndef GGML_CUDA_FORCE_DMMV
     use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
