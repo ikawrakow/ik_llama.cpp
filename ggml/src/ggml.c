@@ -21665,6 +21665,11 @@ static void ggml_compute_forward_rope_f32(
     for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
         for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
 
+            if (ir + ne1 <= ir0 || ir >= ir1) {
+                ir += ne1;
+                continue;
+            }
+
             float * cache = (float *) params->wdata + (ne0 + CACHE_LINE_SIZE_F32)*ith;
             if (!is_mrope) {
                 const int64_t p = pos[i2];
@@ -21868,6 +21873,11 @@ static void ggml_compute_forward_rope_f16(
 
     for (int64_t i3 = 0; i3 < ne3; i3++) {
         for (int64_t i2 = 0; i2 < ne2; i2++) {
+
+            if (ir + ne1 <= ir0 || ir >= ir1) {
+                ir += ne1;
+                continue;
+            }
 
             float * cache = (float *) params->wdata + (ne0 + CACHE_LINE_SIZE_F32)*ith;
             if (!is_mrope) {
