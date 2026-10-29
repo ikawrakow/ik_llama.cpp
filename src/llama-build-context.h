@@ -44,6 +44,23 @@ struct post_norm_data {
     float         f_rms_eps;
 };
 
+struct mla_pp_params {
+    ggml_cgraph * gf = nullptr;
+    int il = -1;
+    ggml_tensor * q = nullptr;
+    ggml_tensor * cache = nullptr;
+    ggml_tensor * wkv_b = nullptr;
+    ggml_tensor * mask = nullptr;
+    ggml_tensor * dsa_last_full_sorted = nullptr;
+    int64_t n_head = 0;
+    int64_t n_embd_head_k = 0;
+    int64_t n_embd_head_v = 0;
+    int64_t n_extra = 0;
+    int64_t kv_lora_rank = 0;
+    float kq_scale = 0.0f;
+    bool force_flash_f32 = false;
+};
+
 struct llm_build_context {
     const llama_model    & model;
           llama_context  & lctx;
@@ -475,6 +492,8 @@ struct llm_build_context {
     //
     static ggml_tensor * llm_build_lora_mm(llama_context & lctx, ggml_context * ctx0,
             ggml_tensor * w, ggml_tensor * cur);
+
+    ggml_tensor * build_mla_expanded_pp(const mla_pp_params & p);
 
     static ggml_tensor * build_mla_output_gate(llama_context & lctx, ggml_context * ctx0,
             ggml_tensor * output, ggml_tensor * input, ggml_tensor * gate_w,
