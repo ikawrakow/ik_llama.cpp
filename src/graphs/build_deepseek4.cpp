@@ -897,10 +897,9 @@ static ggml_tensor * dsv4_build_lid_top_k_shared(
         } else {
             selected = cur;
         }
-        //selected = selected == nullptr ? cur : ggml_concat(ctx0, selected, cur, 1);
     }
 
-    return selected == nullptr ? nullptr : ggml_cont(ctx0, selected);
+    return selected == nullptr ? nullptr : ggml_is_contiguous(selected) ? selected : ggml_cont(ctx0, selected);
 }
 
 static ggml_tensor * dsv4_build_lid_top_k(

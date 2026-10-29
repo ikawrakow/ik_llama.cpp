@@ -45,7 +45,7 @@ int64_t llama_dsv4_idx_chunk_nodes(int64_t n_tokens, int64_t n_lid, int64_t n_in
 }
 
 static bool dsv4_cache_type_supported(ggml_type type) {
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
+    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_F32;
 }
 
 static bool dsv4_validate_cache_type(ggml_type type, int64_t width, const char * name) {
