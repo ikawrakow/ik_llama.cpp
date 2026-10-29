@@ -1331,10 +1331,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
                 cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
             }
-            if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
+            if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1 && add_extra->src[id]) {
                 // When the reduce op is turned off via op_params[3] == 1, we need to add each src
                 // rtaher than add the reduced add_extra result to the ffn reduced ffn result.
-                GGML_ASSERT(add_extra->src[id]); // TODO: fix this! It can be null if the splits of the attention and ffn tensors are different
                 cur = ggml_add(ctx, cur, add_extra->src[id]);
                 cb(cur, "ffn_with_extra", il_cb);
             }
@@ -2192,8 +2191,7 @@ llm_expert_gating_func_type   gating_op,
         } else {
             cur = routed_out;
         }
-        if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
-            GGML_ASSERT(add_extra->src[id]); // TODO: fix this! It can be null if the splits of the attention and ffn tensors are different
+        if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1 && add_extra->src[id]) {
             cur = ggml_add(ctx, cur, add_extra->src[id]);
             cb(cur, "ffn_with_extra", il_cb);
         }
@@ -2214,6 +2212,11 @@ llm_expert_gating_func_type   gating_op,
     if (add_extra && !(add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1)) {
         results[last_id] = ggml_add(ctx, results[last_id], add_extra);
         cb(results[last_id], "ffn_with_inp", il);
+    }
+    if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
+        for (int id = 0; id < n_device; ++id) {
+            if (!results[id]) results[id] = add_extra->src[id];
+        }
     }
 
     auto cur = ggml_reduce(ctx, results.data(), n_device, GGML_OP_ADD);
