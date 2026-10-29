@@ -1324,6 +1324,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_IQ4_NL_R4:default_type = GGML_TYPE_IQ4_NL_R4;break;
         case LLAMA_FTYPE_MOSTLY_IQ4_XS_R8:default_type = GGML_TYPE_IQ4_XS_R8;break;
         case LLAMA_FTYPE_MOSTLY_Q4_0_R8: default_type = GGML_TYPE_Q4_0_R8; break;
+        case LLAMA_FTYPE_MOSTLY_Q2_0_R8: default_type = GGML_TYPE_Q2_0_R8; break;
         case LLAMA_FTYPE_MOSTLY_Q5_0_R4: default_type = GGML_TYPE_Q5_0_R4; break;
         case LLAMA_FTYPE_MOSTLY_Q6_0_R4: default_type = GGML_TYPE_Q6_0_R4; break;
         case LLAMA_FTYPE_MOSTLY_Q8_0_R8: default_type = GGML_TYPE_Q8_0_R8; break;
@@ -1474,7 +1475,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         }
     }
 
-    bool is_repacked = ml.ftype >= LLAMA_FTYPE_MOSTLY_Q4_0_R8 && ml.ftype <= LLAMA_FTYPE_MOSTLY_Q8_K_R8;
+    bool is_repacked = (ml.ftype >= LLAMA_FTYPE_MOSTLY_Q4_0_R8 && ml.ftype <= LLAMA_FTYPE_MOSTLY_Q8_K_R8) ||
+                       ml.ftype == LLAMA_FTYPE_MOSTLY_Q2_0_R8;
     int n_to_repack = 0, n_to_modify = 0;
     const std::vector<std::string> * repack_pattern = nullptr;
     if (params->repack_pattern) repack_pattern = (const std::vector<std::string> *)params->repack_pattern;
@@ -1523,7 +1525,11 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             printf("=========================== %s: nothing to do for only_repack option\n", __func__);
             return;
         }
-        ftype = repacked_ftype(model.ftype);
+        // Keep the requested ftype when the source has no known mapping.
+        auto repacked = repacked_ftype(model.ftype);
+        ftype = repacked != model.ftype ? repacked
+              : params->ftype != LLAMA_FTYPE_ALL_F32 ? params->ftype
+              : model.ftype;
         printf("===================== Model ftype: %s: Repacked ftype: %s\n", llama_model_ftype_name(model.ftype).c_str(),
                 llama_model_ftype_name(ftype).c_str());
     }
