@@ -648,9 +648,10 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
             if (top_k && !gathered && flash_attn && !kv_self.k_l[il]->extra && !kv_self.v_l[il]->extra) {
                 int n_kv_min = ggml_backend_buffer_is_host(kv_self.k_l[il]->buffer) ? 3*n_pad : 8*n_pad;
                 if (n_kv_min <= n_kv) {
-                    selected = ggml_mask_to_index(ctx0, mask, n_pad);
+                    selected = ggml_indexer_mask_to_index(ctx0, KQ_mask, top_k, n_pad);
                     cb(selected, "qsa_mask_idx", il);
                     ggml_build_forward_expand(gf, selected);
+                    mask = nullptr;
                 }
             }
 

@@ -10540,6 +10540,9 @@ static bool ggml_backend_vk_supports_op(ggml_backend_t backend, const ggml_tenso
                 if (op->src[0]->type != GGML_TYPE_F32) {
                     return false;
                 }
+                if (!op->src[3] && op->src[5]) {
+                    return false;
+                }
                 if (op->type != GGML_TYPE_F32) {
                     return false;
                 }

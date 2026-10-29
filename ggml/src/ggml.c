@@ -10828,6 +10828,23 @@ struct ggml_tensor * ggml_mask_to_index_topk(
     return result;
 }
 
+struct ggml_tensor * ggml_indexer_mask_to_index(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk,
+            int                   max_row_size) {
+    GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
+    GGML_ASSERT(topk->type == GGML_TYPE_I32);
+    GGML_ASSERT(ggml_is_matrix(mask) && ggml_is_matrix(topk));
+
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, MIN(mask->ne[0], max_row_size), mask->ne[1]);
+    result->src[0] = mask;
+    result->src[1] = topk;
+    result->op = GGML_OP_MASK_TO_IDX;
+
+    return result;
+}
+
 struct ggml_tensor * ggml_ds4_comp(
             struct ggml_context * ctx,
             struct ggml_tensor  * state,
@@ -25367,6 +25384,24 @@ static void ggml_compute_forward_mask_topk_to_idx(const struct ggml_compute_para
     for (int i1 = first; i1 < last; ++i1) {
         int32_t * y = (int32_t *)((char *)dst->data + i1*dst->nb[1]);
         for (int j = 0; j < ne0; ++j) y[j] = -1;
+
+        if (!vis) {
+            if (i1 >= topk->ne[1]) {
+                continue;
+            }
+            const int32_t * t = (const int32_t *)((const char *)topk->data + i1*topk->nb[1]);
+            int nc = 0;
+            if (src->type == GGML_TYPE_F16) {
+                const uint16_t * x = (const uint16_t *)((const char *)src->data + i1*src->nb[1]);
+                for (int j = 0; j < ntopk; ++j) if (x[t[j]] == 0) cols[nc++] = t[j];
+            } else {
+                const float * x = (const float *)((const char *)src->data + i1*src->nb[1]);
+                for (int j = 0; j < ntopk; ++j) if (x[t[j]] == 0.0f) cols[nc++] = t[j];
+            }
+            qsort(cols, nc, sizeof(int32_t), ggml_compare_i32);
+            for (int j = 0; j < nc; ++j) y[j] = cols[j];
+            continue;
+        }
 
         int idx = 0;
         if (src->type == GGML_TYPE_F16) {

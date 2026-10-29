@@ -2772,6 +2772,13 @@ extern "C" {
             struct ggml_tensor  * n_visible,
             int                   max_row_size);
 
+    // ggml_mask_to_index(ggml_indexer_mask(mask, topk), max_row_size) without the dense mask
+    GGML_API struct ggml_tensor * ggml_indexer_mask_to_index(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk,
+            int                   max_row_size);
+
     GGML_API struct ggml_tensor * ggml_ds4_comp(
             struct ggml_context * ctx,
             struct ggml_tensor  * state,
