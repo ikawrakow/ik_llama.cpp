@@ -4713,9 +4713,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "MASK_TO_IDX",
     "LATENT_ATTN",
     "DS4_COMP",
+    "FMA",
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4842,10 +4843,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "mask_to_idx(masl)",
     "latent_attn_prefix(q,c,pk,pv,mask)",
     "ds4_comp(state, score, idx)",
+    "c + a*b",
 
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6963,7 +6965,44 @@ struct ggml_tensor * ggml_mul_inplace(
         struct ggml_tensor  * b) {
     return ggml_mul_impl(ctx, a, b, true);
 }
-// ggml_mul
+
+// ggml_fma
+
+static struct ggml_tensor * ggml_fma_impl(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * c,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b, bool inplace) {
+    GGML_ASSERT(ggml_can_repeat(a, c));
+    GGML_ASSERT(ggml_can_repeat(b, c));
+    GGML_ASSERT(a->ne[0] == c->ne[0]); // For now
+    GGML_ASSERT(b->ne[0] == c->ne[0] ||  b->ne[0] == 1); // For now
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, c) : ggml_dup_tensor(ctx, c);
+
+    result->op   = GGML_OP_FMA;
+    result->src[0] = c;
+    result->src[1] = a;
+    result->src[2] = b;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_fma(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * c,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b) {
+    return ggml_fma_impl(ctx, c, a, b, false);
+}
+
+struct ggml_tensor * ggml_fma_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * c,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b) {
+    return ggml_fma_impl(ctx, c, a, b, true);
+}
 
 static struct ggml_tensor * ggml_fused_mul_unary_impl(
         struct ggml_context * ctx,
@@ -14957,6 +14996,80 @@ static void ggml_compute_forward_mul(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_mul_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_forward_fma
+
+static void ggml_compute_forward_fma_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * c = dst->src[0];
+    const struct ggml_tensor * a = dst->src[1];
+    const struct ggml_tensor * b = dst->src[2];
+
+    GGML_ASSERT(ggml_can_repeat(a, c) && ggml_can_repeat(b, c) && ggml_are_same_shape(c, dst));
+    GGML_ASSERT(a->ne[0] == c->ne[0]);
+    GGML_ASSERT(b->ne[0] == c->ne[0] || b->ne[0] == 1);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t nr = ggml_nrows(c);
+
+    GGML_ASSERT(c->nb[0] == sizeof(float));
+    GGML_ASSERT(a->nb[0] == sizeof(float));
+    GGML_ASSERT(b->nb[0] == sizeof(float));
+
+    const int64_t npt = (nr + nth - 1)/nth;
+    const int64_t ir0 = npt * ith;
+    const int64_t ir1 = MIN(ir0 + npt, nr);
+
+    int n = c->ne[0];
+
+    for (int ir = ir0; ir < ir1; ++ir) {
+        const int64_t i03 = ir/(c->ne[2]*c->ne[1]);
+        const int64_t i02 = (ir - i03*c->ne[2]*c->ne[1])/c->ne[1];
+        const int64_t i01 = (ir - i03*c->ne[2]*c->ne[1] - i02*c->ne[1]);
+        const int64_t i13 = i03 % a->ne[3];
+        const int64_t i12 = i02 % a->ne[2];
+        const int64_t i11 = i01 % a->ne[1];
+        const int64_t i23 = i03 % b->ne[3];
+        const int64_t i22 = i02 % b->ne[2];
+        const int64_t i21 = i01 % b->ne[1];
+
+        const float * dc  = (const float *)((const char *)c->data + i03*c->nb[3] + i02*c->nb[2] + i01*c->nb[1]);
+        const float * da  = (const float *)((const char *)a->data + i13*a->nb[3] + i12*a->nb[2] + i11*a->nb[1]);
+        const float * db  = (const float *)((const char *)b->data + i23*b->nb[3] + i22*b->nb[2] + i21*b->nb[1]);
+              float * dr  = (      float *)((      char *)dst->data + i03*dst->nb[3] + i02*dst->nb[2] + i01*dst->nb[1]);
+        if (b->ne[0] == 1) {
+            for (int j = 0; j < n; ++j) dr[j] = dc[j] + da[j] * db[0];
+        } else {
+            for (int j = 0; j < n; ++j) dr[j] = dc[j] + da[j] * db[j];
+        }
+    }
+}
+
+static void ggml_compute_forward_fma(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * c = dst->src[0];
+    const struct ggml_tensor * a = dst->src[1];
+    const struct ggml_tensor * b = dst->src[2];
+
+    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && c->type == GGML_TYPE_F32 && "only f32 tensors supported for now");
+
+    switch (c->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_fma_f32(params, dst);
             } break;
         default:
             {
@@ -27170,6 +27283,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_mul(params, tensor);
             } break;
+        case GGML_OP_FMA:
+            {
+                ggml_compute_forward_fma(params, tensor);
+            } break;
         case GGML_OP_FUSED_MUL_UNARY:
             {
                 ggml_compute_forward_fused_mul_unary(params, tensor);
@@ -27994,6 +28111,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                                 ggml_mul(ctx, src0, tensor->grad),
                                 zero_table);
                 }
+            } break;
+        case GGML_OP_FMA:
+            {
+                GGML_ABORT("Fatal error");
             } break;
         case GGML_OP_DIV:
             {
@@ -29385,6 +29506,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             break;
         case GGML_OP_SILU_BACK:
         case GGML_OP_MUL:
+        case GGML_OP_FMA:
         case GGML_OP_FUSED_MUL_UNARY:
         case GGML_OP_DIV:
         case GGML_OP_NORM:

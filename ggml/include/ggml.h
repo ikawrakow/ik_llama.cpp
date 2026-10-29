@@ -730,6 +730,8 @@ extern "C" {
         GGML_OP_LATENT_ATTN,
         GGML_OP_DS4_COMP,
 
+        GGML_OP_FMA,
+
         GGML_OP_COUNT,
     };
 
@@ -1444,6 +1446,20 @@ extern "C" {
             struct ggml_tensor  * b,
             float                 alpha,
             float                 limit);
+
+    // c + a*b. a and b must be broadcastable to c
+    GGML_API struct ggml_tensor * ggml_fma(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * c,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    // c += a*b. a and b must be broadcastable to c
+    GGML_API struct ggml_tensor * ggml_fma_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * c,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
 
     //
     // *** from mainline begin ***
