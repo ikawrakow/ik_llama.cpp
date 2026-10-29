@@ -2391,6 +2391,44 @@ void server_context::populate_token_probs(const server_slot& slot, completion_to
     }
 }
 
+json server_context::get_memory_data() const {
+    std::vector<llama_memory_buft> mmproj;
+    if (mctx) {
+        mmproj.resize(mtmd_get_memory_usage(mctx, nullptr, 0));
+        mtmd_get_memory_usage(mctx, mmproj.data(), (int32_t) mmproj.size());
+    }
+
+    // the target context, then the draft contexts of every slot
+    std::vector<const llama_context *> ctxs = { ctx };
+    for (const server_slot & slot : slots) {
+        for (const llama_context * ctx_dft : common_speculative_get_draft_contexts(slot.spec)) {
+            ctxs.push_back(ctx_dft);
+        }
+    }
+
+    std::vector<llama_memory_row> rows(llama_memory_breakdown(ctxs.data(), (int32_t) ctxs.size(), mmproj.data(), (int32_t) mmproj.size(), nullptr, 0));
+    llama_memory_breakdown(ctxs.data(), (int32_t) ctxs.size(), mmproj.data(), (int32_t) mmproj.size(), rows.data(), (int32_t) rows.size());
+
+    json memory_data = json::array();
+    for (size_t i = 0; i < rows.size(); ++i) {
+        json entry = {
+            { "name",    rows[i].name    },
+            { "model",   rows[i].model   },
+            { "context", rows[i].context },
+            { "compute", rows[i].compute },
+        };
+        if (mctx) {
+            entry["mmproj"] = rows[i].mmproj;
+        }
+        if (rows[i].is_device) {
+            entry["total"] = rows[i].total;
+            entry["free"]  = rows[i].free;
+        }
+        memory_data.push_back(entry);
+    }
+    return memory_data;
+}
+
 json server_context::get_formatted_generation(const server_slot& slot) const {
     const auto eos_bias = slot.sparams.logit_bias.find(llama_token_eos(model));
     const bool ignore_eos = eos_bias != slot.sparams.logit_bias.end() && eos_bias->second < 0.0f && std::isinf(eos_bias->second);
@@ -3086,6 +3124,11 @@ void server_context::process_single_task(server_task&& task) {
 
             { "slots",                           slots_data },
         };
+
+        if (task.metrics_memory) {
+            res.data["n_layer"] = llama_n_layer(model);
+            res.data["memory"]  = get_memory_data();
+        }
 
         if (json_value(task.data, "reset_bucket", false)) {
             metrics.reset_bucket();

@@ -3115,6 +3115,28 @@ llama_context * common_speculative_get_companion_ctx(common_speculative * spec) 
     return nullptr;
 }
 
+std::vector<const llama_context *> common_speculative_get_draft_contexts(const common_speculative * spec) {
+    std::vector<const llama_context *> result;
+    if (spec == nullptr) {
+        return result;
+    }
+
+    for (const auto & impl : spec->impls) {
+        const llama_context * ctx = nullptr;
+        if (const auto * state = dynamic_cast<const common_speculative_state_draft *>(impl.get())) {
+            ctx = state->ctx_dft;
+        } else if (const auto * state = dynamic_cast<const common_speculative_state_mtp *>(impl.get())) {
+            ctx = state->ctx_mtp;
+        } else if (const auto * state = dynamic_cast<const common_speculative_state_dflash *>(impl.get())) {
+            ctx = state->ctx_dft;
+        }
+        if (ctx != nullptr) {
+            result.push_back(ctx);
+        }
+    }
+    return result;
+}
+
 static int32_t mtp_accept_batch(
         common_speculative_state_mtp & state,
         const llama_batch & accepted_batch,

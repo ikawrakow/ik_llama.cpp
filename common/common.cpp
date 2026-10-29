@@ -1006,6 +1006,7 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_CHAT_TEMPLATE",    params.chat_template);
     get_env("LLAMA_ARG_N_PREDICT",        params.n_predict);
     get_env("LLAMA_ARG_ENDPOINT_METRICS", params.endpoint_metrics);
+    get_env("LLAMA_ARG_ENDPOINT_MEMORY",  params.endpoint_memory);
     get_env("LLAMA_ARG_ENDPOINT_SLOTS",   params.endpoint_slots);
     get_env("LLAMA_ARG_EMBEDDINGS",       params.embedding);
     get_env("LLAMA_ARG_FLASH_ATTN",       params.flash_attn);
@@ -2925,6 +2926,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.endpoint_metrics = true;
         return true;
     }
+    if (arg == "--memory") {
+        params.endpoint_memory = true;
+        return true;
+    }
     if (arg == "--slot-save-path") {
         CHECK_ARG
         params.slot_save_path = argv[i];
@@ -3741,6 +3746,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "server",      "       --log-format {text,json}",
                                                                         "log output format: json or text (default: text)" });
     options.push_back({ "server",      "       --metrics",              "enable prometheus compatible metrics endpoint (default: %s)", params.endpoint_metrics ? "enabled" : "disabled" });
+    options.push_back({ "server",      "       --memory",               "enable the /memory endpoint reporting per-device memory use (default: %s)", params.endpoint_memory ? "enabled" : "disabled" });
     options.push_back({ "server",      "       --no-slots",             "disables slots monitoring endpoint (default: %s)", params.endpoint_slots ? "enabled" : "disabled" });
     options.push_back({ "server",      "       --slot-save-path PATH",  "path to save slot kv cache (default: disabled)" });
     options.push_back({ "server",      "       --chat-template JINJA_TEMPLATE",

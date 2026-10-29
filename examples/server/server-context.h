@@ -320,6 +320,7 @@ struct server_context {
     void populate_token_probs(const server_slot& slot, completion_token_output& result, bool post_sampling, bool special, int idx);
 
     json get_formatted_generation(const server_slot& slot) const;
+    json get_memory_data() const;
 
     void send_error(const server_task& task, const std::string& error, const enum error_type type = ERROR_TYPE_SERVER);
 
