@@ -10260,26 +10260,18 @@ struct llama_memory_rows {
     }
 };
 
-int32_t llama_memory_breakdown(
-        const struct llama_context * ctx,
-        const struct llama_memory_buft * mmproj,
-                               int32_t   n_mmproj,
-              struct llama_memory_row * rows,
-                               int32_t   n_rows) {
-    const llama_model & model = ctx->model;
-
-    llama_memory_rows res;
-    const ggml_backend_buffer_type_t cpu_buft = llama_default_buffer_type_cpu(true);
-    for (size_t i = 0; i < model.devices.size(); ++i) {
-        ggml_backend_buffer_type_t buft = llama_default_buffer_type_offload(model, model.devices[i]);
-        if (buft == cpu_buft || buft == ggml_backend_cpu_buffer_type()) {
-            continue;
+static void llama_memory_add_checkpoint(llama_memory_rows & res, const llama_kv_cache::gpu_checkpoint & ckpt) {
+    const std::vector<ggml_backend_buffer_t> * bufs[] = { &ckpt.shadow_bufs, &ckpt.per_step_bufs, &ckpt.dsv4_shadow_bufs, &ckpt.dsv4_per_step_shadow_bufs };
+    for (const std::vector<ggml_backend_buffer_t> * list : bufs) {
+        for (ggml_backend_buffer_t buf : *list) {
+            res.add_context_buffer(buf);
         }
-        llama_memory_row & row = res.add(ggml_backend_buft_name(buft), buft, true);
-        llama_get_device_memory_info(model, model.devices[i], row.free, row.total);
     }
-    res.i_host = res.rows.size();
-    res.add("Host", nullptr, false);
+}
+
+static void llama_memory_add_context(llama_memory_rows & res, const llama_context * ctx) {
+    const llama_model & model = ctx->model;
+    const ggml_backend_buffer_type_t cpu_buft = llama_default_buffer_type_cpu(true);
 
     for (size_t i = 0; i < model.bufs.size(); ++i) {
         res.add_model_buffer(model.bufs[i]);
@@ -10319,15 +10311,59 @@ int32_t llama_memory_breakdown(
             res.find(buft).context += size;
         }
     }
-    if (ctx->sched) {
+    llama_memory_add_checkpoint(res, ctx->kv_self.ckpt);
+    for (const std::unique_ptr<llama_kv_cache::gpu_checkpoint> & ckpt : ctx->kv_self.ckpt_rewind_pool) {
+        llama_memory_add_checkpoint(res, *ckpt);
+    }
+    const ggml_backend_sched_t scheds[] = { ctx->sched, ctx->dflash.kv.cache_sched };
+    for (ggml_backend_sched_t sched : scheds) {
+        if (!sched) {
+            continue;
+        }
         for (size_t i = 0; i < ctx->backends.size(); ++i) {
             ggml_backend_t backend = ctx->backends[i];
             ggml_backend_buffer_type_t buft = ggml_backend_is_cpu(backend) ? cpu_buft : ggml_backend_get_default_buffer_type(backend);
-            const size_t size = ggml_backend_sched_get_buffer_size(ctx->sched, backend);
+            const size_t size = ggml_backend_sched_get_buffer_size(sched, backend);
             if (size > 1) {
                 res.find(buft).compute += size;
             }
         }
+    }
+}
+
+int32_t llama_memory_breakdown(
+        const struct llama_context * const * ctxs,
+                               int32_t   n_ctxs,
+        const struct llama_memory_buft * mmproj,
+                               int32_t   n_mmproj,
+              struct llama_memory_row * rows,
+                               int32_t   n_rows) {
+    std::vector<const llama_context *> unique;
+    for (int32_t i = 0; i < n_ctxs; ++i) {
+        if (ctxs[i] && std::find(unique.begin(), unique.end(), ctxs[i]) == unique.end()) {
+            unique.push_back(ctxs[i]);
+        }
+    }
+
+    llama_memory_rows res;
+    const ggml_backend_buffer_type_t cpu_buft = llama_default_buffer_type_cpu(true);
+    for (const llama_context * ctx : unique) {
+        const llama_model & model = ctx->model;
+        for (size_t i = 0; i < model.devices.size(); ++i) {
+            ggml_backend_buffer_type_t buft = llama_default_buffer_type_offload(model, model.devices[i]);
+            if (buft == cpu_buft || buft == ggml_backend_cpu_buffer_type() ||
+                std::find(res.bufts.begin(), res.bufts.end(), buft) != res.bufts.end()) {
+                continue;
+            }
+            llama_memory_row & row = res.add(ggml_backend_buft_name(buft), buft, true);
+            llama_get_device_memory_info(model, model.devices[i], row.free, row.total);
+        }
+    }
+    res.i_host = res.rows.size();
+    res.add("Host", nullptr, false);
+
+    for (const llama_context * ctx : unique) {
+        llama_memory_add_context(res, ctx);
     }
     for (int32_t i = 0; i < n_mmproj; ++i) {
         if (mmproj[i].size > 0) {

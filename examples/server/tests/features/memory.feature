@@ -91,3 +91,30 @@ Feature: Per-device memory use
     Given a memory report is fetched
     # the cache holds whole expert slots, one slot of this model is under 1 MiB
     Then  the context memory grows by at least 7 MiB
+
+  Scenario: The draft model is counted in the memory report
+    Given a model file stories15M_MOE-Q8_0.gguf
+    And   1 slots
+    And   memory endpoint exposed
+    Then  the server is starting
+    Then  the server is healthy
+    Given a memory report is fetched
+    Then  the memory figures are kept as target
+    Then  shutting the server down
+    Given a model file stories15M-q4_0.gguf
+    Then  the server is starting
+    Then  the server is healthy
+    Given a memory report is fetched
+    Then  the memory figures are kept as draft
+    Then  shutting the server down
+    Given a model file stories15M_MOE-Q8_0.gguf
+    And   a draft model file stories15M-q4_0.gguf
+    Then  the server is starting
+    Then  the server is healthy
+    Given a memory report is fetched
+    Then  the memory figures are kept as both
+    # the weights do not depend on the context, so the draft adds exactly the bytes it holds when loaded alone
+    And   the model memory of both is that of target plus that of draft
+    # the draft context has its own KV cache and compute buffers
+    And   the context memory of both is larger than that of target
+    And   the compute memory of both is larger than that of target

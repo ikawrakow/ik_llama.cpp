@@ -1004,6 +1004,7 @@ The server sums the size of the buffers that hold the model weights, the KV cach
 - The array holds one row for each device the model can use, then a `Host` row, then one row for each other buffer type in use, such as `CUDA_Split`. The `name` of a device row is the name of its buffer type.
 - `total` and `free` describe the whole device, not this process. A row has them only when it is a device.
 - With `--mmproj`, each row also has `mmproj`, the memory of the multimodal projector.
+- With speculative decoding, the rows also count the draft model and the context of each slot's draft, MTP or DFlash stage. A speculative checkpoint counts when it is in a backend buffer. A checkpoint that the CPU checkpoint mode keeps in host memory does not count.
 - On a build without a device backend, the only row is `Host`.
 - Without `--memory`, the endpoint answers with an error and status 501.
 

@@ -729,9 +729,12 @@ extern "C" {
     };
 
     // Fills one row per offload device, then the host, then one row per other buffer type in use.
+    // Sums the memory of all contexts in ctxs, such as a target and its draft contexts.
+    // A context listed twice, or weights that several contexts share, are counted once.
     // Returns the number of rows, which can be larger than n_rows.
     LLAMA_API int32_t llama_memory_breakdown(
-            const struct llama_context * ctx,
+            const struct llama_context * const * ctxs,
+                                   int32_t   n_ctxs,
             const struct llama_memory_buft * mmproj,
                                    int32_t   n_mmproj,
                   struct llama_memory_row * rows,

@@ -2398,8 +2398,16 @@ json server_context::get_memory_data() const {
         mtmd_get_memory_usage(mctx, mmproj.data(), (int32_t) mmproj.size());
     }
 
-    std::vector<llama_memory_row> rows(llama_memory_breakdown(ctx, mmproj.data(), (int32_t) mmproj.size(), nullptr, 0));
-    llama_memory_breakdown(ctx, mmproj.data(), (int32_t) mmproj.size(), rows.data(), (int32_t) rows.size());
+    // the target context, then the draft contexts of every slot
+    std::vector<const llama_context *> ctxs = { ctx };
+    for (const server_slot & slot : slots) {
+        for (const llama_context * ctx_dft : common_speculative_get_draft_contexts(slot.spec)) {
+            ctxs.push_back(ctx_dft);
+        }
+    }
+
+    std::vector<llama_memory_row> rows(llama_memory_breakdown(ctxs.data(), (int32_t) ctxs.size(), mmproj.data(), (int32_t) mmproj.size(), nullptr, 0));
+    llama_memory_breakdown(ctxs.data(), (int32_t) ctxs.size(), mmproj.data(), (int32_t) mmproj.size(), rows.data(), (int32_t) rows.size());
 
     json memory_data = json::array();
     for (size_t i = 0; i < rows.size(); ++i) {

@@ -67,6 +67,7 @@ def step_server_config(context, server_fqdn: str, server_port: str):
     context.server_metrics = False
     context.server_memory = False
     context.mmproj_file = None
+    context.draft_model_file = None
     context.cpu_moe = False
     context.moe_cache_mib = None
     context.server_process = None
@@ -190,6 +191,11 @@ def step_server_memory(context):
 @step('a multimodal projector file {mmproj_file}')
 def step_mmproj_file(context, mmproj_file: str):
     context.mmproj_file = mmproj_file
+
+
+@step('a draft model file {draft_file}')
+def step_draft_model_file(context, draft_file: str):
+    context.draft_model_file = draft_file
 
 
 @step('the MoE weights kept in CPU memory')
@@ -871,6 +877,14 @@ def step_memory_record_context(context):
     context.recorded_context = sum(row['context'] for row in context.memory['data'])
 
 
+@step('the memory figures are kept as {name}')
+def step_memory_keep(context, name: str):
+    if not hasattr(context, 'memory_figures'):
+        context.memory_figures = {}
+    context.memory_figures[name] = {field: sum(row[field] for row in context.memory['data'])
+                                    for field in ['model', 'context', 'compute']}
+
+
 @step('shutting the server down')
 def step_stop_server(context):
     context.server_process.send_signal(signal.SIGINT)
@@ -886,6 +900,18 @@ def step_stop_server(context):
 def step_memory_context_grows(context, mib: int):
     grown = sum(row['context'] for row in context.memory['data']) - context.recorded_context
     assert grown >= mib * 1024 * 1024, f"context memory grew by {grown} bytes, expected {mib} MiB"
+
+
+@step('the model memory of {total} is that of {first} plus that of {second}')
+def step_memory_model_sum(context, total: str, first: str, second: str):
+    figures = context.memory_figures
+    assert figures[total]['model'] == figures[first]['model'] + figures[second]['model'], figures
+
+
+@step('the {field} memory of {larger} is larger than that of {smaller}')
+def step_memory_larger(context, field: str, larger: str, smaller: str):
+    figures = context.memory_figures
+    assert figures[larger][field] > figures[smaller][field], figures
 
 
 @step('the output buffer is counted in the context memory')
@@ -1480,6 +1506,8 @@ def start_server_background(context):
         server_args.append('--memory')
     if context.mmproj_file:
         server_args.extend(['--mmproj', context.mmproj_file])
+    if context.draft_model_file:
+        server_args.extend(['--model-draft', context.draft_model_file, '--spec-type', 'draft'])
     if context.cpu_moe:
         server_args.append('--cpu-moe')
     if context.moe_cache_mib:
