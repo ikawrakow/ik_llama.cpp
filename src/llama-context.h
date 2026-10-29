@@ -702,6 +702,8 @@ struct llama_context {
     struct ggml_tensor * inp_kpool_bias      = nullptr; // F32 [n_pool, n_tokens] 0 if pool complete & visible to query, else -inf
     struct ggml_tensor * inp_kpool_tail      = nullptr; // I32 [kpool-1, n_tokens] trailing incomplete pool cells (null when kpool==1)
     struct ggml_tensor * inp_kpool_ape_slots = nullptr; // I32 [kpool] identity [0..kpool-1], gathers the ape rows in order
+    struct ggml_tensor * inp_msa_cells       = nullptr; // I32 [n_kv] identity, MiniMax-M3 expands selected blocks to cells with it
+    struct ggml_tensor * inp_msa_bias        = nullptr; // F32 [n_blocks, 1, n_tokens] forces each query's own block into the selection
 
     // Qwen sparse attention: everything that depends on cache layout is computed on the host,
     // so the graph only gathers, pools and scores. One entry per distinct compress ratio.

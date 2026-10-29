@@ -614,6 +614,7 @@ struct llama_model {
     int n_gpu_layers;
 
     bool mtp; // use mtp if is supported by the Model
+    bool dsa = false; // load the MiniMax-M3 indexer
     bool swa_compress = false; // value the cache-size fit was computed with
     bool fit = false;
 

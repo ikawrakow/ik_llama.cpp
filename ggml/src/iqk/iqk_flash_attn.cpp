@@ -45,6 +45,117 @@ inline void accumulate_qkv(int Dv, float& M, float& S, float Mj, float Sj, float
         for (int i = 0; i < Dv; ++i) Racc[i] += c*R[i];
     }
 }
+// Decode, one index list per KV head (indexer {nkv, nek2}). The lists are whole blocks of 128 cells,
+// so every 32-entry chunk names 32 consecutive cells and is read in place.
+bool iqk_fa_indexed_kv_heads(int int_type_k, int int_type_v, int Dk, int Dv, int neq2, int nek2, int nkv,
+        long nbq2, long nbk2, long nbv2, long nb1, int stride_k, int stride_v,
+        const char * q, const char * k, const char * v, const ggml_fp16_t * mask, const char * idx, size_t idx_stride,
+        const float * sinks, float scale, float softcap, float * qkv, char * work,
+        barrier_t barrier, void * barrier_data, int ith, int nth) {
+    const int rk2    = neq2/nek2;
+    const int nchunk = nkv/32;
+    const int nunit  = nek2*nchunk;
+    const int upt    = (nunit + nth - 1)/nth;
+    const int u_first = std::min(ith*upt, nunit);
+    const int u_last  = std::min(u_first + upt, nunit);
+    const size_t size_part = (Dv + 2)*rk2*sizeof(float);
+    auto part = [&](int t, int g) { return (float *)(work + (size_t(t)*nek2 + g)*size_part); };
+    auto tmp  = (float *)(work + size_t(nth)*nek2*size_part + ith*size_part);
+
+    for (int g = 0; g < nek2; ++g) {
+        auto PM = part(ith, g) + rk2*Dv;
+        for (int j = 0; j < rk2; ++j) PM[j] = -INFINITY;
+    }
+    bool ok = true;
+    for (int u = u_first; u < u_last; ) {
+        const int g = u/nchunk;
+        const int * ig = (const int *)(idx + g*idx_stride);
+        const int c = u - g*nchunk;
+        const int c_end = std::min(u_last - g*nchunk, nchunk);
+        const int c0 = ig[32*c];
+        int e = c + 1;
+        while (e < c_end && ig[32*e] == c0 + 32*(e - c)) ++e;
+        auto Mt = tmp + rk2*Dv, St = Mt + rk2;
+        if (!iqk_flash_attn_impl(int_type_k, int_type_v, Dk, Dv, rk2, 32*(e - c), nbq2, stride_k, stride_v, 0, Dv,
+                (const float *)(q + g*rk2*nbq2), k + g*nbk2 + size_t(c0)*stride_k, v + g*nbv2 + size_t(c0)*stride_v,
+                mask + c0, nullptr, 0, scale, softcap, tmp, Mt, St)) {
+            ok = false;
+            break;
+        }
+        auto P = part(ith, g);
+        auto PM = P + rk2*Dv, PS = PM + rk2;
+        for (int j = 0; j < rk2; ++j) accumulate_qkv(Dv, PM[j], PS[j], Mt[j], St[j], P + j*Dv, tmp + j*Dv);
+        u = g*nchunk + e;
+    }
+
+    barrier(barrier_data);
+    if (!ok) return false;
+
+    for (int h = ith; h < neq2; h += nth) {
+        const int g = h/rk2, j = h - g*rk2;
+        auto Racc = qkv + h*nb1/sizeof(float);
+        float M = -INFINITY, S = 0;
+        for (int t = 0; t < nth; ++t) {
+            auto P = part(t, g);
+            accumulate_qkv(Dv, M, S, P[rk2*Dv + j], P[rk2*Dv + rk2 + j], Racc, P + j*Dv);
+        }
+        if (sinks) {
+            float s = sinks[h];
+            if (s > M) {
+                float m = expf(M - s);
+                for (int i = 0; i < Dv; ++i) Racc[i] *= m;
+                S = S*m + 1;
+            } else {
+                S += expf(s - M);
+            }
+        }
+        float norm = 1/S;
+        for (int i = 0; i < Dv; ++i) Racc[i] *= norm;
+    }
+    return true;
+}
+// Prefill, one index list per query row and KV head (indexer {nkv, nek2, neq1}), gathered as the nek2 == 1 path does per row.
+bool iqk_fa_indexed_kv_heads_rows(int int_type_k, int int_type_v, int Dk, int Dv, int neq1, int neq2, int nek2, int nkv,
+        long nbq2, long nbk2, long nbv2, long nb1, int ne1, int stride_q, int stride_k, int stride_v, int stride_m,
+        size_t row_size_k, size_t row_size_v, const char * q, const char * k, const char * v, const ggml_fp16_t * mask,
+        const char * idx, size_t idx_nb1, size_t idx_nb2, const float * sinks, float scale, float softcap, float * qkv,
+        char * work, int ith, int nth) {
+    const int rk2     = neq2/nek2;
+    const int nunit   = neq1*nek2;
+    const int upt     = (nunit + nth - 1)/nth;
+    const int u_first = std::min(ith*upt, nunit);
+    const int u_last  = std::min(u_first + upt, nunit);
+    auto work_k = work + size_t(ith)*(row_size_k + row_size_v + 64)*nkv;
+    auto work_v = work_k + row_size_k*nkv;
+    auto work_m = (ggml_fp16_t *)(work_v + row_size_v*nkv);
+    const ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
+
+    for (int u = u_first; u < u_last; ++u) {
+        const int iq = u/nek2, g = u - iq*nek2;
+        auto ig = (const int *)(idx + iq*idx_nb2 + g*idx_nb1);
+        auto M  = (const ggml_fp16_t *)((const char *)mask + iq*stride_m);
+        int last_found = -1;
+        for (int j = 0; j < nkv; ++j) {
+            if (ig[j] >= 0) {
+                std::memcpy(work_k + row_size_k*j, k + g*nbk2 + size_t(ig[j])*stride_k, row_size_k);
+                std::memcpy(work_v + row_size_v*j, v + g*nbv2 + size_t(ig[j])*stride_v, row_size_v);
+                work_m[j] = M[ig[j]];
+                last_found = j;
+            } else {
+                std::memset(work_k + row_size_k*j, 0, row_size_k);
+                std::memset(work_v + row_size_v*j, 0, row_size_v);
+                work_m[j] = h_inf;
+            }
+        }
+        if (last_found < 0) continue;
+        ++last_found;
+        int this_nkv = 32*((last_found + 31)/32);
+        if (!iqk_flash_attn_impl(int_type_k, int_type_v, Dk, Dv, rk2, this_nkv, nbq2, row_size_k, row_size_v, 0, Dv,
+                 (const float *)(q + iq*stride_q + g*rk2*nbq2), work_k, work_v, work_m, sinks ? sinks + g*rk2 : nullptr, 1,
+                 scale, softcap, qkv + (size_t(iq)*ne1 + g*rk2)*nb1/sizeof(float), nullptr, nullptr)) return false;
+    }
+    return true;
+}
 }
 
 size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
@@ -52,6 +163,20 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
     auto K = dst->src[1];
     auto V = dst->src[2];
     auto indexer = dst->src[5];
+    // must match the sparse entry in iqk_flash_attn_noalibi (an unsupported K/V type enters it there, then aborts)
+    if (indexer && indexer->type == GGML_TYPE_I32 && indexer->ne[0] < K->ne[1] && indexer->ne[0] % 32 == 0 && dst->src[3] &&
+        Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 &&
+        K->ne[2] > 1 && indexer->ne[1] == K->ne[2] && indexer->ne[2] == Q->ne[1] && Q->ne[2] % K->ne[2] == 0) {
+        auto row_size_k = ggml_row_size(K->type, K->ne[0]);
+        auto row_size_v = ggml_row_size(V->type, V->ne[0]);
+        if (Q->ne[1] > 1) {
+            // iqk_fa_indexed_kv_heads_rows
+            return nth*(row_size_k + row_size_v + 64)*indexer->ne[0];
+        }
+        // iqk_fa_indexed_kv_heads
+        size_t size_part = (V->ne[0] + 2)*(Q->ne[2]/K->ne[2])*sizeof(float);
+        return nth*(K->ne[2] + 1)*size_part;
+    }
     if (indexer && indexer->type == GGML_TYPE_I32 && indexer->ne[0] < K->ne[1] &&
         Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 && (K->ne[2] == 1 || Q->ne[1] > 1)) {
         auto row_size_k = ggml_row_size(K->type, K->ne[0])*K->ne[2];
@@ -151,7 +276,26 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     if (type_q != 0 || type_mask != 1 || max_bias > 0) return false;
 
     if (indexer && indexer->type == GGML_TYPE_I32) {
-        if (indexer->ne[0] < nek1 && neq3 == 1 && nek3 == 1 && nev3 == 1 && (nek2 == 1 || neq1 > 1)) {
+        // an unsupported K/V type must reach the abort below, as without the indexer, not the generic indexer path
+        if (indexer->ne[0] < nek1 && neq3 == 1 && nek3 == 1 && nev3 == 1 && nek2 > 1 && indexer->ne[1] == nek2 &&
+            indexer->ne[2] == neq1 && neq2 % nek2 == 0 && indexer->ne[0] % 32 == 0 && mask) {
+            if (are_kv_types_supported(ggml_type(int_type_k_in), ggml_type(int_type_v))) {
+                if (neq1 == 1) {
+                    return iqk_fa_indexed_kv_heads(int_type_k_in, int_type_v, Dk, Dv, neq2, nek2, indexer->ne[0],
+                            nbq2, nbk2, nbv2, nb1, stride_k, stride_v,
+                            (const char *)q, (const char *)k, (const char *)v, (const ggml_fp16_t *)mask,
+                            (const char *)indexer->data, indexer->nb[1], (const float *)sinks, scale, softcap, qkv,
+                            (char *)work_buffer_in, barrier, barrier_data, ith, nth);
+                }
+                auto row_size_k = ggml_row_size(ggml_type(int_type_k_in), Dk);
+                auto row_size_v = ggml_row_size(ggml_type(int_type_v   ), Dv);
+                return iqk_fa_indexed_kv_heads_rows(int_type_k_in, int_type_v, Dk, Dv, neq1, neq2, nek2, indexer->ne[0],
+                        nbq2, nbk2, nbv2, nb1, ne1, stride_q, stride_k, stride_v, stride_m, row_size_k, row_size_v,
+                        (const char *)q, (const char *)k, (const char *)v, (const ggml_fp16_t *)mask,
+                        (const char *)indexer->data, indexer->nb[1], indexer->nb[2], (const float *)sinks, scale, softcap, qkv,
+                        (char *)work_buffer_in, ith, nth);
+            }
+        } else if (indexer->ne[0] < nek1 && neq3 == 1 && nek3 == 1 && nev3 == 1 && (nek2 == 1 || neq1 > 1)) {
             // Workbuffer: we need
             // * indexer->ne[0] * sizeof(ggml_half) to extract the mask for a row
             // * indexer->ne[0] * ggml_row_size(int_type_k_in, Dk) to extract the selected K cache entries
