@@ -1396,6 +1396,11 @@ ggml_tensor * llm_build_context::llm_build_ffn(
          ggml_tensor * post_norm, float post_norm_eps,
          post_norm_data * pnd) {
 
+    auto can_fuse_up_gate = [type_op] (const ggml_tensor * u, const ggml_tensor * g) {
+        if (type_op != LLM_FFN_SWIGLU_OAI && type_op != LLM_FFN_SITU) return true;
+        return ggml_is_quantized(u->type) && u->type == g->type;
+    };
+
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
         up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
@@ -1424,11 +1429,19 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             if (input->op != GGML_OP_REDUCE) {
                 cur->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
             }
-            cur = ggml_fused_up_gate(ctx, split_u, split_g, cur, unary_op);
-            cb(cur, "ffn_up_gate", il_cb);
-            *(float *)(cur->op_params + 1) = lctx.model.swiglu_limit(il, lctx.model.arch == LLM_ARCH_BAILINGMOE3);
-            *(float *)(cur->op_params + 2) = lctx.model.hparams.situ_beta;
-            *(float *)(cur->op_params + 3) = lctx.model.hparams.situ_linear_beta;
+            if (can_fuse_up_gate(split_u, split_g)) {
+                cur = ggml_fused_up_gate(ctx, split_u, split_g, cur, unary_op);
+                cb(cur, "ffn_up_gate", il_cb);
+                *(float *)(cur->op_params + 1) = lctx.model.swiglu_limit(il, lctx.model.arch == LLM_ARCH_BAILINGMOE3);
+                *(float *)(cur->op_params + 2) = lctx.model.hparams.situ_beta;
+                *(float *)(cur->op_params + 3) = lctx.model.hparams.situ_linear_beta;
+            } else {
+                // SITU is never split: it takes this path only with n_gpu_layers == 0
+                auto up_cur   = llm_build_lora_mm(lctx, ctx, split_u, cur);
+                auto gate_cur = llm_build_lora_mm(lctx, ctx, split_g, cur);
+                cur = ggml_swiglu_oai(ctx, gate_cur, up_cur, 1.702f, 7.0f);
+                cb(cur, "ffn_swiglu_oai", il_cb);
+            }
             cur = llm_build_lora_mm(lctx, ctx, split_d, cur);
             cb(cur, "ffn_down", il_cb);
             if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
@@ -1484,7 +1497,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     // the fused up/gate op consumes the activation as-is; Hadamard-folded (Prism) weights need
     // their activation transform, which is only applied by llm_build_lora_mm -> keep them separate
     if (lctx.cparams.fused_up_gate &&
-        up && gate && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
+        up && gate && can_fuse_up_gate(up, gate) && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
