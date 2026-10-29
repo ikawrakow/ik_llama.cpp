@@ -818,6 +818,12 @@ class GGUFWriter:
     def add_attention_indexer_top_k(self, top_k: int) -> None:
         self.add_uint32(Keys.Attention.INDEXER_TOP_K.format(arch=self.arch), top_k)
 
+    def add_attention_indexer_block_size(self, size: int) -> None:
+        self.add_uint32(Keys.Attention.INDEXER_BLOCK_SIZE.format(arch=self.arch), size)
+
+    def add_attention_indexer_local_blocks(self, blocks: int) -> None:
+        self.add_uint32(Keys.Attention.INDEXER_LOCAL_BLOCKS.format(arch=self.arch), blocks)
+
     def add_swin_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SWIN_NORM.format(arch=self.arch), value)
 

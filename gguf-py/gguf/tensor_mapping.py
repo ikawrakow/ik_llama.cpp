@@ -350,6 +350,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.moe.linear_v",  # Grok (merged)
             "transformer.blocks.{bid}.ffn.experts.mlp.v1",   # dbrx
             "model.layers.{bid}.mlp.experts.up_proj",        # qwen2moe (merged)
+            "model.layers.{bid}.block_sparse_moe.experts.w3", # minimax-m2/m3 (merged)
         ),
 
         MODEL_TENSOR.FFN_GATE_UP_EXP: (
@@ -388,6 +389,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.moe.linear",   # Grok (merged)
             "transformer.blocks.{bid}.ffn.experts.mlp.w1",  # dbrx
             "model.layers.{bid}.mlp.experts.gate_proj",     # qwen2moe (merged)
+            "model.layers.{bid}.block_sparse_moe.experts.w1", # minimax-m2/m3 (merged)
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
@@ -429,6 +431,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.ffn.experts.mlp.w2",   # dbrx
             "model.layers.{bid}.mlp.experts.down_proj",      # qwen2moe (merged)
             "model.layers.{bid}.feed_forward.experts.down_proj",  # lfm2moe (fused experts)
+            "model.layers.{bid}.block_sparse_moe.experts.w2", # minimax-m2/m3 (merged)
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
@@ -800,6 +803,22 @@ class TensorNameMap:
 
         MODEL_TENSOR.INDEXER_ATTN_Q_B: (
             "model.layers.{bid}.indexer.attn_q_b",
+        ),
+
+        MODEL_TENSOR.INDEXER_Q_PROJ: (
+            "model.layers.{bid}.self_attn.index_q_proj", # minimax-m3
+        ),
+
+        MODEL_TENSOR.INDEXER_Q_NORM: (
+            "model.layers.{bid}.self_attn.index_q_norm", # minimax-m3
+        ),
+
+        MODEL_TENSOR.INDEXER_K_PROJ: (
+            "model.layers.{bid}.self_attn.index_k_proj", # minimax-m3
+        ),
+
+        MODEL_TENSOR.INDEX_K_NORM: (
+            "model.layers.{bid}.self_attn.index_k_norm", # minimax-m3
         ),
     }
 
