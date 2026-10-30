@@ -542,7 +542,7 @@ extern "C" {
         void *              cuda_params;
         int32_t             dflash_query_capacity; // internal DFlash query capacity override
 
-        // optional CPU affinity for the CPU worker threads (Linux only); thread t is
+        // optional CPU affinity for the CPU worker threads (Linux + Windows); thread t is
         // pinned to cpu_affinity[t % n_cpu_affinity], NULL = no pinning
         const int32_t * cpu_affinity;
         int32_t         n_cpu_affinity;
@@ -1184,8 +1184,8 @@ extern "C" {
     // n_threads_batch is the number of threads used for prompt and batch processing (multiple tokens)
     LLAMA_API void llama_set_n_threads(struct llama_context * ctx, uint32_t n_threads, uint32_t n_threads_batch);
 
-    // pin CPU worker threads to the given logical CPUs (Linux only); thread t ->
-    // cpus[t % n_cpus]. Configure before compute, n_cpus == 0 disables pinning.
+    // pin CPU worker threads to cpus[t % n_cpus] (Linux pthreads, Windows group-aware).
+    // Flat ids follow the OS core enumeration, not the Windows group*64+bit numbering.
     LLAMA_API void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus);
 
     // Get the number of threads used for generation of a single token.

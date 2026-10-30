@@ -29414,8 +29414,136 @@ static void set_cpu_thread_affinity(const struct ggml_cplan * cplan, int thread_
         fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
     }
 }
+#elif defined(_WIN32)
+// Windows CPU affinity via SetThreadGroupAffinity (group-aware, >64 CPUs); flat
+// ids follow RelationProcessorCore enumeration, cached once via INIT_ONCE.
+static struct {
+    WORD     group;
+    KAFFINITY mask;
+} g_win_cpus[GGML_MAX_CPU_AFFINITY];
+static int       g_win_ncpu    = 0;
+static BOOL      g_win_init_ok = FALSE;
+static INIT_ONCE g_win_once    = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK ggml_win_init_cpus(PINIT_ONCE once, PVOID param, PVOID * ctx) {
+    UNUSED(once); UNUSED(param); UNUSED(ctx);
+
+    DWORD len = 0;
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &len)) {
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+            return TRUE; // leave ncpu == 0, callers stay unbound
+        }
+    }
+    if (len == 0) {
+        return TRUE;
+    }
+
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX * buf =
+        (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) malloc(len);
+    if (!buf) {
+        return TRUE;
+    }
+
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, buf, &len)) {
+        free(buf);
+        return TRUE;
+    }
+
+    int ncpu = 0;
+    bool truncated = false;
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX * ptr = buf;
+    const char * end = (const char *) buf + len;
+    while ((const char *) ptr < end) {
+        // Size is checked first, like common.cpp: an unusable record must not
+        // contribute flat ids, or the two enumerations would disagree
+        if (ptr->Size == 0) {
+            break; // corrupt, avoid infinite loop
+        }
+        if (ptr->Relationship == RelationProcessorCore) {
+            for (WORD g = 0; g < ptr->Processor.GroupCount; ++g) {
+                const KAFFINITY mask = (KAFFINITY) ptr->Processor.GroupMask[g].Mask;
+                const WORD      grp  = ptr->Processor.GroupMask[g].Group;
+                // bound by KAFFINITY width: 32 LPs/group on 32-bit, 64 on 64-bit
+                for (int bit = 0; bit < (int)(sizeof(KAFFINITY) * 8); ++bit) {
+                    if (mask & ((KAFFINITY) 1 << bit)) {
+                        if (ncpu < GGML_MAX_CPU_AFFINITY) {
+                            g_win_cpus[ncpu].group = grp;
+                            g_win_cpus[ncpu].mask  = (KAFFINITY) ((KAFFINITY) 1 << bit);
+                            ++ncpu;
+                        } else {
+                            truncated = true;
+                        }
+                    }
+                }
+            }
+        }
+        ptr = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ((char *) ptr + ptr->Size);
+    }
+
+    free(buf);
+
+    if (truncated) {
+        fprintf(stderr, "warning: more than %d logical CPUs detected, only the first %d can be pinned\n",
+                GGML_MAX_CPU_AFFINITY, GGML_MAX_CPU_AFFINITY);
+    }
+
+    g_win_ncpu    = ncpu;
+    g_win_init_ok = ncpu > 0 ? TRUE : FALSE;
+    return TRUE;
+}
+
+static bool ggml_win_get_group_affinity(int cpu, GROUP_AFFINITY * out) {
+    InitOnceExecuteOnce(&g_win_once, ggml_win_init_cpus, NULL, NULL);
+    if (!g_win_init_ok || cpu < 0 || cpu >= g_win_ncpu) {
+        return false;
+    }
+    out->Mask  = g_win_cpus[cpu].mask;
+    out->Group = g_win_cpus[cpu].group;
+    memset(out->Reserved, 0, sizeof(out->Reserved));
+    return true;
+}
+
+// pin worker `thread_n` to its assigned logical CPU (no-op without affinity)
+static void set_cpu_thread_affinity(const struct ggml_cplan * cplan, int thread_n) {
+    if (cplan == NULL || cplan->cpu_affinity == NULL || cplan->n_cpu_affinity <= 0) {
+        return;
+    }
+
+    if (thread_n == 0 && cplan->n_threads > cplan->n_cpu_affinity) {
+        static bool warned_stack = false;
+        if (!warned_stack) {
+            warned_stack = true;
+            fprintf(stderr, "warning: n_threads (%d) exceeds the %d CPUs in the affinity list, threads are stacked\n",
+                    cplan->n_threads, cplan->n_cpu_affinity);
+        }
+    }
+
+    const int cpu = cplan->cpu_affinity[thread_n % cplan->n_cpu_affinity];
+
+    GROUP_AFFINITY ga;
+    if (!ggml_win_get_group_affinity(cpu, &ga)) {
+        static bool warned_oob = false;
+        if (thread_n == 0 && !warned_oob) {
+            warned_oob = true;
+            fprintf(stderr, "warning: CPU %d is outside the available topology, ignored (leaving thread unbound)\n", cpu);
+        }
+        return; // out of range or topology query failed, leave unbound like Linux CPU_SETSIZE guard
+    }
+
+    if (!SetThreadGroupAffinity(GetCurrentThread(), &ga, NULL)) {
+        static bool warned_set = false;
+        if (!warned_set) {
+            warned_set = true;
+            const DWORD err = GetLastError();
+            fprintf(stderr, "warning: SetThreadGroupAffinity() failed (cpu %d, group %u): %lu\n",
+                cpu, (unsigned) ga.Group, (unsigned long) err);
+        }
+    }
+}
+
+static void set_numa_thread_affinity(int thread_n) { UNUSED(thread_n); }
+static void clear_numa_thread_affinity(void) {}
 #else
-// TODO: Windows etc.
 // (the linux implementation may also work on BSD, someone should test)
 static void set_numa_thread_affinity(int thread_n) { UNUSED(thread_n);  }
 static void clear_numa_thread_affinity(void) {}
@@ -29930,6 +30058,9 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     const struct ggml_cplan  * cplan  = state->shared->cplan;
 
     set_numa_thread_affinity(state->ith);
+    // affinity is applied at worker entry, once per graph: n+1 set + 1 get
+    // calls, not per node. OpenMP reuses its pool, so a cached pin would have
+    // to detect affinity-list changes; the per-graph call keeps it simple.
     set_cpu_thread_affinity(cplan, state->ith); // explicit affinity takes precedence over NUMA
 
     struct ggml_compute_params params = {
@@ -29990,6 +30121,12 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     const bool restore_affinity =
         cplan->cpu_affinity != NULL && cplan->n_cpu_affinity > 0 &&
         pthread_getaffinity_np(pthread_self(), sizeof(saved_affinity), &saved_affinity) == 0;
+#elif defined(_WIN32)
+    // same for Windows: worker 0 runs on the caller thread, restore its group affinity on exit
+    GROUP_AFFINITY saved_affinity_win;
+    const bool restore_affinity_win =
+        cplan->cpu_affinity != NULL && cplan->n_cpu_affinity > 0 &&
+        GetThreadGroupAffinity(GetCurrentThread(), &saved_affinity_win);
 #endif
 
     struct ggml_compute_state_shared state_shared = {
@@ -30074,7 +30211,25 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
 #if defined(__gnu_linux__)
     if (restore_affinity) {
-        pthread_setaffinity_np(pthread_self(), sizeof(saved_affinity), &saved_affinity);
+        const int rv = pthread_setaffinity_np(pthread_self(), sizeof(saved_affinity), &saved_affinity);
+        if (rv) {
+            // once per process: the restore runs on every pinned graph
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                fprintf(stderr, "warning: pthread_setaffinity_np() restore failed: %s\n", strerror(rv));
+            }
+        }
+    }
+#elif defined(_WIN32)
+    if (restore_affinity_win) {
+        if (!SetThreadGroupAffinity(GetCurrentThread(), &saved_affinity_win, NULL)) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                fprintf(stderr, "warning: SetThreadGroupAffinity() restore failed: %lu\n", (unsigned long) GetLastError());
+            }
+        }
     }
 #endif
 

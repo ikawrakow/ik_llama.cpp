@@ -2007,7 +2007,9 @@ static bool common_speculative_has_target_features(const common_speculative * sp
 // parse --draft-params into draft model/context parameters
 static bool common_speculative_parse_params(const std::string & args, gpt_params & out, bool print_usage) {
     auto [argc, argv] = parse_command_line("llama " + args);
-    const bool ok = gpt_params_parse(argc, argv, out);
+    // draft affinity stays unresolved here: its auto list is the E-cores, see
+    // common_speculative_apply_draft_affinity
+    const bool ok = gpt_params_parse(argc, argv, out, true);
     if (!ok && print_usage) {
         gpt_params_print_usage(argc, argv, out);
     }
@@ -2033,13 +2035,14 @@ static void common_speculative_apply_draft_affinity(const gpt_params & parsed, c
     if (!parsed.cpu_affinity_configured) {
         return;
     }
+    const bool auto_detect = parsed.cpu_affinity_auto;
     // --cpu-affinity = hybrid E-cores
-    params.cpu_affinity = parsed.cpu_affinity_auto
+    params.cpu_affinity = auto_detect
         ? cpu_affinity_resolve_draft({}, true)
         : cpu_affinity_resolve_draft(parsed.cpu_affinity, false);
     params.cpu_affinity_configured = true;
     if (params.cpu_affinity.empty()) {
-        if (parsed.cpu_affinity_auto) {
+        if (auto_detect) {
             LOG_WRN("%s: no efficiency cores available for the draft affinity\n", __func__);
         }
     } else {
@@ -2049,11 +2052,23 @@ static void common_speculative_apply_draft_affinity(const gpt_params & parsed, c
         }
         LOG_INF("%s: draft CPU affinity: %s\n", __func__, cpus.c_str());
     }
-    const int n_dft_threads = parsed.n_threads > 0 ? parsed.n_threads : (int) params.cpu_affinity.size();
+    const int n_dft_threads = parsed.n_threads;
     if (!params.cpu_affinity.empty() && n_dft_threads > (int) params.cpu_affinity.size()) {
-        LOG_WRN("%s: draft uses %d threads on %zu pinned CPUs; consider -t %zu in --draft-params\n",
+        LOG_WRN("%s: draft runs %d threads on %zu pinned CPUs; consider -t %zu in --draft-params\n",
                 __func__, n_dft_threads, params.cpu_affinity.size(), params.cpu_affinity.size());
     }
+}
+
+// draft inherits the target affinity when it has none; the copy keeps
+// cparams_dft's pointer independent of params_base's lifetime
+static const std::vector<int32_t> & speculative_draft_affinity(
+        common_params_speculative & params,
+        const gpt_params                 & params_base) {
+    if (params.cpu_affinity_configured) {
+        return params.cpu_affinity;
+    }
+    params.cpu_affinity_inherited = params_base.cpu_affinity;
+    return params.cpu_affinity_inherited;
 }
 
 bool common_speculative_load_draft_model(
@@ -2140,9 +2155,7 @@ bool common_speculative_load_draft_model(
     params.cparams_dft.cuda_params    = params.cuda_params.empty()    ? nullptr : (void *) params.cuda_params.data();
     params.cparams_dft.offload_policy = params.offload_policy.empty() ? nullptr : (void *) &params.offload_policy;
     // draft affinity; inherits the target one when not requested
-    const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
-        ? params.cpu_affinity
-        : params_base.cpu_affinity;
+    const std::vector<int32_t> & cpu_affinity_dft = speculative_draft_affinity(params, params_base);
     params.cparams_dft.cpu_affinity   = cpu_affinity_dft.empty() ? nullptr : cpu_affinity_dft.data();
     params.cparams_dft.n_cpu_affinity = (int32_t) cpu_affinity_dft.size();
     return true;
@@ -2193,9 +2206,7 @@ bool common_speculative_prepare_mtp_runtime(
         params.cparams_dft.cuda_params    = params.cuda_params.empty()    ? nullptr : (void *) params.cuda_params.data();
         params.cparams_dft.offload_policy = params.offload_policy.empty() ? nullptr : (void *) &params.offload_policy;
         // same draft affinity as the external draft path
-        const std::vector<int32_t> & cpu_affinity_dft = params.cpu_affinity_configured
-            ? params.cpu_affinity
-            : params_base.cpu_affinity;
+        const std::vector<int32_t> & cpu_affinity_dft = speculative_draft_affinity(params, params_base);
         params.cparams_dft.cpu_affinity   = cpu_affinity_dft.empty() ? nullptr : cpu_affinity_dft.data();
         params.cparams_dft.n_cpu_affinity = (int32_t) cpu_affinity_dft.size();
     }

@@ -81,6 +81,8 @@ int32_t cpu_get_num_physical_cores();
 int32_t cpu_get_num_math();
 
 // P-cores, one thread per physical core (no E-cores, no SMT siblings)
+// Linux: CPUID + thread_siblings_list. Windows: EfficiencyClass (highest=P),
+// flat ids in RelationProcessorCore order, as in ggml.c. Empty = no hybrid/opt-out.
 std::vector<int32_t> cpu_get_math_cpus();
 
 // E-cores, one per physical core (Intel hybrid)
@@ -91,6 +93,15 @@ std::vector<int32_t> cpu_affinity_resolve(const std::vector<int32_t> & cpus, boo
 
 // explicit affinity, else auto-detected E-cores
 std::vector<int32_t> cpu_affinity_resolve_draft(const std::vector<int32_t> & cpus, bool auto_detect);
+
+// resolve in place: explicit lists are filtered, auto selects P-cores; an
+// empty auto result warns and leaves pinning disabled. Automatic pinning is
+// also disabled when the batch thread count exceeds the P-core list, because
+// stacking a large prompt pool on the P-cores collapses throughput.
+void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, bool auto_detect, int n_threads_batch = -1);
+
+// install a resolved affinity on a context and log it
+void common_cpu_affinity_apply(llama_context * ctx, const std::vector<int32_t> & cpus, const char * who);
 
 bool cpu_affinity_parse_mask (const std::string & value, std::vector<int32_t> & cpus);
 bool cpu_affinity_parse_range(const std::string & value, std::vector<int32_t> & cpus);
@@ -275,6 +286,7 @@ struct common_params_speculative {
     // draft affinity from --draft-params; empty = inherit the target
     std::vector<int32_t> cpu_affinity;
     bool cpu_affinity_configured = false; // a draft affinity was requested
+    std::vector<int32_t> cpu_affinity_inherited; // stable storage for inherited draft affinity
 
     int32_t n_ctx = 0;  // draft context size
     int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
@@ -315,9 +327,9 @@ struct gpt_params {
 
     int32_t n_threads             = cpu_get_num_math();
     int32_t n_threads_batch       =      -1; // number of threads to use for batch processing (-1 = use n_threads)
-    std::vector<int32_t> cpu_affinity;       // logical CPU ids to pin worker threads to (empty = no explicit pinning)
-    bool    cpu_affinity_auto     = false;   // pin to hybrid P-cores when cpu_affinity is empty (--cpu-affinity)
-    bool    cpu_affinity_configured = false; // a CPU affinity option was given
+    std::vector<int32_t> cpu_affinity;       // logical CPU ids to pin worker threads to, resolved at parse (empty = no pinning)
+    bool    cpu_affinity_configured = false; // a CPU affinity option was given (tells --no-cpu-affinity apart from unset in --draft-params)
+    bool    cpu_affinity_auto       = false; // --cpu-affinity/-ca: pick physical P-cores at parse
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
@@ -648,7 +660,7 @@ void gpt_params_parse_from_env(gpt_params & params);
 void gpt_params_handle_model_default(gpt_params & params);
 
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);
-bool gpt_params_parse      (int argc, char ** argv, gpt_params & params);
+bool gpt_params_parse      (int argc, char ** argv, gpt_params & params, bool draft_affinity = false);
 bool gpt_params_find_arg   (int argc, char ** argv, const std::string & arg, gpt_params & params, int & i, bool & invalid_param);
 void gpt_params_print_usage(int argc, char ** argv, const gpt_params & params);
 

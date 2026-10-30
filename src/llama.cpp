@@ -13528,6 +13528,11 @@ void llama_set_n_threads(struct llama_context * ctx, uint32_t n_threads, uint32_
 }
 
 void llama_set_cpu_affinity(struct llama_context * ctx, const int32_t * cpus, int n_cpus) {
+    if (n_cpus > 0 && cpus == nullptr) {
+        LLAMA_LOG_WARN("%s: ignoring %d CPUs with a null list\n", __func__, n_cpus);
+        return;
+    }
+
     if (ctx->backend_cpu == nullptr) {
         return;
     }

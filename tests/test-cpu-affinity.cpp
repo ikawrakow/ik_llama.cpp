@@ -70,6 +70,44 @@ int main() {
     assert(cpu_affinity_resolve({}, false).empty());
     assert(cpu_affinity_resolve_draft({}, false).empty());
 
+    // affinity is resolved at parse, so examples that skip
+    // llama_init_from_gpt_params still see a list through cparams
+    {
+        char arg0[] = "test";
+        char arg1[] = "-ca";
+        char * argv[] = { arg0, arg1 };
+
+        gpt_params p;
+        assert(gpt_params_parse(2, argv, p));
+        const cpus_t expected = cpu_affinity_resolve({}, true);
+        assert(p.cpu_affinity == expected);
+        // -ca sets cpu_affinity_auto
+        assert(p.cpu_affinity_auto);
+    }
+    {
+        char arg0[] = "test";
+        char arg1[] = "-cr";
+        char arg2[] = "0-1";
+        char * argv[] = { arg0, arg1, arg2 };
+
+        gpt_params p;
+        assert(gpt_params_parse(3, argv, p));
+        assert(p.cpu_affinity == cpu_affinity_resolve({0, 1}, false));
+        assert(!p.cpu_affinity_auto);
+    }
+    {
+        // auto pinning must not stack a large prompt pool on the P-cores
+        char arg0[] = "test";
+        char arg1[] = "-ca";
+        char arg2[] = "-tb";
+        char arg3[] = "999";
+        char * argv[] = { arg0, arg1, arg2, arg3 };
+
+        gpt_params p;
+        assert(gpt_params_parse(4, argv, p));
+        assert(p.cpu_affinity.empty());
+    }
+
     // --draft-params affinity resolved, even when empty
     {
         gpt_params p;

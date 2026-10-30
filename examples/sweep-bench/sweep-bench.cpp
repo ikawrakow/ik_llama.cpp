@@ -195,6 +195,9 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // CPU affinity: -cm/-cr and -ca are resolved at parse and installed via
+    // cparams at init; this re-applies the same list for the log line.
+    common_cpu_affinity_apply(ctx, params.cpu_affinity, __func__);
     const bool use_checkpoint = common_speculative_needs_checkpoint(model);
 
     const unsigned int n_kv_max = llama_n_ctx(ctx);

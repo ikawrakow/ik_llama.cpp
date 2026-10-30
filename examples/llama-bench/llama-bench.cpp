@@ -351,9 +351,11 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -tgb, --threads-gen-batch <n1,n2>   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  --n-cpu-moe <n>                     (default: none)\n");
-    printf("  --cpu-affinity                      pin threads to the physical P-cores (hybrid CPUs)\n");
-    printf("  -cm, --cpu-mask <mask>              pin threads to CPUs in bitmask (e.g. 0x55, 64 CPUs max)\n");
-    printf("  -cr, --cpu-range <list>             pin threads to CPUs (e.g. 0-3,8,10-11)\n");
+    printf("  -cm, --cpu-mask <mask>              opt-in: pin threads to CPUs in bitmask (e.g. 0x55, 64 CPUs max)\n");
+    printf("  -cr, --cpu-range <list>             opt-in: pin threads to CPUs (e.g. 0-3,8,10-11)\n");
+    printf("  --cpu-affinity                      opt-in: auto-pin threads to physical P-cores (alias of -ca)\n");
+    printf("  -ca, --cpu-affinity-auto            opt-in: auto-pin threads to physical P-cores\n");
+    printf("  --no-cpu-affinity                   disable CPU affinity pinning (default: disabled, kept for compat)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
     printf("  -sm, --split-mode <none|layer|graph>(default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
@@ -933,8 +935,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             params.cpu_affinity_auto = false;
         } else if (arg == "--cpu-affinity") {
-            params.cpu_affinity.clear();
+            // alias of -ca, kept for upstream (PR 2565) compatibility
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
             params.cpu_affinity_auto = true;
+        } else if (arg == "-ca" || arg == "--cpu-affinity-auto") {
+            params.cpu_affinity.clear(); // last flag wins: drop any explicit list
+            params.cpu_affinity_auto = true;
+        } else if (arg == "--no-cpu-affinity") {
+            params.cpu_affinity.clear();
+            params.cpu_affinity_auto = false;
         } else {
             invalid_param = true;
             break;
@@ -970,7 +979,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.use_mmap.empty())     { params.use_mmap = cmd_params_defaults.use_mmap; }
     if (params.embeddings.empty())   { params.embeddings = cmd_params_defaults.embeddings; }
     if (params.n_threads.empty())    { params.n_threads = cmd_params_defaults.n_threads; }
-    params.cpu_affinity = cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
+    // resolve explicit -cm/-cr or the P-core auto list; either way the result is a
+    // plain explicit list for all phases
+    int n_threads_batch = 0;
+    for (const auto & t : params.n_threads) {
+        n_threads_batch = std::max(n_threads_batch, t.second);
+    }
+    common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto, n_threads_batch);
     if (!params.buft_overrides.empty()) params.buft_overrides.emplace_back(llama_model_tensor_buft_override{nullptr, nullptr});
 
     return params;
@@ -1097,6 +1112,7 @@ struct cmd_params_instance {
         cparams.embeddings = embeddings;
         cparams.cuda_params = (void *)cuda_params.data();
         cparams.scheduler_async = sas;
+        // the affinity was resolved at parse: always an explicit all-phase list
         cparams.cpu_affinity    = cpu_affinity.empty() ? nullptr : cpu_affinity.data();
         cparams.n_cpu_affinity  = (int32_t) cpu_affinity.size();
 
@@ -2231,7 +2247,7 @@ int main(int argc, char ** argv) {
     std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
 
     for (auto & inst : params_instances) {
-        inst.cpu_affinity = params.cpu_affinity;
+        inst.cpu_affinity      = params.cpu_affinity;
     }
 
     llama_model * lmodel = nullptr;
@@ -2259,6 +2275,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        common_cpu_affinity_apply(ctx, inst.cpu_affinity, __func__);
         test t(inst, lmodel, ctx);
 
         llama_kv_cache_clear(ctx);
