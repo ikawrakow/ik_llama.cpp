@@ -411,6 +411,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
     if (lctx.cparams.fused_idx_topk) {
         ggml_tensor * fused = ggml_indexer_topk(ctx0, pooled, q, inp->head_w, cut_mask, inp->cell_blk,
                 GGML_UNARY_OP_RELU, width);
+        fused->op_params[1] = r;
         cb(fused, "qsa_top_k", il);
         ggml_build_forward_expand(gf, fused);
         ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, fused);

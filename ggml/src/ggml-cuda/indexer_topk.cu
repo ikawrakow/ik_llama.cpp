@@ -86,10 +86,11 @@ static __global__ void k_fused_relu_mul_sum_rows_3(const kq_t * __restrict__ kq,
     dst[ncols*row + col] = sum;
 }
 
-template <bool k_q8_0, typename mask_t>
+template <bool k_q8_0, typename mask_t, bool blocks>
 static __global__ void __launch_bounds__(8*WARP_SIZE, 2) k_indexer_score(const half2 * __restrict__ q, const char * __restrict__ k,
         const float * __restrict__ w, const mask_t * __restrict__ m, float * __restrict__ dst,
-        const size_t nbk1, const size_t nbm, const int ncols, const int nrows, const int nhead, const int rows_per_block) {
+        const size_t nbk1, const size_t nbm, const int ncols, const int nrows, const int nhead, const int rows_per_block,
+        const int ratio_arg, const int ntok_arg, const int nkcol_arg) {
 #ifdef INT8_MMA_AVAILABLE
     using namespace ggml_cuda_mma;
     typedef tile<16, 8, half2> tile_A;
@@ -110,8 +111,11 @@ static __global__ void __launch_bounds__(8*WARP_SIZE, 2) k_indexer_score(const h
     const int warp = threadIdx.y;
     const int tid  = warp*WARP_SIZE + lane;
     const int col0 = blockIdx.x*nwarps*nc_warp + warp*nc_warp;
+    const int ratio = blocks ? ratio_arg : 1;
+    const int ntok  = blocks ? ntok_arg  : 1;
+    const int nkcol = blocks ? nkcol_arg : ncols;
 
-    for (int i = nhead*D2_pad + tid; i < max_head*D2_pad; i += nwarps*WARP_SIZE) {
+    for (int i = ntok*nhead*D2_pad + tid; i < max_head*D2_pad; i += nwarps*WARP_SIZE) {
         ((half2 *)q_s)[i] = make_half2(0.0f, 0.0f);
     }
 
@@ -119,7 +123,7 @@ static __global__ void __launch_bounds__(8*WARP_SIZE, 2) k_indexer_score(const h
 #pragma unroll
     for (int n = 0; n < nc_warp/tile_B::I; ++n) {
         const int col = col0 + n*tile_B::I + tile_B::get_i(0);
-        if (col >= ncols) {
+        if (col >= nkcol) {
             continue;
         }
         const char * k_row = k + col*nbk1;
@@ -141,17 +145,18 @@ static __global__ void __launch_bounds__(8*WARP_SIZE, 2) k_indexer_score(const h
 
     const int col = col0 + lane;
     const int row_end = min(nrows, (blockIdx.y + 1)*rows_per_block);
-    for (int row = blockIdx.y*rows_per_block; row < row_end; ++row) {
+    for (int row = blockIdx.y*rows_per_block; row < row_end; row += ntok) {
+        const int nt = blocks ? min(ntok, row_end - row) : 1;
         __syncthreads();
         const int4 * q_row = (const int4 *)(q + (size_t)row*nhead*D2);
-        for (int i = tid; i < nhead*D2/4; i += nwarps*WARP_SIZE) {
+        for (int i = tid; i < nt*nhead*D2/4; i += nwarps*WARP_SIZE) {
             *(int4 *)&q_s[i/(D2/4)][4*(i%(D2/4))] = q_row[i];
         }
         __syncthreads();
 
         auto this_m = (const mask_t *)((const char *)m + nbm*row);
-        float sum = col < ncols ? indexer_mask_value(this_m, col) : 0.0f;
-        if constexpr (std::is_same_v<mask_t, int>) {
+        float sum = !blocks && col < ncols ? indexer_mask_value(this_m, col) : 0.0f;
+        if constexpr (!blocks && std::is_same_v<mask_t, int>) {
             if (col0 >= *this_m) {
                 if (col < ncols) {
                     dst[(size_t)ncols*row + col] = sum;
@@ -160,7 +165,7 @@ static __global__ void __launch_bounds__(8*WARP_SIZE, 2) k_indexer_score(const h
             }
         }
         const float * this_w = w + nhead*row;
-        for (int h0 = 0; h0 < nhead; h0 += tile_A::I) {
+        for (int h0 = 0; h0 < nt*nhead; h0 += tile_A::I) {
             tile_C C[nc_warp/tile_B::I];
 #pragma unroll
             for (int ks = 0; ks < D2/tile_A::J; ++ks) {
@@ -179,36 +184,74 @@ static __global__ void __launch_bounds__(8*WARP_SIZE, 2) k_indexer_score(const h
                 }
             }
             __syncwarp();
-            const int nh = min(tile_A::I, nhead - h0);
-            for (int h = 0; h < nh; ++h) {
-                float relu = kq_s[warp][h][lane];
-                relu = relu > 0.0f ? relu : 0.0f;
-                sum += relu * this_w[h0 + h];
+            if (ntok == 1) {
+                const int nh = min(tile_A::I, nhead - h0);
+                for (int h = 0; h < nh; ++h) {
+                    float relu = kq_s[warp][h][lane];
+                    relu = relu > 0.0f ? relu : 0.0f;
+                    sum += relu * this_w[h0 + h];
+                }
+            } else {
+                for (int t = 0; t < nt; ++t) {
+                    float s = 0.0f;
+                    for (int h = 0; h < nhead; ++h) {
+                        float relu = kq_s[warp][t*nhead + h][lane];
+                        relu = relu > 0.0f ? relu : 0.0f;
+                        s += relu * this_w[t*nhead + h];
+                    }
+                    kq_s[warp][t][lane] = s;
+                }
             }
             __syncwarp();
         }
-        if (col < ncols) {
+        if constexpr (blocks) {
+            if (ntok == 1) {
+                kq_s[warp][0][lane] = sum;
+            }
+            __syncwarp();
+            for (int t = 0; t < nt; ++t) {
+                auto t_m = (const mask_t *)((const char *)m + nbm*(row + t));
+                float * t_dst = dst + (size_t)ncols*(row + t);
+                for (int i = lane; i < nc_warp*ratio; i += WARP_SIZE) {
+                    const int cell = col0*ratio + i;
+                    if (cell < ncols) {
+                        t_dst[cell] = indexer_mask_value(t_m, cell) + kq_s[warp][t][i/ratio];
+                    }
+                }
+            }
+        } else if (col < ncols) {
             dst[(size_t)ncols*row + col] = sum;
         }
     }
 #else
     GGML_UNUSED(q); GGML_UNUSED(k); GGML_UNUSED(w); GGML_UNUSED(m); GGML_UNUSED(dst);
     GGML_UNUSED(nbk1); GGML_UNUSED(nbm); GGML_UNUSED(ncols); GGML_UNUSED(nrows); GGML_UNUSED(nhead); GGML_UNUSED(rows_per_block);
+    GGML_UNUSED(ratio_arg); GGML_UNUSED(ntok_arg); GGML_UNUSED(nkcol_arg);
     NO_DEVICE_CODE;
 #endif // INT8_MMA_AVAILABLE
 }
 
+static constexpr int indexer_score_rows_per_block = 32;
+
 template <typename mask_t>
 static void indexer_score_cuda(const half2 * q, const ggml_tensor * k, const float * w, const mask_t * m,
-        float * dst, size_t nbm, int ncols, int nrows, int nhead, cudaStream_t stream) {
+        float * dst, size_t nbm, int ncols, int nrows, int nhead, int ratio, cudaStream_t stream) {
     constexpr int nwarps = 8;
-    constexpr int rows_per_block = 32;
-    const dim3 grid((ncols + nwarps*WARP_SIZE - 1)/(nwarps*WARP_SIZE), (nrows + rows_per_block - 1)/rows_per_block, 1);
+    constexpr int rows_per_block = indexer_score_rows_per_block;
+    const int nkcol = k->ne[1];
+    const int ntok = ratio > 1 && 16 % nhead == 0 ? 16/nhead : 1;
+    const dim3 grid((nkcol + nwarps*WARP_SIZE - 1)/(nwarps*WARP_SIZE), (nrows + rows_per_block - 1)/rows_per_block, 1);
     const dim3 block(WARP_SIZE, nwarps, 1);
-    if (k->type == GGML_TYPE_Q8_0) {
-        k_indexer_score<true><<<grid, block, 0, stream>>>(q, (const char *)k->data, w, m, dst, k->nb[1], nbm, ncols, nrows, nhead, rows_per_block);
+    if (ratio > 1) {
+        if (k->type == GGML_TYPE_Q8_0) {
+            k_indexer_score<true, mask_t, true><<<grid, block, 0, stream>>>(q, (const char *)k->data, w, m, dst, k->nb[1], nbm, ncols, nrows, nhead, rows_per_block, ratio, ntok, nkcol);
+        } else {
+            k_indexer_score<false, mask_t, true><<<grid, block, 0, stream>>>(q, (const char *)k->data, w, m, dst, k->nb[1], nbm, ncols, nrows, nhead, rows_per_block, ratio, ntok, nkcol);
+        }
+    } else if (k->type == GGML_TYPE_Q8_0) {
+        k_indexer_score<true, mask_t, false><<<grid, block, 0, stream>>>(q, (const char *)k->data, w, m, dst, k->nb[1], nbm, ncols, nrows, nhead, rows_per_block, 1, 1, nkcol);
     } else {
-        k_indexer_score<false><<<grid, block, 0, stream>>>(q, (const char *)k->data, w, m, dst, k->nb[1], nbm, ncols, nrows, nhead, rows_per_block);
+        k_indexer_score<false, mask_t, false><<<grid, block, 0, stream>>>(q, (const char *)k->data, w, m, dst, k->nb[1], nbm, ncols, nrows, nhead, rows_per_block, 1, 1, nkcol);
     }
     CUDA_CHECK(cudaGetLastError());
 }
@@ -387,6 +430,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     auto w = dst->src[2];
     auto m = dst->src[3];
     auto c = dst->src[4];
+    const int ratio = dst->op_params[1];
     int n_top_k = dst->ne[0];
     int n_kv    = m->type != GGML_TYPE_I32 ? m->ne[0] : c ? c->ne[0] : k->ne[1];
     int n_head  = q->ne[1];
@@ -416,7 +460,8 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     constexpr int k_block_size = 256;
 
     if ((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0) && q->type == GGML_TYPE_F32) {
-        const bool use_mma = new_mma_available(ggml_cuda_info().devices[ctx.device].cc) && q->ne[0] == 128 && q->ne[1] <= 64 && !c;
+        const bool use_mma = new_mma_available(ggml_cuda_info().devices[ctx.device].cc) && q->ne[0] == 128 && q->ne[1] <= 64 &&
+            (!c || (ratio > 1 && q->ne[2] >= indexer_score_rows_per_block));
         constexpr size_t k_max_buf_size = 1 << 28;
         size_t per_row = size_t(n_kv)*((use_mma ? 0 : q->ne[1]*sizeof(half)) + sizeof(int) + sizeof(float)) + q->ne[0]*q->ne[1]*sizeof(half);
         int max_rows = (k_max_buf_size + per_row - 1)/per_row;
@@ -463,12 +508,13 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                 auto q_data = (const half2 *)q_f16.get();
                 auto w_data = (const float *)w->data + first_row*q->ne[1];
                 auto m_data = (const char *)m->data + first_row*m->nb[1];
+                const int r = c ? ratio : 1;
                 if (m->type == GGML_TYPE_F32) {
-                    indexer_score_cuda(q_data, k, w_data, (const float *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], ctx.stream());
+                    indexer_score_cuda(q_data, k, w_data, (const float *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], r, ctx.stream());
                 } else if (m->type == GGML_TYPE_I32) {
-                    indexer_score_cuda(q_data, k, w_data, (const int   *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], ctx.stream());
+                    indexer_score_cuda(q_data, k, w_data, (const int   *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], r, ctx.stream());
                 } else {
-                    indexer_score_cuda(q_data, k, w_data, (const half  *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], ctx.stream());
+                    indexer_score_cuda(q_data, k, w_data, (const half  *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], r, ctx.stream());
                 }
                 indexer_select_top_k(ctx, score.get(), sorted.get(), (int *)((char *)dst->data + first_row*dst->nb[1]),
                         n_kv, nrows, dst->ne[0]);
