@@ -753,18 +753,20 @@ static __global__ void k_mask_topk_to_index(int ne00, int ne0, int ntopk, int nt
     for (int i = threadIdx.x; i < P; i += blockDim.x) keys[i] = 0xffffffff;
     __syncthreads();
 
-    for (int j = threadIdx.x; j < ne00; j += blockDim.x) {
-        if (mask_r[j] == zero) {
-            const int s = atomicAdd(&n_on, 1);
-            if (s < P) keys[s] = (uint32_t(j % WARP_SIZE) << 26) | uint32_t(j / WARP_SIZE);
+    if (n_visible) {
+        for (int j = threadIdx.x; j < ne00; j += blockDim.x) {
+            if (mask_r[j] == zero) {
+                const int s = atomicAdd(&n_on, 1);
+                if (s < P) keys[s] = (uint32_t(j % WARP_SIZE) << 26) | uint32_t(j / WARP_SIZE);
+            }
         }
     }
     if (row < ntok) {
         const int * t = (const int *)((const char *)topk + row*nb11);
-        const int n = *(const int *)(n_visible + row*nb21);
+        const int n = n_visible ? *(const int *)(n_visible + row*nb21) : 0;
         for (int j = threadIdx.x; j < ntopk; j += blockDim.x) {
-            if (t[j] < n) {
-                const int c = ne00 + t[j];
+            if (n_visible ? t[j] < n : mask_r[t[j]] == zero) {
+                const int c = (n_visible ? ne00 : 0) + t[j];
                 const int s = atomicAdd(&n_on, 1);
                 if (s < P) keys[s] = (uint32_t(c % WARP_SIZE) << 26) | uint32_t(c / WARP_SIZE);
             }
@@ -786,22 +788,44 @@ static __global__ void k_mask_topk_to_index(int ne00, int ne0, int ntopk, int nt
     for (int j = threadIdx.x; j < ne0; j += blockDim.x) idx_r[j] = keys[j] == 0xffffffff ? -1 : int((keys[j] & 0x3ffffff)*WARP_SIZE + (keys[j] >> 26));
 }
 
+template <typename mask_t>
+static void mask_topk_to_index_dense(ggml_backend_cuda_context & ctx, const ggml_tensor * src, const ggml_tensor * topk, ggml_tensor * dst) {
+    ggml_cuda_pool_alloc<mask_t> mask(ctx.pool(), src->ne[0]*dst->ne[1]);
+    const size_t nb1 = src->ne[0]*sizeof(mask_t);
+    k_indexer_mask<<<dst->ne[1], 256, 0, ctx.stream()>>>(src->ne[0], dst->ne[1], 1, topk->ne[0], topk->ne[1],
+            src->nb[1], 0, 0, topk->nb[1], 0, 0, nb1, 0, 0,
+            (const mask_t *)src->data, (const int *)topk->data, mask.get());
+    k_mask_to_index<<<dst->ne[1], WARP_SIZE, 0, ctx.stream()>>>(src->ne[0], dst->ne[0], nb1, 0, 0, dst->nb[1], 0, 0,
+            mask.get(), (int *)dst->data);
+}
+
 void ggml_cuda_op_mask_to_index(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     auto src = dst->src[0];
     GGML_ASSERT(dst->type == GGML_TYPE_I32);
     GGML_ASSERT(src->type == GGML_TYPE_F32 || src->type == GGML_TYPE_F16);
     if (auto topk = dst->src[1]) {
         auto vis = dst->src[2];
+        const size_t nb21 = vis ? vis->nb[1] : 0;
+        const char * vis_data = vis ? (const char *)vis->data : nullptr;
         int P = 1;
         while (P < dst->ne[0]) P *= 2;
+        constexpr int max_keys = 8192; // P*4 bytes of shared memory
+        if (!vis && P > max_keys) {
+            if (src->type == GGML_TYPE_F16) {
+                mask_topk_to_index_dense<half>(ctx, src, topk, dst);
+            } else {
+                mask_topk_to_index_dense<float>(ctx, src, topk, dst);
+            }
+            return;
+        }
         if (src->type == GGML_TYPE_F16) {
             k_mask_topk_to_index<<<dst->ne[1], 256, P*sizeof(uint32_t), ctx.stream()>>>(src->ne[0], dst->ne[0], topk->ne[0], topk->ne[1], P,
-                    src->nb[1], topk->nb[1], vis->nb[1], dst->nb[1],
-                    (const half *)src->data, (const int *)topk->data, (const char *)vis->data, (int *)dst->data);
+                    src->nb[1], topk->nb[1], nb21, dst->nb[1],
+                    (const half *)src->data, (const int *)topk->data, vis_data, (int *)dst->data);
         } else {
             k_mask_topk_to_index<<<dst->ne[1], 256, P*sizeof(uint32_t), ctx.stream()>>>(src->ne[0], dst->ne[0], topk->ne[0], topk->ne[1], P,
-                    src->nb[1], topk->nb[1], vis->nb[1], dst->nb[1],
-                    (const float *)src->data, (const int *)topk->data, (const char *)vis->data, (int *)dst->data);
+                    src->nb[1], topk->nb[1], nb21, dst->nb[1],
+                    (const float *)src->data, (const int *)topk->data, vis_data, (int *)dst->data);
         }
         return;
     }
