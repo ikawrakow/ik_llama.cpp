@@ -767,7 +767,7 @@ json oaicompat_chat_params_parse(
                 }
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = get_media_marker();
                 p.erase("image_url");
 
             }
@@ -787,7 +787,7 @@ json oaicompat_chat_params_parse(
                 out_files.push_back(decoded_data);
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = get_media_marker();
                 p.erase("input_audio");
 
             }
