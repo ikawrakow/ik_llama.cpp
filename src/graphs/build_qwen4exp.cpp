@@ -207,6 +207,7 @@ static ggml_tensor * qwen4exp_ple(
     // get_rows lays the head dimension out slowest, which is the flatten order the
     // projections expect
     ggml_tensor * emb = ggml_get_rows(ctx0, model.tok_embd_per_layer, rows);
+    cb(emb, "ple_emb", il);
     emb = ggml_reshape_2d(ctx0, emb, hparams.ple_head_dim * n_heads, n_tokens);
     cb(emb, "ple_embd", il);
 
@@ -360,6 +361,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
             ggml_row_size(kr_cache->type, idx_dim), 0);
 
     ggml_tensor * members = ggml_get_rows(ctx0, k_all, inp->win_cells);
+    cb(members, "k_all", il);
     members = ggml_reshape_3d(ctx0, members, idx_dim, r, n_win);
 
     // the gather put each block's members contiguously in one row, which is what multi_add sums
@@ -440,6 +442,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
     // for. get_rows gathers rows, so the scores are transposed first
     ggml_tensor * expanded = ggml_get_rows(ctx0,
             ggml_cont(ctx0, ggml_transpose(ctx0, score)), inp->cell_blk);
+    cb(expanded, "expanded", il);
     expanded = ggml_cont(ctx0, ggml_transpose(ctx0, expanded));
 
     expanded = ggml_add(ctx0, expanded, cut_mask);
@@ -503,12 +506,14 @@ static bool qwen4exp_qsa_gather(
 
     ggml_tensor * k = ggml_reshape_4d_ext(ctx0, k_cache, GGML_TYPE_F32, k_cell/sizeof(float), n_cells, 1, 1);
     k = ggml_get_rows(ctx0, k, idx);
+    cb(k, "gather_k", il);
     k = ggml_reshape_4d_ext(ctx0, k, k_cache->type, n_embd_head_k, n_head_kv, n_pad, 1);
     *k_out = ggml_view_3d(ctx0, k, n_embd_head_k, n_pad, n_head_kv, k->nb[2], k->nb[1], 0);
     cb(*k_out, "qsa_k_sel", il);
 
     ggml_tensor * v = ggml_reshape_4d_ext(ctx0, v_cache, GGML_TYPE_F32, v_cell/sizeof(float), n_cells, 1, 1);
     v = ggml_get_rows(ctx0, v, idx);
+    cb(v, "gather_v", il);
     v = ggml_reshape_4d_ext(ctx0, v, v_cache->type, n_embd_head_v, n_head_kv, n_pad, 1);
     *v_out = ggml_view_3d(ctx0, v, n_embd_head_v, n_pad, n_head_kv, v->nb[2], v->nb[1], 0);
     cb(*v_out, "qsa_v_sel", il);
@@ -516,6 +521,7 @@ static bool qwen4exp_qsa_gather(
     // gather the mask too: a selected cell can belong to another sequence or lie past its end
     ggml_tensor * m = ggml_view_2d(ctx0, KQ_mask, 1, bctx.n_kv, ggml_element_size(KQ_mask), 0);
     m = ggml_get_rows(ctx0, m, ggml_reshape_1d(ctx0, top_k, width));
+    cb(m, "gather_m", il);
     ggml_tensor * tail = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_pad*KQ_mask->ne[1] - width);
     tail = ggml_fill_inplace(ctx0, tail, -INFINITY);
     m = ggml_concat(ctx0, ggml_reshape_1d(ctx0, m, width), tail, 0);
