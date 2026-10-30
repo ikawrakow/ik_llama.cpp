@@ -351,6 +351,15 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
 
     // TODO: avoid hardcoded tensor names - use the TN_* constants
     const llm_arch arch = qs.model.arch;
+
+    // Xing4.0: keep the MLA latent projections at source precision for Q6_K/Q8_0.
+    if (arch == LLM_ARCH_XING4_0 &&
+            (ftype == LLAMA_FTYPE_MOSTLY_Q6_K || ftype == LLAMA_FTYPE_MOSTLY_Q8_0) &&
+            (name.find("attn_kv_a_mqa.weight") != std::string::npos ||
+             name.find("attn_k_b.weight")      != std::string::npos ||
+             name.find("attn_v_b.weight")      != std::string::npos)) {
+        return tensor->type;
+    }
     const auto       tn = LLM_TN(arch);
 
     auto use_more_bits = [](int i_layer, int n_layers) -> bool {
@@ -1745,6 +1754,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         // do not quantize relative position bias (T5)
         quantize &= name.find("attn_rel_b.weight") == std::string::npos;
+
+        // do not quantize the mHC projection weights
+        quantize &= name.find("hc_attn_fn.weight") == std::string::npos;
+        quantize &= name.find("hc_ffn_fn.weight")  == std::string::npos;
 
         // quantize the extra output tensor
         quantize = tensor == output_tensor || quantize;

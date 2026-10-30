@@ -3396,6 +3396,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_raon1();
             } break;
+        case LLM_ARCH_XING4_0:
+            {
+                result = llm.build_xing4();
+            } break;
         case LLM_ARCH_MINIMAX_M2:
             {
                 result = llm.build_minimaxm2();
