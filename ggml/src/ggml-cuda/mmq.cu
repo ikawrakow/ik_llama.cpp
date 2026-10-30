@@ -271,6 +271,12 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
     return true;
 #endif //GGML_CUDA_FORCE_MMQ
 
+    // Without hardware dp4a MMQ is several times slower than dequantizing to FP16 and using hipBLAS
+    // (gfx900 PP: 44 vs 292 t/s on Llama-3.1-8B Q4_K_M)
+    if (GGML_CUDA_CC_IS_AMD(cc) && ggml_cuda_info().devices[ggml_cuda_get_device()].no_dp4a) {
+        return false;
+    }
+
     if (cc < CC_OFFSET_AMD) {
         // On Volta, large-batch quantized matmuls otherwise fall back through
         // fp16 cuBLAS temporaries. Keep using MMQ for pre-Turing NVIDIA.

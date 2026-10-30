@@ -1066,7 +1066,13 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 
         const block_mxfp4 * bxi = (const block_mxfp4 *)(x + i*stride) + kbx0 + kbx;
 
+#if defined(__gfx900__)
+        // ROCm 6.2 clang segfaults in AMDGPU ISel on the byte-wise get_int_b1() here (mmq_x = 8, -O2+)
+        int aux_q4;
+        memcpy(&aux_q4, bxi->qs + 4*kqsx, sizeof(int));
+#else
         const int aux_q4 = get_int_b1(bxi->qs, kqsx);
+#endif // defined(__gfx900__)
         const int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
         const int k0 = kbx * (2 * QI_MXFP4) + kqsx;
 

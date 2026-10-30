@@ -23,6 +23,21 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
     // nrows_dst == nrows of the matrix that the kernel writes into
     const int64_t nrows_dst = id == ctx.device ? ne0 : row_diff;
 
+    // GCN/CDNA (e.g. gfx900): MMVQ with more than 4 columns is several times slower per launch than
+    // splitting into launches of 4 columns, so split even though the weights are read once per chunk
+    const int cc = ggml_cuda_info().devices[id].cc;
+    constexpr int64_t k_amd_gcn_max_ncols = 4;
+    if (GGML_CUDA_CC_IS_AMD(cc) && cc < CC_RDNA1 && !ids_data && src1_ncols > k_amd_gcn_max_ncols) {
+        const int64_t src1_col_size = src1_padded_row_size/QK8_1*sizeof(block_q8_1);
+        for (int64_t i = 0; i < src1_ncols; i += k_amd_gcn_max_ncols) {
+            ggml_cuda_op_mul_mat_vec_q_impl(ctx, type, ne00, ne0, ne2, nb02, nb12, nb2, ids_nb0, bias_nb1,
+                    src0_dd_u, src0_dd_g, src1_ddq_i + i*src1_col_size, dst_dd_i + i*nrows_dst, ids_data, bias_u, bias_g,
+                    row_low, row_high, std::min<int64_t>(src1_ncols - i, k_amd_gcn_max_ncols), src1_padded_row_size,
+                    unary_op, limit, stream);
+        }
+        return;
+    }
+
     if (src1_ncols > MMVQ_MAX_NCOLS_PASCAL) {
         const int64_t src1_col_size = src1_padded_row_size/QK8_1*sizeof(block_q8_1);
         for (int64_t i = 0; i < src1_ncols; i += MMVQ_MAX_BATCH_SIZE) {

@@ -830,6 +830,7 @@ struct ggml_cuda_device_info {
         size_t  vmm_granularity;    // granularity of virtual memory
         size_t  total_vram;
         bool    integrated;
+        bool    no_dp4a;            // AMD without hardware int8 dot products (gfx900): dp4a is emulated
     };
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};

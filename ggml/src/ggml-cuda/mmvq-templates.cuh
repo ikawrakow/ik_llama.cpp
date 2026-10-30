@@ -87,7 +87,8 @@ static __device__ void k_mul_mat_vec_q(
     //int64_t rows_per_cuda_block = ggml_cuda_info().devices[id].cc < CC_RDNA2 ?
     //    ncols_y < 4 ? 1 : 2 : 1;
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
+#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA1)
+    // RDNA2+ and GCN/CDNA: one row per block. Two rows for ncols_y >= 4 makes the kernel ~5x slower on gfx900.
     constexpr int rows_per_cuda_block = 1;
 #elif defined(__CUDA_ARCH__) && !defined(GGML_USE_MUSA)
     constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block(type, ncols_y, __CUDA_ARCH__);
@@ -174,7 +175,8 @@ static __device__ void k_fused_mul_mat_vec_q(
     //int64_t rows_per_cuda_block = ggml_cuda_info().devices[id].cc < CC_RDNA2 ?
     //    ncols_y < 4 ? 1 : 2 : 1;
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
+#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA1)
+    // RDNA2+ and GCN/CDNA: one row per block. Two rows for ncols_y >= 4 makes the kernel ~5x slower on gfx900.
     constexpr int rows_per_cuda_block = 1;
 #elif defined(__CUDA_ARCH__) && !defined(GGML_USE_MUSA)
     constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block(type, ncols_y, __CUDA_ARCH__);
@@ -369,7 +371,9 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
     int id = ggml_cuda_get_device();
     const int cc = ggml_cuda_info().devices[id].cc;
 
-    int64_t rows_per_cuda_block = cc < CC_RDNA2 ? mmvq_rows_per_cuda_block(type, args.ncols_y, ggml_cuda_highest_compiled_arch(cc)) : 1;
+    // must match the device-side choice above: AMD other than RDNA1 always uses one row per block
+    const bool amd_one_row = GGML_CUDA_CC_IS_AMD(cc) && cc != CC_RDNA1;
+    int64_t rows_per_cuda_block = cc < CC_RDNA2 && !amd_one_row ? mmvq_rows_per_cuda_block(type, args.ncols_y, ggml_cuda_highest_compiled_arch(cc)) : 1;
 #endif
 
     const int64_t nblocks = (args.nrows_x + rows_per_cuda_block - 1) / rows_per_cuda_block;
