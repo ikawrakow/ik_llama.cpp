@@ -711,8 +711,7 @@ static void solve_tri_f32_cublas(
     }
 
     // Get cuBLAS handle and set stream
-    cublasHandle_t handle = ctx.cublas_handle();
-    cublasSetStream(handle, stream);
+    cublasHandle_t handle = ctx.cublas_handle(ctx.device, stream);
 
     // Save current math mode and set to default for accuracy
     // (TF32 can cause numerical issues with triangular solves)
