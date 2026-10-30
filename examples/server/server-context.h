@@ -315,7 +315,7 @@ struct server_context {
 
     bool system_prompt_set(const std::string& sys_prompt);
 
-    bool process_token(completion_token_output& result, server_slot& slot);
+    bool process_token(completion_token_output& result, server_slot& slot, bool last = true);
 
     void populate_token_probs(const server_slot& slot, completion_token_output& result, bool post_sampling, bool special, int idx);
 
