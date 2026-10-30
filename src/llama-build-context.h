@@ -271,7 +271,11 @@ struct llm_build_context {
     ggml_cgraph * build_qwen3next();
     ggml_cgraph * build_qwen4exp();
 
+    ggml_tensor * build_lfm_shortconv(ggml_cgraph * gf, ggml_tensor * input, ggml_tensor * state_seq,
+            uint32_t state_seq_id, bool reset_state, int il);
+
     ggml_cgraph * build_lfm2();
+    ggml_cgraph * build_lfm3();
 
     ggml_cgraph * build_qwen35moe();
 

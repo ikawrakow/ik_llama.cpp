@@ -64,6 +64,7 @@ class TensorNameMap:
 
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
+            "model.embedding_norm",                       # lfm3
             "gpt_neox.final_layer_norm",               # gptneox
             "transformer.ln_f",                        # gpt2 gpt-j falcon jais
             "model.norm",                              # llama-hf baichuan internlm2
@@ -238,10 +239,12 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
+            "model.layers.{bid}.post_operator_norm",      # lfm3
             "model.layers.{bid}.post_attention_layernorm",     # gemma2
         ),
 
         MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.self_attn.gate_proj",     # lfm3
             "model.layers.{bid}.self_attn.g_proj",              # laguna
         ),
 
@@ -282,6 +285,7 @@ class TensorNameMap:
 
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
+            "model.layers.{bid}.post_ffn_norm",           # lfm3
             "model.layers.{bid}.post_feedforward_layernorm", # gemma2
             "model.layers.{bid}.post_moe_norm",              # grok-2
         ),

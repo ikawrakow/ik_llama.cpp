@@ -3173,6 +3173,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_lfm2();
             } break;
+        case LLM_ARCH_LFM3:
+            {
+                result = llm.build_lfm3();
+            } break;
         case LLM_ARCH_QWEN4EXP:
             {
                 result = llm.build_qwen4exp();

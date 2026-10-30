@@ -719,6 +719,7 @@ struct llama_model {
             || arch == LLM_ARCH_LAGUNA    || arch == LLM_ARCH_GEMMA4
             || arch == LLM_ARCH_MAPLE
             || arch == LLM_ARCH_SPARK2_5
+            || arch == LLM_ARCH_LFM3
             || arch == LLM_ARCH_MAPLE     || arch == LLM_ARCH_FLINT
             || supports_dflash_swa_compress() ;
     }
