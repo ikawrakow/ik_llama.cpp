@@ -211,7 +211,9 @@ static ggml_tensor * qwen4exp_ple(
     cb(emb, "ple_embd", il);
 
     ggml_tensor * key   = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ple_key,   emb);
+    cb(key, "ple_k", il);
     ggml_tensor * value = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ple_value, emb);
+    cb(value, "ple_v", il);
 
     auto grouped_norm = [&](ggml_tensor * x, ggml_tensor * w) {
         ggml_tensor * t = qwen4exp_grouped_rms(ctx0, hparams,
@@ -298,6 +300,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
 
     // the cached indexer keys are raw: pooling precedes both the norm and the rotation
     ggml_tensor * k_raw = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].indexer_k_proj, cur);
+    cb(k_raw, "qsa_k_raw", il);
     k_raw = ggml_reshape_2d(ctx0, k_raw, idx_dim, n_tokens);
     cb(k_raw, "qsa_k_raw", il);
     {
@@ -397,6 +400,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
     }
 
     ggml_tensor * q = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].indexer_q_proj, cur);
+    cb(q, "qsa_q", il);
     q = ggml_reshape_3d(ctx0, q, idx_dim, n_idx_h, n_tokens);
     q = llm_build_context::llm_build_norm(ctx0, q, hparams,
             model.layers[il].indexer_q_norm, nullptr, LLM_NORM_RMS, cb, il);
@@ -424,6 +428,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
 
     ggml_tensor * score = ggml_mul_mat(ctx0, pooled,
             ggml_reshape_2d(ctx0, ggml_cont(ctx0, q), idx_dim, n_idx_h*n_tokens));
+    cb(score, "score", il);
     score = ggml_reshape_3d(ctx0, score, n_blocks, n_idx_h, n_tokens);
     score = ggml_relu(ctx0, score);
     score = ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3));
