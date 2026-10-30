@@ -1118,8 +1118,8 @@ inline void iqk_scaled_sigmoid(int n, const float * x, float * y, float s_before
     int i = 0;
 #ifdef __AVX512F__
     {
-        auto vsb = _mm512_set1_ps(s_before);
-        auto vsa = _mm512_set1_ps(-s_after);
+        auto vsb = _mm512_set1_ps(-s_before);
+        auto vsa = _mm512_set1_ps(s_after);
         auto one = _mm512_set1_ps(1.0f);
         for (; i + 15 < n; i += 16) {
             auto vx = _mm512_mul_ps(vsb, _mm512_loadu_ps(x + i));
@@ -1144,8 +1144,8 @@ inline void iqk_scaled_sigmoid(int n, const float * x, float * y, float s_before
 #endif
 #if defined(__ARM_NEON) && defined(__aarch64__)
     {
-        auto vsb = vdupq_n_f32(s_before);
-        auto vsa = vdupq_n_f32(-s_after);
+        auto vsb = vdupq_n_f32(-s_before);
+        auto vsa = vdupq_n_f32(s_after);
         auto one = vdupq_n_f32(1.0f);
         for (; i + 3 < n; i += 4) {
             auto vx = vmulq_f32(vsb, vld1q_f32(x + i));
