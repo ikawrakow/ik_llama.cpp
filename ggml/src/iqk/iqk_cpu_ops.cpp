@@ -1131,8 +1131,8 @@ inline void iqk_scaled_sigmoid(int n, const float * x, float * y, float s_before
 #endif
 #ifdef __AVX2__
     {
-        auto vsb = _mm256_set1_ps(s_before);
-        auto vsa = _mm256_set1_ps(-s_after);
+        auto vsb = _mm256_set1_ps(-s_before);
+        auto vsa = _mm256_set1_ps(s_after);
         auto one = _mm256_set1_ps(1.0f);
         for (; i + 7 < n; i += 8) {
             auto vx = _mm256_mul_ps(vsb, _mm256_loadu_ps(x + i));
@@ -1176,11 +1176,11 @@ bool iqk_op_scale_unary_scale(struct ggml_tensor * dst, int ith, int nth) {
     if (src0->type != GGML_TYPE_F32) return false;
 
     float s_before, s_after;
-    memcpy(&s_before, src->op_params, sizeof(float));
-    memcpy(&s_after, dst->op_params, sizeof(float));
+    std::memcpy(&s_before, src->op_params, sizeof(float));
+    std::memcpy(&s_after, dst->op_params, sizeof(float));
 
     int64_t nelem = ggml_nelements(src0);
-    int64_t  nblocks = (nelem + k_block_size - 1)/k_block_size;
+    int64_t nblocks = (nelem + k_block_size - 1)/k_block_size;
 
     for (int64_t ib = ith; ib < nblocks; ib += nth) {
         int64_t first = ib*k_block_size;
