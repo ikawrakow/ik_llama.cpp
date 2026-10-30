@@ -924,6 +924,7 @@ struct ggml_backend_cuda_context {
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
+    void * cublas_workspaces[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
 
     int   fusion = GGML_CUDA_FUSION;
     int   offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
@@ -972,6 +973,28 @@ struct ggml_backend_cuda_context {
 
     cublasHandle_t cublas_handle() {
         return cublas_handle(device);
+    }
+
+    // cublasSetStream() resets the handle to the default workspace pool, and cuBLAS may then add
+    // memory nodes to captured CUDA graphs. Bind a per-(device, stream) workspace instead.
+    cublasHandle_t cublas_handle(int device, cudaStream_t stream) {
+        cublasHandle_t handle = cublas_handle(device);
+        CUBLAS_CHECK(cublasSetStream(handle, stream));
+#if !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2))
+        for (int is = 0; is < GGML_CUDA_MAX_STREAMS; ++is) {
+            if (streams[device][is] != stream) {
+                continue;
+            }
+            const size_t size = ggml_cuda_info().devices[device].cc >= 900 ? (size_t) 32 << 20 : (size_t) 4 << 20;
+            if (cublas_workspaces[device][is] == nullptr) {
+                ggml_cuda_set_device(device);
+                CUDA_CHECK(cudaMalloc(&cublas_workspaces[device][is], size));
+            }
+            CUBLAS_CHECK(cublasSetWorkspace(handle, cublas_workspaces[device][is], size));
+            break;
+        }
+#endif
+        return handle;
     }
 
     // pool

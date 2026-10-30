@@ -448,7 +448,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         const float alpha = 1.0f;
         const float beta = 0.0f;
 
-        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+        ctx.cublas_handle(ctx.device, ctx.stream());
 
         for (int istep = 0; istep < nstep; ++istep) {
             int first_row = max_rows*istep;
@@ -586,7 +586,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
             // relu, mul, sum_rows all in one kernel, avoiding the k*q intermediate result.
             const float alpha = 1.0f;
             const float beta = 0.0f;
-            CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+            ctx.cublas_handle(ctx.device, ctx.stream());
             CUBLAS_CHECK(cublasSgemm(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
                     &alpha,     k_data,                k_ld,
