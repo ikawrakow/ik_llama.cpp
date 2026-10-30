@@ -674,6 +674,9 @@ struct llama_model {
         if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5NEXT) {
             return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
         }
+        if (arch == LLM_ARCH_RAON1) {
+            return std::max<size_t>(n_tokens * 160, 64u * n_tensors);
+        }
         //return std::max<size_t>(1024, 8*n_tensors);
         return 65536;
     }

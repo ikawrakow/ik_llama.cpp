@@ -196,9 +196,24 @@ static ggml_tensor * raon1_mla_attention(
         auto kq = ggml_mul_mat(ctx0, K_cache, Qcur); // [n_kv, n_tokens, n_head]
         ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
         kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
-        auto V_cache = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora, llm.n_kv, row_size,
-                ggml_row_size(K_cache->type, n_extra));
-        kqv = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, V_cache)), kq);
+        ggml_tensor * V_cache_trans = nullptr;
+        auto v_l = kv_self.v_l.empty() ? nullptr : kv_self.v_l[il];
+        if (v_l && !ggml_is_quantized(v_l->type)) {
+            auto v_write = ggml_view_2d(ctx0, v_l, n_tokens, kv_lora,
+                    ggml_row_size(v_l->type, kv_self.size),
+                    ggml_row_size(v_l->type, llm.kv_head));
+            auto v_cpy = ggml_cpy(ctx0, ggml_transpose(ctx0, latent), v_write);
+            lctx.cache_copies[2*il + 1].cpy  = v_cpy;
+            lctx.cache_copies[2*il + 1].step = ggml_row_size(v_l->type, 1);
+            ggml_build_forward_expand(gf, v_cpy);
+            V_cache_trans = ggml_view_2d(ctx0, v_l, llm.n_kv, kv_lora,
+                    ggml_row_size(v_l->type, kv_self.size), 0);
+        } else {
+            auto V_cache = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora, llm.n_kv, row_size,
+                    ggml_row_size(K_cache->type, n_extra));
+            V_cache_trans = ggml_cont(ctx0, ggml_transpose(ctx0, V_cache));
+        }
+        kqv = ggml_mul_mat(ctx0, V_cache_trans, kq);
     }
     cb(kqv, "kqv_compressed", il);
 
@@ -207,10 +222,11 @@ static ggml_tensor * raon1_mla_attention(
         wv_b = ggml_reshape_3d(ctx0, wv_b, kv_lora, head_v, n_head);
     }
     kqv = ggml_mul_mat(ctx0, wv_b, kqv); // [head_v, n_tokens, n_head]
-    kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-    kqv = ggml_cont(ctx0, kqv);
+    if (n_tokens > 1) {
+        kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
+        kqv = ggml_cont(ctx0, kqv);
+    }
     kqv = ggml_reshape_2d(ctx0, kqv, head_v * n_head, n_tokens);
-
     auto gate = ggml_mul_mat(ctx0, layer.attn_v_gate, cur);
     gate = ggml_reshape_2d(ctx0, gate, head_v * n_head, n_tokens);
     kqv = ggml_mul(ctx0, kqv, ggml_sigmoid(ctx0, gate));
