@@ -778,8 +778,9 @@ const common_chat_msg& server_slot::update_chat_msg(bool is_partial, std::vector
     auto msg_prv_copy = chat_msg;
     common_chat_msg new_msg;
     try {
+        // text held back as a possible stop string is parsed only after the stop check releases it
         new_msg = common_chat_parse(
-            generated_text,
+            is_partial ? generated_text.substr(0, n_sent_text) : generated_text,
             /* is_partial= */ is_partial,
             params.chat_parser_params);
     } catch (const std::exception & e) {
@@ -2232,13 +2233,14 @@ bool server_context::has_next_token(const completion_token_output& result,  serv
 }
 
 
-bool server_context::process_token(completion_token_output& result, server_slot& slot) {
+bool server_context::process_token(completion_token_output& result, server_slot& slot, bool last) {
     // remember which tokens were sampled - used for repetition penalties during sampling
     const std::string token_str = result.text_to_send;
     slot.sampled = result.tok;
 
     // search stop word and delete it
     slot.last_gentxt_len = slot.generated_text.size();
+    const std::string piece = slot.generated_text.substr(validate_utf8(slot.generated_text)) + token_str;
     slot.generated_text += token_str;
     slot.has_next_token = true;
 
@@ -2248,7 +2250,8 @@ bool server_context::process_token(completion_token_output& result, server_slot&
     }
 
     // check if there is incomplete UTF-8 character at the end
-    bool incomplete = validate_utf8(slot.generated_text) < slot.generated_text.size();
+    const size_t n_valid = validate_utf8(slot.generated_text);
+    bool incomplete = n_valid < slot.generated_text.size();
 
     if (!incomplete) {
         size_t pos = std::min(slot.n_sent_text, slot.generated_text.size());
@@ -2279,10 +2282,9 @@ bool server_context::process_token(completion_token_output& result, server_slot&
             result.text_to_send = "";
         }
 
-        slot.add_token_string(result);
-        if (slot.params.stream) {
-            send_partial_response(slot, result);
-        }
+        completion_token_output sampled = result;
+        sampled.text_to_send = piece;
+        slot.add_token_string(sampled);
     }
 
     if (incomplete) {
@@ -2330,6 +2332,29 @@ bool server_context::process_token(completion_token_output& result, server_slot&
         slot.has_next_token = false; // stop prediction
     }
     log_text(params_base, "token:"+result.text_to_send);
+    size_t n_end = incomplete ? n_valid : slot.generated_text.size();
+    if (incomplete && last && !slot.has_next_token) {
+        // the complete text before the incomplete character has not been checked for a stop string
+        const std::string str_test = slot.generated_text.substr(slot.n_sent_text, n_end - slot.n_sent_text);
+        const size_t stop_pos = slot.find_stopping_strings(str_test, str_test.size(), true);
+        if (stop_pos != std::string::npos) {
+            n_end = slot.n_sent_text + stop_pos;
+            slot.generated_text.erase(n_end);
+        }
+    }
+    const bool release = last && !slot.has_next_token && slot.n_sent_text < n_end;
+    if (slot.params.stream && (!incomplete || release)) {
+        if (incomplete) {
+            result.text_to_send.clear();
+        }
+        if (release) {
+            // the generation ended without completing the stop string: send the text held back for it
+            result.text_to_send += slot.generated_text.substr(slot.n_sent_text, n_end - slot.n_sent_text);
+            slot.n_sent_text = n_end;
+        }
+        send_partial_response(slot, result);
+    }
+
     LOG_VERBOSE("next token", {
         {"id_slot",        slot.id},
         {"id_task",        slot.id_task},
@@ -2590,7 +2615,10 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
 
     // populate res->probs_output
     if (slot.sparams.n_probs > 0) {
-        res->probs_output = { tkn }; // copy the token probs
+        if (!server_response_needs_chat_parse(slot.params.oaicompat) || !res->oaicompat_msg_diffs.empty() || slot.n_decoded == 1) {
+            res->probs_output.assign(slot.generated_token_probs.begin() + slot.n_sent_token_probs, slot.generated_token_probs.end());
+            slot.n_sent_token_probs = slot.generated_token_probs.size();
+        }
         res->data["completion_probabilities"] = probs_vector_to_json(ctx, res->probs_output);
     }
 
@@ -4695,7 +4723,7 @@ void server_context::send_token_results(completion_token_outputs& results, serve
     int32_t start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
 
     for (auto& it : results) {
-        bool has_next = process_token(it, slot);
+        bool has_next = process_token(it, slot, &it == &results.back());
 
         // Clean up positional bans for the token we just confirmed/sent
         slot.positional_bans.erase(start_pos + count);
