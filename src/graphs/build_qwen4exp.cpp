@@ -86,8 +86,11 @@ static ggml_tensor * qwen4exp_hc_combine(
     const int32_t hc = hparams.dsv4_hc_mult;
     const int64_t nt = residual->ne[2];
 
-    ggml_tensor * w = ggml_sigmoid(ctx0, ggml_scale(ctx0, inject, 1.0f / (float) hc));
+    auto inject_scaled = ggml_scale(ctx0, inject, 1.0f / (float) hc);
+    cb(inject_scaled, "inject_s", il);
+    ggml_tensor * w = ggml_sigmoid(ctx0, inject_scaled);
     w = ggml_scale(ctx0, w, 2.0f);
+    cb(w, "hc_w", il);
     w = ggml_reshape_3d(ctx0, w, 1, hc, nt);
 
     ggml_tensor * b = ggml_reshape_3d(ctx0, block_out, n_embd, 1, nt);

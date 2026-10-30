@@ -4146,8 +4146,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 cgraph->nodes[i+2]->op == GGML_OP_SCALE &&
                 cgraph->nodes[i+1]->src[0] == cgraph->nodes[i+0] &&
                 cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
-                (ggml_unary_op)cgraph->nodes[i+1]->op_params[0] == GGML_UNARY_OP_SOFTPLUS) {
-                ggml_cuda_op_scaled_softplus(ctx, cgraph->nodes[i+2]);
+                ggml_cuda_op_scale_unary_scale(ctx, cgraph->nodes[i+2])) {
                 i += 2;
             }
             else if (fusion && i + 1 < cgraph->n_nodes &&

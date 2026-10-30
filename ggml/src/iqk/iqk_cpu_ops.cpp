@@ -1112,3 +1112,83 @@ void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
         }
     }
 }
+
+namespace {
+inline void iqk_scaled_sigmoid(int n, const float * x, float * y, float s_before, float s_after) {
+    int i = 0;
+#ifdef __AVX512F__
+    {
+        auto vsb = _mm512_set1_ps(s_before);
+        auto vsa = _mm512_set1_ps(-s_after);
+        auto one = _mm512_set1_ps(1.0f);
+        for (; i + 15 < n; i += 16) {
+            auto vx = _mm512_mul_ps(vsb, _mm512_loadu_ps(x + i));
+            auto exp_vx = v_expf(vx);
+            auto vy = _mm512_div_ps(vsa, _mm512_add_ps(one, exp_vx));
+            _mm512_storeu_ps(y + i, vy);
+        }
+    }
+#endif
+#ifdef __AVX2__
+    {
+        auto vsb = _mm256_set1_ps(s_before);
+        auto vsa = _mm256_set1_ps(-s_after);
+        auto one = _mm256_set1_ps(1.0f);
+        for (; i + 7 < n; i += 8) {
+            auto vx = _mm256_mul_ps(vsb, _mm256_loadu_ps(x + i));
+            auto exp_vx = v_expf(vx);
+            auto vy = _mm256_div_ps(vsa, _mm256_add_ps(one, exp_vx));
+            _mm256_storeu_ps(y + i, vy);
+        }
+    }
+#endif
+#if defined(__ARM_NEON) && defined(__aarch64__)
+    {
+        auto vsb = vdupq_n_f32(s_before);
+        auto vsa = vdupq_n_f32(-s_after);
+        auto one = vdupq_n_f32(1.0f);
+        for (; i + 3 < n; i += 4) {
+            auto vx = vmulq_f32(vsb, vld1q_f32(x + i));
+            auto exp_vx = v_expf(vx);
+            auto vy = vdivq_f32(vsa, vaddq_f32(one, exp_vx));
+            vst1q_f32(y + i, vy);
+        }
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = s_after / (1.0f + expf(-s_before * x[i]));
+    }
+}
+}
+
+bool iqk_op_scale_unary_scale(struct ggml_tensor * dst, int ith, int nth) {
+    constexpr int k_block_size = 1024;
+    if (dst->op != GGML_OP_SCALE) return false;
+    auto unary = dst->src[0];
+    if (unary->op != GGML_OP_UNARY) return false;
+    auto unary_op = (ggml_unary_op)unary->op_params[0];
+    if (unary_op != GGML_UNARY_OP_SIGMOID) return false;
+    auto src = unary->src[0];
+    if (src->op != GGML_OP_SCALE) return false;
+    auto src0 = src->src[0];
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) return false;
+    if (src0->type != dst->type) return false;
+    if (src0->type != GGML_TYPE_F32) return false;
+
+    float s_before, s_after;
+    memcpy(&s_before, src->op_params, sizeof(float));
+    memcpy(&s_after, dst->op_params, sizeof(float));
+
+    int64_t nelem = ggml_nelements(src0);
+    int64_t  nblocks = (nelem + k_block_size - 1)/k_block_size;
+
+    for (int64_t ib = ith; ib < nblocks; ib += nth) {
+        int64_t first = ib*k_block_size;
+        auto x = (const float *)src0->data + first;
+        auto y = (      float *) dst->data + first;
+        int  n = std::min<int>(k_block_size, nelem - first);
+        iqk_scaled_sigmoid(n, x, y, s_before, s_after);
+    }
+
+    return true;
+}
