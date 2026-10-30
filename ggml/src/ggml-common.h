@@ -183,6 +183,14 @@ typedef struct {
 } block_q2_0;
 static_assert(sizeof(block_q2_0) == sizeof(ggml_half) + QK2_0 / 4, "wrong q2_0 block size/padding");
 
+// 8-row repacked Q2_0: qs[64*p + 8*j + k] = x[k].qs[8*p + j]
+#define QK2_0_R8_ROWS 8
+typedef struct {
+    ggml_half d[QK2_0_R8_ROWS];
+    uint8_t   qs[QK2_0_R8_ROWS*(QK2_0/4)];
+} block_q2_0_r8;
+static_assert(sizeof(block_q2_0_r8) == QK2_0_R8_ROWS*sizeof(block_q2_0), "wrong q2_0_r8 block size/padding");
+
 #define QK4_1 32
 typedef struct {
     GGML_SCALE_TYPE1(m, dm);

@@ -292,7 +292,8 @@ static inline int num_rows([[maybe_unused]] ggml_type type) {
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q8_KV:
         case GGML_TYPE_Q8_KV_R8:
-        case GGML_TYPE_Q8_K_R8: return 8;
+        case GGML_TYPE_Q8_K_R8:
+        case GGML_TYPE_Q2_0_R8: return 8;
         case GGML_TYPE_Q4_0_R8:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_Q8_1:
@@ -330,7 +331,8 @@ static inline int num_rows([[maybe_unused]] ggml_type type) {
         case GGML_TYPE_Q8_KV:
         case GGML_TYPE_Q8_KV_R8:
         case GGML_TYPE_Q8_1:
-        case GGML_TYPE_Q8_K_R8: return 8;
+        case GGML_TYPE_Q8_K_R8:
+        case GGML_TYPE_Q2_0_R8: return 8;
         case GGML_TYPE_Q8_K_R16:
         case GGML_TYPE_BF16_R16: return 16;
         default: return 1;
@@ -6062,6 +6064,95 @@ void vec_dot_q4_0_r8_q8_0(int n, float * s, size_t bs, const void * vx, size_t b
 
 
 //
+// ========================================= q2_0_r8
+//
+void quantize_row_q2_0_r8_ref(const float * x, block_q2_0_r8  * y, int64_t k) {
+    // we assume we are called with 8 rows
+    quantize_q2_0_r8(x, (void *)y, 8, k/8, nullptr, nullptr);
+}
+
+void quantize_row_q2_0_r8(const float * x, void * y, int64_t k) {
+    // we assume we are called with 8 rows
+    quantize_q2_0_r8(x, y, 8, k/8, nullptr, nullptr);
+}
+
+static void repack_q2_0(int nrows, int n_per_row, const block_q2_0 * x, block_q2_0_r8 * y, [[maybe_unused]] bool online) {
+    GGML_ASSERT(nrows%8 == 0);
+    GGML_ASSERT(n_per_row%QK2_0 == 0);
+    int nblock = n_per_row/QK2_0;
+    const block_q2_0 * x8[8];
+    for (int row = 0; row < nrows; row += 8) {
+        for (int k = 0; k < 8; ++k) x8[k] = x + nblock*k;
+        for (int ib = 0; ib < nblock; ++ib) {
+            for (int k = 0; k < 8; ++k) {
+                y[ib].d[k] = x8[k][ib].d;
+                for (int p = 0; p < 2; ++p) {
+                    for (int j = 0; j < 8; ++j) {
+                        y[ib].qs[64*p + 8*j + k] = x8[k][ib].qs[8*p + j];
+                    }
+                }
+            }
+        }
+        x += 8*nblock;
+        y += nblock;
+    }
+}
+
+size_t quantize_q2_0_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
+        const quantize_user_data * user_data) {
+    GGML_ASSERT(nrows%8 == 0);
+    auto row_size_nl = ggml_row_size(GGML_TYPE_Q2_0, n_per_row);
+    std::vector<char> qtmp(8*row_size_nl);
+    QHelper helper(imatrix, user_data, n_per_row, QK2_0);
+    auto q_func = [] (const float * x, void * vy, int n_per_row, const float * imatrix,
+            [[maybe_unused]] const quantize_user_data * user_data) {
+        quantize_q2_0(x, (char *)vy, 1, n_per_row, imatrix, nullptr);
+    };
+    char * qrow = (char *)dst;
+    for (int row = 0; row < nrows; row += 8) {
+        helper.quantize(8, src, qtmp.data(), row_size_nl, q_func);
+        repack_q2_0(8, n_per_row, (const block_q2_0 *)qtmp.data(), (block_q2_0_r8 *)qrow, false);
+        src += 8*n_per_row;
+        qrow += 8*row_size_nl;
+    }
+    return nrows*row_size_nl;
+}
+
+void dequantize_row_q2_0_r8(const block_q2_0_r8 * x, float * y, int64_t k) {
+    // we assume we are called with 8 rows
+    int n_per_row = k/8;
+    int nb = n_per_row/QK2_0;
+    float * yk[8];
+    for (int kk = 0; kk < 8; ++kk) yk[kk] = y + kk*n_per_row;
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int kk = 0; kk < 8; ++kk) {
+            float scale = GGML_FP16_TO_FP32(x[ib].d[kk]);
+            for (int p = 0; p < 2; ++p) {
+                for (int j = 0; j < 8; ++j) {
+                    uint8_t q = x[ib].qs[64*p + 8*j + kk];
+                    for (int l = 0; l < 4; ++l) {
+                        yk[kk][QK2_0*ib + 32*p + 4*j + l] = scale * (((q >> 2*l) & 3) - 1);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void vec_dot_q2_0_r8_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q2_0_R8, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK2_0 == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
+//
 // ========================================= q8_0_r8
 //
 void quantize_row_q8_0_r8_ref(const float * x, block_q8_0_r8  * y, int64_t k) {
@@ -9447,6 +9538,7 @@ const Repack * get_repack_info(ggml_type type) {
         { GGML_TYPE_Q5_K,   { GGML_TYPE_Q5_K_R4,   4,  (Repack::repack_func)repack_q5_k}    },
         { GGML_TYPE_Q6_K,   { GGML_TYPE_Q6_K_R4,   4,  (Repack::repack_func)repack_q6_k}    },
         { GGML_TYPE_Q4_0,   { GGML_TYPE_Q4_0_R8,   8,  (Repack::repack_func)repack_q4_0}    },
+        { GGML_TYPE_Q2_0,   { GGML_TYPE_Q2_0_R8,   8,  (Repack::repack_func)repack_q2_0}    },
         { GGML_TYPE_Q5_0,   { GGML_TYPE_Q5_0_R4,   4,  (Repack::repack_func)repack_q5_0}    },
         { GGML_TYPE_Q6_0,   { GGML_TYPE_Q6_0_R4,   4,  (Repack::repack_func)repack_q6_0}    },
         { GGML_TYPE_Q8_0,   { GGML_TYPE_Q8_0_R8,   8,  (Repack::repack_func)repack_q8_0}    },
