@@ -992,6 +992,9 @@ class GGUFWriter:
     def add_hyper_connection_epsilon(self, value: float) -> None:
         self.add_float32(f"{self.arch}.hyper_connection.epsilon", value)
 
+    def add_hyper_connection_sinkhorn_iterations(self, value: int) -> None:
+        self.add_uint32(f"{self.arch}.hyper_connection.sinkhorn_iterations", value)
+
     def add_hyper_connection_magnitude(self, value: float) -> None:
         self.add_float32(f"{self.arch}.hyper_connection.magnitude", value)
 
