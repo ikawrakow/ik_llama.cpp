@@ -298,7 +298,11 @@ struct common_sampler {
     int32_t                       elb_search_pos;   // for exitwords
 };
 
+struct positional_ban_set {
+    std::map<int32_t, std::set<llama_token>> tokens;
+    float bias;
 
+};
 
 // Create a new sampling context instance.
 struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params);
@@ -388,7 +392,7 @@ llama_token_data_array * common_sampler_get_candidates(struct common_sampler * c
 
 std::vector<llama_token> llama_sampling_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<llama_token> & draft);
 
-std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft, bool grammar_first = false);
+std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft, bool grammar_first = false, positional_ban_set * positional_ban = nullptr);
 
 std::vector<llama_token> common_sampler_sample_and_accept_n(
         struct common_sampler * gsmpl,
@@ -396,7 +400,8 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
         const std::vector<int> & idxs,
         const std::vector<llama_token> & draft,
         const std::vector<common_speculative_token_dist> & dists,
-        bool grammar_first = false);
+        bool grammar_first = false, positional_ban_set * positional_ban = nullptr);
+
 
 // Greedy argmax sampling for speculative drafting
 llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob = nullptr);

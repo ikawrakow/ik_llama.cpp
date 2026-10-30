@@ -2322,32 +2322,32 @@ void llama_kv_cache::checkpoint_delete(llama_ckpt_data ckpt_type) {
 
 llama_kv_cache::gpu_checkpoint & llama_kv_cache::llama_get_ckpt(llama_ckpt_data ckpt_type) {
     if (ckpt_type.type == LLAMA_CHECKPOINT_REWIND) {
-        if (!ckpt_rewind_map.contains(ckpt_type.pos)) {
+        if (!ckpt_rewind_map.contains(ckpt_type.pos1)) {
             bool found = false;
             for (auto & saved_ckpt : ckpt_rewind_pool) {
                 // reuse ckpt pool
                 if (!saved_ckpt->saved && !saved_ckpt->dsv4_shadow_saved) {
-                    ckpt_rewind_map[ckpt_type.pos] = saved_ckpt.get();
+                    ckpt_rewind_map[ckpt_type.pos1] = saved_ckpt.get();
                     found = true;
                     break;
                 }
             }
             if (!found) {
                 ckpt_rewind_pool.push_back(std::make_unique<gpu_checkpoint>());
-                ckpt_rewind_map[ckpt_type.pos] = ckpt_rewind_pool.back().get();
+                ckpt_rewind_map[ckpt_type.pos1] = ckpt_rewind_pool.back().get();
             }
         }
-        return *ckpt_rewind_map[ckpt_type.pos];
+        return *ckpt_rewind_map[ckpt_type.pos1];
     }
     return ckpt;
 }
 
 bool  llama_kv_cache::llama_ckpt_mode_equal(llama_ckpt_data ckpt_type, int mode) const {
     if (ckpt_type.type == LLAMA_CHECKPOINT_REWIND) {
-        if (!ckpt_rewind_map.contains(ckpt_type.pos)) {
+        if (!ckpt_rewind_map.contains(ckpt_type.pos1)) {
             return mode==LLAMA_SPEC_CKPT_NONE;
         }
-        const auto * ckpt1 = ckpt_rewind_map.at(ckpt_type.pos);
+        const auto * ckpt1 = ckpt_rewind_map.at(ckpt_type.pos1);
         return ckpt1->selected_spec_mode== mode;
     }
     return ckpt.selected_spec_mode == mode;
@@ -7829,10 +7829,10 @@ static int llama_decode_internal(
         llama_graph_compute(lctx, gf, n_threads);
 
         if (llm_arch_is_dsv4(lctx.model.arch) &&
-            llama_dsv4_per_step_capture_active(lctx, { LLAMA_CHECKPOINT_SPEC, 0 }) &&
-            !llama_dsv4_spec_ckpt_capture_rows(&lctx, { LLAMA_CHECKPOINT_SPEC, 0 })) {
+            llama_dsv4_per_step_capture_active(lctx, { LLAMA_CHECKPOINT_SPEC, 0, 0 }) &&
+            !llama_dsv4_spec_ckpt_capture_rows(&lctx, { LLAMA_CHECKPOINT_SPEC, 0, 0 })) {
             // the checkpoint cannot be trusted: drop it, so later decodes do not keep capturing into it
-            llama_spec_ckpt_discard(&lctx, { LLAMA_CHECKPOINT_SPEC, 0 });
+            llama_spec_ckpt_discard(&lctx, { LLAMA_CHECKPOINT_SPEC, 0, 0 });
             return GGML_STATUS_FAILED;
         }
 
@@ -11167,9 +11167,9 @@ bool llama_rewind_ckpt_save(struct llama_context * ctx, llama_ckpt_data ckpt_typ
 bool llama_rewind_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_type, [[maybe_unused]] llama_seq_id seq_id) {
     auto & m = ctx->kv_self.ckpt_rewind_map;
     for (auto it = m.begin(); it != m.end(); ) {
-        if (it->first < ckpt_type.pos || ckpt_type.pos <0) {
+        if ((it->first >= ckpt_type.pos1 && it->first < ckpt_type.pos2) ||(ckpt_type.pos2 < 0 && it->first >= ckpt_type.pos1)) {
             auto new_type = ckpt_type;
-            new_type.pos = it->first;
+            new_type.pos1 = it->first;
             llama_spec_ckpt_discard(ctx, new_type);
             it = m.erase(it);
         } else {
@@ -11182,7 +11182,7 @@ bool llama_rewind_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_
 bool llama_rewind_ckpt_release(struct llama_context * ctx, llama_ckpt_data ckpt_type, [[maybe_unused]] llama_seq_id seq_id) {
     auto & m = ctx->kv_self.ckpt_rewind_map;
     for (auto it = m.begin(); it != m.end(); ) {
-        if (it->first < ckpt_type.pos || ckpt_type.pos < 0) {
+        if ((it->first >= ckpt_type.pos1 && it->first < ckpt_type.pos2) || (ckpt_type.pos2 < 0 && it->first >= ckpt_type.pos1)) {
             auto & ckpt = *it->second;
             ckpt.release();
             it = m.erase(it);
@@ -11192,6 +11192,21 @@ bool llama_rewind_ckpt_release(struct llama_context * ctx, llama_ckpt_data ckpt_
     }
     return true;
 }
+
+llama_pos llama_rewind_ckpt_pos(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id) {
+    auto & m = ctx->kv_self.ckpt_rewind_map;
+    llama_pos pos = -1;
+    for (auto it = m.begin(); it != m.end(); ) {
+        if (it->first > ckpt_type.pos1) {    
+            break;
+        } else {
+            pos = it->first;
+            ++it;
+        }
+    }
+    return pos;
+}
+
 
 enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
         struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id,
