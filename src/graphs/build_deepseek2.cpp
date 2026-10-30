@@ -735,8 +735,10 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
         bool use_f32_attn_precision,
         bool is_lite,
         bool pp_opt) {
+    const uint32_t n_embd_head_k       = hparams.n_embd_head_k_mla_impl ? hparams.n_embd_head_k_mla() : hparams.n_embd_head_k(0);
+    const uint32_t n_embd_head_v       = hparams.n_embd_head_v_mla_impl ? hparams.n_embd_head_v_mla() : hparams.n_embd_head_v(0);
     const uint32_t n_embd_head_qk_rope = hparams.n_rot;
-    const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k(0) - hparams.n_rot;
+    const uint32_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
     const uint32_t kv_lora_rank = hparams.n_lora_kv;
     const uint32_t q_lora_rank  = hparams.n_lora_q;
     ggml_tensor * cur;
@@ -784,9 +786,9 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                 qnb1 = mqa->nb[1];
             }
             q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-                ggml_row_size(q->type, hparams.n_embd_head_k(il)), qnb1, 0);
+                ggml_row_size(q->type, n_embd_head_k), qnb1, 0);
             q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-                ggml_row_size(q->type, hparams.n_embd_head_k(il)), qnb1, ggml_row_size(q->type, n_embd_head_qk_nope));
+                ggml_row_size(q->type, n_embd_head_k), qnb1, ggml_row_size(q->type, n_embd_head_qk_nope));
             k_rope = ggml_view_3d(ctx0, kv_rope_compressed, n_embd_head_qk_rope, 1, n_tokens,
                     mqa->nb[1], mqa->nb[1], ggml_row_size(kv_rope_compressed->type, kv_lora_rank));
             kv_compressed = ggml_view_2d(ctx0, kv_rope_compressed, kv_lora_rank, n_tokens, mqa->nb[1], 0);
@@ -851,12 +853,12 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
             }
 
             q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il)),
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il) * n_head), 0);
+                    ggml_row_size(q->type, n_embd_head_k),
+                    ggml_row_size(q->type, n_embd_head_k * n_head), 0);
 
             q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il)),
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il) * n_head),
+                    ggml_row_size(q->type, n_embd_head_k),
+                    ggml_row_size(q->type, n_embd_head_k * n_head),
                     ggml_row_size(q->type, n_embd_head_qk_nope));
 
             k_rope = ggml_view_3d(ctx0, kv_rope_compressed, n_embd_head_qk_rope, 1, n_tokens,
@@ -1124,23 +1126,23 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 
             // split into {n_head * n_embd_head_qk_nope, n_tokens}
             struct ggml_tensor * k_nope = ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head, n_tokens,
-                    ggml_row_size(kv->type, n_embd_head_qk_nope + hparams.n_embd_head_v_full),
-                    ggml_row_size(kv->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v_full)),
+                    ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
+                    ggml_row_size(kv->type, n_head * (n_embd_head_qk_nope + n_embd_head_v)),
                     0);
             cb(k_nope, "k_nope", il);
 
             // and {n_head * n_embd_head_v, n_tokens}
-            struct ggml_tensor * v_states = ggml_view_3d(ctx0, kv, hparams.n_embd_head_v_full, n_head, n_tokens,
-                    ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v_full)),
-                    ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v_full)*n_head),
+            struct ggml_tensor * v_states = ggml_view_3d(ctx0, kv, n_embd_head_v, n_head, n_tokens,
+                    ggml_row_size(kv->type, (n_embd_head_qk_nope + n_embd_head_v)),
+                    ggml_row_size(kv->type, (n_embd_head_qk_nope + n_embd_head_v)*n_head),
                     ggml_row_size(kv->type, (n_embd_head_qk_nope)));
             cb(v_states, "v_states", il);
 
             v_states = ggml_cont(ctx0, v_states);
             cb(v_states, "v_states", il);
 
-            v_states = ggml_view_2d(ctx0, v_states, hparams.n_embd_head_v_full * n_head, n_tokens,
-                    ggml_row_size(kv->type, hparams.n_embd_head_v_full * n_head),
+            v_states = ggml_view_2d(ctx0, v_states, n_embd_head_v * n_head, n_tokens,
+                    ggml_row_size(kv->type, n_embd_head_v * n_head),
                     0);
             cb(v_states, "v_states", il);
 
