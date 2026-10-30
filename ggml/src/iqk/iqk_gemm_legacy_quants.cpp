@@ -2002,44 +2002,42 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
         }
     }
 }
-template <int nrc_y>
-static void mul_mat_q8_0_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    GGML_ASSERT(nrc_x%16 == 0);
-    const int nb  = n / QK8_0;
-    const int nb4 = 4*(nb/4);
-    thread_local std::vector<int32_t> aux;
-    if (aux.size() < (size_t)2*nrc_y*nb) aux.resize(2*nrc_y*nb);
-    int32_t * tab = aux.data();
-    const char * yc[nrc_y];
-    for (int iy = 0; iy < nrc_y; ++iy) {
-        yc[iy] = info.src1_row(iy);
-        auto y4 = (const block_q8_2_x4 *)yc[iy];
-        for (int ib4 = 0; ib4 < nb4/4; ++ib4) {
-            auto v = _mm_loadu_si128((const __m128i *)y4[ib4].d);
-            auto d = _mm_slli_epi32(_mm_cvtepu16_epi32(v), 16);
-            auto m = _mm_sub_epi32(_mm_setzero_si128(), _mm_slli_epi32(_mm_cvtepi16_epi32(_mm_srli_si128(v, 8)), 7));
-            auto e01 = _mm_unpacklo_epi32(d, m);
-            auto e23 = _mm_unpackhi_epi32(d, m);
-            int32_t * t = tab + 2*(4*ib4*nrc_y + iy);
-            _mm_storel_epi64((__m128i *)(t + 0*nrc_y), e01);
-            _mm_storeh_pd((double *)(t + 2*nrc_y), _mm_castsi128_pd(e01));
-            _mm_storel_epi64((__m128i *)(t + 4*nrc_y), e23);
-            _mm_storeh_pd((double *)(t + 6*nrc_y), _mm_castsi128_pd(e23));
+static IQK_NOINLINE void q8_0_r16_fill_tab8(int nb4, const char * const * yc, int32_t * tab) {
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i idx_0 = _mm512_setr_epi64(0, 2, 4, 6,  8, 10, 12, 14);
+    const __m512i idx_1 = _mm512_setr_epi64(1, 3, 5, 7,  9, 11, 13, 15);
+    for (int ib4 = 0; ib4 < nb4/4; ++ib4) {
+        __m512i e01[2], e23[2];
+        for (int k = 0; k < 2; ++k) {
+            auto v = _mm512_castsi128_si512(_mm_loadu_si128((const __m128i *)((const block_q8_2_x4 *)yc[4*k+0] + ib4)->d));
+            v = _mm512_inserti32x4(v, _mm_loadu_si128((const __m128i *)((const block_q8_2_x4 *)yc[4*k+1] + ib4)->d), 1);
+            v = _mm512_inserti32x4(v, _mm_loadu_si128((const __m128i *)((const block_q8_2_x4 *)yc[4*k+2] + ib4)->d), 2);
+            v = _mm512_inserti32x4(v, _mm_loadu_si128((const __m128i *)((const block_q8_2_x4 *)yc[4*k+3] + ib4)->d), 3);
+            auto d = _mm512_unpacklo_epi16(zero, v);
+            auto m = _mm512_sub_epi32(zero, _mm512_srai_epi32(_mm512_unpackhi_epi16(zero, v), 9));
+            e01[k] = _mm512_unpacklo_epi32(d, m);
+            e23[k] = _mm512_unpackhi_epi32(d, m);
         }
-        auto y1 = (const block_q8_2 *)yc[iy];
-        for (int ib = nb4; ib < nb; ++ib) {
-            tab[2*(ib*nrc_y + iy) + 0] = (int32_t)y1[ib].d << 16;
-            tab[2*(ib*nrc_y + iy) + 1] = -128*(int32_t)*(const int16_t *)&y1[ib].s;
-        }
+        auto t = (__m512i *)(tab + 64*ib4);
+        _mm512_storeu_si512(t + 0, _mm512_permutex2var_epi64(e01[0], idx_0, e01[1]));
+        _mm512_storeu_si512(t + 1, _mm512_permutex2var_epi64(e01[0], idx_1, e01[1]));
+        _mm512_storeu_si512(t + 2, _mm512_permutex2var_epi64(e23[0], idx_0, e23[1]));
+        _mm512_storeu_si512(t + 3, _mm512_permutex2var_epi64(e23[0], idx_1, e23[1]));
     }
+}
+template <int nrc_y>
+static IQK_NOINLINE void q8_0_r16_main(int nb, int nb4, const void * vx, size_t bx, const DataInfo& info, int nrc_x,
+        const int32_t * tab, const char * const * yc, const char * yn) {
     __m512  acc[nrc_y];
     __m512i sumi[nrc_y];
     for (int ix = 0; ix < nrc_x; ix += 16) {
         auto xb = (const block_q8_0_r16 *)((const char *)vx + ix*bx);
         const int32_t * tb = tab;
+        const char * pf = yn + 144*nb*((ix >> 4) & 1);
         for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm512_setzero_ps();
         for (int ib = 0; ib < nb; ++ib) {
             const int off = ib < nb4 ? 144*(ib >> 2) + 16 + 32*(ib & 3) : 36*ib + 4;
+            if constexpr (nrc_y == 8) _mm_prefetch(pf + 144*ib, _MM_HINT_T1);
             for (int iy = 0; iy < nrc_y; ++iy) sumi[iy] = _mm512_set1_epi32(tb[2*iy+1]);
             for (int j = 0; j < 8; ++j) {
                 auto qx = _mm512_loadu_si512((const __m512i *)xb->qs + j);
@@ -2056,6 +2054,42 @@ static void mul_mat_q8_0_r16_q8_2(int n, const void * vx, size_t bx, const DataI
         }
         for (int iy = 0; iy < nrc_y; ++iy) info.store(ix, iy, acc[iy]);
     }
+}
+template <int nrc_y>
+static void mul_mat_q8_0_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%16 == 0);
+    const int nb  = n / QK8_0;
+    const int nb4 = 4*(nb/4);
+    thread_local std::vector<int32_t> aux;
+    if (aux.size() < (size_t)2*nrc_y*nb + 16) aux.resize(2*nrc_y*nb + 16);
+    int32_t * tab = (int32_t *)(((uintptr_t)aux.data() + 63) & ~(uintptr_t)63);
+    const char * yc[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        yc[iy] = info.src1_row(iy);
+        if constexpr (nrc_y != 8) {
+            auto y4 = (const block_q8_2_x4 *)yc[iy];
+            for (int ib4 = 0; ib4 < nb4/4; ++ib4) {
+                auto v = _mm_loadu_si128((const __m128i *)y4[ib4].d);
+                auto d = _mm_slli_epi32(_mm_cvtepu16_epi32(v), 16);
+                auto m = _mm_sub_epi32(_mm_setzero_si128(), _mm_slli_epi32(_mm_cvtepi16_epi32(_mm_srli_si128(v, 8)), 7));
+                auto e01 = _mm_unpacklo_epi32(d, m);
+                auto e23 = _mm_unpackhi_epi32(d, m);
+                int32_t * t = tab + 2*(4*ib4*nrc_y + iy);
+                _mm_storel_epi64((__m128i *)(t + 0*nrc_y), e01);
+                _mm_storeh_pd((double *)(t + 2*nrc_y), _mm_castsi128_pd(e01));
+                _mm_storel_epi64((__m128i *)(t + 4*nrc_y), e23);
+                _mm_storeh_pd((double *)(t + 6*nrc_y), _mm_castsi128_pd(e23));
+            }
+        }
+        auto y1 = (const block_q8_2 *)yc[iy];
+        for (int ib = nb4; ib < nb; ++ib) {
+            tab[2*(ib*nrc_y + iy) + 0] = (int32_t)y1[ib].d << 16;
+            tab[2*(ib*nrc_y + iy) + 1] = -128*(int32_t)*(const int16_t *)&y1[ib].s;
+        }
+    }
+    if constexpr (nrc_y == 8) q8_0_r16_fill_tab8(nb4, yc, tab);
+    const char * yn = info.row_mapping ? yc[0] : yc[0] + nrc_y*info.by;
+    q8_0_r16_main<nrc_y>(nb, nb4, vx, bx, info, nrc_x, tab, yc, yn);
 }
 
 #else
