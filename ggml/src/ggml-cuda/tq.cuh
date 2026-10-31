@@ -163,8 +163,8 @@ static __device__ __forceinline__ void tq_dequant_lane(const void * x, const int
 // q8_1 block aligned with the start of block kbx (4 q8_1 blocks per trellis block);
 // iqs = VDR_TQ_Q8_1_MMVQ * lane.
 template <ggml_type type>
-static __device__ __forceinline__ float vec_dot_tq_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+static __device__ __forceinline__ void vec_dot_tq_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
     typedef typename tq_block_info<type>::block_t block_t;
     const block_t * b = (const block_t *) vbq + kbx;
     const int l = iqs / VDR_TQ_Q8_1_MMVQ;
@@ -183,7 +183,7 @@ static __device__ __forceinline__ float vec_dot_tq_q8_1(
         const uint32_t w = (uint32_t) tq_lut_i8[idx[2*i]] | ((uint32_t) tq_lut_i8[idx[2*i + 1]] << 16);
         sumi = ggml_cuda_dp4a((int) w, q8[i], sumi);
     }
-    return __half2float(b->d) * (__low2float(b8->ds) * TQ_LUT_I8_SCALE) * (float) sumi;
+    *result = __half2float(b->d) * (__low2float(b8->ds) * TQ_LUT_I8_SCALE) * (float) sumi;
 }
 
 // MMQ (batched) path: lane l of block x as 16 int8 values (4 packed ints, weight order) with
