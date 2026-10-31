@@ -7579,38 +7579,60 @@ static int llama_decode_internal(
                 n_tokens > 1 &&
                 batch_all.n_seq_id != nullptr &&
                 batch_all.seq_id != nullptr) {
+            // The delta-net builder takes its fast path only when every token in
+            // the chunk shares one sequence; a chunk mixing sequences is handled
+            // token by token and asserts unless each token carries a unique seq id.
+            // After regrouping, sequence runs are contiguous, so a window that
+            // straddles two sequences is the normal case. Clamp the chunk to the
+            // current run so the fast path still applies, instead of collapsing
+            // the whole ubatch to one token per graph.
             bool can_check = true;
-            bool any_diff = false;
-            bool has_dup = false;
-            llama_seq_id first_seq_id = 0;
-            std::unordered_set<llama_seq_id> seen_seq_ids;
-            seen_seq_ids.reserve(n_tokens);
-
             for (uint32_t i = 0; i < n_tokens; ++i) {
                 const uint32_t idx = cur_token + i;
                 if (batch_all.n_seq_id[idx] <= 0 || batch_all.seq_id[idx] == nullptr) {
                     can_check = false;
                     break;
                 }
-
-                const llama_seq_id seq_id_i = batch_all.seq_id[idx][0];
-                if (i == 0) {
-                    first_seq_id = seq_id_i;
-                } else if (seq_id_i != first_seq_id) {
-                    any_diff = true;
-                }
-
-                if (!seen_seq_ids.insert(seq_id_i).second) {
-                    has_dup = true;
-                }
             }
 
-            if (can_check && any_diff && has_dup) {
-                n_tokens = 1;
-                lctx.n_single_token_fallbacks++;
-                if (!warned_qnext_mixed_repeat) {
-                    LLAMA_LOG_WARN("%s: qwen3next mixed-sequence batch contains repeated seq_id values; falling back to single-token chunking\n", __func__);
-                    warned_qnext_mixed_repeat = true;
+            if (can_check) {
+                const llama_seq_id run_seq_id = batch_all.seq_id[cur_token][0];
+                uint32_t run_len = 1;
+                bool all_same   = true;
+                bool all_unique = true;
+                std::unordered_set<llama_seq_id> seen_ids;
+                seen_ids.reserve(n_tokens);
+                seen_ids.insert(run_seq_id);
+
+                while (run_len < n_tokens && batch_all.seq_id[cur_token + run_len][0] == run_seq_id) {
+                    ++run_len;
+                }
+
+                // The builder accepts a chunk when every token shares one sequence,
+                // or when every token carries a distinct one. Token generation with
+                // several slots is the second shape: one token per sequence, ids all
+                // unique, so it must be left alone. Only a chunk with repeated ids
+                // that is not a single run needs cutting.
+                for (uint32_t i = 1; i < n_tokens; ++i) {
+                    const llama_seq_id s = batch_all.seq_id[cur_token + i][0];
+                    if (s != run_seq_id) {
+                        all_same = false;
+                    }
+                    if (!seen_ids.insert(s).second) {
+                        all_unique = false;
+                    }
+                }
+
+                if (!all_same && !all_unique && run_len < n_tokens) {
+                    n_tokens = run_len;
+                    if (run_len == 1) {
+                        // alternating singleton sequences, nothing to group
+                        lctx.n_single_token_fallbacks++;
+                        if (!warned_qnext_mixed_repeat) {
+                            LLAMA_LOG_WARN("%s: qwen3next batch interleaves sequence ids; falling back to single-token chunking\n", __func__);
+                            warned_qnext_mixed_repeat = true;
+                        }
+                    }
                 }
             }
         }
