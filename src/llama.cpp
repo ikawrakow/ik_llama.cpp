@@ -7499,6 +7499,76 @@ static int llama_decode_internal(
         }
     }
 
+    // Hybrid (delta-net) archs need each sequence's tokens contiguous within a ubatch,
+    // otherwise the per-ubatch check below has to fall back to single-token chunking.
+    // Callers such as batched-bench and the server interleave sequences token by token,
+    // so regroup by seq_id here, before the batch is sliced into ubatches.
+    // The buffers live until the end of decode: batch_all points into them.
+    std::vector<llama_token>    rg_token;
+    std::vector<llama_pos>      rg_pos;
+    std::vector<int32_t>        rg_nseq;
+    std::vector<llama_seq_id *> rg_seq;
+    std::vector<int8_t>         rg_logits;
+    std::vector<int32_t>        rg_out;
+
+    if (llm_arch_is_hybrid(model.arch) && n_tokens_all > 1 &&
+            batch_all.token && batch_all.pos && batch_all.n_seq_id && batch_all.seq_id) {
+        bool already_grouped = true;
+        for (uint32_t i = 1; i < n_tokens_all; ++i) {
+            if (batch_all.n_seq_id[i] <= 0 || batch_all.n_seq_id[i-1] <= 0 ||
+                    !batch_all.seq_id[i] || !batch_all.seq_id[i-1] ||
+                    batch_all.seq_id[i][0] < batch_all.seq_id[i-1][0]) {
+                already_grouped = false;
+                break;
+            }
+        }
+
+        if (!already_grouped) {
+            std::vector<int32_t> perm(n_tokens_all);
+            for (uint32_t i = 0; i < n_tokens_all; ++i) {
+                perm[i] = (int32_t) i;
+            }
+            std::stable_sort(perm.begin(), perm.end(), [&batch_all](int32_t a, int32_t b) {
+                return batch_all.seq_id[a][0] < batch_all.seq_id[b][0];
+            });
+
+            const size_t n_planes = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
+                    hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
+
+            rg_token .resize(n_tokens_all);
+            rg_pos   .resize(n_tokens_all * n_planes);
+            rg_nseq  .resize(n_tokens_all);
+            rg_seq   .resize(n_tokens_all);
+            rg_logits.resize(n_tokens_all);
+            rg_out   .resize(n_tokens_all);
+
+            for (uint32_t i = 0; i < n_tokens_all; ++i) {
+                const int32_t s = perm[i];
+                rg_token [i] = batch_all.token[s];
+                rg_nseq  [i] = batch_all.n_seq_id[s];
+                rg_seq   [i] = batch_all.seq_id[s];
+                rg_logits[i] = batch_all.logits ? batch_all.logits[s] : 0;
+                // keep every token attached to the output row it had in the caller's order
+                rg_out   [i] = lctx.output_ids[s];
+                for (size_t p = 0; p < n_planes; ++p) {
+                    rg_pos[p*n_tokens_all + i] = batch_all.pos[p*n_tokens_all + s];
+                }
+            }
+
+            batch_all.token    = rg_token.data();
+            batch_all.pos      = rg_pos.data();
+            batch_all.n_seq_id = rg_nseq.data();
+            batch_all.seq_id   = rg_seq.data();
+            batch_all.logits   = batch_all.logits ? rg_logits.data() : nullptr;
+            for (uint32_t i = 0; i < n_tokens_all; ++i) {
+                lctx.output_ids[i] = rg_out[i];
+            }
+
+            LLAMA_LOG_INFO("%s: regrouped %u tokens by seq_id for hybrid attention\n",
+                    __func__, n_tokens_all);
+        }
+    }
+
     bool warned_qnext_mixed_repeat = false;
     for (uint32_t cur_token = 0; cur_token < n_tokens_all; ) {
 #if IK_PRINT_TIMING
@@ -7537,6 +7607,7 @@ static int llama_decode_internal(
 
             if (can_check && any_diff && has_dup) {
                 n_tokens = 1;
+                lctx.n_single_token_fallbacks++;
                 if (!warned_qnext_mixed_repeat) {
                     LLAMA_LOG_WARN("%s: qwen3next mixed-sequence batch contains repeated seq_id values; falling back to single-token chunking\n", __func__);
                     warned_qnext_mixed_repeat = true;
