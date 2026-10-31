@@ -481,7 +481,7 @@ static struct ggml_tensor * llm_build_hadamard_rotate(
         struct ggml_context * ctx0,
         struct ggml_tensor * cur,
         const llama_hadamard_transform & t,
-        bool inverse);
+        bool inverse, bool fuse_signs);
 
 struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd) {
     struct ggml_tensor * cur = nullptr;
@@ -500,7 +500,7 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
         // undo the Hadamard rotation of the embedding table (latent token embedding);
         // without this the draft head consumes embeddings in the rotated basis
         if (auto rot = lctx.model.hadamard_rotation(mtp_tok_embd); rot != nullptr) {
-            cur = llm_build_hadamard_rotate(ctx0, cur, *rot, true);
+            cur = llm_build_hadamard_rotate(ctx0, cur, *rot, true, false);
         }
     } else {
         lctx.inp_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, batch.n_tokens);
@@ -922,7 +922,7 @@ static struct ggml_tensor * llm_build_hadamard_rotate(
         struct ggml_context * ctx0,
         struct ggml_tensor * cur,
         const llama_hadamard_transform & t,
-        bool inverse = false) {
+        bool inverse, bool fuse_signs) {
     if (t.block_size == 0) {
         return cur;
     }
@@ -939,7 +939,7 @@ static struct ggml_tensor * llm_build_hadamard_rotate(
         res = ggml_reshape_4d(ctx0, x, t.perm_hd*t.perm_nk*t.perm_rep, ne1, ne2, ne3);
     }
     const bool signs_first = !inverse;
-    if (t.signs && ggml_is_contiguous(res) && ggml_is_contiguous(t.signs) && ggml_nrows(t.signs) == 1 &&
+    if (t.signs && fuse_signs && ggml_is_contiguous(res) && ggml_is_contiguous(t.signs) && ggml_nrows(t.signs) == 1 &&
         res->ne[0] == t.signs->ne[0] && res->type == GGML_TYPE_F32 && t.signs->type == GGML_TYPE_F32) {
         return ggml_signed_hadamard(ctx0, res, t.signs, t.block_size, signs_first);
     }
@@ -985,7 +985,7 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
 
         // undo the Hadamard rotation of the embedding table
         if (auto rot = lctx.model.hadamard_rotation(tok_embd); rot != nullptr) {
-            inpL = llm_build_hadamard_rotate(ctx, inpL, *rot, true);
+            inpL = llm_build_hadamard_rotate(ctx, inpL, *rot, true, false);
         }
     } else {
        lctx.inp_embd = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, batch.n_tokens);
@@ -1085,7 +1085,7 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
         if (memo_it != lctx.hadamard_memo.end()) {
             cur_mm = memo_it->second;
         } else {
-            cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+            cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot, false, true); //false);
             lctx.hadamard_memo[memo_key] = cur_mm;
         }
     }
@@ -1234,7 +1234,8 @@ ggml_tensor * llm_build_context::llm_build_lora_mm_id(
           struct ggml_tensor * cur, // struct ggml_tensor * b
           struct ggml_tensor * ids,
           struct ggml_tensor * cache_w,
-          struct ggml_tensor * cache_ids) {
+          struct ggml_tensor * cache_ids,
+          bool fuse_signs) {
     struct ggml_tensor * cur_mm = cur;
     if (auto rot = lctx.model.hadamard_rotation(w); rot != nullptr) {
         // several folded weights consume the same input activation; rotate it once per graph.
@@ -1245,7 +1246,7 @@ ggml_tensor * llm_build_context::llm_build_lora_mm_id(
         if (memo_it != lctx.hadamard_memo.end()) {
             cur_mm = memo_it->second;
         } else {
-            cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot);
+            cur_mm = llm_build_hadamard_rotate(ctx0, cur, *rot, false, fuse_signs);
             lctx.hadamard_memo[memo_key] = cur_mm;
         }
     }
@@ -1481,10 +1482,6 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     if (lctx.cparams.fused_up_gate &&
         up && gate && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
-        //up->type != GGML_TYPE_TQK6 && up->type != GGML_TYPE_TQK7 &&
-        //up->type != GGML_TYPE_TQ2_T && up->type != GGML_TYPE_TQP5 &&
-        //up->type != GGML_TYPE_TQP6 && up->type != GGML_TYPE_TQP7 &&
-        //lctx.model.hadamard_rotation(up) == nullptr && lctx.model.hadamard_rotation(gate) == nullptr &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
 
@@ -1493,9 +1490,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         if (hadamard_u && hadamard_g && hadamard_u != hadamard_g) {
             printf("Oops: hadamard_u != hadamard_g?\n");
         }
-        if ((!hadamard_u && !hadamard_g) || (hadamard_u == hadamard_g)) {
+        if ((!hadamard_u && !hadamard_g) || (hadamard_u == hadamard_g) || (hadamard_u && hadamard_g && *hadamard_u == *hadamard_g)) {
             if (hadamard_u) {
-                cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_u);
+                cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_u, false, true);
             }
             auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                             type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :
@@ -1508,7 +1505,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             *(float *)(cur->op_params + 3) = lctx.model.hparams.situ_linear_beta;
             if (down) {
                 if (auto hadamard_d = lctx.model.hadamard_rotation(down); hadamard_d != nullptr) {
-                    cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_d);
+                    cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_d, false, true);
                 }
                 cur = llm_build_lora_mm(lctx, ctx, down, cur);
                 cb(cur, "ffn_down", il);
@@ -1910,7 +1907,7 @@ llm_expert_gating_func_type   gating_op,
     if (up_gate_exps) {
         GGML_ASSERT(cache_ids && cached_up_gate);
         ggml_tensor * gate_up = llm_build_lora_mm_id(lctx, ctx, up_gate_exps, cur,
-                selected_experts, cached_up_gate, cache_ids);
+                selected_experts, cached_up_gate, cache_ids, true);
         if (up_gate_exps_b) {
             gate_up = ggml_add_id(ctx, gate_up, up_gate_exps_b, selected_experts);
         }
@@ -1950,7 +1947,7 @@ llm_expert_gating_func_type   gating_op,
         auto hadamard_g = lctx.model.hadamard_rotation(gate_weight);
         if ((!hadamard_u && !hadamard_g) || (hadamard_u == hadamard_g) || (hadamard_u && hadamard_g && *hadamard_u == *hadamard_g)) {
             if (hadamard_u) {
-                cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_u);
+                cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_u, false, true);
             }
             if (up_exps_b || gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI || type_op == LLM_FFN_SITU) {
                 par = ggml_moe_up_gate_ext(ctx, up_weight, gate_weight, cur, expert_ids, up_exps_b, gate_exps_b,

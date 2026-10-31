@@ -3145,6 +3145,15 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
         const ggml_cgraph * graph, int i) {
     ggml_tensor * next = i + 1 < graph->n_nodes ? graph->nodes[i+1] : nullptr;
+    ggml_tensor * hada = nullptr;
+    if (next && next->op != GGML_OP_MUL_MAT_ID) {
+        if (i + 2 < graph->n_nodes &&
+            graph->nodes[i+1]->op == GGML_OP_HADAMARD &&
+            graph->nodes[i+2]->op == GGML_OP_MUL_MAT_ID) {
+            hada = graph->nodes[i+1];
+            next = graph->nodes[i+2];
+        }
+    }
 
     const ggml_tensor * src0_1 = dst->src[0];
     const ggml_tensor * src0_2 = dst->src[1];
@@ -3253,8 +3262,16 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             auto dst_row_size = dst_padded_col_size*sizeof(block_q8_1)/QK8_1;
             auto dst_ddq_size = n_ids*dst_row_size;
             ggml_cuda_pool_alloc<char> dst_quantized(ctx.pool(), dst_ddq_size*Ny);
-            quantize_row_q8_1_cuda((const float *)dst->data, (void *)dst_quantized.get(), dst->ne[0], n_ids*Ny, 1,
-                    dst_padded_col_size, next->src[0]->type, stream);
+            int delta = 2;
+            if (hada) {
+                delta = 3;
+                ggml_cuda_op_hadamard(ctx, hada);
+                quantize_row_q8_1_cuda((const float *)hada->data, (void *)dst_quantized.get(), dst->ne[0], n_ids*Ny, 1,
+                        dst_padded_col_size, next->src[0]->type, stream);
+            } else {
+                quantize_row_q8_1_cuda((const float *)dst->data, (void *)dst_quantized.get(), dst->ne[0], n_ids*Ny, 1,
+                        dst_padded_col_size, next->src[0]->type, stream);
+            }
             CUDA_CHECK(cudaGetLastError());
 
             local_dst.ne[2] = 1;
@@ -3271,19 +3288,19 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             auto local_src0 = *next->src[0];
             local_src0.ne[2] = local_src0.ne[3] = 1;
 
-            int result = i + 1;
+            int result = i + delta - 1;
 
             //printf("next: %ld x %ld x %ld x %ld,    %zu x %zu x %zu x %zu\n", next->ne[0], next->ne[1], next->ne[2], next->ne[3], next->nb[0], next->nb[1], next->nb[2], next->nb[3]);
 
             for (int iy = 0; iy < Ny; ++iy) {
                 local_ids.data  = (char *)ids->data + iy*ids->nb[1];
                 auto this_dst_quantized = dst_quantized.get() + iy*dst_ddq_size;
-                if (i+2 < graph->n_nodes &&
-                    graph->nodes[i+2]->op == GGML_OP_ADD_ID &&
-                    graph->nodes[i+2]->src[0] == next &&
-                    graph->nodes[i+2]->src[2] == ids) {
-                    ggml_cuda_op_mul_mat_vec_q_id(ctx, &local_src0, &local_src1, &local_ids, &local_next, graph->nodes[i+2]->src[1],
-                            (const char *)next->src[0]->data, nullptr, this_dst_quantized, (float *)graph->nodes[i+2]->data + iy*next->ne[0]*n_ids,
+                if (i+delta < graph->n_nodes &&
+                    graph->nodes[i+delta]->op == GGML_OP_ADD_ID &&
+                    graph->nodes[i+delta]->src[0] == next &&
+                    graph->nodes[i+delta]->src[2] == ids) {
+                    ggml_cuda_op_mul_mat_vec_q_id(ctx, &local_src0, &local_src1, &local_ids, &local_next, graph->nodes[i+delta]->src[1],
+                            (const char *)next->src[0]->data, nullptr, this_dst_quantized, (float *)graph->nodes[i+delta]->data + iy*next->ne[0]*n_ids,
                             0, next->src[0]->ne[1], 1, dst_padded_col_size, stream);
                     if (iy == 0) {
                         ++result;
@@ -3407,7 +3424,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         }
         CUDA_CHECK(cudaGetLastError());
 
-        if (next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
+        if (next && !hada && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
             ggml_cuda_should_use_mmq(next->src[0]->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
             //ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, (char *)ids_device.get(), nullptr);
             ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, nullptr, nullptr);
@@ -3451,7 +3468,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     dst_row.nb[2] = nb1;
     dst_row.nb[3] = nb1;
 
-    bool fuse_down = next && next->op == GGML_OP_MUL_MAT_ID;
+    bool fuse_down = next && !hada && next->op == GGML_OP_MUL_MAT_ID;
     // The down result of an expert is written to next before the up/gate data of the remaining experts is read.
     // If the up/gate experts are copies of host tensors, next may have been allocated on top of them.
     for (int j = 0; fuse_down && j < GGML_MAX_SRC; ++j) {
