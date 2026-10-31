@@ -1940,30 +1940,35 @@ llm_expert_gating_func_type   gating_op,
     } else {
     GGML_ASSERT(!up_gate_exps_b);
 
-    // iqk has no fused kernel for the trellis types; the generic mul_mat_id path falls back to vec_dot
+    bool up_gate_done = false;
     if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type &&
-        //up_exps->type != GGML_TYPE_TQK6 && up_exps->type != GGML_TYPE_TQK7 &&
-        //up_exps->type != GGML_TYPE_TQ2_T && up_exps->type != GGML_TYPE_TQP5 &&
-        //up_exps->type != GGML_TYPE_TQP6 && up_exps->type != GGML_TYPE_TQP7 &&
-            lctx.model.hadamard_rotation(up_exps) == nullptr && lctx.model.hadamard_rotation(gate_exps) == nullptr &&
             (!cache_ids || (!up_exps_b && !gate_exps_b))) {
         ggml_tensor * up_weight = cached_up ? cached_up : up_exps;
         ggml_tensor * gate_weight = cached_gate ? cached_gate : gate_exps;
         ggml_tensor * expert_ids = cache_ids ? cache_ids : selected_experts;
-        if (up_exps_b || gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI || type_op == LLM_FFN_SITU) {
-            par = ggml_moe_up_gate_ext(ctx, up_weight, gate_weight, cur, expert_ids, up_exps_b, gate_exps_b,
-                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :
-                    type_op == LLM_FFN_SITU ? GGML_UNARY_OP_SITU_GLU : GGML_UNARY_OP_SWIGLU_OAI);
-        } else {
-            GGML_ASSERT(type_op != LLM_FFN_SWIGLU_OAI);
-            par = ggml_moe_up_gate(ctx, up_weight, gate_weight, cur, expert_ids,
-                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+        auto hadamard_u = lctx.model.hadamard_rotation(up_weight);
+        auto hadamard_g = lctx.model.hadamard_rotation(gate_weight);
+        if ((!hadamard_u && !hadamard_g) || (hadamard_u == hadamard_g) || (hadamard_u && hadamard_g && *hadamard_u == *hadamard_g)) {
+            if (hadamard_u) {
+                cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_u);
+            }
+            if (up_exps_b || gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI || type_op == LLM_FFN_SITU) {
+                par = ggml_moe_up_gate_ext(ctx, up_weight, gate_weight, cur, expert_ids, up_exps_b, gate_exps_b,
+                        type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
+                        type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :
+                        type_op == LLM_FFN_SITU ? GGML_UNARY_OP_SITU_GLU : GGML_UNARY_OP_SWIGLU_OAI);
+            } else {
+                GGML_ASSERT(type_op != LLM_FFN_SWIGLU_OAI);
+                par = ggml_moe_up_gate(ctx, up_weight, gate_weight, cur, expert_ids,
+                        type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+            }
+            *(float *)(par->op_params + 1) = lctx.model.swiglu_limit(il, false);
+            *(float *)(par->op_params + 2) = lctx.model.hparams.situ_beta;
+            *(float *)(par->op_params + 3) = lctx.model.hparams.situ_linear_beta;
+            up_gate_done = true;
         }
-        *(float *)(par->op_params + 1) = lctx.model.swiglu_limit(il, false);
-        *(float *)(par->op_params + 2) = lctx.model.hparams.situ_beta;
-        *(float *)(par->op_params + 3) = lctx.model.hparams.situ_linear_beta;
-    } else {
+    }
+    if (!up_gate_done) {
         ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts, cached_up, cache_ids); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
 
