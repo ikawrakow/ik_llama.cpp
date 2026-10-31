@@ -1,6 +1,7 @@
 #include "iqk_common.h"
 #include "iqk_gemm_ktquants.h"
 #include "ggml.h"
+#include "tq-lut-i8.h"
 
 #ifdef IQK_IMPLEMENT
 
@@ -2329,6 +2330,113 @@ void mul_mat_iq4_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
 }
 
 template <int nrc_y>
+void mul_mat_tq2_t_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(n % QK_TQ2_T == 0);
+    const int nb = n/QK_TQ2_T;
+
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+
+    __m256i qx[4];
+
+    auto magic = _mm256_set1_epi32(0x9e3779b1u);
+    auto mask1 = _mm256_set1_epi32(32767);
+    auto mask2 = _mm256_set1_epi32(2047);
+    auto m1    = _mm256_set1_epi16(1);
+
+    __m256 acc[nrc_y] = {};
+
+    uint32_t s[32];
+    uint16_t index[64];
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        auto tq2 = (const block_tq2_t *)((const char*)vx + ix*bx);
+        for (int ib = 0; ib < nb; ++ib) {
+            auto qs16 = (const uint16_t *)tq2[ib].qs;
+            for (int l = 0; l < 8; ++l) {
+                const uint32_t w01  = qs16[2*l + 0];
+                const uint32_t w23  = qs16[2*l + 1];
+                const uint32_t prev = tq2[ib].qs[(4*l + 31) & 31];
+                uint32_t b0 = w01 & 0xFF, b1 = w01 >> 8, b2 = w23 & 0xFF, b3 = w23 >> 8;
+                s[4*l+0] = (prev << 8) | b0;
+                s[4*l+1] = (b0   << 8) | b1;
+                s[4*l+2] = (b1   << 8) | b2;
+                s[4*l+3] = (b2   << 8) | b3;
+            }
+            for (int l = 0; l < 4; ++l) qx[l] = _mm256_and_si256(_mm256_loadu_si256((const __m256i *)s + l), mask1);
+            for (int l = 0; l < 4; ++l) qx[l] = _mm256_mullo_epi32(qx[l], magic);
+            for (int l = 0; l < 4; ++l) {
+                // is it better to pack them together?
+                auto i1 = _mm256_srli_epi32(qx[l], 21);
+                auto i2 = _mm256_and_si256(_mm256_srli_epi32(qx[l], 10), mask2);
+                auto ii = _mm256_or_si256(i1, _mm256_slli_epi32(i2, 16));
+                _mm256_storeu_si256((__m256i *)index + l, ii);
+            }
+            auto idx = index;
+            //qx[0] = _mm256_setr_epi16(tq_lut_i8[idx[ 0]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 3]],
+            //                          tq_lut_i8[idx[ 4]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 7]],
+            //                          tq_lut_i8[idx[ 8]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[10]], tq_lut_i8[idx[11]],
+            //                          tq_lut_i8[idx[12]], tq_lut_i8[idx[13]], tq_lut_i8[idx[14]], tq_lut_i8[idx[15]]);
+            //idx += 16;
+            //qx[1] = _mm256_setr_epi16(tq_lut_i8[idx[ 0]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 3]],
+            //                          tq_lut_i8[idx[ 4]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 7]],
+            //                          tq_lut_i8[idx[ 8]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[10]], tq_lut_i8[idx[11]],
+            //                          tq_lut_i8[idx[12]], tq_lut_i8[idx[13]], tq_lut_i8[idx[14]], tq_lut_i8[idx[15]]);
+            //idx += 16;
+            //qx[2] = _mm256_setr_epi16(tq_lut_i8[idx[ 0]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 3]],
+            //                          tq_lut_i8[idx[ 4]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 7]],
+            //                          tq_lut_i8[idx[ 8]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[10]], tq_lut_i8[idx[11]],
+            //                          tq_lut_i8[idx[12]], tq_lut_i8[idx[13]], tq_lut_i8[idx[14]], tq_lut_i8[idx[15]]);
+            //idx += 16;
+            //qx[3] = _mm256_setr_epi16(tq_lut_i8[idx[ 0]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 3]],
+            //                          tq_lut_i8[idx[ 4]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 7]],
+            //                          tq_lut_i8[idx[ 8]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[10]], tq_lut_i8[idx[11]],
+            //                          tq_lut_i8[idx[12]], tq_lut_i8[idx[13]], tq_lut_i8[idx[14]], tq_lut_i8[idx[15]]);
+            qx[0] = _mm256_set_epi16(tq_lut_i8[idx[15]], tq_lut_i8[idx[14]], tq_lut_i8[idx[13]], tq_lut_i8[idx[12]],
+                                     tq_lut_i8[idx[11]], tq_lut_i8[idx[10]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[ 8]],
+                                     tq_lut_i8[idx[ 7]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 4]],
+                                     tq_lut_i8[idx[ 3]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 0]]);
+            idx += 16;
+            qx[1] = _mm256_set_epi16(tq_lut_i8[idx[15]], tq_lut_i8[idx[14]], tq_lut_i8[idx[13]], tq_lut_i8[idx[12]],
+                                     tq_lut_i8[idx[11]], tq_lut_i8[idx[10]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[ 8]],
+                                     tq_lut_i8[idx[ 7]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 4]],
+                                     tq_lut_i8[idx[ 3]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 0]]);
+            idx += 16;
+            qx[2] = _mm256_set_epi16(tq_lut_i8[idx[15]], tq_lut_i8[idx[14]], tq_lut_i8[idx[13]], tq_lut_i8[idx[12]],
+                                     tq_lut_i8[idx[11]], tq_lut_i8[idx[10]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[ 8]],
+                                     tq_lut_i8[idx[ 7]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 4]],
+                                     tq_lut_i8[idx[ 3]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 0]]);
+            idx += 16;
+            qx[3] = _mm256_set_epi16(tq_lut_i8[idx[15]], tq_lut_i8[idx[14]], tq_lut_i8[idx[13]], tq_lut_i8[idx[12]],
+                                     tq_lut_i8[idx[11]], tq_lut_i8[idx[10]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[ 8]],
+                                     tq_lut_i8[idx[ 7]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 4]],
+                                     tq_lut_i8[idx[ 3]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 0]]);
+            auto dx = _mm256_set1_ps(TQ_LUT_I8_SCALE * GGML_FP16_TO_FP32(tq2[ib].d));
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const block_q8_0_x4 * y = q8.y[iy];
+                auto s0 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(_mm256_sign_epi8(qx[0], qx[0]),
+                        _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)y[ib].qs + 0),qx[0])));
+                auto s1 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(_mm256_sign_epi8(qx[1], qx[1]),
+                        _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)y[ib].qs + 1),qx[1])));
+                auto s2 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(_mm256_sign_epi8(qx[2], qx[2]),
+                        _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)y[ib].qs + 2),qx[2])));
+                auto s3 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(_mm256_sign_epi8(qx[3], qx[3]),
+                        _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)y[ib].qs + 3),qx[3])));
+                auto s01 = _mm256_add_epi32(_mm256_unpacklo_epi32(s0, s1), _mm256_unpackhi_epi32(s0, s1));
+                auto s23 = _mm256_add_epi32(_mm256_unpacklo_epi32(s2, s3), _mm256_unpackhi_epi32(s2, s3));
+                auto sum = _mm256_add_epi32(_mm256_unpacklo_epi64(s01, s23), _mm256_unpackhi_epi64(s01, s23));
+                auto dy  = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)y[ib].d));
+                auto dxy = _mm256_mul_ps(dx, _mm256_set_m128(dy, dy));
+                acc[iy]  = _mm256_fmadd_ps(dxy, _mm256_cvtepi32_ps(sum), acc[iy]);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            //auto dot = _mm_add_ps(_mm256_castps256_ps128(acc[iy]), _mm256_extractf128_ps(acc[iy], 1));
+            info.store(ix, iy, hsum_float_8(acc[iy]));
+            acc[iy] = _mm256_setzero_ps();
+        }
+    }
+}
+
+template <int nrc_y>
 void mul_mat_iq4_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n%QK_K == 0);
     const int nb = n/QK_K;
@@ -2481,6 +2589,14 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
         }
         return false;
     }
+
+    if (typeA == GGML_TYPE_TQ2_T) {
+        if (typeB == GGML_TYPE_Q8_0_X4) {
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_tq2_t_q8_0_x4_T, kernels);
+            return true;
+        }
+    }
+
 
     if (ggml_type(typeB) != GGML_TYPE_F32) {
         return false;

@@ -16,7 +16,7 @@
 //
 
 #include "common.cuh"
-#include "tq-lut-i8.cuh"
+#include "tq-lut-i8.h"
 
 #define TQ_LUT_POINTS   2048
 #define TQ_LANES        8   // lanes per 128-weight block

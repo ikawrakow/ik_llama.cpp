@@ -5,13 +5,19 @@
 // SPDX-License-Identifier: MIT
 //
 #pragma once
+#include <cstdint>
+
+#define TQ_LUT_I8_SCALE (3.984375f/127.0f)
+
 // int8 copy of the TQ codebook tq2t_lut_f16 (2048 2-D points): point i = (lo byte, hi byte) as int8,
 // value ~= TQ_LUT_I8_SCALE * int8. One global scale (max |point| = 3.984375 -> 127); relative RMS error
 // 0.0085 of the codebook std, far below the trellis quantization error.
 // Generated from ggml-common.h by the 2026-10-03 3090 tuning session (perf/tq-cuda-decode).
-#include <cstdint>
-#define TQ_LUT_I8_SCALE (3.984375f/127.0f)
+#if defined(GGML_COMMON_IMPL_CUDA) || defined(GGML_COMMON_IMPL_HIP) || defined(GGML_COMMON_IMPL_MUSA)
 alignas(16) static const __device__ uint16_t tq_lut_i8[2048] = {
+#else
+GGML_TABLE_BEGIN(uint16_t, tq_lut_i8, 2048)
+#endif
     0xecd6, 0x27f2, 0x76d3, 0xed2e, 0xf815, 0x2e1f, 0x25eb, 0x1bdb, 0xed27, 0x30e3, 0xe41a, 0x2dd5, 0x1ec7, 0x0df8, 0xfef8, 0x0b4f,
     0x16bb, 0x16cf, 0xe9eb, 0x2415, 0xd155, 0xd8f5, 0x41f8, 0x361e, 0x41f3, 0xcf1c, 0xf72d, 0xedee, 0x13f6, 0x0906, 0x1208, 0x13e7,
     0x1dd9, 0x2a07, 0x263a, 0xea05, 0x160e, 0xf2f2, 0xd3cc, 0xd0da, 0x430d, 0x35f6, 0x1623, 0xd5f3, 0x0b36, 0xe158, 0xfa04, 0x06ef,

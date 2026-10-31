@@ -544,6 +544,12 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        //case GGML_TYPE_TQ2_T:
+        //case GGML_TYPE_TQK6:
+        //case GGML_TYPE_TQK7:
+        //case GGML_TYPE_TQP5:
+        //case GGML_TYPE_TQP6:
+        //case GGML_TYPE_TQP7:
             return iqk_dequantize_ktquants(typeA, n, vx, bx, vy, stride_y, nrc_x);
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
@@ -1033,6 +1039,12 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        case GGML_TYPE_TQ2_T:
+        //case GGML_TYPE_TQK6:
+        //case GGML_TYPE_TQK7:
+        //case GGML_TYPE_TQP5:
+        //case GGML_TYPE_TQP6:
+        //case GGML_TYPE_TQP7:
             return iqk_set_kernels_ktquants(ne00, typeA, typeB, mm.funcs, mm.func16);
         case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
@@ -1170,6 +1182,12 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
+        //case GGML_TYPE_TQ2_T:
+        //case GGML_TYPE_TQK6:
+        //case GGML_TYPE_TQK7:
+        //case GGML_TYPE_TQP5:
+        //case GGML_TYPE_TQP6:
+        //case GGML_TYPE_TQP7:
             return iqk_set_kernels_ktquants(ne00, typeA, typeB, m.funcs, m.func16);
         default:
             return false;
