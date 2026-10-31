@@ -527,6 +527,36 @@ void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth) {
     GGML_ASSERT(nh > 1 && popcount(uint32_t(nh)) == 1);
     GGML_ASSERT(dst->ne[0] % nh == 0);
 
+    if (auto signs = dst->src[1]; signs != nullptr) {
+        GGML_ASSERT(signs->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_is_contiguous(src) && ggml_is_contiguous(dst) && ggml_is_contiguous(signs));
+        GGML_ASSERT(ggml_nrows(signs) == 1);
+        GGML_ASSERT(src->ne[0] == signs->ne[0]);
+        bool before = dst->op_params[1];
+        int64_t nelem = ggml_nelements(src);
+        int nblock = nelem / nh;
+        int npt = (nblock + nth - 1)/nth;
+        int first = npt * ith;
+        int last  = std::min(first + npt, nblock);
+        for (int ib = first; ib < last; ++ib) {
+            int64_t i0 = int64_t(ib) * nh;
+            int64_t j0 = i0 % src->ne[0];
+            auto x = (const float *)src->data + i0;
+            auto y = (      float *)dst->data + i0;
+            auto s = (const float *)signs->data + j0;
+            if (before) {
+                for (int j = 0; j < nh; ++j) y[j] = x[j] * s[j];
+            } else {
+                std::memcpy(y, x, nh*sizeof(float));
+            }
+            fast_ht(nh, y);
+            if (!before) {
+                for (int j = 0; j < nh; ++j) y[j] *= s[j];
+            }
+        }
+        return;
+    }
+
     int nc = dst->ne[0]/nh;
     int nr = ggml_nrows(dst) * nc;
     int npt = (nr + nth - 1)/nth;
