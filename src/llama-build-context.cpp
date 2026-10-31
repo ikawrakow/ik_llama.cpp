@@ -1480,49 +1480,63 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         //up->type != GGML_TYPE_TQK6 && up->type != GGML_TYPE_TQK7 &&
         //up->type != GGML_TYPE_TQ2_T && up->type != GGML_TYPE_TQP5 &&
         //up->type != GGML_TYPE_TQP6 && up->type != GGML_TYPE_TQP7 &&
-        lctx.model.hadamard_rotation(up) == nullptr && lctx.model.hadamard_rotation(gate) == nullptr &&
+        //lctx.model.hadamard_rotation(up) == nullptr && lctx.model.hadamard_rotation(gate) == nullptr &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
-        auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                        type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :
-                        type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :
-                        type_op == LLM_FFN_SITU ? GGML_UNARY_OP_SITU_GLU : GGML_UNARY_OP_SWIGLU_OAI;
-        cur = ggml_fused_up_gate(ctx, up, gate, cur, unary_op);
-        cb(cur, "ffn_up_gate", il);
-        *(float *)(cur->op_params + 1) = lctx.model.swiglu_limit(il, true);
-        *(float *)(cur->op_params + 2) = lctx.model.hparams.situ_beta;
-        *(float *)(cur->op_params + 3) = lctx.model.hparams.situ_linear_beta;
-        if (down) {
-            cur = llm_build_lora_mm(lctx, ctx, down, cur);
-            cb(cur, "ffn_down", il);
-            if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
-                // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
-                ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+
+        auto hadamard_u = lctx.model.hadamard_rotation(up);
+        auto hadamard_g = lctx.model.hadamard_rotation(gate);
+        if (hadamard_u && hadamard_g && hadamard_u != hadamard_g) {
+            printf("Oops: hadamard_u != hadamard_g?\n");
+        }
+        if ((!hadamard_u && !hadamard_g) || (hadamard_u == hadamard_g)) {
+            if (hadamard_u) {
+                cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_u);
             }
-        }
-        if (down_b) {
-            cur = ggml_add(ctx, cur, down_b);
-            cb(cur, "ffn_down_b", il);
-        }
-        if (down_s) {
-            cur = ggml_mul(ctx, cur, down_s);
-            cb(cur, "ffn_down_s", il);
-        }
-        if (post_norm) {
-            if (post_norm_eps > 0.0f) {
-                cur = ggml_fused_rms_norm(ctx, cur, post_norm, post_norm_eps);
-            } else {
-                cur = llm_build_norm(ctx, cur, lctx.model.hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+            auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
+                            type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :
+                            type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :
+                            type_op == LLM_FFN_SITU ? GGML_UNARY_OP_SITU_GLU : GGML_UNARY_OP_SWIGLU_OAI;
+            cur = ggml_fused_up_gate(ctx, up, gate, cur, unary_op);
+            cb(cur, "ffn_up_gate", il);
+            *(float *)(cur->op_params + 1) = lctx.model.swiglu_limit(il, true);
+            *(float *)(cur->op_params + 2) = lctx.model.hparams.situ_beta;
+            *(float *)(cur->op_params + 3) = lctx.model.hparams.situ_linear_beta;
+            if (down) {
+                if (auto hadamard_d = lctx.model.hadamard_rotation(down); hadamard_d != nullptr) {
+                    cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_d);
+                }
+                cur = llm_build_lora_mm(lctx, ctx, down, cur);
+                cb(cur, "ffn_down", il);
+                if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
+                    // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+                    ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+                }
             }
-            cb(cur, "ffn_post_normed", il);
-        }
-        if (add_input) {
-            cur = ggml_add(ctx, cur, input);
-            cb(cur, "ffn_out_with_inp", il);
-        }
-        if (add_extra) {
-            cur = ggml_add(ctx, cur, add_extra);
-            cb(cur, "ffn_out_with_inp", il);
+            if (down_b) {
+                cur = ggml_add(ctx, cur, down_b);
+                cb(cur, "ffn_down_b", il);
+            }
+            if (down_s) {
+                cur = ggml_mul(ctx, cur, down_s);
+                cb(cur, "ffn_down_s", il);
+            }
+            if (post_norm) {
+                if (post_norm_eps > 0.0f) {
+                    cur = ggml_fused_rms_norm(ctx, cur, post_norm, post_norm_eps);
+                } else {
+                    cur = llm_build_norm(ctx, cur, lctx.model.hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+                }
+                cb(cur, "ffn_post_normed", il);
+            }
+            if (add_input) {
+                cur = ggml_add(ctx, cur, input);
+                cb(cur, "ffn_out_with_inp", il);
+            }
+            if (add_extra) {
+                cur = ggml_add(ctx, cur, add_extra);
+                cb(cur, "ffn_out_with_inp", il);
+            }
         }
         return cur;
     }
