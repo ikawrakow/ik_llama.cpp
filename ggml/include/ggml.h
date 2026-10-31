@@ -1179,6 +1179,12 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   n);
 
+    GGML_API struct ggml_tensor * ggml_signed_hadamard(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * signs,
+            int                   n, int before);
+
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b
     // return dst

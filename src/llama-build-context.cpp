@@ -939,6 +939,10 @@ static struct ggml_tensor * llm_build_hadamard_rotate(
         res = ggml_reshape_4d(ctx0, x, t.perm_hd*t.perm_nk*t.perm_rep, ne1, ne2, ne3);
     }
     const bool signs_first = !inverse;
+    if (t.signs && ggml_is_contiguous(res) && ggml_is_contiguous(t.signs) && ggml_nrows(t.signs) == 1 &&
+        res->ne[0] == t.signs->ne[0] && res->type == GGML_TYPE_F32 && t.signs->type == GGML_TYPE_F32) {
+        return ggml_signed_hadamard(ctx0, res, t.signs, t.block_size, signs_first);
+    }
     if (signs_first && t.signs) {
         res = ggml_mul(ctx0, res, t.signs);
     }

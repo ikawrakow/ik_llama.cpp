@@ -6804,6 +6804,29 @@ struct ggml_tensor * ggml_hadamard(
     return result;
 }
 
+struct ggml_tensor * ggml_signed_hadamard(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * signs,
+            int                   n,
+            int                   before) {
+
+    // To simplify things, for now we assume the following:
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(signs->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(a) && ggml_is_contiguous(signs));
+    GGML_ASSERT(a->ne[0] == signs->ne[0]);
+    GGML_ASSERT(ggml_nrows(signs) == 1);
+
+    struct ggml_tensor * result = ggml_hadamard(ctx, a, n);
+
+    result->src[1]       = signs;
+    result->op_params[1] = before;
+
+    return result;
+}
+
+
 // ggml_add_cast
 
 static struct ggml_tensor * ggml_add_cast_impl(
