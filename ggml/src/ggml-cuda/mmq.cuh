@@ -2677,6 +2677,8 @@ template <ggml_type type, int mmq_y, int nwarps, bool need_check> static __devic
     const int kbx  = kqsx / TQ_LANES;
     const int lane = kqsx % TQ_LANES;
 
+    int q[TQ_STEPS_LANE];
+
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * nrows) {
         int i = i0 + threadIdx.y*nrows + threadIdx.x/threads_per_row;
@@ -2687,7 +2689,6 @@ template <ggml_type type, int mmq_y, int nwarps, bool need_check> static __devic
 
         const block_t * bxi = (const block_t *)(x + i*stride) + kbx0 + kbx;
 
-        int q[TQ_STEPS_LANE];
         const float dq = tq_lane_to_q8<type>(bxi, lane, q);
 
 #pragma unroll
@@ -2702,7 +2703,7 @@ template <ggml_type type, int mmq_y, int nwarps, bool need_check> static __devic
 #ifdef INT8_MMA_AVAILABLE
         if (kqsx % 2 == 0) x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx/2] = dq;
 #else
-        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + kqsx] = dq;
+        if (kqsx % 2 == 0) x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + kqsx/2] = dq;
 #endif // INT8_MMA_AVAILABLE
     }
 }

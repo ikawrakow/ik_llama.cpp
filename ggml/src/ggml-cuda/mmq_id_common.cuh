@@ -3186,6 +3186,8 @@ template <ggml_type type, int mmq_y, bool need_check> static __device__ __forcei
     const int kbx  = kqsx / TQ_LANES;                   // 0 or 1
     const int lane = kqsx % TQ_LANES;                   // 0...7
 
+    int q[TQ_STEPS_LANE];
+
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * nrows) {
         int i = i0 + threadIdx.y*nrows + threadIdx.x/threads_per_row;
@@ -3196,7 +3198,6 @@ template <ggml_type type, int mmq_y, bool need_check> static __device__ __forcei
 
         const block_t * bxi = (const block_t *)(x + i*stride) + kbx0 + kbx;
 
-        int q[TQ_STEPS_LANE];
         const float dq = tq_lane_to_q8<type>(bxi, lane, q);
 
 #pragma unroll
@@ -3211,7 +3212,7 @@ template <ggml_type type, int mmq_y, bool need_check> static __device__ __forcei
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         if (kqsx % 2 == 0) x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx/2] = dq;
 #else
-        x_df[i*(2*MMQ_TILE_NE_K*2/QI8_0) + i/(QI8_0/4) + kqsx] = dq;
+        if (kqsx % 2 == 0) x_df[i*(2*MMQ_TILE_NE_K*2/QI8_0) + i/(QI8_0/4) + kqsx/2] = dq;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
     }
 }
