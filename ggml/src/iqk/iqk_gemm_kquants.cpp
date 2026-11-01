@@ -1941,7 +1941,7 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
             info.store(ix + 16, iy, accb[iy]);
         }
     }
-    #endif
+#endif
     __m512  acc[nrc_y] = {};
     __m512i isum[nrc_y] = {};
     __m512i isum2[nrc_y] = {};
