@@ -7604,6 +7604,7 @@ static int llama_decode_internal(
     std::vector<llama_seq_id *> rg_seq;
     std::vector<int8_t>         rg_logits;
     std::vector<int32_t>        rg_out;
+    std::vector<int32_t>        rg_perm;
 
     if (llm_arch_is_hybrid(model.arch) && n_tokens_all > 1 &&
             batch_all.token && batch_all.pos && batch_all.n_seq_id && batch_all.seq_id) {
@@ -7635,15 +7636,20 @@ static int llama_decode_internal(
             rg_seq   .resize(n_tokens_all);
             rg_logits.resize(n_tokens_all);
             rg_out   .resize(n_tokens_all);
+            rg_perm  .assign(perm.begin(), perm.end());
 
+            // Output rows are numbered in the order the tokens are processed, so
+            // recompute the mapping here. It is flipped back to the caller's order
+            // once the loop finishes, which keeps llama_get_logits_ith(i) addressing
+            // the token the caller passed at index i.
+            int32_t j = 0;
             for (uint32_t i = 0; i < n_tokens_all; ++i) {
                 const int32_t s = perm[i];
                 rg_token [i] = batch_all.token[s];
                 rg_nseq  [i] = batch_all.n_seq_id[s];
                 rg_seq   [i] = batch_all.seq_id[s];
                 rg_logits[i] = batch_all.logits ? batch_all.logits[s] : 0;
-                // keep every token attached to the output row it had in the caller's order
-                rg_out   [i] = lctx.output_ids[s];
+                rg_out   [i] = rg_logits[i] ? j++ : -1;
                 for (size_t p = 0; p < n_planes; ++p) {
                     rg_pos[p*n_tokens_all + i] = batch_all.pos[p*n_tokens_all + s];
                 }
@@ -8254,6 +8260,13 @@ static int llama_decode_internal(
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     lctx.n_outputs = n_outputs;
     lctx.n_outputs_embd = n_outputs_embd;
+
+    // put the output rows back into the caller's token order after a regroup
+    if (!rg_perm.empty()) {
+        for (uint32_t i = 0; i < (uint32_t) rg_perm.size(); ++i) {
+            lctx.output_ids[rg_perm[i]] = rg_out[i];
+        }
+    }
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //llama_synchronize(&lctx);
