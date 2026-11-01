@@ -2412,6 +2412,42 @@ struct TQ2T_Loader {
                 tq_lut_i8[idx[ 7]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 4]],
                 tq_lut_i8[idx[ 3]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 0]]);
     }
+
+    inline __m256i load_and_compute_block(const block_tq2_t & tq2, __m256i * qx, __m256i * ux,
+            const int8_t * qy, const __m256i & m1) {
+        prepare_block(tq2, qx);
+        auto idx = (const uint16_t *)s;
+        qx[0] = _mm256_set_epi16(tq_lut_i8[idx[15]], tq_lut_i8[idx[14]], tq_lut_i8[idx[13]], tq_lut_i8[idx[12]],
+                                 tq_lut_i8[idx[11]], tq_lut_i8[idx[10]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[ 8]],
+                                 tq_lut_i8[idx[ 7]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 4]],
+                                 tq_lut_i8[idx[ 3]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 0]]);
+        ux[0] = _mm256_sign_epi8(qx[0], qx[0]);
+        auto s0 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(ux[0], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)qy + 0),qx[0])));
+        idx += 16;
+        qx[1] = _mm256_set_epi16(tq_lut_i8[idx[15]], tq_lut_i8[idx[14]], tq_lut_i8[idx[13]], tq_lut_i8[idx[12]],
+                                 tq_lut_i8[idx[11]], tq_lut_i8[idx[10]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[ 8]],
+                                 tq_lut_i8[idx[ 7]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 4]],
+                                 tq_lut_i8[idx[ 3]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 0]]);
+        ux[1] = _mm256_sign_epi8(qx[1], qx[1]);
+        auto s1 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(ux[1], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)qy + 1),qx[1])));
+        idx += 16;
+        qx[2] = _mm256_set_epi16(tq_lut_i8[idx[15]], tq_lut_i8[idx[14]], tq_lut_i8[idx[13]], tq_lut_i8[idx[12]],
+                                 tq_lut_i8[idx[11]], tq_lut_i8[idx[10]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[ 8]],
+                                 tq_lut_i8[idx[ 7]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 4]],
+                                 tq_lut_i8[idx[ 3]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 0]]);
+        ux[2] = _mm256_sign_epi8(qx[2], qx[2]);
+        auto s2 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(ux[2], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)qy + 2),qx[2])));
+        idx += 16;
+        qx[3] = _mm256_set_epi16(tq_lut_i8[idx[15]], tq_lut_i8[idx[14]], tq_lut_i8[idx[13]], tq_lut_i8[idx[12]],
+                                 tq_lut_i8[idx[11]], tq_lut_i8[idx[10]], tq_lut_i8[idx[ 9]], tq_lut_i8[idx[ 8]],
+                                 tq_lut_i8[idx[ 7]], tq_lut_i8[idx[ 6]], tq_lut_i8[idx[ 5]], tq_lut_i8[idx[ 4]],
+                                 tq_lut_i8[idx[ 3]], tq_lut_i8[idx[ 2]], tq_lut_i8[idx[ 1]], tq_lut_i8[idx[ 0]]);
+        ux[3] = _mm256_sign_epi8(qx[3], qx[3]);
+        auto s3 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(ux[3], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)qy + 3),qx[3])));
+        auto s01 = _mm256_add_epi32(_mm256_unpacklo_epi32(s0, s1), _mm256_unpackhi_epi32(s0, s1));
+        auto s23 = _mm256_add_epi32(_mm256_unpacklo_epi32(s2, s3), _mm256_unpackhi_epi32(s2, s3));
+        return _mm256_add_epi32(_mm256_unpacklo_epi64(s01, s23), _mm256_unpackhi_epi64(s01, s23));
+    }
 };
 
 // Something is wrong in this function, but I don't see what.
@@ -2479,6 +2515,7 @@ void mul_mat_tq2_t_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo& 
     Q8<nrc_y, block_q8_2_x4> q8(info);
 
     __m256i qx[4];
+    __m256i ux[4];
 
     TQ2T_Loader t;
 
@@ -2489,17 +2526,20 @@ void mul_mat_tq2_t_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo& 
     for (int ix = 0; ix < nrc_x; ++ix) {
         auto tq2 = (const block_tq2_t *)((const char*)vx + ix*bx);
         for (int ib = 0; ib < nb; ++ib) {
-            t.load_block(tq2[ib], qx);
-            auto dx = _mm256_set1_ps(TQ_LUT_I8_SCALE * GGML_FP16_TO_FP32(tq2[ib].d));
-            for (int iy = 0; iy < nrc_y; ++iy) {
+            auto dx  = _mm256_set1_ps(TQ_LUT_I8_SCALE * GGML_FP16_TO_FP32(tq2[ib].d));
+            auto sum = t.load_and_compute_block(tq2[ib], qx, ux, q8.y[0][ib].qs, m1);
+            auto dy  = _mm_castsi128_ps(_mm_slli_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)q8.y[0][ib].d)), 16));
+            auto dxy = _mm256_mul_ps(dx, _mm256_set_m128(dy, dy));
+            acc[0]   = _mm256_fmadd_ps(dxy, _mm256_cvtepi32_ps(sum), acc[0]);
+            for (int iy = 1; iy < nrc_y; ++iy) {
                 const block_q8_2_x4 * y = q8.y[iy];
-                auto s0 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(_mm256_sign_epi8(qx[0], qx[0]),
+                auto s0 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(ux[0],
                         _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)y[ib].qs + 0),qx[0])));
-                auto s1 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(_mm256_sign_epi8(qx[1], qx[1]),
+                auto s1 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(ux[1],
                         _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)y[ib].qs + 1),qx[1])));
-                auto s2 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(_mm256_sign_epi8(qx[2], qx[2]),
+                auto s2 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(ux[2],
                         _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)y[ib].qs + 2),qx[2])));
-                auto s3 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(_mm256_sign_epi8(qx[3], qx[3]),
+                auto s3 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(ux[3],
                         _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)y[ib].qs + 3),qx[3])));
                 auto s01 = _mm256_add_epi32(_mm256_unpacklo_epi32(s0, s1), _mm256_unpackhi_epi32(s0, s1));
                 auto s23 = _mm256_add_epi32(_mm256_unpacklo_epi32(s2, s3), _mm256_unpackhi_epi32(s2, s3));
