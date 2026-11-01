@@ -2906,6 +2906,7 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
         if (idx_out >= 0) idx = idx_out;
         const bool is_qwen_mtp = (lctx.model.arch == LLM_ARCH_QWEN35 ||
                                   lctx.model.arch == LLM_ARCH_QWEN35MOE ||
+                                  lctx.model.arch == LLM_ARCH_GLM4 ||
                                   lctx.model.arch == LLM_ARCH_GLM4_MOE) && lctx.cparams.mtp;
         if (cur->op == GGML_OP_REDUCE && cur->src[idx] && !is_qwen_mtp) {
             // avoid copy to main GPU
@@ -3321,7 +3322,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             } break;
         case LLM_ARCH_GLM4:
             {
-                result = llm.build_glm4();
+                result = (llm.cparams.mtp || llm.cparams.mtp_op_type != MTP_OP_NONE) ? llm.build_glm4_with_mtp() : llm.build_glm4();
             } break;
         case LLM_ARCH_GLM4_MOE:
             {

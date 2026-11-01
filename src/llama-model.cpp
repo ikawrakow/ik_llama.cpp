@@ -1610,6 +1610,13 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
             { LLM_TENSOR_ATTN_POST_NORM,  "blk.%d.post_attention_norm" },
             { LLM_TENSOR_FFN_POST_NORM,   "blk.%d.post_ffw_norm" },
+            // NextN/MTP tensors
+            { LLM_TENSOR_NEXTN_EH_PROJ,        "blk.%d.nextn.eh_proj" },
+            { LLM_TENSOR_NEXTN_EMBED_TOKENS,   "blk.%d.nextn.embed_tokens" },
+            { LLM_TENSOR_NEXTN_ENORM,          "blk.%d.nextn.enorm" },
+            { LLM_TENSOR_NEXTN_HNORM,          "blk.%d.nextn.hnorm" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "blk.%d.nextn.shared_head_head" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.%d.nextn.shared_head_norm" },
         },
     },
     {

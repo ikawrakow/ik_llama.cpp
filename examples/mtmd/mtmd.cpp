@@ -1142,7 +1142,8 @@ const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
 
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
     if (image_tokens->use_mrope_pos) {
-        return 1; // for M-RoPE, the whole image is 1 in temporal dimension
+        // next text pos after an M-RoPE image
+        return std::max(image_tokens->nx, image_tokens->ny);
     }
     return image_tokens->n_tokens();
 }
