@@ -131,6 +131,16 @@ std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
     return {type, 1};
 }
 
+// The halves of a qwen4exp merged weight pair are loaded as row views, so they must not split an interleaved row group
+static bool splits_merged_pair(const llama_model & model, const std::string & name, ggml_type type) {
+    if (model.arch != LLM_ARCH_QWEN4EXP) return false;
+    int64_t rows_b = 0;
+    if      (name.find("_down_inject.weight")   != std::string::npos) rows_b = model.hparams.dsv4_hc_mult;
+    else if (name.find("attn_qkv_gate.weight")  != std::string::npos) rows_b = model.hparams.ssm_d_inner;
+    else if (name.find("ssm_beta_alpha.weight") != std::string::npos) rows_b = model.hparams.ssm_dt_rank;
+    return rows_b % interleaved_properties(type).second != 0;
+}
+
 static void llama_tensor_dequantize_internal(
     struct ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers,
     const size_t nelements, const int nthread
@@ -1495,6 +1505,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         if (params->only_repack) {
             auto repacked_type = (ggml_type)iqk_repacked_type(meta);
+            if (splits_merged_pair(model, name, repacked_type)) repacked_type = meta->type;
             bool repack = false, modify = false;
             if (repacked_type != meta->type) {
                 repack = true;
@@ -1766,6 +1777,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         if (params->only_repack) {
             ggml_type repacked_type = (ggml_type)iqk_repacked_type(tensor);
+            if (splits_merged_pair(model, name, repacked_type)) repacked_type = tensor->type;
             bool modify = !is_repacked && iqk_should_modify_tensor(tensor);
             if ((modify || repacked_type != tensor->type) && repack_pattern) {
                 bool found = false;
@@ -1979,7 +1991,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
             int chunk_size_multiplier = 1;
             auto [working_type, num_rows] = interleaved_properties(new_type);
-            if (tensor->ne[1] % num_rows != 0) {
+            if (tensor->ne[1] % num_rows != 0 || splits_merged_pair(model, name, new_type)) {
                 new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
                 if (new_type != working_type) ++qs.n_fallback;
             } else {
