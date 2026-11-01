@@ -27451,6 +27451,15 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_SCALE:
             {
+                if (i + 2 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_UNARY &&
+                    cgraph->nodes[i+2]->op == GGML_OP_SCALE &&
+                    cgraph->nodes[i+1]->src[0] == cgraph->nodes[i+0] &&
+                    cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
+                    iqk_op_scale_unary_scale(cgraph->nodes[i+2], params->ith, params->nth)) {
+                    i += 2;
+                    break;
+                }
                 ggml_compute_forward_scale(params, tensor);
             } break;
         case GGML_OP_SOFTCAP:
