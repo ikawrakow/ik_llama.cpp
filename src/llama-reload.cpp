@@ -945,6 +945,16 @@ bool reload_info::reload_tensor(const char * name, llama_model & model) {
     ggml_backend_buffer_t old_buf = tensor->buffer;
     bool returning = (curr_type == src.original_type);
 
+    // Row views of a merged weight pair keep the storage and type of the original tensor
+    if (!returning) {
+        for (auto & p : model.tensors_by_name) {
+            if (p.second->view_src == tensor) {
+                LLAMA_LOG_WARN("hotswap: tensor '%s' cannot change type: view '%s' uses its storage; skipping\n", name, p.first.c_str());
+                return false;
+            }
+        }
+    }
+
     // A same-dtype swap reattaches the original buffer and refreshes its data;
     // that is impossible when the original data lives inside a read-only file
     // mapping, so refuse instead of silently keeping the old weights
