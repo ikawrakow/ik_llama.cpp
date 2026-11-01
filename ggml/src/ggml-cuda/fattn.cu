@@ -137,6 +137,12 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
             return;
         }
+        // With GQA the vec kernel reads every K/V row once per Q head. The tile kernel packs 4 or 8 Q heads per K/V head.
+        if (cc == CC_PASCAL && Q->ne[1] == 1 && (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) && V->type == K->type &&
+            ggml_cuda_fattn_tile_new_is_supported(ctx, dst)) {
+            ggml_cuda_flash_attn_ext_tile_new(ctx, dst);
+            return;
+        }
         if (precision == GGML_PREC_DEFAULT) {
             if (Q->ne[1] <= 8) {
                 // P100 (sm_60/CC_PASCAL): the fp16 vec kernel accumulates the online-softmax
