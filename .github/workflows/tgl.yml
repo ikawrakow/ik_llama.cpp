@@ -1,5 +1,4 @@
-
-name: tgl
+name: TGL
 
 on:
   workflow_dispatch: # allows manual triggering
@@ -20,7 +19,7 @@ jobs:
       matrix:
         include:
           - build: 'x86_64'
-            os: ubuntu-26.04-arm
+            os: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.os }}
 
@@ -34,12 +33,12 @@ jobs:
         with:
           key: ubuntu-cpu-${{ matrix.build }}
 
-      - name: Toolchain workaround (GCC 15)
+      - name: Toolchain workaround (GCC 14)
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-15-x86-64-linux-gnu g++-15-x86-64-linux-gnu patchelf
-          echo "CC=x86_64-linux-gnu-gcc-15 -march=tigerlake" >> "$GITHUB_ENV"
-          echo "CXX=x86_64-linux-gnu-g++-15 -march=tigerlake" >> "$GITHUB_ENV"
+          sudo apt-get install -y gcc-14-x86-64-linux-gnu g++-14-x86-64-linux-gnu patchelf
+          echo "CC=x86_64-linux-gnu-gcc-14 -march=tigerlake" >> "$GITHUB_ENV"
+          echo "CXX=x86_64-linux-gnu-g++-14 -march=tigerlake" >> "$GITHUB_ENV"
       - name: Swap Endianness
         id: endianness
         if: ${{ matrix.build == 's390x' }}
@@ -50,8 +49,8 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          x86_64-linux-gnu-g++-15 --version
-          x86_64-linux-gnu-gcc-15 --version
+          x86_64-linux-gnu-g++-14 --version
+          x86_64-linux-gnu-gcc-14 --version
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_NATIVE=OFF \
