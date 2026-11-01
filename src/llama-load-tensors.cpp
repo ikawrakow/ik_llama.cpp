@@ -2107,6 +2107,8 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
         if (ab) {
             a = ggml_view_2d(ctx_ab, ab, n_in, n_a, ab->nb[1], 0);
             b = ggml_view_2d(ctx_ab, ab, n_in, n_b, ab->nb[1], n_a*ab->nb[1]);
+            ggml_set_name(a, tn(t_a, "weight", i).c_str());
+            ggml_set_name(b, tn(t_b, "weight", i).c_str());
         }
     };
 

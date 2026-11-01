@@ -8761,7 +8761,8 @@ static void llama_lora_adapter_init_internal(struct llama_model * model, const c
             ggml_free(ctx);
             throw std::runtime_error("LoRA tensor '" + name + "' does not exist in base model");
         }
-        struct ggml_context * dev_ctx = get_ctx_for_buft(ggml_backend_buffer_get_type(model_tensor->buffer));
+        struct ggml_context * dev_ctx = get_ctx_for_buft(ggml_backend_buffer_get_type(
+                model_tensor->buffer ? model_tensor->buffer : model_tensor->view_src->buffer));
         // validate tensor shape
         if (model_tensor->ne[0] != w.a->ne[0] || model_tensor->ne[1] != w.b->ne[1]) {
             gguf_free(ctx_gguf);
