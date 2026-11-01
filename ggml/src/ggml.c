@@ -10691,29 +10691,49 @@ struct ggml_tensor * ggml_indexer_topk(
             struct ggml_tensor  * mask,
             struct ggml_tensor  * blk_idx,
             enum ggml_unary_op    op,
-            int                   n_top_k) {
+            int                   n_top_k,
+            int                   group_size,
+            bool                  select_groups,
+            struct ggml_tensor  * top_k_out) {
     GGML_ASSERT(k->ne[2] == 1 && k->ne[3] == 1);
     GGML_ASSERT(k->ne[0] == q->ne[0]);
-    if (blk_idx) {
-        GGML_ASSERT(ggml_nrows(blk_idx) == 1);
-        GGML_ASSERT(blk_idx->ne[0] > n_top_k);
-        GGML_ASSERT(blk_idx->type == GGML_TYPE_I32);
-    } else {
-        GGML_ASSERT(mask->type == GGML_TYPE_I32 ? mask->ne[0] == 1 : k->ne[1] == mask->ne[0]);
-        GGML_ASSERT(k->ne[1] > n_top_k);
-    }
+    GGML_ASSERT(group_size >= 0);
     GGML_ASSERT(q->ne[2] == mask->ne[1]);
     GGML_ASSERT(q->ne[1] == w->ne[0]);
     GGML_ASSERT(q->ne[2] == w->ne[1]);
+    if (select_groups) {
+        GGML_ASSERT(group_size > 0 && k->ne[1] % group_size == 0);
+        GGML_ASSERT(blk_idx == NULL);
+        GGML_ASSERT(mask->type == GGML_TYPE_I32 ? mask->ne[0] == 1 : k->ne[1] == mask->ne[0]);
+        GGML_ASSERT(n_top_k > 0 && n_top_k <= k->ne[1]/group_size);
+        if (top_k_out != NULL) {
+            GGML_ASSERT(top_k_out->type == GGML_TYPE_I32);
+            GGML_ASSERT(top_k_out->ne[0] > 0 && top_k_out->ne[0] <= k->ne[1]);
+            GGML_ASSERT(top_k_out->ne[1] == q->ne[2]);
+        }
+    } else {
+        GGML_ASSERT(top_k_out == NULL);
+        if (blk_idx) {
+            GGML_ASSERT(ggml_nrows(blk_idx) == 1);
+            GGML_ASSERT(blk_idx->ne[0] > n_top_k);
+            GGML_ASSERT(blk_idx->type == GGML_TYPE_I32);
+        } else {
+            GGML_ASSERT(mask->type == GGML_TYPE_I32 ? mask->ne[0] == 1 : k->ne[1] == mask->ne[0]);
+            GGML_ASSERT(k->ne[1] > n_top_k);
+        }
+    }
 
     struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_top_k, q->ne[2]);
     result->op = GGML_OP_INDEXER_TOPK;
     result->op_params[0] = (int)op;
+    result->op_params[1] = group_size;
+    result->op_params[2] = select_groups ? 1 : 0;
     result->src[0] = k;
     result->src[1] = q;
     result->src[2] = w;
     result->src[3] = mask;
     result->src[4] = blk_idx;
+    result->src[5] = top_k_out;
 
     return result;
 }

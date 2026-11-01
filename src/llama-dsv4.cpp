@@ -1096,6 +1096,18 @@ bool llama_context::ensure_dsv4_cache_tensors() {
         }
     }
 
+    if (v41_separate && hp.dsv4_candidate_source_layer >= 0) {
+        const int32_t il = hp.dsv4_candidate_source_layer;
+        cache.cand_topk = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_I32,
+                (int64_t) hp.indexer_top_k, (int64_t) cparams.n_ubatch);
+        if (cache.cand_topk == nullptr ||
+            !alloc_tensor(cache.cand_topk, llama_dsv4_layer_buft(*this, il))) {
+            LLAMA_LOG_ERROR("%s: failed to allocate DSV4 candidate top-k buffer\n", __func__);
+            free_dsv4_cache_tensors();
+            return false;
+        }
+    }
+
     // count each buffer once: under shared streams (V4.1) the reader layers alias their source
     auto bytes = [](const auto & tensors) {
         size_t total = 0;
@@ -1148,6 +1160,7 @@ void llama_context::free_dsv4_cache_tensors() {
     release_vector(dsv4.cache.hca_state_score);
     release_vector(dsv4.cache.lid_state_kv);
     release_vector(dsv4.cache.lid_state_score);
+    dsv4.cache.cand_topk = nullptr;
     dsv4.cache.n_stream = 1;
     if (dsv4.cache.cache_ctx != nullptr) {
         ggml_free(dsv4.cache.cache_ctx);

@@ -1,4 +1,5 @@
 #include "indexer_topk.cuh"
+#include <cfloat>
 #include "mmq.cuh"
 #include "quantize.cuh"
 #include "convert.cuh"
@@ -422,15 +423,72 @@ static void indexer_select_top_k(ggml_backend_cuda_context & ctx, const float * 
     CUDA_CHECK(cudaGetLastError());
 }
 
-void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+static __global__ void k_indexer_apply_group_keep(float * __restrict__ score, const int * __restrict__ group_ids,
+        int n_kv, int n_b, int group_size, int n_top_groups, int64_t ngi) {
+    extern __shared__ unsigned int bits[];
+    const int row   = blockIdx.x;
+    const int nword = (n_b + 31)/32;
+
+    for (int i = threadIdx.x; i < nword; i += blockDim.x) {
+        bits[i] = 0u;
+    }
+    __syncthreads();
+
+    const int * ids = (const int *)((const char *)group_ids + (size_t)row*ngi*sizeof(int));
+    for (int j = threadIdx.x; j < n_top_groups; j += blockDim.x) {
+        const int b = ids[j];
+        if (b >= 0 && b < n_b) {
+            atomicOr(&bits[b >> 5], 1u << (b & 31));
+        }
+    }
+    __syncthreads();
+
+    float * s = score + (size_t)row*n_kv;
+    for (int col = threadIdx.x; col < n_kv; col += blockDim.x) {
+        const int b = col/group_size;
+        if ((bits[b >> 5] & (1u << (b & 31))) == 0u) {
+            s[col] = -INFINITY;
+        }
+    }
+}
+
+static __global__ void k_indexer_group_max(const float * __restrict__ score, float * __restrict__ group_score,
+        int n_kv, int n_b, int group_size) {
+    const int row = blockIdx.x;
+    const float * s = score + (size_t)row*n_kv;
+    float * gs = group_score + (size_t)row*n_b;
+
+    for (int b = threadIdx.x; b < n_b; b += blockDim.x) {
+        const float * sb = s + (size_t)b*group_size;
+        float mx = -INFINITY;
+        for (int i = 0; i < group_size; ++i) {
+            mx = fmaxf(mx, sb[i]);
+        }
+        gs[b] = mx;
+    }
+    __syncthreads();
+
+    if (threadIdx.x == 0) {
+        for (int b = n_b - 1; b >= 0; --b) {
+            if (gs[b] > -INFINITY) {
+                gs[b] = FLT_MAX;
+                break;
+            }
+        }
+    }
+}
+
+static void indexer_topk_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     auto op = ggml_unary_op(dst->op_params[0]);
     GGML_ASSERT(op == GGML_UNARY_OP_RELU);
     auto k = dst->src[0];
     auto q = dst->src[1];
     auto w = dst->src[2];
     auto m = dst->src[3];
-    auto c = dst->src[4];
-    const int ratio = dst->op_params[1];
+    const int  group_size    = (int) dst->op_params[1];
+    const bool select_groups = dst->op_params[2] != 0;
+    auto c = select_groups ? nullptr : dst->src[4];
+    const int ratio = select_groups ? 1 : group_size;
     int n_top_k = dst->ne[0];
     int n_kv    = m->type != GGML_TYPE_I32 ? m->ne[0] : c ? c->ne[0] : k->ne[1];
     int n_head  = q->ne[1];
@@ -458,6 +516,37 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     GGML_ASSERT(ggml_is_contiguous(w));
 
     constexpr int k_block_size = 256;
+
+    const int n_b = select_groups ? n_kv/group_size : 0;
+    ggml_tensor * top_k_out = select_groups ? dst->src[5] : nullptr;
+    if (select_groups) {
+        GGML_ASSERT(group_size > 0 && n_kv % group_size == 0);
+        GGML_ASSERT(dst->ne[0] <= n_b);
+        if (top_k_out) {
+            GGML_ASSERT(top_k_out->type == GGML_TYPE_I32);
+            GGML_ASSERT(top_k_out->ne[1] == q->ne[2] && top_k_out->ne[0] <= n_kv);
+        }
+    }
+    auto finish_rows = [&](const float * score, int * sorted, int nrows, int first_row) {
+        int * out = (int *)((char *)dst->data + first_row*dst->nb[1]);
+        if (!select_groups) {
+            indexer_select_top_k(ctx, score, sorted, out, n_kv, nrows, dst->ne[0]);
+            return;
+        }
+        ggml_cuda_pool_alloc<float> group_score(ctx.pool(), int64_t(n_b)*nrows);
+        k_indexer_group_max<<<nrows, k_block_size, 0, ctx.stream()>>>(score, group_score.get(), n_kv, n_b, group_size);
+        CUDA_CHECK(cudaGetLastError());
+        indexer_select_top_k(ctx, group_score.get(), sorted, out, n_b, nrows, dst->ne[0]);
+        if (top_k_out) {
+            const int nword = (n_b + 31)/32;
+            k_indexer_apply_group_keep<<<nrows, k_block_size, nword*sizeof(unsigned int), ctx.stream()>>>(
+                    const_cast<float *>(score), out, n_kv, n_b, group_size, (int) dst->ne[0],
+                    dst->nb[1]/sizeof(int));
+            CUDA_CHECK(cudaGetLastError());
+            int * out2 = (int *)((char *)top_k_out->data + (size_t)first_row*top_k_out->nb[1]);
+            indexer_select_top_k(ctx, score, sorted, out2, n_kv, nrows, top_k_out->ne[0]);
+        }
+    };
 
     if ((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0) && q->type == GGML_TYPE_F32) {
         const bool use_mma = new_mma_available(ggml_cuda_info().devices[ctx.device].cc) && q->ne[0] == 128 && q->ne[1] <= 64 &&
@@ -516,8 +605,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                 } else {
                     indexer_score_cuda(q_data, k, w_data, (const half  *)m_data, score.get(), m->nb[1], n_kv, nrows, q->ne[1], r, ctx.stream());
                 }
-                indexer_select_top_k(ctx, score.get(), sorted.get(), (int *)((char *)dst->data + first_row*dst->nb[1]),
-                        n_kv, nrows, dst->ne[0]);
+                finish_rows(score.get(), sorted.get(), nrows, first_row);
                 continue;
             }
 
@@ -574,8 +662,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                 CUDA_CHECK(cudaGetLastError());
             }
 
-            indexer_select_top_k(ctx, score.get(), sorted.get(), (int *)((char *)dst->data + first_row*dst->nb[1]),
-                    n_kv, nrows, dst->ne[0]);
+            finish_rows(score.get(), sorted.get(), nrows, first_row);
         }
 
         return;
@@ -651,10 +738,13 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         }
         CUDA_CHECK(cudaGetLastError());
 
-        indexer_select_top_k(ctx, score.get(), sorted.get(), (int *)((char *)dst->data + first*dst->nb[1]),
-                k->ne[1], nrows, dst->ne[0]);
+        finish_rows(score.get(), sorted.get(), nrows, first);
     }
 
+}
+
+void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    indexer_topk_impl(ctx, dst);
 }
 
 template <typename mask_t>
