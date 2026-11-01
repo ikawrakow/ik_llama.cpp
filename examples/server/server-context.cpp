@@ -798,7 +798,13 @@ const common_chat_msg& server_slot::update_chat_msg(bool is_partial, std::vector
         //new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
         new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;
-        auto all_diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, chat_msg);
+        std::vector<common_chat_msg_diff> all_diffs;
+        try {
+            all_diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, chat_msg);
+        } catch (const std::exception & e) {
+            // compute_diffs() rejects non-append-only messages; don't terminate the server.
+            LOG_WRN("%s: failed to compute chat message diffs: %s\n", __func__, e.what());
+        }
 
         if (!filter_tool_calls) {
             diffs = std::move(all_diffs);
