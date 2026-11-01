@@ -2385,8 +2385,11 @@ struct TQ2T_Loader {
     //}
 
     inline void load_table() {
-        auto index = (uint16_t *)s;
-        for (int j = 0; j < 64; ++j) index[j] = tq_lut_i8[index[j]];
+        for (int j = 0; j < 32; ++j) {
+            auto idx1 = s[j] & 0x0000ffff;
+            auto idx2 = s[j] >> 16;
+            s[j] = tq_lut_i8[idx1] | (uint32_t(tq_lut_i8[idx2]) << 16);
+        }
     }
 
     inline void load_block(const block_tq2_t & tq2, __m256i * qx) {
@@ -2471,15 +2474,11 @@ void iqk_dequantize_tq2_t_q80_r8(int n, const void * vx, size_t bx, void * vy, i
     block_q8_0_r8 * y = (block_q8_0_r8 *)vy;
 
     const block_tq2_t * x8[8];
-    //ggml_half dkt[8];
 
     TQ2T_Loader t;
 
     __m256i qx[4];
 
-    //__m256i bad_counts = _mm256_setzero_si256();
-
-    int nbad = 0;
     for (int ix = 0; ix < nrc_x; ix += 8) {
         for (int k = 0; k < 8; ++k) {
             x8[k] = (const block_tq2_t *)((const char*)vx + (ix+k)*bx);
@@ -2490,9 +2489,7 @@ void iqk_dequantize_tq2_t_q80_r8(int n, const void * vx, size_t bx, void * vy, i
                 t.prepare_block(x8[k][i], qx);
                 t.load_table();
                 float dx32 = TQ_LUT_I8_SCALE*GGML_FP16_TO_FP32(x8[k][i].d);
-                if (dx32 < 6.10352e-5f) ++nbad;
                 ggml_half dx = GGML_FP32_TO_FP16(dx32);
-                //dkt[k] = x8[k][i].d;
                 for (int ib = 0; ib < kn; ++ib) {
                     y[kn*i + ib].d[k] = dx;
                     auto xq = t.s + QK8_0/4*ib;
@@ -2512,9 +2509,6 @@ void iqk_dequantize_tq2_t_q80_r8(int n, const void * vx, size_t bx, void * vy, i
         }
         y += kn*nb;
     }
-    //auto nbad = hsum_i32_8(bad_counts);
-    if (nbad > 0) printf("Oops: found %d scale underflows\n", nbad);
-
 }
 
 template <int nrc_y>
