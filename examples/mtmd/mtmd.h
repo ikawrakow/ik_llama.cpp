@@ -221,6 +221,7 @@ MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
 // the reading size (in bytes) is equal to:
 // llama_model_n_embd(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
+MTMD_API int32_t mtmd_get_memory_usage(const mtmd_context * ctx, struct llama_memory_buft * usage, int32_t n_max);
 MTMD_API mtmd_input_chunk * mtmd_create_input_chunk(void);
 MTMD_API mtmd_input_chunk * mtmd_input_chunk_from_json(json & j);
 MTMD_API void mtmd_input_chunk_to_json(mtmd_input_chunk * chunk, json & j);

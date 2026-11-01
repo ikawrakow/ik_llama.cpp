@@ -417,6 +417,15 @@ struct llama_moe_cache::impl {
         return true;
     }
 
+    std::map<ggml_backend_buffer_type *, size_t> memory_breakdown() const {
+        std::map<ggml_backend_buffer_type *, size_t> res;
+        for (const device & d : devices) {
+            if (d.buffer) res[d.buft] += ggml_backend_buffer_get_size(d.buffer.get());
+        }
+        if (buf_host) res[ggml_backend_buffer_get_type(buf_host.get())] += ggml_backend_buffer_get_size(buf_host.get());
+        return res;
+    }
+
     void log_stats() const {
         auto log = [](const char * name, const stats & s) {
             const size_t n = s.hits + s.misses;
@@ -447,3 +456,4 @@ ggml_tensor * llama_moe_cache::get_slot_map(int32_t il, int64_t n_tokens, int64_
 ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * t) const { return pimpl->get_experts(t); }
 bool llama_moe_cache::copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
         ggml_backend_sched_copy_phase phase) { return pimpl->copy(backend, src, dst, graph, phase); }
+std::map<ggml_backend_buffer_type *, size_t> llama_moe_cache::memory_breakdown() const { return pimpl->memory_breakdown(); }

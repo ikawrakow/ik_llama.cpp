@@ -799,6 +799,52 @@ void llm_load_hparams(
                     }
                 }
             } break;
+        case LLM_ARCH_LFM3:
+            {
+                ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_CAUSAL,            hparams.causal_attn, false);
+                ml.get_key(LLM_KV_POOLING_TYPE,                hparams.pooling_type, false);
+
+                if (hparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
+                    hparams.pooling_type = LLAMA_POOLING_TYPE_NONE;
+                }
+
+                if (!hparams.causal_attn || hparams.pooling_type != LLAMA_POOLING_TYPE_NONE || hparams.n_expert > 0) {
+                    throw std::runtime_error("LFM3: only dense causal LLM models are supported (MoE, embedding and audio variants are not supported)");
+                }
+                if (hparams.n_shortconv_l_cache <= 1) {
+                    throw std::runtime_error("LFM3 shortconv.l_cache must be greater than 1");
+                }
+
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    hparams.recurrent_layer_arr[i] = hparams.n_head_kv(i) == 0;
+                }
+
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                if (hparams.n_swa > 0) {
+                    hparams.rope_freq_base_train_swa = hparams.rope_freq_base_train;
+                    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+                    hparams.rope_freq_scale_train_swa = 1.0f;
+
+                    std::array<uint32_t, LLAMA_MAX_LAYERS> pattern{};
+                    if (ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern, hparams.n_layer, false)) {
+                        for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                            hparams.swa_layers[i] = hparams.recurrent_layer_arr[i] ? 0 : (pattern[i] != 0);
+                        }
+                    } else {
+                        for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                            hparams.swa_layers[i] = hparams.recurrent_layer_arr[i] ? 0 : 1;
+                        }
+                    }
+                } else {
+                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                        hparams.swa_layers[i] = 0;
+                    }
+                }
+
+                model.type = e_model::MODEL_UNKNOWN;
+            } break;
         case LLM_ARCH_QWEN3NEXT:
             {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);

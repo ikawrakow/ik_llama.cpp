@@ -123,6 +123,7 @@ static ggml_tensor * raon1_mla_attention(
     q = ggml_permute(ctx0, q, 0, 2, 1, 3); // [head_k, n_tokens, n_head]
 
     auto q_nope = ggml_view_3d(ctx0, q, n_nope, n_tokens, n_head, q->nb[1], q->nb[2], 0);
+    ggml_tensor * q_pp = q_nope;
 
     auto Qcur_nope = ggml_mul_mat(ctx0, layer.wk_b, q_nope); // [kv_lora, n_tokens, n_head]
     auto Qcur = Qcur_nope;
@@ -130,6 +131,7 @@ static ggml_tensor * raon1_mla_attention(
         // Raon-1's 64 NoPE channels are real extra K/Q channels.
         auto q_extra = ggml_view_3d(ctx0, q, n_extra, n_tokens, n_head, q->nb[1], q->nb[2], n_nope*q->nb[0]);
         Qcur = ggml_concat(ctx0, q_extra, Qcur_nope, 0);      // [kv_lora + n_extra, n_tokens, n_head]
+        q_pp = ggml_concat(ctx0, q_extra, q_nope, 0);
     }
     cb(Qcur, "Qcur", il);
 
@@ -153,6 +155,32 @@ static ggml_tensor * raon1_mla_attention(
 
     auto K_cache = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora + n_extra, llm.n_kv, row_size, 0);
     cb(K_cache, "kv_cache", il);
+
+    const size_t pp_bytes = layer.wkv_b ? (size_t) layer.wkv_b->ne[1] * llm.n_kv * sizeof(float) : 0;
+    if (layer.wkv_b && n_tokens >= 128 && lctx.cparams.mla_attn > 1 && lctx.cparams.flash_attn &&
+            (lctx.cparams.attn_max_batch > 0 || pp_bytes <= 256ull*1024*1024)) {
+        mla_pp_params p;
+        p.gf = gf;
+        p.il = il;
+        p.q = q_pp;
+        p.cache = kv_self.k_l[il];
+        p.wkv_b = layer.wkv_b;
+        p.mask = KQ_mask;
+        p.n_head = n_head;
+        p.n_embd_head_k = head_k;
+        p.n_embd_head_v = head_v;
+        p.n_extra = n_extra;
+        p.kv_lora_rank = kv_lora;
+        p.kq_scale = kq_scale;
+
+        auto kqv = llm.build_mla_expanded_pp(p);
+        auto gate = ggml_mul_mat(ctx0, layer.attn_v_gate, cur);
+        gate = ggml_reshape_2d(ctx0, gate, head_v * n_head, n_tokens);
+        kqv = ggml_mul(ctx0, kqv, ggml_sigmoid(ctx0, gate));
+        cur = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.wo, kqv);
+        cb(cur, "kqv_out", il);
+        return cur;
+    }
 
     ggml_tensor * kqv = nullptr;
     if (lctx.cparams.flash_attn) {

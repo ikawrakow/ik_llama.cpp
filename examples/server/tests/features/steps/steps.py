@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -64,6 +65,11 @@ def step_server_config(context, server_fqdn: str, server_port: str):
     context.server_continuous_batching = False
     context.server_embeddings = False
     context.server_metrics = False
+    context.server_memory = False
+    context.mmproj_file = None
+    context.draft_model_file = None
+    context.cpu_moe = False
+    context.moe_cache_mib = None
     context.server_process = None
     context.seed = None
     context.draft = None
@@ -175,6 +181,31 @@ def step_server_embeddings(context):
 @step('prometheus compatible metrics exposed')
 def step_server_metrics(context):
     context.server_metrics = True
+
+
+@step('memory endpoint exposed')
+def step_server_memory(context):
+    context.server_memory = True
+
+
+@step('a multimodal projector file {mmproj_file}')
+def step_mmproj_file(context, mmproj_file: str):
+    context.mmproj_file = mmproj_file
+
+
+@step('a draft model file {draft_file}')
+def step_draft_model_file(context, draft_file: str):
+    context.draft_model_file = draft_file
+
+
+@step('the MoE weights kept in CPU memory')
+def step_cpu_moe(context):
+    context.cpu_moe = True
+
+
+@step('{mib:d} MiB of MoE expert cache')
+def step_moe_cache_mib(context, mib: int):
+    context.moe_cache_mib = mib
 
 
 @step('Jinja templating enabled')
@@ -783,11 +814,149 @@ async def step_prometheus_metrics_exported(context):
             assert metric_exported, "No metrics exported"
 
 
+async def fetch_memory(context, expected_status: int = 200):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f'{context.base_url}/memory') as response:
+            assert response.status == expected_status, f"/memory answered {response.status}"
+            return await response.json()
+
+
+@step('the memory endpoint answers {status:d}')
+@async_run_until_complete
+async def step_memory_endpoint_status(context, status: int):
+    await fetch_memory(context, status)
+
+
+@step('a memory report is fetched')
+@async_run_until_complete
+async def step_fetch_memory(context):
+    context.memory = await fetch_memory(context)
+    print(f"/memory answer:\n{json.dumps(context.memory, indent=2)}")
+
+
+@step('the memory report has a host row and the layer count')
+def step_memory_report_shape(context):
+    assert isinstance(context.memory['n_layer'], int) and context.memory['n_layer'] > 0
+    rows = context.memory['data']
+    names = [row['name'] for row in rows]
+    assert len(names) == len(set(names)), f"duplicate rows: {names}"
+    host = next(row for row in rows if row['name'] == 'Host')
+    assert 'total' not in host and 'free' not in host, "the host row describes no whole device"
+    for row in rows:
+        for field in ['model', 'context', 'compute']:
+            assert isinstance(row[field], int) and row[field] >= 0, row
+        assert ('total' in row) == ('free' in row), row
+        if 'total' in row:
+            assert 0 < row['free'] <= row['total'], row
+
+
+@step('the memory report counts at least {n_bytes:d} bytes of {field}')
+def step_memory_report_counts_at_least(context, n_bytes: int, field: str):
+    total = sum(row.get(field, 0) for row in context.memory['data'])
+    assert total >= n_bytes, f"{field} bytes {total} < {n_bytes}"
+
+
+@step('the model memory is within {low:f} and {high:f} of the model file size')
+def step_memory_model_size(context, low: float, high: float):
+    file_size = os.path.getsize(context.model_file)
+    model_bytes = sum(row['model'] for row in context.memory['data'])
+    assert low * file_size <= model_bytes <= high * file_size, f"model memory {model_bytes}, file {file_size}"
+
+
+@step('a device row carries model memory')
+def step_memory_device_row_has_model(context):
+    devices = [row for row in context.memory['data'] if 'total' in row]
+    if not context.n_gpu_layer or not devices:
+        context.scenario.skip("no GPU offload on this build or run")
+        return
+    assert any(row['model'] > 0 for row in devices), f"no device row has model memory: {devices}"
+
+
+@step('the context memory is recorded')
+def step_memory_record_context(context):
+    context.recorded_context = sum(row['context'] for row in context.memory['data'])
+
+
+@step('the memory figures are kept as {name}')
+def step_memory_keep(context, name: str):
+    if not hasattr(context, 'memory_figures'):
+        context.memory_figures = {}
+    context.memory_figures[name] = {field: sum(row[field] for row in context.memory['data'])
+                                    for field in ['model', 'context', 'compute']}
+
+
+@step('shutting the server down')
+def step_stop_server(context):
+    context.server_process.send_signal(signal.SIGINT)
+    try:
+        context.server_process.wait(10)
+    except subprocess.TimeoutExpired:
+        context.server_process.kill()
+        context.server_process.wait()
+    context.server_process = None
+
+
+@step('the context memory grows by at least {mib:d} MiB')
+def step_memory_context_grows(context, mib: int):
+    grown = sum(row['context'] for row in context.memory['data']) - context.recorded_context
+    assert grown >= mib * 1024 * 1024, f"context memory grew by {grown} bytes, expected {mib} MiB"
+
+
+@step('the model memory of {total} is that of {first} plus that of {second}')
+def step_memory_model_sum(context, total: str, first: str, second: str):
+    figures = context.memory_figures
+    assert figures[total]['model'] == figures[first]['model'] + figures[second]['model'], figures
+
+
+@step('the {field} memory of {larger} is larger than that of {smaller}')
+def step_memory_larger(context, field: str, larger: str, smaller: str):
+    figures = context.memory_figures
+    assert figures[larger][field] > figures[smaller][field], figures
+
+
+@step('the output buffer is counted in the context memory')
+@async_run_until_complete
+async def step_memory_output_buffer(context):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f'{context.base_url}/v1/models') as response:
+            assert response.status == 200
+            n_vocab = (await response.json())['data'][0]['meta']['n_vocab']
+    # the KV cache doubles with the context size, the output buffer does not
+    smaller = context.recorded_context
+    larger = sum(row['context'] for row in context.memory['data'])
+    output_buffer = 2 * smaller - larger
+    assert output_buffer >= n_vocab * 4, f"output buffer {output_buffer} bytes, vocabulary {n_vocab}"
+
+
+@step('every memory row has an exact gauge in the metrics')
+@async_run_until_complete
+async def step_memory_gauges_match(context):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f'{context.base_url}/metrics') as response:
+            assert response.status == 200
+            metrics_raw = await response.text()
+    for row in context.memory['data']:
+        for field in ['model', 'context', 'compute', 'mmproj', 'total']:
+            if field in row:
+                line = f'llamacpp:memory_{field}_bytes{{device="{row["name"]}"}} {row[field]}\n'
+                assert line in metrics_raw, f"missing {line!r} in:\n{metrics_raw}"
+    for field in ['model', 'context', 'compute']:
+        help_line = f'# HELP llamacpp:memory_{field}_bytes '
+        assert metrics_raw.count(help_line) == 1, f"{field} gauge is not described exactly once"
+
+
 @step('metric {metric_name} is {metric_value:d}')
 def step_assert_metric_value(context, metric_name, metric_value):
     if metric_name not in context.metrics:
         assert False, f"no metric {metric_name} in {context.metrics.keys()}"
     assert context.metrics[metric_name].samples[0].value == metric_value, f"metric: {context.metrics[metric_name]}"
+
+
+@step('metric {metric_name} is positive on the host')
+def step_assert_host_metric_positive(context, metric_name: str):
+    assert metric_name in context.metrics, f"no metric {metric_name} in {context.metrics.keys()}"
+    host = [s for s in context.metrics[metric_name].samples if s.labels.get('device') == 'Host']
+    assert host and host[0].value > 0, f"metric: {context.metrics[metric_name]}"
 
 
 @step('available models')
@@ -1333,6 +1502,16 @@ def start_server_background(context):
         server_args.append('--embedding')
     if context.server_metrics:
         server_args.append('--metrics')
+    if context.server_memory:
+        server_args.append('--memory')
+    if context.mmproj_file:
+        server_args.extend(['--mmproj', context.mmproj_file])
+    if context.draft_model_file:
+        server_args.extend(['--model-draft', context.draft_model_file, '--spec-type', 'draft'])
+    if context.cpu_moe:
+        server_args.append('--cpu-moe')
+    if context.moe_cache_mib:
+        server_args.extend(['--moe-cache-mib', context.moe_cache_mib])
     if context.model_alias:
         server_args.extend(['--alias', context.model_alias])
     if context.n_ctx:

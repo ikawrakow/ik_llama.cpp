@@ -253,6 +253,9 @@ void common_speculative_clear_sequence_kv(
 
 llama_context * common_speculative_get_companion_ctx(common_speculative * spec);
 
+// the draft, MTP and DFlash contexts that the stages of spec own
+std::vector<const llama_context *> common_speculative_get_draft_contexts(const common_speculative * spec);
+
 int32_t common_speculative_on_target_seq_batch(
     common_speculative * spec,
     llama_context * ctx,

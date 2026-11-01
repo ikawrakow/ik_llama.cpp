@@ -101,6 +101,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MUSE_GLIMMER,    "muse-glimmer" },
     { LLM_ARCH_LFM2,            "lfm2"         },
     { LLM_ARCH_LFM2MOE,         "lfm2moe"      },
+    { LLM_ARCH_LFM3,            "lfm3"         },
     { LLM_ARCH_MAPLE,           "maple"        },
     { LLM_ARCH_SPARK2_5,        "spark2_5"     },
     { LLM_ARCH_RAON1,           "raon1"        },
@@ -390,6 +391,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_GLM5NEXT:
     case LLM_ARCH_LFM2:
     case LLM_ARCH_LFM2MOE:
+    case LLM_ARCH_LFM3:
     case LLM_ARCH_RAON1:
         return true;
     default:
