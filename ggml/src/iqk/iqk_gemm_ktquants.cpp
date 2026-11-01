@@ -2336,18 +2336,22 @@ struct TQ2T_Loader {
     uint32_t s[32];
 
     inline void prepare_block(const block_tq2_t & tq2, __m256i * qx) {
-        auto qs16 = (const uint16_t *)tq2.qs;
-        for (int l = 0; l < 8; ++l) {
-            const uint32_t w01  = qs16[2*l + 0];
-            const uint32_t w23  = qs16[2*l + 1];
-            const uint32_t prev = tq2.qs[(4*l + 31) & 31];
-            uint32_t b0 = w01 & 0xFF, b1 = w01 >> 8, b2 = w23 & 0xFF, b3 = w23 >> 8;
-            s[4*l+0] = (prev << 8) | b0;
-            s[4*l+1] = (b0   << 8) | b1;
-            s[4*l+2] = (b1   << 8) | b2;
-            s[4*l+3] = (b2   << 8) | b3;
-        }
-        for (int l = 0; l < 4; ++l) qx[l] = _mm256_and_si256(_mm256_loadu_si256((const __m256i *)s + l), mask1);
+        __m128i low  = _mm_loadu_si128((const __m128i *)(tq2.qs + 0));
+        __m128i high = _mm_loadu_si128((const __m128i *)(tq2.qs + 16));
+
+        __m128i prev_low  = _mm_alignr_epi8(low, high, 15); // Predecessors for indices 0..15
+        __m128i prev_high = _mm_alignr_epi8(high, low, 15); // Predecessors for indices 16..31
+
+        __m128i w_lo_0 = _mm_unpacklo_epi8(low,  prev_low);  // Indices 0..7
+        __m128i w_lo_1 = _mm_unpackhi_epi8(low,  prev_low);  // Indices 8..15
+        __m128i w_hi_0 = _mm_unpacklo_epi8(high, prev_high); // Indices 16..23
+        __m128i w_hi_1 = _mm_unpackhi_epi8(high, prev_high); // Indices 24..31
+
+        qx[0] = _mm256_and_si256(_mm256_cvtepu16_epi32(w_lo_0), mask1);
+        qx[1] = _mm256_and_si256(_mm256_cvtepu16_epi32(w_lo_1), mask1);
+        qx[2] = _mm256_and_si256(_mm256_cvtepu16_epi32(w_hi_0), mask1);
+        qx[3] = _mm256_and_si256(_mm256_cvtepu16_epi32(w_hi_1), mask1);
+
         for (int l = 0; l < 4; ++l) qx[l] = _mm256_mullo_epi32(qx[l], magic);
         for (int l = 0; l < 4; ++l) {
             auto i1 = _mm256_srli_epi32(qx[l], 21);
@@ -2356,6 +2360,29 @@ struct TQ2T_Loader {
             _mm256_storeu_si256((__m256i *)s + l, ii);
         }
     }
+    // GCC and Clang are both unable to auto-vectorize this. Hence, manual SIMD-ification above
+    //inline void prepare_block(const block_tq2_t & tq2, __m256i * qx) {
+    //    auto qs16 = (const uint16_t *)tq2.qs;
+    //    _Pragma("GCC unroll 8")
+    //    for (int l = 0; l < 8; ++l) {
+    //        const uint32_t w01  = qs16[2*l + 0];
+    //        const uint32_t w23  = qs16[2*l + 1];
+    //        const uint32_t prev = tq2.qs[(4*l + 31) & 31];
+    //        uint32_t b0 = w01 & 0xFF, b1 = w01 >> 8, b2 = w23 & 0xFF, b3 = w23 >> 8;
+    //        s[4*l+0] = (prev << 8) | b0;
+    //        s[4*l+1] = (b0   << 8) | b1;
+    //        s[4*l+2] = (b1   << 8) | b2;
+    //        s[4*l+3] = (b2   << 8) | b3;
+    //    }
+    //    for (int l = 0; l < 4; ++l) qx[l] = _mm256_and_si256(_mm256_loadu_si256((const __m256i *)s + l), mask1);
+    //    for (int l = 0; l < 4; ++l) qx[l] = _mm256_mullo_epi32(qx[l], magic);
+    //    for (int l = 0; l < 4; ++l) {
+    //        auto i1 = _mm256_srli_epi32(qx[l], 21);
+    //        auto i2 = _mm256_and_si256(_mm256_srli_epi32(qx[l], 10), mask2);
+    //        auto ii = _mm256_or_si256(i1, _mm256_slli_epi32(i2, 16));
+    //        _mm256_storeu_si256((__m256i *)s + l, ii);
+    //    }
+    //}
 
     inline void load_table() {
         auto index = (uint16_t *)s;
