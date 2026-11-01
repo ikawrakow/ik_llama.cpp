@@ -5564,10 +5564,17 @@ static bool llm_load_tensors(
         int n_repacked = 0;
         int n_skipped = 0;
         if (!ml.use_mmap || keep_ple_mapping) {
+            // row views of a file weight keep the file type
+            std::unordered_set<const ggml_tensor *> viewed_weights;
+            for (auto& it : model.tensors_by_name) {
+                if (it.second->view_src && ml.get_weight(ggml_get_name(it.second->view_src))) {
+                    viewed_weights.insert(it.second->view_src);
+                }
+            }
             for (auto& it : model.tensors_by_name) {
                 if (ggml_backend_buffer_is_host(it.second->buffer)) {
                     auto orig_type = it.second->type;
-                    if (it.second->view_src) continue;
+                    if (it.second->view_src || viewed_weights.count(it.second)) continue;
                     if (tensor_is_file_aliased(it.second)) {
                         if ((ggml_type) iqk_repacked_type(it.second) != it.second->type) {
                             ++n_skipped;

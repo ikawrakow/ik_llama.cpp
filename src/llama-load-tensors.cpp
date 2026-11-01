@@ -385,6 +385,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
     auto n_tensors = ml.n_tensors;
     if (ml.merge_qkv) n_tensors += n_layer;
     if (ml.merge_up_gate_exps) n_tensors += n_layer;
+    if (model.arch == LLM_ARCH_QWEN4EXP) n_tensors += 8*n_layer; // up to 4 merged weight pairs per layer, 2 views each
     ctx_size = ggml_tensor_overhead()*(n_tensors + 1); // +1 for models where tok_embd is duplicated as output
     ctx_size += ggml_tensor_overhead()*n_layer*3;         // for moe merged tensors
 
@@ -2092,6 +2093,23 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
         throw std::runtime_error("n_expert_used must be > 0 when QWEN4EXP MoE tensors are present");
     }
 
+    // The converter may store two weights that read the same input as one [a | b] weight
+    auto create_pair = [&](ggml_context * ctx, llm_tensor t_ab, llm_tensor t_a, llm_tensor t_b, int i,
+            int64_t n_in, int64_t n_a, int64_t n_b, int flags, ggml_tensor *& a, ggml_tensor *& b) {
+        const std::string name_ab = tn(t_ab, "weight", i);
+        if (!ml.get_tensor_meta(name_ab.c_str())) {
+            a = create_tensor(ctx, tn(t_a, "weight", i), {n_in, n_a}, flags);
+            b = create_tensor(ctx, tn(t_b, "weight", i), {n_in, n_b}, flags);
+            return;
+        }
+        ggml_context * ctx_ab = nullptr;
+        auto * ab = create_tensor(ctx, name_ab, {n_in, n_a + n_b}, flags, &ctx_ab);
+        if (ab) {
+            a = ggml_view_2d(ctx_ab, ab, n_in, n_a, ab->nb[1], 0);
+            b = ggml_view_2d(ctx_ab, ab, n_in, n_b, ab->nb[1], n_a*ab->nb[1]);
+        }
+    };
+
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
@@ -2107,13 +2125,13 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
         }
 
         layer.hc_attn_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_NORM,   "weight", i), {hc_dim}, lf);
-        layer.hc_attn_down   = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_DOWN,   "weight", i), {hc_dim, hc_rank}, lf);
+        create_pair(ctx_split, LLM_TENSOR_HC_ATTN_DOWN_INJECT, LLM_TENSOR_HC_ATTN_DOWN, LLM_TENSOR_HC_ATTN_INJECT, i,
+                hc_dim, hc_rank, hc, lf, layer.hc_attn_down, layer.hc_attn_inject);
         layer.hc_attn_up     = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_UP,     "weight", i), {hc_rank, hc_dim}, lf);
-        layer.hc_attn_inject = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_INJECT, "weight", i), {hc_dim, hc}, lf);
         layer.hc_ffn_norm    = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_NORM,    "weight", i), {hc_dim}, lf);
-        layer.hc_ffn_down    = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_DOWN,    "weight", i), {hc_dim, hc_rank}, lf);
+        create_pair(ctx_split, LLM_TENSOR_HC_FFN_DOWN_INJECT, LLM_TENSOR_HC_FFN_DOWN, LLM_TENSOR_HC_FFN_INJECT, i,
+                hc_dim, hc_rank, hc, lf, layer.hc_ffn_down, layer.hc_ffn_inject);
         layer.hc_ffn_up      = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_UP,      "weight", i), {hc_rank, hc_dim}, lf);
-        layer.hc_ffn_inject  = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_INJECT,  "weight", i), {hc_dim, hc}, lf);
 
         if (hparams.is_ple(i)) {
             layer.ple_key        = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_KEY,        "weight", i), {n_embd, hc_dim}, lf);
@@ -2140,13 +2158,13 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
             layer.indexer_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), {idx_head}, lf);
             layer.indexer_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), {idx_head}, lf);
         } else {
-            layer.wqkv       = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_QKV,   "weight", i), {n_embd, key_dim * 2 + value_dim}, lf);
-            layer.wqkv_gate  = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_GATE,  "weight", i), {n_embd, value_dim}, lf);
+            create_pair(ctx_layer, LLM_TENSOR_ATTN_QKV_GATE, LLM_TENSOR_ATTN_QKV, LLM_TENSOR_ATTN_GATE, i,
+                    n_embd, key_dim * 2 + value_dim, value_dim, lf, layer.wqkv, layer.wqkv_gate);
             layer.ssm_conv1d = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {hparams.ssm_d_conv, conv_dim}, lf);
             layer.ssm_dt     = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_DT,     "bias",   i), {hparams.ssm_dt_rank}, lf);
             layer.ssm_a      = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_A_NOSCAN,         i), {hparams.ssm_dt_rank}, lf);
-            layer.ssm_beta   = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_BETA,   "weight", i), {n_embd, num_v_heads}, lf);
-            layer.ssm_alpha  = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_ALPHA,  "weight", i), {n_embd, num_v_heads}, lf);
+            create_pair(ctx_layer, LLM_TENSOR_SSM_BETA_ALPHA_CAT, LLM_TENSOR_SSM_BETA, LLM_TENSOR_SSM_ALPHA, i,
+                    n_embd, num_v_heads, num_v_heads, lf, layer.ssm_beta, layer.ssm_alpha);
             layer.ssm_norm   = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_NORM,   "weight", i), {head_v_dim}, lf);
             layer.ssm_out    = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_OUT,    "weight", i), {value_dim, n_embd}, lf);
         }
