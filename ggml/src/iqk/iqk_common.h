@@ -722,7 +722,7 @@ template <int scale_block> struct Q8KRowRepacker<16, scale_block> {
         auto dn = _mm512_mul_ps(_mm512_cvtepi32_ps(_mm512_load_si512(rmax)), _mm512_set1_ps(d0));
         auto small = _mm512_cmp_ps_mask(dn, _mm512_set1_ps(1.f), _CMP_LT_OQ);
         dn = _mm512_mask_blend_ps(small, dn, _mm512_set1_ps(1.f));
-        _mm512_store_ps(inv, _mm512_div_ps(_mm512_set1_ps(1.f), dn));
+        _mm512_store_ps(inv, _mm512_rcp14_ps(dn));
         _mm512_storeu_ps(y_d, _mm512_mul_ps(_mm512_load_ps(drow), dn));
         for (int k = 0; k < 16; ++k) rescale(prod + 8*k, inv[k], !((small >> k) & 1), stage + k);
         transpose_xor(stage, y_qs);

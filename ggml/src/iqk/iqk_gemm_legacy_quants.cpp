@@ -2210,7 +2210,71 @@ struct DequantIQ5KS {
 
 template <int nrc_y>
 static void mul_mat_iq4_ks_r16_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    mul_mat_iqX_ks_r16_q8_K<DequantIQ4KS, nrc_y>(n, vx, bx, info, nrc_x);
+    GGML_ASSERT(nrc_x % 16 == 0);
+    Q8<nrc_y> q8(info);
+    int nb = n / QK8_0;
+    auto table = load_iq4nl_values_512();
+    auto m4 = _mm512_set1_epi8(0xf);
+    __m512i qx[8];
+    auto prepare_block = [&] (const block_iq4_ks_r16 & b, __m512i & iscales, __m512i & imins) {
+        auto sas = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)b.scales));
+        auto shi = _mm512_slli_epi32(_mm512_and_si512(sas, _mm512_set1_epi32(1)), 1);
+        imins = _mm512_add_epi16(_mm512_set1_epi16(-64), _mm512_or_si512(shi, _mm512_slli_epi32(shi, 16)));
+        iscales = _mm512_sub_epi32(_mm512_and_si512(sas, _mm512_set1_epi32(254)), _mm512_set1_epi32(127));
+        for (int j = 0; j < 4; ++j) {
+            auto bits = _mm512_loadu_si512(b.qs + 64*j);
+            qx[j+0] = _mm512_shuffle_epi8(table, _mm512_and_si512(bits, m4));
+            qx[j+4] = _mm512_shuffle_epi8(table, _mm512_and_si512(_mm512_srli_epi16(bits, 4), m4));
+        }
+    };
+    __m512 acc[nrc_y] = {};
+    __m512i sumi[nrc_y] = {};
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        auto dptr = (const float *)((const char *)vx + ix*bx);
+        auto d4   = _mm512_loadu_ps(dptr);
+        auto iq4  = (const block_iq4_ks_r16 *)(dptr + 16);
+        __m512i iscales, imins;
+        for (int ibl = 0; ibl < nb/8; ++ibl) {
+            for (int k = 0; k < 8; ++k) {
+                prepare_block(iq4[8*ibl+k], iscales, imins);
+                _Pragma("GCC unroll 8")
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto & by = q8.y[iy][ibl];
+                    auto isum = qx_r8_q8_dot_product(qx, by.qs+32*k);
+                    isum = _mm512_dpwssd_epi32(isum, imins, _mm512_set1_epi16(by.bsums[2*k]+by.bsums[2*k+1]));
+                    sumi[iy] = _mm512_add_epi32(sumi[iy], _mm512_mullo_epi32(isum, iscales));
+                }
+            }
+            _Pragma("GCC unroll 8")
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                acc[iy] = _mm512_fmadd_ps(_mm512_mul_ps(d4, _mm512_set1_ps(q8.scale(iy, ibl))), _mm512_cvtepi32_ps(sumi[iy]), acc[iy]);
+                sumi[iy] = _mm512_setzero_si512();
+            }
+        }
+        if (int nb0 = 8*(nb/8); nb0 < nb) {
+            int nbtail = nb - nb0;
+            for (int k = 0; k < nbtail; ++k) {
+                prepare_block(iq4[nb0+k], iscales, imins);
+                _Pragma("GCC unroll 8")
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto & by = q8.y[iy][nb/8];
+                    auto isum = qx_r8_q8_dot_product(qx, by.qs+32*k);
+                    auto bsums = (const int16_t *)(by.qs + 32*nbtail);
+                    isum = _mm512_dpwssd_epi32(isum, imins, _mm512_set1_epi16(bsums[2*k]+bsums[2*k+1]));
+                    sumi[iy] = _mm512_add_epi32(sumi[iy], _mm512_mullo_epi32(isum, iscales));
+                }
+            }
+            _Pragma("GCC unroll 8")
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                acc[iy] = _mm512_fmadd_ps(_mm512_mul_ps(d4, _mm512_set1_ps(q8.scale(iy, nb/8))), _mm512_cvtepi32_ps(sumi[iy]), acc[iy]);
+                sumi[iy] = _mm512_setzero_si512();
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+            acc[iy] = _mm512_setzero_ps();
+        }
+    }
 }
 
 template <int nrc_y>
