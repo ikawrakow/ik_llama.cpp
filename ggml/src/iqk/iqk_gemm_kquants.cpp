@@ -1849,100 +1849,16 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
 }
 
 #ifdef HAVE_FANCY_SIMD
-#ifdef __GNUC__
-typedef int dpbusd_acc_t __attribute__((vector_size(64)));
-#else
-typedef __m512i dpbusd_acc_t;
-#endif
 template <bool has_tail, int nrc_y>
 static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
     int nbl = n / QK_K;
-    int ix = 0;
-    for (; ix + 32 <= nrc_x; ix += 32) {
-        const block_q8_k_r16 * iqa = (const block_q8_k_r16 *)((const char *)vx + (ix +  0)*bx);
-        const block_q8_k_r16 * iqb = (const block_q8_k_r16 *)((const char *)vx + (ix + 16)*bx);
-        __m512  acca[nrc_y] = {};
-        __m512  accb[nrc_y] = {};
-        dpbusd_acc_t suma[nrc_y] = {};
-        dpbusd_acc_t sumb[nrc_y] = {};
-        __m512i qa[4], qb[4];
-        for (int ibl = 0; ibl < nbl; ++ibl) {
-            _Pragma("GCC unroll 2")
-            for (int ib = 0; ib < QK_K/16; ++ib) {
-                for (int k = 0; k < 4; ++k) {
-                    qa[k] = _mm512_loadu_si512((const __m512i *)iqa[ibl].qs+4*ib+k);
-                    qb[k] = _mm512_loadu_si512((const __m512i *)iqb[ibl].qs+4*ib+k);
-                }
-                _Pragma("GCC unroll 8")
-                for (int iy = 0; iy < nrc_y; ++iy) {
-                    const int8_t * yb = q8.y[iy][ibl].qs + 16*ib;
-                    for (int k = 0; k < 4; ++k) {
-                        auto y = _mm512_set1_epi32(*(const int32_t *)(yb + 4*k));
-                        suma[iy] = (dpbusd_acc_t)_mm512_dpbusd_epi32((__m512i)suma[iy], qa[k], y);
-                        sumb[iy] = (dpbusd_acc_t)_mm512_dpbusd_epi32((__m512i)sumb[iy], qb[k], y);
-                    }
-                }
-            }
-            auto da = _mm512_loadu_ps(iqa[ibl].d);
-            auto db = _mm512_loadu_ps(iqb[ibl].d);
-            auto ma = _mm512_mul_ps(da, _mm512_set1_ps(-128.f));
-            auto mb = _mm512_mul_ps(db, _mm512_set1_ps(-128.f));
-            for (int iy = 0; iy < nrc_y; ++iy) {
-                auto dy = _mm512_set1_ps(q8.scale(iy, ibl));
-                auto sy = _mm512_set1_ps(q8.y[iy][ibl].sum);
-                acca[iy] = _mm512_fmadd_ps(_mm512_mul_ps(da, dy), _mm512_cvtepi32_ps((__m512i)suma[iy]), acca[iy]);
-                acca[iy] = _mm512_fmadd_ps(ma, sy, acca[iy]);
-                accb[iy] = _mm512_fmadd_ps(_mm512_mul_ps(db, dy), _mm512_cvtepi32_ps((__m512i)sumb[iy]), accb[iy]);
-                accb[iy] = _mm512_fmadd_ps(mb, sy, accb[iy]);
-                suma[iy] = sumb[iy] = (dpbusd_acc_t)_mm512_setzero_si512();
-            }
-        }
-        if constexpr (has_tail) {
-        if (int nleft = n - nbl*QK_K; nleft > 0) {
-            int nbtail = nleft/32;
-            _Pragma("GCC unroll 2")
-            for (int ib = 0; ib < 2*nbtail; ++ib) {
-                for (int k = 0; k < 4; ++k) {
-                    qa[k] = _mm512_loadu_si512((const __m512i *)iqa[nbl].qs+4*ib+k);
-                    qb[k] = _mm512_loadu_si512((const __m512i *)iqb[nbl].qs+4*ib+k);
-                }
-                _Pragma("GCC unroll 8")
-                for (int iy = 0; iy < nrc_y; ++iy) {
-                    const int8_t * yb = q8.y[iy][nbl].qs + 16*ib;
-                    for (int k = 0; k < 4; ++k) {
-                        auto y = _mm512_set1_epi32(*(const int32_t *)(yb + 4*k));
-                        suma[iy] = (dpbusd_acc_t)_mm512_dpbusd_epi32((__m512i)suma[iy], qa[k], y);
-                        sumb[iy] = (dpbusd_acc_t)_mm512_dpbusd_epi32((__m512i)sumb[iy], qb[k], y);
-                    }
-                }
-            }
-            auto da = _mm512_loadu_ps(iqa[nbl].d);
-            auto db = _mm512_loadu_ps(iqb[nbl].d);
-            auto ma = _mm512_mul_ps(da, _mm512_set1_ps(-128.f));
-            auto mb = _mm512_mul_ps(db, _mm512_set1_ps(-128.f));
-            for (int iy = 0; iy < nrc_y; ++iy) {
-                auto dy = _mm512_set1_ps(q8.scale(iy, nbl));
-                auto sy = _mm512_set1_ps(q8.y[iy][nbl].sum);
-                acca[iy] = _mm512_fmadd_ps(_mm512_mul_ps(da, dy), _mm512_cvtepi32_ps((__m512i)suma[iy]), acca[iy]);
-                acca[iy] = _mm512_fmadd_ps(ma, sy, acca[iy]);
-                accb[iy] = _mm512_fmadd_ps(_mm512_mul_ps(db, dy), _mm512_cvtepi32_ps((__m512i)sumb[iy]), accb[iy]);
-                accb[iy] = _mm512_fmadd_ps(mb, sy, accb[iy]);
-                suma[iy] = sumb[iy] = (dpbusd_acc_t)_mm512_setzero_si512();
-            }
-        }
-        }
-        for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix +  0, iy, acca[iy]);
-            info.store(ix + 16, iy, accb[iy]);
-        }
-    }
     __m512  acc[nrc_y] = {};
     __m512i isum[nrc_y] = {};
     __m512i isum2[nrc_y] = {};
     __m512i qx[4];
-    for (; ix < nrc_x; ix += 16) {
+    for (int ix = 0; ix < nrc_x; ix += 16) {
         const block_q8_k_r16 * iq16 = (const block_q8_k_r16 *)((const char *)vx + ix*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto d4 = _mm512_loadu_ps(iq16[ibl].d);
