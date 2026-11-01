@@ -207,10 +207,11 @@ static ggml_tensor * raon1_mla_attention(
         wv_b = ggml_reshape_3d(ctx0, wv_b, kv_lora, head_v, n_head);
     }
     kqv = ggml_mul_mat(ctx0, wv_b, kqv); // [head_v, n_tokens, n_head]
-    kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-    kqv = ggml_cont(ctx0, kqv);
+    if (n_tokens > 1) {
+        kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
+        kqv = ggml_cont(ctx0, kqv);
+    }
     kqv = ggml_reshape_2d(ctx0, kqv, head_v * n_head, n_tokens);
-
     auto gate = ggml_mul_mat(ctx0, layer.attn_v_gate, cur);
     gate = ggml_reshape_2d(ctx0, gate, head_v * n_head, n_tokens);
     kqv = ggml_mul(ctx0, kqv, ggml_sigmoid(ctx0, gate));

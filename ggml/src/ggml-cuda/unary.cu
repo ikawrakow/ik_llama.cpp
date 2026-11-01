@@ -922,32 +922,49 @@ static __global__ void scaled_softplus_kernel(const T * x, T * dst, const int k,
     dst[i] = (T)op_softplus_scaled((float)x[i], s_before, s_after);
 }
 
-void ggml_cuda_op_scaled_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    GGML_ASSERT(dst->op == GGML_OP_SCALE);
-    auto soft = dst->src[0];
-    GGML_ASSERT(soft->op == GGML_OP_UNARY);
-    auto unary_op = (ggml_unary_op)soft->op_params[0];
-    GGML_ASSERT(unary_op == GGML_UNARY_OP_SOFTPLUS);
-    auto src = soft->src[0];
-    GGML_ASSERT(src->op == GGML_OP_SCALE);
+template <typename T>
+static __global__ void scaled_sigmoid_kernel(const T * x, T * dst, const int k, float s_before, float s_after) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    dst[i] = (T)(s_after / (1.0f + expf(-s_before * (float)x[i])));
+}
+
+bool ggml_cuda_op_scale_unary_scale(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    if (dst->op != GGML_OP_SCALE) return false;
+    auto unary = dst->src[0];
+    if (unary->op != GGML_OP_UNARY) return false;
+    auto unary_op = (ggml_unary_op)unary->op_params[0];
+    if (unary_op != GGML_UNARY_OP_SOFTPLUS && unary_op != GGML_UNARY_OP_SIGMOID) return false;
+    auto src = unary->src[0];
+    if (src->op != GGML_OP_SCALE) return false;
     auto src0 = src->src[0];
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) return false;
+    if (src0->type != dst->type) return false;
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) return false;
+
     float s_before, s_after;
     memcpy(&s_before, src->op_params, sizeof(float));
     memcpy(&s_after, dst->op_params, sizeof(float));
 
-    GGML_ASSERT(ggml_is_contiguous(src0));
-    GGML_ASSERT(ggml_is_contiguous(dst));
-
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
-    GGML_ASSERT(src0->type == dst->type);
-
     auto nelem = ggml_nelements(src0);
     const int num_blocks = (nelem + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
-    if (src0->type == GGML_TYPE_F16) {
-        scaled_softplus_kernel<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>((const half *)src0->data, (half *)dst->data, nelem, s_before, s_after);
+    if (unary_op == GGML_UNARY_OP_SOFTPLUS) {
+        if (src0->type == GGML_TYPE_F16) {
+            scaled_softplus_kernel<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>((const half *)src0->data, (half *)dst->data, nelem, s_before, s_after);
+        } else {
+            scaled_softplus_kernel<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>((const float *)src0->data, (float *)dst->data, nelem, s_before, s_after);
+        }
     } else {
-        scaled_softplus_kernel<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>((const float *)src0->data, (float *)dst->data, nelem, s_before, s_after);
+        if (src0->type == GGML_TYPE_F16) {
+            scaled_sigmoid_kernel<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>((const half *)src0->data, (half *)dst->data, nelem, s_before, s_after);
+        } else {
+            scaled_sigmoid_kernel<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, ctx.stream()>>>((const float *)src0->data, (float *)dst->data, nelem, s_before, s_after);
+        }
     }
+    return true;
 }
 
 void ggml_cuda_op_sqrt_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
