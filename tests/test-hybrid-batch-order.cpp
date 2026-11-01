@@ -11,6 +11,11 @@
 // A 128-token batch over two sequences must need zero of them, whether the tokens
 // arrive grouped or interleaved.
 //
+// Logits are checked twice. Once through llama_get_logits, which is order agnostic,
+// and once through llama_get_logits_ith with the caller's own token index, which is
+// what llama-server does when it reads results per slot. The second check is the one
+// that catches a regroup which moves tokens without moving the output rows with them.
+//
 // Both ubatch sizes are exercised. With n_ubatch 32 the 64-token sequence
 // boundary lines up with a window, so every ubatch holds a single sequence and
 // the degenerate check cannot fire by accident. With n_ubatch 40 the boundary at
@@ -42,6 +47,9 @@ static const float   LOGIT_TOL = 1e-3f;
 struct run_result {
     uint64_t fallbacks = 0;
     std::vector<float> logits[N_SEQ];
+    // logits fetched the way a server does it: by the caller's token index
+    std::vector<float> logits_ith[N_SEQ];
+    bool               ith_ok = true;
 };
 
 // Adds one token to the batch at the next free slot.
@@ -54,18 +62,31 @@ static void add_token(llama_batch & batch, int32_t i, llama_token tok, llama_pos
 }
 
 // Fills the batch grouped (seq0 tokens, then seq1 tokens) or interleaved (token-major).
-static void fill_batch(llama_batch & batch, const std::vector<llama_token> & toks, bool interleaved) {
+// When last_idx is given it receives the caller-side index of each sequence's last token.
+static void fill_batch(llama_batch & batch, const std::vector<llama_token> & toks, bool interleaved,
+                       std::vector<int32_t> * last_idx = nullptr) {
     int32_t i = 0;
+    if (last_idx) {
+        last_idx->assign(N_SEQ, -1);
+    }
     if (!interleaved) {
         for (llama_seq_id s = 0; s < N_SEQ; ++s) {
             for (int32_t t = 0; t < N_TOK; ++t) {
-                add_token(batch, i++, toks[t], t, s, t == N_TOK - 1);
+                add_token(batch, i, toks[t], t, s, t == N_TOK - 1);
+                if (t == N_TOK - 1 && last_idx) {
+                    (*last_idx)[s] = i;
+                }
+                ++i;
             }
         }
     } else {
         for (int32_t t = 0; t < N_TOK; ++t) {
             for (llama_seq_id s = 0; s < N_SEQ; ++s) {
-                add_token(batch, i++, toks[t], t, s, t == N_TOK - 1);
+                add_token(batch, i, toks[t], t, s, t == N_TOK - 1);
+                if (t == N_TOK - 1 && last_idx) {
+                    (*last_idx)[s] = i;
+                }
+                ++i;
             }
         }
     }
@@ -75,7 +96,8 @@ static void fill_batch(llama_batch & batch, const std::vector<llama_token> & tok
 // Decodes one batch on a clean cache and records fallback count plus last-token logits per sequence.
 static bool run_batch(llama_context * ctx, int32_t n_vocab, const std::vector<llama_token> & toks, bool interleaved, run_result & out) {
     llama_batch batch = llama_batch_init(N_TOKENS, 0, N_SEQ);
-    fill_batch(batch, toks, interleaved);
+    std::vector<int32_t> last_idx;
+    fill_batch(batch, toks, interleaved, &last_idx);
 
     llama_kv_cache_clear(ctx);
 
@@ -91,6 +113,17 @@ static bool run_batch(llama_context * ctx, int32_t n_vocab, const std::vector<ll
                 out.logits[s].assign(l + (size_t) s * n_vocab, l + (size_t) (s + 1) * n_vocab);
             }
             have_logits = true;
+        }
+
+        // Same rows, but asking the way llama-server does: by the caller's token index.
+        // A regroup that permutes tokens without fixing the output rows returns null here.
+        for (int32_t s = 0; s < N_SEQ; ++s) {
+            const float * li = llama_get_logits_ith(ctx, last_idx[s]);
+            if (!li) {
+                out.ith_ok = false;
+                continue;
+            }
+            out.logits_ith[s].assign(li, li + n_vocab);
         }
     }
 
@@ -156,6 +189,22 @@ static bool run_case(llama_model * model, int32_t n_vocab, const std::vector<lla
         printf("  seq %d logits: max |diff| = %.6f\n", s, max_diff);
         if (max_diff > LOGIT_TOL) {
             fprintf(stderr, "FAIL: sequence %d logits differ at n_ubatch %d (%.6f)\n", s, n_ubatch, max_diff);
+            ok = false;
+        }
+
+        if (!interleaved.ith_ok || interleaved.logits_ith[s].size() != (size_t) n_vocab) {
+            fprintf(stderr, "FAIL: llama_get_logits_ith returned no row for sequence %d at n_ubatch %d\n", s, n_ubatch);
+            ok = false;
+            continue;
+        }
+        float max_diff_ith = 0.0f;
+        for (int32_t v = 0; v < n_vocab; ++v) {
+            max_diff_ith = std::fmax(max_diff_ith, std::fabs(grouped.logits[s][v] - interleaved.logits_ith[s][v]));
+        }
+        printf("  seq %d logits by caller index: max |diff| = %.6f\n", s, max_diff_ith);
+        if (max_diff_ith > LOGIT_TOL) {
+            fprintf(stderr, "FAIL: sequence %d logits by caller index differ at n_ubatch %d (%.6f)\n",
+                    s, n_ubatch, max_diff_ith);
             ok = false;
         }
     }
