@@ -17,6 +17,7 @@
 #include <iostream>
 #include <regex>
 #include <exception>
+#include <unordered_map>
 
 // DFlash/DSpark (draft model family) and MTP stages work with multimodal
 static bool server_speculative_multimodal_supported(const common_params_speculative & params) {
@@ -4327,8 +4328,10 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         slot.n_past--;
                         if (slot.n_buffer != 0 && params_base.can_ban_phrases && llama_model_has_recurrent(llama_get_model(slot.ctx))) {
                             //banned strings need to evaluate at p-2 and save checkpoint at p-1
-                            slot.n_past_prompt--;
-                            slot.n_past--;
+                            if (slot.n_past_prompt > 0 && slot.n_past > 0) {
+                                slot.n_past_prompt--;
+                                slot.n_past--;
+                            }
                         }
                         if (slot.ga_i > 0) {
                             slot.n_past_se--;
@@ -4560,8 +4563,7 @@ void server_context::extend_context(const int32_t n_tokens) {
 static inline void create_rewind_checkpoint(server_slot & slot) {
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
         int32_t max_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
-        llama_rewind_ckpt_save(slot.ctx, { LLAMA_CHECKPOINT_REWIND, max_pos+1, 0 }, slot.id, slot.n_buffer);
-        //LLAMA_LOG_DEBUG("--- Save checkpoint for string ban at n: %d. \n", max_pos+1);
+        llama_rewind_ckpt_save(slot.ctx, { LLAMA_CHECKPOINT_REWIND, max_pos, 0 }, slot.id, slot.n_buffer);
     }
 }
 
@@ -4585,7 +4587,7 @@ void server_context::speculative_decoding_accept() {
         // the accepted tokens from the speculation
         std::vector<llama_token> ids;
         // RESTORE AND APPLY POSITIONAL BANS
-        std::map<int32_t, std::set<llama_token>> sampling_logit_bias;
+        std::unordered_map<int32_t, std::set<llama_token>> sampling_logit_bias;
         positional_ban_set *  ban_set_ptr = nullptr;
         positional_ban_set  ban_set;
 
@@ -4901,11 +4903,11 @@ void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
     }
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
         // ckpt that can be restored 
-        llama_pos pos = llama_rewind_ckpt_pos(slot.ctx, { LLAMA_CHECKPOINT_REWIND, (int32_t)n_keep_cache, 0 }, slot.id);
+        llama_pos pos = llama_rewind_ckpt_pos(slot.ctx, { LLAMA_CHECKPOINT_REWIND, (int32_t)n_keep_cache - 1, 0 }, slot.id);
         if (pos < 0) {
-            LLAMA_LOG_ERROR("--- Get n for string ban failed at %d. \n", n_keep_cache);
+            LLAMA_LOG_ERROR("--- Get pos for string ban failed at %zu. \n", n_keep_cache);
         } else {
-            n_keep_cache = pos;
+            n_keep_cache = pos + 1;
         }
     }
     if (n_keep_cache < slot.cache_tokens.size()) {
@@ -4920,11 +4922,11 @@ void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
 
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
         auto n_past = slot.cache_tokens.pos_next(slot.n_past);
-        auto result = llama_spec_ckpt_restore(slot.ctx, { LLAMA_CHECKPOINT_REWIND, n_past, 0 }, slot.id, n_past, 0); // restore recurrent layers
+        auto result = llama_spec_ckpt_restore(slot.ctx, { LLAMA_CHECKPOINT_REWIND, n_past - 1, 0 }, slot.id, n_past, 0); // restore recurrent layers
         if (!result) {
             LLAMA_LOG_ERROR("--- Restoring checkpoint for string ban failed at %d. \n", n_past);
         }
-        llama_rewind_ckpt_discard(slot.ctx, { LLAMA_CHECKPOINT_REWIND,  n_past + 1,  -1 }, slot.id);
+        llama_rewind_ckpt_discard(slot.ctx, { LLAMA_CHECKPOINT_REWIND,  n_past,  -1 }, slot.id);
     } else {
         // Remove from KV cache
         llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
@@ -5219,7 +5221,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 create_checkpoint_at_interval(slot);
                 if (slot.n_buffer != 0 && params_base.can_ban_phrases) {
                     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
-                        int32_t n = slot.n_past - 1 * (int32_t)slot.n_buffer - 2;
+                        int32_t n = slot.n_past - 1 * (int32_t)slot.n_buffer - 3;
                         llama_rewind_ckpt_discard(slot.ctx, { LLAMA_CHECKPOINT_REWIND, 0,   n<0?0:n}, slot.id);
                     }
                     create_rewind_checkpoint(slot);
@@ -5381,7 +5383,7 @@ void server_context::update_slots() {
             const llama_pos n_past_pre_spec = slot.cache_tokens.pos_next(n_pre_spec_tokens);
             const int max_tokens = (int) slot.drafted.size() + 1;
             if (slot.n_buffer != 0 && params_base.can_ban_phrases && llama_model_has_recurrent(llama_get_model(slot.ctx))) {
-                int32_t n = n_past_pre_spec - 1 * (int32_t)slot.n_buffer-2;
+                int32_t n = n_past_pre_spec - 1 * (int32_t)slot.n_buffer - 3;
                 llama_rewind_ckpt_discard(slot.ctx, { LLAMA_CHECKPOINT_REWIND, 0,  n <0 ? 0 : n  }, slot.id);
                 create_rewind_checkpoint(slot); // snapshot before speculative decoding
             }

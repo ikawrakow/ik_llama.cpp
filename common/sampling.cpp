@@ -810,7 +810,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
 
     std::vector<llama_token> result;
     result.reserve(idxs.size());
-    auto & old_bias = gsmpl->params.logit_bias;
+    auto old_bias = gsmpl->params.logit_bias;
     size_t i = 0;
     for (; i < draft.size(); i++) {
         update_logit_bias(gsmpl, positional_ban, i);
@@ -834,6 +834,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
         if (positional_ban) {
             gsmpl->params.logit_bias = old_bias;
         }
+        result.push_back(id);
     }
 
     return result;
@@ -858,7 +859,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
         common_sampler_accept(gsmpl, ctx, id, true);
         result.push_back(id);
     };
-    auto & old_bias = gsmpl->params.logit_bias;
+    auto old_bias = gsmpl->params.logit_bias;
     size_t i = 0;
     for (; i < draft.size(); ++i) {
         update_logit_bias(gsmpl, positional_ban, i);

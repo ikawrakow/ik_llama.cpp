@@ -299,9 +299,8 @@ struct common_sampler {
 };
 
 struct positional_ban_set {
-    std::map<int32_t, std::set<llama_token>> tokens;
-    float bias;
-
+    std::unordered_map<int32_t, std::set<llama_token>> tokens;
+    float bias = 0.0f;
 };
 
 // Create a new sampling context instance.
