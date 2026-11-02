@@ -5341,13 +5341,13 @@ bool create_tensors_helper::create_minimaxm3_tensors(const LLM_TN & tn) {
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), { n_embd, n_ff_exp * n_expert_shared }, 0);
         }
 
-        // M3 has the indexer on the MoE layers, M3.1 on every layer
-        const int idx_flags = llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED;
+        // M3 has the indexer on the MoE layers, M3.1 on every layer; the layers that have it run sparse
+        const int idx_flags = llama_model_loader::TENSOR_NOT_REQUIRED | (model.dsa ? 0 : llama_model_loader::TENSOR_SKIP);
         const int64_t n_idx = hparams.indexer_head_size;
-        create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), { n_embd, n_idx * hparams.indexer_n_head }, idx_flags);
-        create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), { n_embd, n_idx }, idx_flags);
-        create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), { n_idx }, idx_flags);
-        create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), { n_idx }, idx_flags);
+        layer.indexer_q_proj = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), { n_embd, n_idx * hparams.indexer_n_head }, idx_flags);
+        layer.indexer_k_proj = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), { n_embd, n_idx }, idx_flags);
+        layer.indexer_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), { n_idx }, idx_flags);
+        layer.indexer_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), { n_idx }, idx_flags);
     }
     return use_mmap_buffer;
 }
