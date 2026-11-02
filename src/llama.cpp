@@ -4250,6 +4250,49 @@ static void llm_scale_gate_inp_s(llama_model & model, bool uses_mmap) {
     }
 }
 
+// Mainline GGUFs store the MiniMax-M3 indexer projections as F32, although their values are usually exact in BF16.
+static void llm_minimaxm3_indexer_to_bf16(llama_model & model, bool uses_mmap) {
+    std::vector<ggml_tensor *> exact;
+    size_t nbytes = 0;
+    for (auto & l : model.layers) {
+        for (auto t : { l.indexer_q_proj, l.indexer_k_proj }) {
+            if (!t || t->type != GGML_TYPE_F32) continue;
+            const uint32_t * u = (const uint32_t *)t->data;
+            const int64_t n = ggml_nelements(t);
+            int64_t i = 0;
+            while (i < n && (u[i] & 0xffff) == 0) ++i;
+            if (i < n) continue;
+            exact.push_back(t);
+            nbytes += n*sizeof(ggml_bf16_t);
+        }
+    }
+    if (exact.empty()) return;
+
+    char * dst = nullptr;
+    if (uses_mmap) {
+        model.aux_buffer.resize((nbytes + sizeof(float) - 1)/sizeof(float));
+        dst = (char *)model.aux_buffer.data();
+    }
+    std::vector<ggml_bf16_t> tmp;
+    for (auto t : exact) {
+        const uint32_t * u = (const uint32_t *)t->data;
+        const int64_t n = ggml_nelements(t);
+        tmp.resize(n);
+        // exact since the low half is zero; ggml_fp32_to_bf16_row would flush subnormals with AVX512_BF16
+        for (int64_t i = 0; i < n; ++i) tmp[i].bits = u[i] >> 16;
+        if (dst) {
+            t->data = dst;
+            dst += n*sizeof(ggml_bf16_t);
+        }
+        std::memcpy(t->data, tmp.data(), n*sizeof(ggml_bf16_t));
+        t->type  = GGML_TYPE_BF16;
+        t->nb[0] = sizeof(ggml_bf16_t);
+        for (int j = 1; j < GGML_MAX_DIMS; ++j) t->nb[j] = t->nb[j-1]*t->ne[j-1];
+    }
+    LLAMA_LOG_INFO("%s: %d F32 indexer tensors are exact in BF16, converted (%.2f MiB)\n", __func__,
+            (int) exact.size(), nbytes/1024./1024.);
+}
+
 // Backend (reg) enumeration
 static bool striequals(const char* a, const char* b) {
     for (; *a && *b; a++, b++) {
@@ -5511,6 +5554,9 @@ static bool llm_load_tensors(
     }
     if (model.arch == LLM_ARCH_GEMMA4) {
         llm_scale_gate_inp_s(model, use_mmap_buffer);
+    }
+    if (!dry_run && model.arch == LLM_ARCH_MINIMAX_M3 && model.dsa) {
+        llm_minimaxm3_indexer_to_bf16(model, ml.use_mmap);
     }
     if ((model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || llm_arch_is_dflash_family(model.arch)) && extra_output_type != GGML_TYPE_COUNT) {
         llm_requantize_output_tensor(model, extra_output_type);
