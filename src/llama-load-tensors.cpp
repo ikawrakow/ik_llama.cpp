@@ -1913,7 +1913,7 @@ bool create_tensors_helper::create_lfm3_tensors(const LLM_TN & tn) {
         }
     }
 
-    return true;
+    return use_mmap_buffer;
 }
 
 bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
