@@ -96,24 +96,6 @@ void iqk_mul_mat_vec_q(ggml_type type, const mmvq_args & args, cudaStream_t stre
         case GGML_TYPE_IQ5_KS_R16:
             mul_mat_vec_iq5_ks_r16_q8_1_cuda(args, stream);
             break;
-        case GGML_TYPE_TQ2_T:
-            mul_mat_vec_tq2_t_q8_1_cuda(args, stream);
-            break;
-        case GGML_TYPE_TQK6:
-            mul_mat_vec_tqk6_q8_1_cuda(args, stream);
-            break;
-        case GGML_TYPE_TQK7:
-            mul_mat_vec_tqk7_q8_1_cuda(args, stream);
-            break;
-        case GGML_TYPE_TQP5:
-            mul_mat_vec_tqp5_q8_1_cuda(args, stream);
-            break;
-        case GGML_TYPE_TQP6:
-            mul_mat_vec_tqp6_q8_1_cuda(args, stream);
-            break;
-        case GGML_TYPE_TQP7:
-            mul_mat_vec_tqp7_q8_1_cuda(args, stream);
-            break;
         default:
             GGML_ABORT("fatal error");
             break;
