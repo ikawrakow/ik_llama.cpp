@@ -4672,6 +4672,12 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
                     if (next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type)) {
                         ++i;
                     }
+                    else if (next->op == GGML_OP_HADAMARD && i < cgraph->n_nodes-2) {
+                        next = cgraph->nodes[i+2];
+                        if (next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type)) {
+                            i += 2;
+                        }
+                    }
                 }
             }
         }
