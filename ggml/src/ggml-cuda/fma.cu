@@ -84,6 +84,45 @@ static __global__ void fma_kernel2(const int ne0, T * __restrict__ dst,
     }
 }
 
+template <bool b_is_const, typename T>
+static __global__ void fma_kernel3(const int ne0, T * __restrict__ dst,
+                                  const T * __restrict__ c,
+                                  const T * __restrict__ a,
+                                  const T * __restrict__ b,
+                                  const int ne11, const int ne12,
+                                  const int ne21, const int ne22,
+                                  const int64_t nb1,  const int64_t nb2,
+                                  const int64_t nb01, const int64_t nb02,
+                                  const int64_t nb11, const int64_t nb12,
+                                  const int64_t nb21, const int64_t nb22,
+                                  float s_before, float s_after) {
+
+    int i0 = blockIdx.z*blockDim.x + threadIdx.x;
+    if (i0 >= ne0) {
+        return;
+    }
+    int i2 = blockIdx.x;
+    int i1 = blockIdx.y;
+
+    const int i11 = i1 % ne11;
+    const int i12 = i2 % ne12;
+
+    const int i21 = i1 % ne21;
+    const int i22 = i2 % ne22;
+
+    auto dc = c + i1*nb01 + i2*nb02;
+    auto da = a + i11*nb11 + i12*nb12;
+    auto db = b + i21*nb21 + i22*nb22;
+
+    auto dr = dst + i1*nb1 + i2*nb2;
+
+    if constexpr (b_is_const) {
+        dr[i0] = dc[i0] + da[i0] * s_before / (1.0f + expf(-s_after * db[0]));
+    } else {
+        dr[i0] = dc[i0] + da[i0] * s_before / (1.0f + expf(-s_after * db[i0]));
+    }
+}
+
 void ggml_cuda_op_fma(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     constexpr int k_block_size = 256;
@@ -227,4 +266,59 @@ void ggml_cuda_op_fma(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                     b->nb[1]/tsize, b->nb[2]/tsize, b->nb[3]/tsize, nelem);
         }
     }
+}
+
+bool ggml_cuda_op_fma_sus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+
+    constexpr int k_block_size = 256;
+
+    auto c = dst->src[0];
+    auto a = dst->src[1];
+    auto b = dst->src[2];
+
+    if (c->ne[3] != 1 || ggml_nrows(c) >= 32) return false;
+
+    GGML_ASSERT(ggml_are_same_shape(c, dst));
+    GGML_ASSERT(c->ne[0] == a->ne[0]);
+    GGML_ASSERT(c->ne[0] == b->ne[0] || b->ne[0] == 1);
+
+    if (b->op != GGML_OP_RESHAPE) return false;
+    auto bs = b->src[0];
+    if (bs->op != GGML_OP_SCALE) return false;
+    auto u = bs->src[0];
+    if (u->op != GGML_OP_UNARY) return false;
+    if (ggml_unary_op(u->op_params[0]) != GGML_UNARY_OP_SIGMOID) return false;
+    auto s = u->src[0];
+    if (s->op != GGML_OP_SCALE) return false;
+
+    if (c->type != dst->type || c->type != a->type || c->type != b->type || c->type != u->type || c->type != s->type) return false;
+    if (c->type != GGML_TYPE_F32) return false;
+    if (!ggml_is_contiguous(dst) || !ggml_is_contiguous(c) || !ggml_is_contiguous(a) || !ggml_is_contiguous(b) ||
+        !ggml_is_contiguous(u) || !ggml_is_contiguous(s)) return false;
+
+
+    float s_before, s_after;
+    memcpy(&s_before, bs->op_params, sizeof(float));
+    memcpy(&s_after,  s->op_params, sizeof(float));
+
+    auto d = dst;
+    auto tsize = sizeof(float);
+    int nblocks = (c->ne[0] + k_block_size - 1)/k_block_size;
+    const dim3 grid(c->ne[2], c->ne[1], nblocks);
+    if (b->ne[0] == 1 && b->ne[0] != c->ne[0]) {
+        GGML_ASSERT(c->nb[0] == tsize && a->nb[0] == tsize && b->nb[0] == tsize && dst->nb[0] == tsize);
+        fma_kernel3<true><<<grid, k_block_size, 0, ctx.stream()>>>(c->ne[0], (float *)d->data,
+                (const float *)c->data, (const float *)a->data, (const float *)s->data,
+                a->ne[1], a->ne[2], b->ne[1], b->ne[2], d->nb[1]/tsize, d->nb[2]/tsize,
+                c->nb[1]/tsize, c->nb[2]/tsize, a->nb[1]/tsize, a->nb[2]/tsize, b->nb[1]/tsize, b->nb[2]/tsize,
+                s_before, s_after);
+    } else {
+        GGML_ASSERT(c->nb[0] == tsize && a->nb[0] == tsize && b->nb[0] == tsize && dst->nb[0] == tsize);
+        fma_kernel3<false><<<grid, k_block_size, 0, ctx.stream()>>>(c->ne[0], (float *)d->data,
+                (const float *)c->data, (const float *)a->data, (const float *)s->data,
+                a->ne[1], a->ne[2], b->ne[1], b->ne[2], d->nb[1]/tsize, d->nb[2]/tsize,
+                c->nb[1]/tsize, c->nb[2]/tsize, a->nb[1]/tsize, a->nb[2]/tsize, b->nb[1]/tsize, b->nb[2]/tsize,
+                s_before, s_after);
+    }
+    return true;
 }
