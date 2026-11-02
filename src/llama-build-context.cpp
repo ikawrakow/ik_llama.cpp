@@ -1892,6 +1892,13 @@ llm_expert_gating_func_type   gating_op,
 
     ggml_tensor * par;
     if (can_use_fmoe && up_gate_exps && (!cache_ids || !up_gate_exps_b)) {
+        auto hadamard_u = lctx.model.hadamard_rotation(up_exps);
+        auto hadamard_g = lctx.model.hadamard_rotation(gate_exps);
+        GGML_ASSERT((!hadamard_u && !hadamard_g) || (hadamard_u == hadamard_g) ||
+                (hadamard_u && hadamard_g && *hadamard_u == *hadamard_g));
+        if (hadamard_u) {
+            cur = llm_build_hadamard_rotate(ctx, cur, *hadamard_u, false, true);
+        }
         ggml_tensor * weight = cached_up_gate ? cached_up_gate : up_gate_exps;
         ggml_tensor * expert_ids = cache_ids ? cache_ids : selected_experts;
         if (up_gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI || type_op == LLM_FFN_SITU) {
