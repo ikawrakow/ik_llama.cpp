@@ -3040,7 +3040,10 @@ bool llama_model_supports_ctx_shift(const struct llama_model * model) {
 }
 
 bool llama_model_supports_partial_kv_reuse(const struct llama_model * model) {
-    return model != nullptr;
+    // Hybrid and recurrent archs keep per-position state outside the plain KV cache.
+    // When a cached sequence diverges from the new prompt, that state still describes the
+    // old tokens, so reusing a partial prefix feeds the model someone else's text.
+    return model != nullptr && !llm_arch_is_hybrid(model->arch) && !llm_arch_is_recurrent(model->arch);
 }
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il) {
