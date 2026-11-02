@@ -1849,10 +1849,12 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
 }
 
 #ifdef HAVE_FANCY_SIMD
-#ifdef __GNUC__
-typedef int dpbusd_acc_t __attribute__((vector_size(64)));
-#else
-typedef __m512i dpbusd_acc_t;
+#ifndef GGML_CPU_INTEL_CLIENT
+  #ifdef __GNUC__
+  typedef int dpbusd_acc_t __attribute__((vector_size(64)));
+  #else
+  typedef __m512i dpbusd_acc_t;
+  #endif
 #endif
 template <bool has_tail, int nrc_y>
 static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
@@ -1860,6 +1862,7 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
     Q8<nrc_y, block_q8_K> q8(info);
     int nbl = n / QK_K;
     int ix = 0;
+#ifndef GGML_CPU_INTEL_CLIENT
     for (; ix + 32 <= nrc_x; ix += 32) {
         const block_q8_k_r16 * iqa = (const block_q8_k_r16 *)((const char *)vx + (ix +  0)*bx);
         const block_q8_k_r16 * iqb = (const block_q8_k_r16 *)((const char *)vx + (ix + 16)*bx);
@@ -1938,6 +1941,7 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
             info.store(ix + 16, iy, accb[iy]);
         }
     }
+#endif
     __m512  acc[nrc_y] = {};
     __m512i isum[nrc_y] = {};
     __m512i isum2[nrc_y] = {};
