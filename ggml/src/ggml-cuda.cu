@@ -4163,7 +4163,19 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_up_gate_unary(ctx, dst);
             break;
         case GGML_OP_SCALE:
-            if (fusion && i + 2 < cgraph->n_nodes &&
+            if (fusion && i + 4 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_UNARY &&
+                cgraph->nodes[i+2]->op == GGML_OP_SCALE &&
+                cgraph->nodes[i+1]->src[0] == cgraph->nodes[i+0] &&
+                cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
+                cgraph->nodes[i+3]->op == GGML_OP_RESHAPE &&
+                cgraph->nodes[i+4]->op == GGML_OP_FMA &&
+                cgraph->nodes[i+3]->src[0] == cgraph->nodes[i+2] &&
+                cgraph->nodes[i+4]->src[2] == cgraph->nodes[i+3] &&
+                ggml_cuda_op_fma_sus(ctx, cgraph->nodes[i+4])) {
+                i += 4;
+            }
+            else if (fusion && i + 2 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_UNARY &&
                 cgraph->nodes[i+2]->op == GGML_OP_SCALE &&
                 cgraph->nodes[i+1]->src[0] == cgraph->nodes[i+0] &&
