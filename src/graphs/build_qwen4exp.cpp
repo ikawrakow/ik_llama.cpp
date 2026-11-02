@@ -214,6 +214,7 @@ static ggml_tensor * qwen4exp_ple(
     ggml_tensor * key   = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ple_key,   emb);
     cb(key, "ple_k", il);
     ggml_tensor * value = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ple_value, emb);
+    cb(key, "ple_k", il);
     cb(value, "ple_v", il);
 
     auto grouped_norm = [&](ggml_tensor * x, ggml_tensor * w) {
@@ -301,7 +302,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
 
     // the cached indexer keys are raw: pooling precedes both the norm and the rotation
     ggml_tensor * k_raw = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].indexer_k_proj, cur);
-    cb(k_raw, "qsa_k_raw", il);
+    cb(k_raw, "qsa_k", il);
     k_raw = ggml_reshape_2d(ctx0, k_raw, idx_dim, n_tokens);
     cb(k_raw, "qsa_k_raw", il);
     {

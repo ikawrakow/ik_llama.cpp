@@ -15997,6 +15997,12 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_PTQ1_0:
         case GGML_TYPE_PQ2_0_R8: break;
         case GGML_TYPE_PTQ1_0_R8: break;
+        case GGML_TYPE_TQK6:
+        case GGML_TYPE_TQK7: break;
+        case GGML_TYPE_TQ2_T:
+        case GGML_TYPE_TQP5:
+        case GGML_TYPE_TQP6:
+        case GGML_TYPE_TQP7: break;
             // nothing to validate
             break;
         default:
@@ -16559,4 +16565,302 @@ void ggml_gemm_pq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void 
             }
         }
     }
+}
+
+// ===================== TQK6 / TQK7 (bit-packed trellis, group 128) =====================
+// Ported from Agention's trellis-llama.cpp. Same "Hyb" codebook and value formula as
+// their TQ2_T; the state of step t is the 16-bit circular window at stream bit (31 - t)*K
+// (tqk_state below). Decoder is the format definition, bit-exact with agention-infer's
+// dequant_tqk. On-disk type ids 145/146 collide with IQ2_KS/IQ4_KSS, so
+// gguf_init_from_file remaps them to GGML_TYPE_TQK6/TQK7 when
+// agention.trellis.state_bits is present (see ggml.c). Encoding is not supported (real
+// files come from an offline Viterbi; from_float is left NULL).
+
+
+static inline float tq2t_lut_val(uint32_t i) {
+    return GGML_FP16_TO_FP32(tq2t_lut_f16[i]);
+}
+
+// Codebook index (11-bit) of trellis entry e = 2*s + p, s the state (masked to TQ_STATE_BITS),
+// p the pair. One u32 wrapping multiply per state serves both pairs: x = s * 0x9e3779b1;
+// p = 0 -> x >> 21, p = 1 -> (x >> 10) & 2047.
+static inline uint32_t tq2t_hyb_index(uint32_t e) {
+    const uint32_t x = ((e >> 1) & TQ_STATE_MASK) * 0x9e3779b1u;
+    return (e & 1) ? ((x >> 10) & 2047u) : (x >> 21);
+}
+
+// TQK state of step t (0..31) from the 4*k stream bytes qs (k = 6 or 7): the 16 bits
+// starting at stream bit off = (31 - t)*k, LSB-first, circular modulo 32*k bits.
+// 32*k is a multiple of 8, so the bit wrap is a byte wrap: read the three bytes
+// covering bits off..off+15 (indices modulo 4*k) and shift.
+static inline uint32_t tqk_state(const uint8_t * GGML_RESTRICT qs, int k, int t) {
+    const uint32_t nbytes = 4u*(uint32_t) k;
+    const uint32_t off    = (uint32_t) (31 - t) * (uint32_t) k;
+    const uint32_t i0     = off >> 3;
+    const uint32_t i1     = (i0 + 1) % nbytes;
+    const uint32_t i2     = (i0 + 2) % nbytes;
+    const uint32_t w      = (uint32_t) qs[i0] | ((uint32_t) qs[i1] << 8) | ((uint32_t) qs[i2] << 16);
+    return (w >> (off & 7)) & 0xffffu;
+}
+
+static void dequantize_row_tqk_impl(const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k, int kb) {
+    assert(k % QK_TQK == 0);
+    const int64_t nb = k / QK_TQK;
+    const int nsteps = QK_TQK/4;
+    const size_t bsize = sizeof(ggml_half) + 4*kb;
+    const uint8_t * GGML_RESTRICT x = (const uint8_t *) vx;
+
+    for (int64_t i = 0; i < nb; ++i, x += bsize) {
+        const float d = GGML_FP16_TO_FP32(*(const ggml_half *) x);
+        const uint8_t * GGML_RESTRICT qs = x + sizeof(ggml_half);
+        for (int t = 0; t < nsteps; ++t) {
+            const uint32_t s = tqk_state(qs, kb, t);
+            for (int h = 0; h < 2; ++h) {
+                const uint32_t idx = tq2t_hyb_index(2*s + h);
+                *y++ = d * tq2t_lut_val(2*idx + 0);
+                *y++ = d * tq2t_lut_val(2*idx + 1);
+            }
+        }
+    }
+}
+
+void dequantize_row_tqk6(const block_tqk6 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_tqk_impl(x, y, k, 6);
+}
+
+void dequantize_row_tqk7(const block_tqk7 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_tqk_impl(x, y, k, 7);
+}
+
+// TQK x Q8_0 generic kernel: every trellis step t (0..31) of a 128-weight block yields
+// weights 4t..4t+3 = the codebook pair(s) of state(t), dotted against the Q8_0 activations
+// (Q8_0 block k covers steps 8k..8k+7). The fork accelerates this with a precomputed
+// int16 state table; here the codebook is read directly, which is fine for the generic
+// path (a fast iqk GEMM can be added later).
+static void ggml_vec_dot_tqk_q8_0_impl(int n, float * GGML_RESTRICT s, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int kb) {
+    const int qk = QK_TQK;
+    const int nb = n / qk;
+    const size_t bsize = sizeof(ggml_half) + 4*kb;
+
+    assert(n % qk == 0);
+
+    const uint8_t    * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; ++i, x += bsize) {
+        const float d = GGML_FP16_TO_FP32(*(const ggml_half *) x);
+        const uint8_t * GGML_RESTRICT qs = x + sizeof(ggml_half);
+        float sumb = 0.0f;
+        for (int k = 0; k < QK_TQK/QK8_0; ++k) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[i*(QK_TQK/QK8_0) + k];
+            float dot = 0.0f;
+            for (int t = 8*k; t < 8*k + 8; ++t) {
+                const uint32_t st = tqk_state(qs, kb, t);
+                const int8_t * GGML_RESTRICT q = yb->qs + 4*(t - 8*k);
+                for (int h = 0; h < 2; ++h) {
+                    const uint32_t idx = tq2t_hyb_index(2*st + h);
+                    dot += tq2t_lut_val(2*idx + 0) * q[0];
+                    dot += tq2t_lut_val(2*idx + 1) * q[1];
+                    q += 2;
+                }
+            }
+            sumb += GGML_FP16_TO_FP32(yb->d) * dot;
+        }
+        sumf += d * sumb;
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_tqk6_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    ggml_vec_dot_tqk_q8_0_impl(n, s, vx, vy, 6);
+}
+
+void ggml_vec_dot_tqk7_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    ggml_vec_dot_tqk_q8_0_impl(n, s, vx, vy, 7);
+}
+
+// ===================== TQ2_T / TQP5-7 (trellis siblings of TQK6/7) =====================
+// Same codebook and value formula as TQK6/7; only the state extraction differs. TQ2_T
+// stores one byte per step (tail-biting 16-bit path); TQP5/6/7 bit-pack 64 pair-steps
+// into a circular 64*K-bit stream. On-disk type ids 144/147/148/149 collide with
+// IQ4_KS/Q8_K16/Q8_K32/Q8_KR8, so gguf_init_from_file remaps them under the same
+// agention.trellis.state_bits gate as TQK (see ggml.c). Decode only (from_float NULL).
+
+void dequantize_row_tq2_t(const block_tq2_t * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ2_T == 0);
+    const int64_t nb = k / QK_TQ2_T;
+    const int nsteps = QK_TQ2_T/4;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+        const uint8_t * GGML_RESTRICT qs = x[i].qs;
+        for (int t = 0; t < nsteps; ++t) {
+            const uint32_t s = ((uint32_t) qs[(t + nsteps - 1) % nsteps] << 8) | qs[t];
+            for (int h = 0; h < 2; ++h) {
+                const uint32_t idx = tq2t_hyb_index(2*s + h);
+                *y++ = d * tq2t_lut_val(2*idx + 0);
+                *y++ = d * tq2t_lut_val(2*idx + 1);
+            }
+        }
+    }
+}
+
+// TQ2_T x Q8_0: step t yields weights 4t..4t+3 = the codebook pair(s) of state(t);
+// Q8_0 block k covers steps 8k..8k+7 (same layout as the TQK kernel).
+void ggml_vec_dot_tq2_t_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+
+    const int nb = n / QK_TQ2_T;
+    const uint8_t    * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    assert(n % QK_TQ2_T == 0);
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; ++i, x += sizeof(ggml_half) + QK_TQ2_T/4) {
+        const float d = GGML_FP16_TO_FP32(*(const ggml_half *) x);
+        const uint8_t * GGML_RESTRICT qs = x + sizeof(ggml_half);
+        float sumb = 0.0f;
+        for (int k = 0; k < QK_TQ2_T/QK8_0; ++k) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[i*(QK_TQ2_T/QK8_0) + k];
+            float dot = 0.0f;
+            for (int t = 8*k; t < 8*k + 8; ++t) {
+                const uint32_t st = ((uint32_t) qs[(t + 31) % 32] << 8) | qs[t];
+                const int8_t * GGML_RESTRICT q = yb->qs + 4*(t - 8*k);
+                for (int h = 0; h < 2; ++h) {
+                    const uint32_t idx = tq2t_hyb_index(2*st + h);
+                    dot += tq2t_lut_val(2*idx + 0) * q[0];
+                    dot += tq2t_lut_val(2*idx + 1) * q[1];
+                    q += 2;
+                }
+            }
+            sumb += GGML_FP16_TO_FP32(yb->d) * dot;
+        }
+        sumf += d * sumb;
+    }
+
+    *s = sumf;
+}
+
+// TQP state of step t (0..63) from the 8*k stream bytes qs (k = 5, 6 or 7): the 16 bits
+// starting at stream bit off = (63 - t)*k, LSB-first, circular modulo 64*k bits. The bit
+// wrap is a byte wrap (64*k is a multiple of 8): read the three bytes covering
+// bits off..off+15 (indices modulo 8*k) and shift.
+static inline uint32_t tqp_state(const uint8_t * GGML_RESTRICT qs, int k, int t) {
+    const uint32_t nbytes = 8u*(uint32_t) k;
+    const uint32_t off    = (uint32_t) (63 - t) * (uint32_t) k;
+    const uint32_t i0     = off >> 3;
+    const uint32_t i1     = (i0 + 1) % nbytes;
+    const uint32_t i2     = (i0 + 2) % nbytes;
+    const uint32_t w      = (uint32_t) qs[i0] | ((uint32_t) qs[i1] << 8) | ((uint32_t) qs[i2] << 16);
+    return (w >> (off & 7)) & 0xffffu;
+}
+
+static void dequantize_row_tqp_impl(const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k, int kb) {
+    assert(k % QK_TQP == 0);
+    const int64_t nb = k / QK_TQP;
+    const int nsteps = QK_TQP/2;
+    const size_t bsize = sizeof(ggml_half) + 8*kb;
+    const uint8_t * GGML_RESTRICT x = (const uint8_t *) vx;
+
+    for (int64_t i = 0; i < nb; ++i, x += bsize) {
+        const float d = GGML_FP16_TO_FP32(*(const ggml_half *) x);
+        const uint8_t * GGML_RESTRICT qs = x + sizeof(ggml_half);
+        for (int t = 0; t < nsteps; ++t) {
+            const uint32_t idx = tq2t_hyb_index(2*tqp_state(qs, kb, t));
+            *y++ = d * tq2t_lut_val(2*idx + 0);
+            *y++ = d * tq2t_lut_val(2*idx + 1);
+        }
+    }
+}
+
+void dequantize_row_tqp5(const block_tqp5 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_tqp_impl(x, y, k, 5);
+}
+
+void dequantize_row_tqp6(const block_tqp6 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_tqp_impl(x, y, k, 6);
+}
+
+void dequantize_row_tqp7(const block_tqp7 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    dequantize_row_tqp_impl(x, y, k, 7);
+}
+
+// TQP x Q8_0: step t (0..63) yields weights 2t, 2t+1 = the first codebook pair of
+// state(t); Q8_0 block k covers steps 16k..16k+15.
+static void ggml_vec_dot_tqp_q8_0_impl(int n, float * GGML_RESTRICT s, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int kb) {
+    const int nb = n / QK_TQP;
+    const size_t bsize = sizeof(ggml_half) + 8*kb;
+
+    assert(n % QK_TQP == 0);
+
+    const uint8_t    * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; ++i, x += bsize) {
+        const float d = GGML_FP16_TO_FP32(*(const ggml_half *) x);
+        const uint8_t * GGML_RESTRICT qs = x + sizeof(ggml_half);
+        float sumb = 0.0f;
+        for (int k = 0; k < QK_TQP/QK8_0; ++k) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[i*(QK_TQP/QK8_0) + k];
+            float dot = 0.0f;
+            for (int t = 16*k; t < 16*k + 16; ++t) {
+                const uint32_t idx = tq2t_hyb_index(2*tqp_state(qs, kb, t));
+                const int8_t * GGML_RESTRICT q = yb->qs + 2*(t - 16*k);
+                dot += tq2t_lut_val(2*idx + 0) * q[0];
+                dot += tq2t_lut_val(2*idx + 1) * q[1];
+            }
+            sumb += GGML_FP16_TO_FP32(yb->d) * dot;
+        }
+        sumf += d * sumb;
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_tqp5_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    ggml_vec_dot_tqp_q8_0_impl(n, s, vx, vy, 5);
+}
+
+void ggml_vec_dot_tqp6_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    ggml_vec_dot_tqp_q8_0_impl(n, s, vx, vy, 6);
+}
+
+void ggml_vec_dot_tqp7_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    ggml_vec_dot_tqp_q8_0_impl(n, s, vx, vy, 7);
 }

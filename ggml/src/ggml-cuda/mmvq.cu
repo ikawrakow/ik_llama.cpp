@@ -152,6 +152,12 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
         case GGML_TYPE_IQ3_KS_R16:
         case GGML_TYPE_IQ4_KS_R16:
         case GGML_TYPE_IQ5_KS_R16:
+        case GGML_TYPE_TQ2_T:
+        case GGML_TYPE_TQK6:
+        case GGML_TYPE_TQK7:
+        case GGML_TYPE_TQP5:
+        case GGML_TYPE_TQP6:
+        case GGML_TYPE_TQP7:
             iqk_mul_mat_vec_q(type, args, stream);
             break;
         default:
@@ -373,6 +379,12 @@ bool ggml_cuda_mmvq_type_supported(ggml_type src0_type) {
         case GGML_TYPE_IQ4_KS_R16:
         case GGML_TYPE_IQ5_KS_R16:
         case GGML_TYPE_IQ3_KS_R16:
+        case GGML_TYPE_TQ2_T:
+        case GGML_TYPE_TQK6:
+        case GGML_TYPE_TQK7:
+        case GGML_TYPE_TQP5:
+        case GGML_TYPE_TQP6:
+        case GGML_TYPE_TQP7:
             return true;
         default:
             return false;

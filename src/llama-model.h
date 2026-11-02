@@ -523,6 +523,10 @@ struct llama_hadamard_transform {
     int64_t perm_hd  = 1;                 // GDN v-grouped reshape (head dim)
     int64_t perm_nk  = 1;                 // GDN v-grouped reshape (n groups)
     int64_t perm_rep = 1;                 // GDN v-grouped reshape (repeat count)
+    bool operator==(const llama_hadamard_transform & other) const {
+        return block_size == other.block_size && perm_hd == other.perm_hd && perm_nk == other.perm_nk && perm_rep == other.perm_rep
+            && signs == other.signs;
+    }
 };
 
 struct llama_model {

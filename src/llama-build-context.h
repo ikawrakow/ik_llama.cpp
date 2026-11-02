@@ -508,7 +508,7 @@ struct llm_build_context {
 
     static ggml_tensor * llm_build_lora_mm_id(llama_context & lctx, ggml_context * ctx0,
           ggml_tensor * w, ggml_tensor * cur, ggml_tensor * ids,
-          ggml_tensor * cache_w = nullptr, ggml_tensor * cache_ids = nullptr);
+          ggml_tensor * cache_w = nullptr, ggml_tensor * cache_ids = nullptr, bool fuse_signs = true);
 
     static ggml_tensor * llm_build_inp_embd(ggml_context * ctx, llama_context & lctx,
         const llama_hparams & hparams,
