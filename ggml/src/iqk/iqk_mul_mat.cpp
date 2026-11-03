@@ -16,6 +16,7 @@
 #include <vector>
 #include <new>
 #include <algorithm>
+#include <numeric>
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
@@ -666,6 +667,35 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         }
         if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
             return false;
+        }
+        const bool is_float = !mm.func16 && (typeA == GGML_TYPE_F32 || typeA == GGML_TYPE_F16 || typeA == GGML_TYPE_BF16);
+        if (int num_rows = is_float ? 1 : MulMat::num_rows(ggml_type(typeA)); Ny <= 16 && (is_float || (num_rows >= 4 && Nx%num_rows == 0))) {
+            int nunit = Nx/num_rows;
+            int nper  = (nunit + nth - 1)/nth;
+            int first = ith*nper;
+            if (first < nunit) {
+                int nrc_x = num_rows*std::min(nper, nunit - first);
+                first *= num_rows;
+                DataInfo info{C + first, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+                mm.mul_mat_NxM(ne00, (const char *)A + first*row_size_qx, row_size_qx, info, nrc_x, Ny);
+            }
+            return true;
+        }
+        if (is_float) {
+            constexpr int k_tile_x = 16;
+            int ntile_x = (Nx + k_tile_x - 1)/k_tile_x;
+            int ntile_y = std::max(1, std::min<int>(nth/std::gcd(ntile_x, nth), Ny/8));
+            int ntile = ntile_x*ntile_y;
+            for (int itile = ith; itile < ntile; itile += nth) {
+                int ix = (itile % ntile_x)*k_tile_x;
+                int nrc_x = std::min<int>(k_tile_x, Nx - ix);
+                int jy = itile / ntile_x;
+                int iy0 = (int)((int64_t)jy*Ny/ntile_y);
+                int iy1 = (int)((int64_t)(jy + 1)*Ny/ntile_y);
+                DataInfo info{C + ix, (const char *)B, (size_t)stride_C, row_size_qy, iy0, 1, nullptr, 0};
+                mm.mul_mat_NxM(ne00, (const char *)A + ix*row_size_qx, row_size_qx, info, nrc_x, iy1);
+            }
+            return true;
         }
         const int min_step = Ny <= 16 ? 16 : 32;
         int ntile_x = (Nx + min_step - 1)/min_step;
