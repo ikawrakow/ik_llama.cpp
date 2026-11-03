@@ -2243,7 +2243,9 @@ bool server_context::has_next_token(const completion_token_output& result,  serv
 
 bool server_context::process_token(completion_token_output& result, server_slot& slot, bool last) {
     // remember which tokens were sampled - used for repetition penalties during sampling
-    const std::string token_str = result.text_to_send;
+    const bool is_eog = llama_token_is_eog(model, result.tok);
+    // EOG is a control token, not content; keep it out even with --special.
+    const std::string token_str = is_eog ? "" : result.text_to_send;
     slot.sampled = result.tok;
 
     // search stop word and delete it
@@ -2274,7 +2276,7 @@ bool server_context::process_token(completion_token_output& result, server_slot&
                 slot.generated_text.end());
             pos = std::min(slot.n_sent_text, slot.generated_text.size());
         }
-        else if (slot.has_next_token && !llama_token_is_eog(model, result.tok)) {
+        else if (slot.has_next_token && !is_eog) {
             stop_pos = slot.find_stopping_strings(str_test, token_str.size(), false);
             send_text = stop_pos == std::string::npos;
         }
@@ -2312,9 +2314,10 @@ bool server_context::process_token(completion_token_output& result, server_slot&
             });
     }
 
-    if (llama_token_is_eog(model, result.tok)) {
+    if (is_eog) {
         slot.stopped_eos = true;
         slot.has_next_token = false;
+        result.text_to_send.clear();
 
         LOG_VERBOSE("eos token found", {});
     }
