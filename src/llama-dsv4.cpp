@@ -1965,7 +1965,7 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
     set_comp(lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, true);
     set_comp(lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, true);
     set_comp(lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, false);
-    llama_dsv4_spec_ckpt_record_plan(&lctx, { LLAMA_CHECKPOINT_SPEC,0 });
+    llama_dsv4_spec_ckpt_record_plan(&lctx, { LLAMA_CHECKPOINT_SPEC, 0, 0 });
 
     //tim2 = ggml_time_us();
     //fprintf(stderr, "%s: setting input tensors took %ld us\n", __func__, tim2 - tim1);
