@@ -4071,9 +4071,13 @@ static __global__ void mul_mat_q_id(
     const     int64_t blocks_per_ne00 = (ncols_x + qk - 1) / qk;
     constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
 
+    // Only with nty*ntzw blocks, where each block owns whole tiles (partial tiles and the fixup use blockIdx.x): consecutive blocks take the row tiles of one expert.
+    const int ntzw = nsamples_y*nchannels_y;
+    const int bidx = gridDim.x == nty*ntzw && ntx >= 4 ? (blockIdx.x % nty)*ntzw + blockIdx.x / nty : blockIdx.x;
+
     // kbc == k block continuous, current index in continuous ijk space.
-    int64_t kbc      = (int64_t) blockIdx.x     *nsamples_y*nchannels_y*ntx*nty*blocks_per_ne00 / gridDim.x;
-    int64_t kbc_stop = (int64_t)(blockIdx.x + 1)*nsamples_y*nchannels_y*ntx*nty*blocks_per_ne00 / gridDim.x;
+    int64_t kbc      = (int64_t) bidx     *ntzw*ntx*nty*blocks_per_ne00 / gridDim.x;
+    int64_t kbc_stop = (int64_t)(bidx + 1)*ntzw*ntx*nty*blocks_per_ne00 / gridDim.x;
 
     kbc      -= (kbc      % blocks_per_ne00) % blocks_per_iter;
     kbc_stop -= (kbc_stop % blocks_per_ne00) % blocks_per_iter;
@@ -4435,8 +4439,13 @@ static void launch_mul_mat_q_id_impl(ggml_backend_cuda_context & ctx, const mmq_
         return;
     }
 
-    const dim3 block_nums_stream_k(nsm, 1, 1);
-    const bool fixup_needed = ntx*nty*ntzw % nsm != 0;
+    const int ntiles = ntx*nty*ntzw;
+    const int nblocks = nty*ntzw;
+    const int nwaves = (nblocks + nsm - 1) / nsm;
+    const int efficiency_percent = 100 * nblocks / (nsm*nwaves);
+
+    const dim3 block_nums_stream_k(GGML_CUDA_CC_IS_NVIDIA(cc) && efficiency_percent >= 90 ? nblocks : nsm, 1, 1);
+    const bool fixup_needed = ntiles % block_nums_stream_k.x != 0;
 
     ggml_cuda_pool & pool = ctx.pool(id);
     ggml_cuda_pool_alloc<float> tmp_fixup(pool);
