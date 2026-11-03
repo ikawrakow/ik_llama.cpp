@@ -1672,7 +1672,14 @@ void llm_load_hparams(
         case LLM_ARCH_GLM4:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (hparams.nextn_predict_layers >= hparams.n_layer) {
+                    throw std::runtime_error("GLM4: nextn_predict_layers must be < block_count");
+                }
+                hparams.n_layer_kv_from_start = model.mtp ? hparams.n_layer : hparams.n_layer - hparams.nextn_predict_layers;
                 switch (hparams.n_layer) {
+                    case 17: model.type = e_model::MODEL_1B; break; // GLM-OCR
                     case 40: model.type = e_model::MODEL_9B; break;
                     case 61: model.type = e_model::MODEL_32B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;

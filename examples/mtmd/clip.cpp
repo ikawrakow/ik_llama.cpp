@@ -317,6 +317,8 @@ struct clip_model {
 
     ggml_tensor * pre_ln_w = nullptr;
     ggml_tensor * pre_ln_b = nullptr;
+    ggml_tensor * norm_embd_w = nullptr;
+    ggml_tensor * norm_embd_b = nullptr;
 
     std::vector<clip_layer> layers;
 
@@ -412,6 +414,7 @@ struct clip_model {
     // pixtral
     ggml_tensor * token_embd_img_break = nullptr;
     ggml_tensor * mm_patch_merger_w = nullptr;
+    ggml_tensor * mm_patch_merger_b = nullptr;
 
     // deepseek4v sentinel embeddings (image_newline is reused for IMAGE_NEW_LINE)
     ggml_tensor * token_embd_img_start = nullptr;
@@ -430,8 +433,11 @@ struct clip_model {
     ggml_tensor * mm_post_fc_norm_w = nullptr;
     ggml_tensor * mm_post_fc_norm_b = nullptr;
     ggml_tensor * mm_h_to_4h_w = nullptr;
+    ggml_tensor * mm_h_to_4h_b = nullptr;
     ggml_tensor * mm_gate_w = nullptr;
+    ggml_tensor * mm_gate_b = nullptr;
     ggml_tensor * mm_4h_to_h_w = nullptr;
+    ggml_tensor * mm_4h_to_h_b = nullptr;
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
 
@@ -710,19 +716,7 @@ struct clip_graph {
 
             cur = ggml_mul(ctx0, ggml_rms_norm(ctx0, cur, eps), model.mm_input_norm_w);
 
-            // reshape image tokens to 2D grid
-            cur = ggml_reshape_3d(ctx0, cur, n_embd, n_patches_x, n_patches_y);
-            cur = ggml_permute(ctx0, cur, 2, 0, 1, 3); // [x, y, n_embd]
-            cur = ggml_cont(ctx0, cur);
-
-            // torch.nn.functional.unfold is just an im2col under the hood
-            // we just need a dummy kernel to make it work
-            ggml_tensor * kernel = ggml_view_3d(ctx0, cur, n_merge, n_merge, cur->ne[2], 0, 0, 0);
-            cur = ggml_im2col(ctx0, kernel, cur, n_merge, n_merge, 0, 0, 1, 1, true, inp->type);
-
-            // project to n_embd
-            cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], cur->ne[1] * cur->ne[2]);
-            cur = ggml_mul_mat(ctx0, model.mm_patch_merger_w, cur);
+            cur = build_patch_merge(cur, model.mm_patch_merger_w, nullptr);
         }
 
         // LlavaMultiModalProjector (always using GELU activation)
@@ -798,7 +792,6 @@ struct clip_graph {
                                 hparams.ffn_op,
                                 nullptr, // no learned pos embd
                                 add_pos);
-        cb(cur, "vit_out", -1);
 
         // aligner patch merge: zero-pad the patch grid to a multiple of n_merge
         // then F.unfold == im2col with a dummy kernel (same trick as pixtral)
@@ -883,7 +876,6 @@ struct clip_graph {
                                 hparams.ffn_op,
                                 nullptr,
                                 add_pos);
-        cb(cur, "vit_out", -1);
 
         {
             cur = ggml_reshape_3d(ctx0, cur, n_embd, n_patches_x, n_patches_y);
@@ -1216,6 +1208,102 @@ struct clip_graph {
         // build the graph
         ggml_build_forward_expand(gf, embeddings);
 
+        return gf;
+    }
+
+    // n_merge x n_merge patch merge
+    ggml_tensor * build_patch_merge(ggml_tensor * cur, ggml_tensor * w, ggml_tensor * b) {
+        GGML_ASSERT(hparams.n_merge > 0);
+        GGML_ASSERT(n_patches_x % hparams.n_merge == 0);
+        GGML_ASSERT(n_patches_y % hparams.n_merge == 0);
+
+        cur = ggml_reshape_3d(ctx0, cur, n_embd, n_patches_x, n_patches_y);
+        cur = ggml_permute(ctx0, cur, 2, 0, 1, 3); // [x, y, n_embd]
+        cur = ggml_cont(ctx0, cur);
+
+        ggml_tensor * kernel = ggml_view_3d(ctx0, cur, hparams.n_merge, hparams.n_merge, cur->ne[2], 0, 0, 0);
+        cur = ggml_im2col(ctx0, kernel, cur, hparams.n_merge, hparams.n_merge, 0, 0, 1, 1, true, cur->type);
+
+        cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], cur->ne[1] * cur->ne[2]);
+        cur = ggml_mul_mat(ctx0, w, cur);
+        if (b) {
+            cur = ggml_add(ctx0, cur, b);
+        }
+        return cur;
+    }
+
+    // n_merge x n_merge patch merge with an nn.Conv2d-style weight (n_merge, n_merge, n_embd, out)
+    ggml_tensor * build_patch_merge_conv(ggml_tensor * cur, ggml_tensor * w, ggml_tensor * b) {
+        GGML_ASSERT(hparams.n_merge > 0);
+        GGML_ASSERT(n_patches_x % hparams.n_merge == 0);
+        GGML_ASSERT(n_patches_y % hparams.n_merge == 0);
+
+        const int n_merge = hparams.n_merge;
+        const int n_token_out = n_patches / n_merge / n_merge;
+        cur = ggml_reshape_4d(ctx0, cur, n_embd, n_merge, n_merge, n_token_out);
+        cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 2, 0, 1, 3)); // [n_merge, n_merge, n_embd, n_token_out]
+        cur = ggml_conv_2d(ctx0, w, cur, n_merge, n_merge, 0, 0, 1, 1);
+        cur = ggml_reshape_2d(ctx0, cur, cur->ne[2], n_token_out);
+        if (b) {
+            cur = ggml_add(ctx0, cur, b);
+        }
+        return cur;
+    }
+
+    // GLM4V patch embedding: decoupled temporal conv + 2x2 tile reorder
+    ggml_tensor * build_inp_glm4v() {
+        ggml_tensor * inp_raw = build_inp_raw();
+        ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+        inp = ggml_add(ctx0, inp,
+                ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1));
+        inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);
+        inp = ggml_cont_4d(ctx0, inp, n_embd*2, n_patches_x/2, n_patches_y, 1);
+        inp = ggml_reshape_4d(ctx0, inp, n_embd*2, n_patches_x/2, 2, n_patches_y/2);
+        inp = ggml_permute(ctx0, inp, 0, 2, 1, 3);
+        inp = ggml_cont_3d(ctx0, inp, n_embd, n_patches_x*n_patches_y, 1);
+        inp = ggml_add(ctx0, inp, model.patch_bias);
+        cb(inp, "patch_bias", -1);
+        return build_norm(inp, model.norm_embd_w, model.norm_embd_b, NORM_TYPE_RMS, eps, -1);
+    }
+
+    // GLM4V / GLM-OCR vision encoder
+    ggml_cgraph * build_glm4v() {
+        GGML_ASSERT(model.patch_bias != nullptr);
+        GGML_ASSERT(model.patch_embeddings_1 != nullptr);
+        GGML_ASSERT(model.class_embedding == nullptr);
+        GGML_ASSERT(n_patches_x % hparams.n_merge == 0);
+        GGML_ASSERT(n_patches_y % hparams.n_merge == 0);
+
+        const int n_pos = n_patches;
+
+        // 2D rope positions (t, h, w)
+        ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos * 4);
+        ggml_set_name(positions, "positions");
+        ggml_set_input(positions);
+
+        int mrope_sections[4] = { d_head/4, d_head/4, d_head/4, d_head/4 };
+        auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+            return ggml_rope_multi(ctx0, cur, positions, nullptr,
+                d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION,
+                32768, hparams.rope_theta, 1, 0, 1, 32, 1);
+        };
+
+        ggml_tensor * inp = build_inp_glm4v();
+        ggml_tensor * cur = build_vit(inp, n_pos, NORM_TYPE_RMS, hparams.ffn_op, nullptr, add_pos);
+        cur = build_patch_merge_conv(cur, model.mm_patch_merger_w, model.mm_patch_merger_b);
+
+        // FC -> GELU -> SwiGLU
+        cur = ggml_mul_mat(ctx0, model.mm_model_proj, cur);
+        cur = build_norm(cur, model.mm_post_fc_norm_w, model.mm_post_fc_norm_b, NORM_TYPE_NORMAL, 1e-5, -1);
+        cur = ggml_gelu_erf(ctx0, cur);
+        cur = build_ffn(cur,
+                model.mm_h_to_4h_w, model.mm_h_to_4h_b,
+                model.mm_gate_w,    model.mm_gate_b,
+                model.mm_4h_to_h_w, model.mm_4h_to_h_b,
+                FFN_SILU, -1);
+        cb(cur, "result_embd", -1);
+
+        ggml_build_forward_expand(gf, cur);
         return gf;
     }
 
@@ -2002,7 +2090,6 @@ struct clip_graph {
                                 learned_pos_embd,
                                 add_pos);
 
-        cb(cur, "vit_out", -1);
 
         {
             // patch_merger
@@ -2068,7 +2155,6 @@ struct clip_graph {
                                 nullptr,
                                 add_pos);
 
-        cb(cur, "vit_out", -1);
 
         {
             // patch_merger
@@ -2776,19 +2862,11 @@ private:
                         /* nb2    */ cur->nb[1],
                         /* offset */ ggml_row_size(cur->type, 2 * n_embd));
 
-                    // TODO: q/k norm requires row size == n_embd, while here it's d_head
-                    // we can add support in the future if needed
-                    GGML_ASSERT(layer.q_norm == nullptr && layer.k_norm == nullptr);
                     if (layer.q_norm) {
-                        GGML_ASSERT(layer.q_norm->ne[0] == Qcur->ne[0]);
-                        Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
-                        cb(Qcur, "Qcur_norm", il);
+                        Qcur = build_norm(ggml_cont(ctx0, Qcur), layer.q_norm, NULL, norm_t, eps, il);
                     }
-
                     if (layer.k_norm) {
-                        GGML_ASSERT(layer.k_norm->ne[0] == Kcur->ne[0]);
-                        Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
-                        cb(Kcur, "Kcur_norm", il);
+                        Kcur = build_norm(ggml_cont(ctx0, Kcur), layer.k_norm, NULL, norm_t, eps, il);
                     }
 
                 } else {
@@ -3347,6 +3425,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 res = graph.build_qwen2vl();
             } break;
+        case PROJECTOR_TYPE_GLM4V:
+            {
+                res = graph.build_glm4v();
+            } break;
         case PROJECTOR_TYPE_QWEN3VL:
             {
                 res = graph.build_qwen3vl();
@@ -3815,13 +3897,23 @@ struct clip_model_loader {
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
                         hparams.set_limit_image_tokens(8, 4096);
-                        hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
+                        hparams.set_warmup_n_tokens(46*46);
                         const int warn_min_pixels = 1024 * hparams.n_merge * hparams.n_merge * hparams.patch_size * hparams.patch_size;
                         if (hparams.image_min_pixels < warn_min_pixels) {
                             LOG_WRN("%s: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks\n", __func__);
                             LOG_WRN("%s: if you encounter problems with accuracy, try adding --image-min-tokens 1024\n", __func__);
                             LOG_WRN("%s: more info: https://github.com/ggml-org/llama.cpp/issues/16842\n\n", __func__);
                         }
+                    } break;
+                case PROJECTOR_TYPE_GLM4V:
+                    {
+                        hparams.rope_theta = 10000.0f;
+                        hparams.n_merge = 2;
+                        hparams.ffn_op = FFN_SILU;
+                        log_ffn_op = "silu";
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        hparams.set_limit_image_tokens(8, 4096);
+                        hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_MINIMAX_M3_VL:
                     {
@@ -4003,6 +4095,9 @@ struct clip_model_loader {
 
         model.post_ln_w = get_tensor(string_format(TN_LN_POST, prefix, "weight"), false);
         model.post_ln_b = get_tensor(string_format(TN_LN_POST, prefix, "bias"),   false);
+
+        model.norm_embd_w = get_tensor(string_format(TN_NORM_EMBD, prefix, "weight"), false);
+        model.norm_embd_b = get_tensor(string_format(TN_NORM_EMBD, prefix, "bias"),   false);
 
         model.patch_bias = get_tensor(TN_PATCH_BIAS, false);
         model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   false);
@@ -4340,6 +4435,20 @@ struct clip_model_loader {
                     model.mm_4h_to_h_w      = get_tensor(string_format(TN_MM_4H_TO_H,      "weight"));
                     model.mm_boi            = get_tensor(TN_TOK_BOI);
                     model.mm_eoi            = get_tensor(TN_TOK_EOI);
+                } break;
+            case PROJECTOR_TYPE_GLM4V:
+                {
+                    model.mm_patch_merger_w = get_tensor(TN_MM_PATCH_MERGER);
+                    model.mm_patch_merger_b = get_tensor(TN_MM_PATCH_MERGER_B);
+                    model.mm_model_proj     = get_tensor(TN_MM_PROJECTOR);
+                    model.mm_post_fc_norm_w = get_tensor(string_format(TN_MM_POST_NORM, "weight"));
+                    model.mm_post_fc_norm_b = get_tensor(string_format(TN_MM_POST_NORM, "bias"));
+                    model.mm_h_to_4h_w      = get_tensor(string_format(TN_MM_H_TO_4H,      "weight"));
+                    model.mm_h_to_4h_b      = get_tensor(string_format(TN_MM_H_TO_4H,      "bias"), false);
+                    model.mm_gate_w         = get_tensor(string_format(TN_MM_GATE,         "weight"));
+                    model.mm_gate_b         = get_tensor(string_format(TN_MM_GATE,         "bias"), false);
+                    model.mm_4h_to_h_w      = get_tensor(string_format(TN_MM_4H_TO_H,      "weight"));
+                    model.mm_4h_to_h_b      = get_tensor(string_format(TN_MM_4H_TO_H,      "bias"), false);
                 } break;
             case PROJECTOR_TYPE_JANUS_PRO:
                 {
@@ -5279,6 +5388,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_GEMMA4V:
         case PROJECTOR_TYPE_MINIMAX_M3_VL:
+        case PROJECTOR_TYPE_GLM4V:
             {
                 GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized;
@@ -5723,7 +5833,7 @@ const char * clip_patch_merge_type(const struct clip_ctx * ctx) {
 int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
     const auto & params = ctx->model.hparams;
     const int n_total = clip_n_output_tokens(ctx, img);
-    if (ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN3VL || ctx->proj_type() == PROJECTOR_TYPE_LING3VL || ctx->proj_type() == PROJECTOR_TYPE_MINIMAX_M3_VL) {
+    if (ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN3VL || ctx->proj_type() == PROJECTOR_TYPE_LING3VL || ctx->proj_type() == PROJECTOR_TYPE_MINIMAX_M3_VL || ctx->proj_type() == PROJECTOR_TYPE_GLM4V) {
         return img->nx / (params.patch_size * 2);
     }
     return n_total;
@@ -5731,7 +5841,7 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
 
 int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
     const auto & params = ctx->model.hparams;
-    if (ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN3VL || ctx->proj_type() == PROJECTOR_TYPE_LING3VL || ctx->proj_type() == PROJECTOR_TYPE_MINIMAX_M3_VL) {
+    if (ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN3VL || ctx->proj_type() == PROJECTOR_TYPE_LING3VL || ctx->proj_type() == PROJECTOR_TYPE_MINIMAX_M3_VL || ctx->proj_type() == PROJECTOR_TYPE_GLM4V) {
         return img->ny / (params.patch_size * 2);
     }
     return 1;
@@ -5791,6 +5901,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_MINIMAX_M3_VL:
+        case PROJECTOR_TYPE_GLM4V:
             {
                 // dynamic size (2 conv, so double patch size)
                 int x_patch = img->nx / (params.patch_size * 2);
@@ -6119,6 +6230,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_LING3VL:
+        case PROJECTOR_TYPE_GLM4V:
             {
                 const int merge_ratio = hparams.n_merge;
                 const int pw = image_size_width  / patch_size;
@@ -6501,6 +6613,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_DEEPSEEK41:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_COGVLM:
+        case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_4h_to_h_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
@@ -6522,7 +6635,8 @@ bool clip_is_qwen2vl(const struct clip_ctx * ctx) {
     return ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL
         || ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL
         || ctx->proj_type() == PROJECTOR_TYPE_QWEN3VL
-        || ctx->proj_type() == PROJECTOR_TYPE_LING3VL;
+        || ctx->proj_type() == PROJECTOR_TYPE_LING3VL
+        || ctx->proj_type() == PROJECTOR_TYPE_GLM4V;
 }
 
 bool clip_is_llava(const struct clip_ctx * ctx) {

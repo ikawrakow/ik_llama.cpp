@@ -450,6 +450,7 @@ struct llm_build_context {
     ggml_cgraph * build_chatglm();
 
     ggml_cgraph * build_glm4();
+    ggml_cgraph * build_glm4_with_mtp();
 
     ggml_cgraph * build_dots1();
 

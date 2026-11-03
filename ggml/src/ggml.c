@@ -22045,7 +22045,8 @@ static void ggml_compute_forward_rope_f32(
                     }
                 }
 
-                if (is_inplace) {
+                // vision rope: second loop rotates the other half, run it in-place too
+                if (is_inplace && !is_vision) {
                     continue;
                 }
 

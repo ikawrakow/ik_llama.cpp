@@ -85,6 +85,7 @@
 #define TN_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"  // post-FFN norm (gemma4)
 #define TN_LN_PRE          "%s.pre_ln.%s"
 #define TN_LN_POST         "%s.post_ln.%s"
+#define TN_NORM_EMBD       "%s.norm_embd.%s"
 #define TN_LLAVA_PROJ      "mm.%d.%s"
 #define TN_MVLM_PROJ_MLP   "mm.model.mlp.%d.%s"
 #define TN_MVLM_PROJ_BLOCK "mm.model.mb_block.%d.block.%d.%s"
@@ -96,7 +97,9 @@
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
 #define TN_MM_PROJECTOR    "mm.model.fc.weight"         // idefics3
-#define TN_MM_PATCH_MERGER "mm.patch_merger.weight"     // mistral small 3.1
+#define TN_MM_PATCH_MERGER "mm.patch_merger.weight"     // glm4v
+#define TN_MM_PATCH_MERGER_B "mm.patch_merger.bias"     // glm4v
+#define TN_MM_POST_NORM    "mm.post_norm.%s"            // glm4v
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
 #define TN_TOK_IMG_START   "v.token_embd.img_start"     // deepseek4v
 #define TN_TOK_IMG_END     "v.token_embd.img_end"       // deepseek4v
@@ -191,6 +194,7 @@ enum projector_type {
     PROJECTOR_TYPE_MINIMAX_M3_VL,
     PROJECTOR_TYPE_DEEPSEEK4V,
     PROJECTOR_TYPE_DEEPSEEK41,
+    PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_UNKNOWN,
 
 };
@@ -225,6 +229,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MINIMAX_M3_VL, "minimax_m3_vl"},
     { PROJECTOR_TYPE_DEEPSEEK4V, "deepseek4v"},
     { PROJECTOR_TYPE_DEEPSEEK41, "deepseek41"},
+    { PROJECTOR_TYPE_GLM4V,      "glm4v"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
