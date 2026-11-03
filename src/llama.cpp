@@ -7669,7 +7669,7 @@ static int llama_decode_internal(
         }
     }
 
-    bool warned_qnext_mixed_repeat = false;
+    bool warned_hybrid_mixed_repeat = false;
     for (uint32_t cur_token = 0; cur_token < n_tokens_all; ) {
 #if IK_PRINT_TIMING
         auto tim1 = ggml_time_us();
@@ -7728,9 +7728,9 @@ static int llama_decode_internal(
                     if (run_len == 1) {
                         // alternating singleton sequences, nothing to group
                         lctx.n_single_token_fallbacks++;
-                        if (!warned_qnext_mixed_repeat) {
-                            LLAMA_LOG_WARN("%s: qwen3next batch interleaves sequence ids; falling back to single-token chunking\n", __func__);
-                            warned_qnext_mixed_repeat = true;
+                        if (!warned_hybrid_mixed_repeat) {
+                            LLAMA_LOG_WARN("%s: hybrid model batch interleaves sequence ids; falling back to single-token chunking\n", __func__);
+                            warned_hybrid_mixed_repeat = true;
                         }
                     }
                 }
