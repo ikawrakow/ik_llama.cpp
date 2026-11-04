@@ -581,6 +581,9 @@ const char * llama_model_arch_name(llm_arch arch);
 
 bool llm_arch_is_recurrent(const llm_arch & arch);
 bool llm_arch_is_hybrid(const llm_arch & arch);
+
+// true for archs whose recurrent state is packed into the V-cache tail / s_l slot
+bool llm_arch_uses_qnext_state_layout(const llm_arch & arch);
 bool llm_arch_is_dflash_family(const llm_arch & arch);
 // DFlash2 consumes every anchor/mask row to construct its selector lattice
 bool llm_arch_requires_all_graph_output_rows(const llm_arch & arch);

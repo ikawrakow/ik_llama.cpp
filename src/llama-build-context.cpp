@@ -1291,7 +1291,8 @@ ggml_tensor * llm_build_context::llm_build_ffn(
          post_norm_data * pnd) {
 
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
-        up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
+        // gateless FFNs (relu^2(up)) have no gate tensor; this used to dereference it
+        up->extra && gate && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :

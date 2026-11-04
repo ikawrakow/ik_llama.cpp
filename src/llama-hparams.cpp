@@ -2819,12 +2819,7 @@ void llm_load_hparams(
     // qwen3next-family packed recurrent state layout, kept as an explicit flag:
     // Nemotron-H also has ssm_n_group > 0 but uses the standard Mamba-2 layout
     // (conv state in the k-side row, d_state * d_inner recurrent state).
-    hparams.use_qnext_state_layout =
-        model.arch == LLM_ARCH_QWEN3NEXT ||
-        model.arch == LLM_ARCH_QWEN4EXP  ||
-        model.arch == LLM_ARCH_QWEN35MOE ||
-        model.arch == LLM_ARCH_QWEN35    ||
-        model.arch == LLM_ARCH_GLM5NEXT;
+    hparams.use_qnext_state_layout = llm_arch_uses_qnext_state_layout(model.arch);
 
     hparams.rope_type = llama_rope_type(&model);
 }
