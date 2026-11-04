@@ -4964,6 +4964,19 @@ void vec_dot_mxfp4_r8_q8_2_x4(int n, float * s, size_t bs, const void * vx, size
     GGML_UNUSED(by);
 }
 
+void vec_dot_nvfp4_q8_2_x4(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_NVFP4, vx, 0, GGML_TYPE_Q8_2_X4, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK_NVFP4 == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
 namespace {
 static void quantize_row_iq4_k_impl_bs32(int n_per_row, const float * x, char * cy,
         float * all_scales, float * weight,

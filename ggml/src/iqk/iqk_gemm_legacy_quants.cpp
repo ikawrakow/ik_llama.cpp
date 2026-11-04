@@ -1356,6 +1356,77 @@ static void mul_mat_mxfp4_r8_q8_2_avx2(int n, const void * vx, size_t bx, const 
     }
 }
 
+// NVFP4 (native 36-byte blocks: 64 values with four UE4M3 sub-scales of 16) against
+// Q8_2_X4 rows. Exact per-sub-block scales: the int32 partial sums of
+// mul_add_epi8 + madd_epi16 keep the first and the second 16-value halves in the two
+// 128-bit lanes, so each half is scaled by its own UE4M3 scale (the same lane
+// convention as the scalar reference ggml_vec_dot_nvfp4_q8_0). No +12 offset trick
+// is used, hence no correction term is needed.
+static inline __m256i nvfp4_mul_add_epi8(const __m256i x, const __m256i y) {
+    const __m256i ax = _mm256_sign_epi8(x, x);
+    const __m256i sy = _mm256_sign_epi8(y, x);
+    return _mm256_maddubs_epi16(ax, sy);
+}
+
+template <int nrc_y>
+static void mul_mat_nvfp4_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(n%QK_NVFP4 == 0);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
+    const int nb  = n / QK_NVFP4;      // 64-value A blocks per row
+    const int nb4 = 4*((n/QK8_2)/4);   // number of q8_2 blocks covered by the x4 layout
+    const __m128i values = _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
+    const __m128i m4b    = _mm_set1_epi8(0x0f);
+    const __m256i mone   = _mm256_set1_epi16(1);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const block_nvfp4 * xb = (const block_nvfp4 *)((const char *)vx + ix*bx);
+        __m256 acc[nrc_y];
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm256_setzero_ps();
+
+        for (int ib = 0; ib < nb; ++ib) {
+            const uint8_t * qs = xb[ib].qs;
+            __m256i va[2];
+            {
+                const __m128i bits0 = _mm_loadu_si128((const __m128i *)(qs));
+                const __m128i bits1 = _mm_loadu_si128((const __m128i *)(qs + 16));
+                const __m128i lo0 = _mm_shuffle_epi8(values, _mm_and_si128(bits0, m4b));
+                const __m128i hi0 = _mm_shuffle_epi8(values, _mm_and_si128(_mm_srli_epi16(bits0, 4), m4b));
+                const __m128i lo1 = _mm_shuffle_epi8(values, _mm_and_si128(bits1, m4b));
+                const __m128i hi1 = _mm_shuffle_epi8(values, _mm_and_si128(_mm_srli_epi16(bits1, 4), m4b));
+                va[0] = _mm256_set_m128i(_mm_unpackhi_epi64(lo0, hi0), _mm_unpacklo_epi64(lo0, hi0));
+                va[1] = _mm256_set_m128i(_mm_unpackhi_epi64(lo1, hi1), _mm_unpacklo_epi64(lo1, hi1));
+            }
+            float sA[4];
+            for (int k = 0; k < 4; ++k) sA[k] = ggml_ue4m3_to_fp32(xb[ib].d[k]);
+
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                const block_q8_2_x4 * y4 = q8.y[iy];
+                for (int h = 0; h < 2; ++h) {
+                    const int r = 2*ib + h;    // raw q8_2 block index
+                    const int8_t * q8qs;
+                    float d8;
+                    if (r < nb4) {
+                        q8qs = (const int8_t *)(y4[r/4].qs + QK8_2*(r%4));
+                        d8   = GGML_BF16_TO_FP32(ggml_bf16_t{y4[r/4].d[r%4]});
+                    } else {
+                        const block_q8_2 * yr = ((const block_q8_2 *)y4) + r;
+                        q8qs = yr->qs;
+                        d8   = GGML_BF16_TO_FP32(ggml_bf16_t{yr->d});
+                    }
+                    const __m256i q8v  = _mm256_loadu_si256((const __m256i *)q8qs);
+                    const __m256i sumi = _mm256_madd_epi16(nvfp4_mul_add_epi8(va[h], q8v), mone);
+                    const __m256  sc   = _mm256_mul_ps(_mm256_set1_ps(d8),
+                                            _mm256_set_m128(_mm_set1_ps(sA[2*h+1]), _mm_set1_ps(sA[2*h])));
+                    acc[iy] = _mm256_fmadd_ps(sc, _mm256_cvtepi32_ps(sumi), acc[iy]);
+                }
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, hsum_float_8(acc[iy]));
+        }
+    }
+}
+
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
 static void mul_mat_mxfp4_r8_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
@@ -3436,6 +3507,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             break;
         case GGML_TYPE_MXFP4:
             set_functions<MXFP4_Unpacker>(kernels);
+            break;
+        case GGML_TYPE_NVFP4:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_nvfp4_q8_2, kernels)
             break;
         case GGML_TYPE_IQ3_KS_R16:
 #ifdef HAVE_FANCY_SIMD

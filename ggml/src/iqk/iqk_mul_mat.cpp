@@ -1050,6 +1050,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q8_0_R16:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_NL_R4:
+        case GGML_TYPE_NVFP4:
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_MXFP4_R8:
         case GGML_TYPE_IQ4_KS_R16:
