@@ -694,12 +694,21 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
                 sum1 = _mm256_fmadd_ps(vs[ii+0], vc[k+0], sum1);
                 sum2 = _mm256_fmadd_ps(vs[ii+4], vc[k+4], sum2);
             }
+#if defined __AVX512F__ && defined __AVX512DQ__
+            if (dst_silu) {
+                _mm512_storeu_ps(x, v_silu(_mm512_insertf32x8(_mm512_castps256_ps512(sum1), sum2, 1)));
+            } else {
+                _mm256_storeu_ps(x+0, sum1);
+                _mm256_storeu_ps(x+8, sum2);
+            }
+#else
             if (dst_silu) {
                 sum1 = v_silu(sum1);
                 sum2 = v_silu(sum2);
             }
             _mm256_storeu_ps(x+0, sum1);
             _mm256_storeu_ps(x+8, sum2);
+#endif
             x0 += nb11/sizeof(float);
             x  += nr;
         }
