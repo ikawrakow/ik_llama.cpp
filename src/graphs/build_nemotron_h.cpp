@@ -18,7 +18,10 @@ ggml_tensor * llm_build_context::llm_build_nemotron_mamba2(ggml_cgraph * gf, ggm
     const int64_t n_seq_tokens = n_tokens / n_seqs;
     const int64_t ch       = d_inner + 2 * n_group * d_state; // wide conv channel count
 
-    GGML_ASSERT(n_seqs == 1); // single-sequence path (matches the state slot allocation)
+    if (n_seqs != 1) {
+        GGML_ABORT("Nemotron-H: the Mamba-2 path supports a single sequence per batch "
+                   "(use -np 1 / n_seq_max = 1; multi-sequence state slots are not implemented)");
+    }
     GGML_ASSERT(n_seq_tokens == n_tokens);
     GGML_ASSERT(d_inner % n_head  == 0);
     GGML_ASSERT(d_inner % n_group == 0);
@@ -31,7 +34,10 @@ ggml_tensor * llm_build_context::llm_build_nemotron_mamba2(ggml_cgraph * gf, ggm
     GGML_ASSERT((int64_t) conv_states_all->ne[0] == (d_conv - 1) * ch);
     GGML_ASSERT((int64_t) conv_states_all->ne[1] == state_slots);
     GGML_ASSERT((int64_t) ssm_states_all->ne[0] == d_state * d_inner);
-    GGML_ASSERT(state_slots == 1);
+    if (state_slots != 1) {
+        GGML_ABORT("Nemotron-H: the recurrent state cache has %d slots but the Mamba-2 graph "
+                   "implements one (use -np 1 / n_seq_max = 1)", (int) state_slots);
+    }
 
     // conv state -> {d_conv - 1, ch, n_seqs}
     ggml_tensor * conv = ggml_reshape_3d(ctx0, conv_states_all, d_conv - 1, ch, n_seqs);
@@ -109,10 +115,21 @@ ggml_tensor * llm_build_context::llm_build_nemotron_mamba2(ggml_cgraph * gf, ggm
         // y = swiglu(z, y)
         y = ggml_swiglu_split(ctx0, ggml_reshape_4d(ctx0, ggml_cont(ctx0, z), head_dim, n_head, n_seq_tokens, n_seqs), y);
 
-        // grouped RMS norm
+        // grouped RMS norm.
+        // The weight is one gamma per (group, channel), i.e. {d_inner/n_group, n_group}, so the
+        // generic fused norm (which needs a single row of gammas) falls back to RMS_NORM + MUL.
+        // Fold the group axis into the row width and use the grouped fused kernel instead, the
+        // same way the qwen4exp graph does: one GGML_OP_FUSED_RMS_NORM per layer.
         if (layer.ssm_norm) {
+            y = ggml_reshape_2d(ctx0, y, d_inner, n_seq_tokens * n_seqs);
+            if (n_group > 1) {
+                ggml_tensor * gamma = ggml_reshape_1d(ctx0, layer.ssm_norm, d_inner);
+                y = ggml_fused_grouped_rms_norm(ctx0, y, gamma, hparams.f_norm_rms_eps, (int) n_group);
+            } else {
+                y = llm_build_norm(ctx0, y, hparams, layer.ssm_norm, NULL, LLM_NORM_RMS, cb, il);
+            }
+            cb(y, "ssm_norm", il);
             y = ggml_reshape_4d(ctx0, y, d_inner / n_group, n_group, n_seq_tokens, n_seqs);
-            y = llm_build_norm(ctx0, y, hparams, layer.ssm_norm, NULL, LLM_NORM_RMS, cb, il);
         }
 
         y = ggml_reshape_2d(ctx0, y, d_inner, n_seq_tokens * n_seqs);
