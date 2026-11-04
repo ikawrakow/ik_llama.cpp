@@ -47,10 +47,10 @@
 #define LLAMA_FILE_MAGIC_GGSQ 0x67677371u // 'ggsq'
 
 #define LLAMA_SESSION_MAGIC   LLAMA_FILE_MAGIC_GGSN
-#define LLAMA_SESSION_VERSION 10
+#define LLAMA_SESSION_VERSION 11 // 11: the whole-context blob gained the Mamba-2 conv-state block
 
 #define LLAMA_STATE_SEQ_MAGIC   LLAMA_FILE_MAGIC_GGSQ
-#define LLAMA_STATE_SEQ_VERSION 4
+#define LLAMA_STATE_SEQ_VERSION 5 // 5: standard Mamba-2 conv state block
 
 #define LLAMA_SERVER_MAGIC 0x6c6d7376u // 'lmsv'
 #define LLAMA_SERVER_VERSION 1
