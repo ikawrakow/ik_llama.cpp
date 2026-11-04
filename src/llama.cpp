@@ -5698,6 +5698,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
+        model.split_output_tensor = params.split_output_tensor;
 
         model.mtp = params.mtp;
         // MiniMax-M3 sparse attention runs only without GPU devices (see llama_init_from_model), so do not load its indexer
@@ -8992,6 +8993,7 @@ struct llama_model_params llama_model_default_params() {
         /*.mtp                         =*/ false,
         /*.dsa                         =*/ false,
         /*.dry_run                     =*/ false,
+        /*.split_output_tensor         =*/ false,
         /*.flash_attn                  =*/ true,
         /*.defer_experts               =*/ false,
         /*.defer_ple                   =*/ false,
