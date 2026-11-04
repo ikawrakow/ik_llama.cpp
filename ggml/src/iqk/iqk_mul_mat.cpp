@@ -422,6 +422,7 @@ struct MulMat {
             case GGML_TYPE_Q1_0_G128_R8: return 8;
             case GGML_TYPE_PQ2_0_R8: return 8;
             case GGML_TYPE_PTQ1_0_R8: return 8;
+            case GGML_TYPE_Q2_0_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
             case GGML_TYPE_Q8_1:
@@ -469,6 +470,7 @@ struct MulMat {
             case GGML_TYPE_Q1_0_G128_R8: return 8;
             case GGML_TYPE_PQ2_0_R8: return 8;
             case GGML_TYPE_PTQ1_0_R8: return 8;
+            case GGML_TYPE_Q2_0_R8: return 8;
             case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_IQ4_KS_R16:
             case GGML_TYPE_IQ5_KS_R16:
@@ -1091,6 +1093,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         //case GGML_TYPE_TQP7:
             return iqk_set_kernels_ktquants(ne00, typeA, typeB, mm.funcs, mm.func16);
         case GGML_TYPE_Q2_0:
+        case GGML_TYPE_Q2_0_R8:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -1192,6 +1195,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_IQ3_S_R4:
             return iqk_set_kernels_iquants(ne00, typeA, typeB, m.funcs, m.func16);
         case GGML_TYPE_Q2_0:
+        case GGML_TYPE_Q2_0_R8:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
