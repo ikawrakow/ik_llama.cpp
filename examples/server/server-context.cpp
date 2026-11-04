@@ -625,7 +625,8 @@ void server_slot::reset() {
 }
 
 bool server_slot::need_embd() const {
-    return embedding || uses_mtp();
+    // stateless MTP assistants only need the last prompt hidden row
+    return embedding || (uses_mtp() && common_speculative_needs_all_target_hidden(spec));
 }
 
 bool server_slot::uses_mtp() const {
@@ -4406,7 +4407,8 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     llama_pos p1 = slot.cache_tokens.pos_next();
                     server_mtp_warmup mtp_media_warmup {
                         ctx,
-                        slot.uses_mtp() && slot.spec ? &slot : nullptr,
+                        slot.uses_mtp() && slot.spec &&
+                        common_speculative_needs_all_target_hidden(slot.spec) ? &slot : nullptr,
                     };
                     mtmd_helper_eval_batch_callback mtp_media_callback =
                         mtp_media_warmup.slot ? server_mtp_media_warmup_callback : nullptr;
@@ -5040,6 +5042,18 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             0, 0, 0, // unused
         };
 
+        // token index -> output-row index (differs once non-output rows are pruned)
+        auto batch_out_index = [&](int32_t tok) -> int32_t {
+            if (batch.logits == nullptr) {
+                return tok - i;
+            }
+            int32_t n = 0;
+            for (int32_t t = i; t < tok; ++t) {
+                n += batch.logits[t] != 0;
+            }
+            return n;
+        };
+
         const int ret = server_decode(ctx, batch_view);
         if (ret != 0) {
             if (n_batch == 1 || ret < 0) {
@@ -5093,6 +5107,11 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             }
 
             if (slot.spec_prompt_warmup_failed) {
+                continue;
+            }
+
+            // stateless MTP: hidden is captured from the output index at sampling time
+            if (!common_speculative_needs_all_target_hidden(slot.spec)) {
                 continue;
             }
 
@@ -5170,10 +5189,12 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             }
 
             completion_token_output result;
+            // logits/sampling use a token index; hidden capture uses an output-row index
             const int tok_idx = slot.i_batch - i;
 
             if (slot.uses_mtp() && slot.n_decoded == 0) {
-                (void) common_speculative_capture_output_hidden(slot.spec, ctx, tok_idx, slot.id, slot.n_past);
+                const int out_idx = batch_out_index(slot.i_batch);
+                (void) common_speculative_capture_output_hidden(slot.spec, ctx, out_idx, slot.id, slot.n_past);
             }
 
             apply_server_biases(slot);

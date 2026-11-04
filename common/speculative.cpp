@@ -1287,6 +1287,15 @@ done:
     return res;
 }
 
+bool common_speculative_needs_all_target_hidden(const common_speculative * spec) {
+    const auto * mtp_state = common_speculative_get_mtp_state(spec);
+    // gemma4-assistant: stateless, only the last target hidden row is needed
+    if (mtp_state != nullptr && mtp_state->constant_draft_positions) {
+        return false;
+    }
+    return true;
+}
+
 // initialization of the speculative decoding system
 //
 common_speculative * common_speculative_init(
