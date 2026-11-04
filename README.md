@@ -175,6 +175,9 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 * Self speculative decoding, ngram [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261), suffix [PR 1646](https://github.com/ikawrakow/ik_llama.cpp/pull/1646)
 * DFlash initial support [PR 1970](https://github.com/ikawrakow/ik_llama.cpp/pull/1970)
 * DSpark initial support [PR 2280](https://github.com/ikawrakow/ik_llama.cpp/pull/2280)
+* Nemotron-H / Nemotron-H-MoE (Mamba-2 + NoPE attention + relu^2 MoE), incl. the official
+  Nemotron 3.5 Bolt 74B-A9B GGUF; single sequence per batch for the Mamba-2 path
+* NVFP4 (type 40) inference - CPU, IQK and CUDA (MMVQ + MMQ)
 * GLM-DSA architecture indexer cache
 * GLM-5.2 vision hack [PR 2283](https://github.com/ikawrakow/ik_llama.cpp/pull/2283)
 * String ban function for all completions [PR 1185](https://github.com/ikawrakow/ik_llama.cpp/pull/1185) [PR 1243](https://github.com/ikawrakow/ik_llama.cpp/pull/1243)

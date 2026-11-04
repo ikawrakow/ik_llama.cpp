@@ -277,6 +277,8 @@ class MODEL_ARCH(IntEnum):
     DFLASH_DRAFT = auto()
     STARCODER2   = auto()
     MAMBA        = auto()
+    NEMOTRON_H   = auto()
+    NEMOTRON_H_MOE = auto()
     XVERSE       = auto()
     COMMAND_R    = auto()
     COHERE2_MOE  = auto()
@@ -545,6 +547,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DFLASH_DRAFT:   "dflash-draft",
     MODEL_ARCH.STARCODER2:     "starcoder2",
     MODEL_ARCH.MAMBA:          "mamba",
+    MODEL_ARCH.NEMOTRON_H:     "nemotron_h",
+    MODEL_ARCH.NEMOTRON_H_MOE: "nemotron_h_moe",
     MODEL_ARCH.XVERSE:         "xverse",
     MODEL_ARCH.COMMAND_R:      "command-r",
     MODEL_ARCH.COHERE2_MOE:    "cohere2_moe",
