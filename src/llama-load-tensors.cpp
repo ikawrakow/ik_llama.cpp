@@ -176,6 +176,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     bool create_bailingmoe3_tensors(const LLM_TN & tn);
     bool create_glm5next_tensors(const LLM_TN & tn);
     bool create_raon1_tensors(const LLM_TN & tn);
+    bool create_xing4_tensors(const LLM_TN & tn);
 
     bool create_minimaxm2_tensors(const LLM_TN & tn);
     bool create_minimaxm3_tensors(const LLM_TN & tn);
@@ -5033,6 +5034,113 @@ bool create_tensors_helper::create_glm5next_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
+bool create_tensors_helper::create_xing4_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    const int64_t n_embd_head_k_mla  = hparams.n_embd_head_k_mla();
+    const int64_t n_embd_head_v_mla  = hparams.n_embd_head_v_mla();
+    const int64_t n_embd_head_qk_nope = n_embd_head_k_mla - hparams.n_rot;
+    const int64_t q_lora_rank        = hparams.n_lora_q;
+    const int64_t kv_lora_rank       = hparams.n_lora_kv;
+    const int64_t hc                 = hparams.dsv4_hc_mult;
+    const int64_t hc_dim             = hc * n_embd;
+    const int64_t hc_mix_dim         = hc * (hc + 2);
+    const int64_t n_ff_exp           = hparams.n_ff_exp;
+    const int64_t n_ff_shexp         = (hparams.n_ff_shexp > 0 ? hparams.n_ff_shexp : hparams.n_ff_exp)
+                                     * hparams.n_expert_shared;
+
+    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+    model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab},
+            llama_model_loader::TENSOR_NOT_REQUIRED);
+    if (!model.output) {
+        model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
+                llama_model_loader::TENSOR_DUPLICATED);
+    }
+
+    uint32_t n_main = hparams.n_layer;
+    if (hparams.n_layer > 0) {
+        const std::string last_hc = tn(LLM_TENSOR_HC_ATTN_FN, "weight", hparams.n_layer - 1);
+        if (ml.get_tensor_meta(last_hc.c_str()) == nullptr) {
+            const uint32_t n_mtp = hparams.nextn_predict_layers > 0 ? hparams.nextn_predict_layers : 1;
+            n_main = hparams.n_layer > n_mtp ? hparams.n_layer - n_mtp : 0;
+        }
+    }
+    model.hparams.n_layer_main = n_main;
+    model.hparams.nextn_predict_layers = hparams.n_layer - n_main;
+
+    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+        auto & layer = model.layers[il];
+        ggml_context * ctx_layer = ctx_for_layer(il);
+        ggml_context * ctx_split = ctx_for_layer_split(il);
+        const bool graph_or_attn = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
+        ggml_context * norm_ctx = graph_or_attn ? ctx_split : ctx_layer;
+        ggml_context * moe_ctx  = graph_or_attn ? ctx_split : ctx_layer;
+        const bool is_mtp = il >= n_main;
+        const int layer_flags = is_mtp && !model.mtp ? llama_model_loader::TENSOR_SKIP : 0;
+
+        layer.attn_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_NORM, "weight", il), {n_embd}, layer_flags);
+        layer.ffn_norm  = create_tensor(norm_ctx, tn(LLM_TENSOR_FFN_NORM,  "weight", il), {n_embd}, layer_flags);
+
+        if (!is_mtp) {
+            layer.hc_attn_fn    = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_FN,    "weight", il), {hc_dim, hc_mix_dim}, layer_flags);
+            layer.hc_attn_base  = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_BASE,  "weight", il), {hc_mix_dim},        0);
+            layer.hc_attn_scale = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_SCALE, "weight", il), {3},                 0);
+            layer.hc_ffn_fn     = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_FN,     "weight", il), {hc_dim, hc_mix_dim}, layer_flags);
+            layer.hc_ffn_base   = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_BASE,   "weight", il), {hc_mix_dim},        0);
+            layer.hc_ffn_scale  = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_SCALE,  "weight", il), {3},                 0);
+        }
+
+        layer.wq_a = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_A, "weight", il), {n_embd, q_lora_rank}, layer_flags);
+        layer.attn_q_a_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", il), {q_lora_rank}, layer_flags);
+        layer.wq_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_B, "weight", il),
+                {q_lora_rank, n_head * n_embd_head_k_mla}, layer_flags);
+        layer.wkv_a_mqa = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", il),
+                {n_embd, kv_lora_rank + hparams.n_rot}, layer_flags);
+        layer.attn_kv_a_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", il), {kv_lora_rank}, layer_flags);
+        layer.wk_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B, "weight", il),
+                {n_embd_head_qk_nope, kv_lora_rank, n_head}, layer_flags);
+        layer.wv_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B, "weight", il),
+                {kv_lora_rank, n_embd_head_v_mla, n_head}, layer_flags);
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", il),
+                {n_head * n_embd_head_v_mla, n_embd}, layer_flags);
+
+        if (il < (uint32_t) hparams.n_layer_dense_lead) {
+            layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", il), {n_embd, n_ff}, layer_flags);
+            layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", il), {n_ff, n_embd}, layer_flags);
+            layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", il), {n_embd, n_ff}, layer_flags);
+        } else {
+            layer.ffn_gate_inp = create_tensor(moe_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", il), {n_embd, n_expert}, layer_flags);
+            layer.ffn_exp_probs_b = create_tensor(moe_ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", il), {n_expert},
+                    llama_model_loader::TENSOR_NOT_REQUIRED | layer_flags);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, il, layer_flags, n_ff_exp, ctx_split);
+            layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", il), {n_embd, n_ff_shexp}, layer_flags);
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", il), {n_ff_shexp, n_embd}, layer_flags);
+            layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", il), {n_embd, n_ff_shexp}, layer_flags);
+        }
+
+        if (is_mtp) {
+            layer.nextn.eh_proj = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", il), {2 * n_embd, n_embd}, layer_flags);
+            layer.nextn.embed_tokens = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", il), {n_embd, n_vocab},
+                    llama_model_loader::TENSOR_NOT_REQUIRED | layer_flags);
+            layer.nextn.enorm = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_ENORM, "weight", il), {n_embd}, layer_flags);
+            layer.nextn.hnorm = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_HNORM, "weight", il), {n_embd}, layer_flags);
+            layer.nextn.shared_head_head = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", il), {n_embd, n_vocab},
+                    llama_model_loader::TENSOR_NOT_REQUIRED | layer_flags);
+            layer.nextn.shared_head_norm = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", il), {n_embd},
+                    llama_model_loader::TENSOR_NOT_REQUIRED | layer_flags);
+        }
+    }
+
+    return use_mmap_buffer;
+}
+
 bool create_tensors_helper::create_raon1_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
@@ -6378,6 +6486,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_glm5next_tensors(tn); break;
         case LLM_ARCH_RAON1:
             use_mmap_buffer = create_raon1_tensors(tn); break;
+        case LLM_ARCH_XING4_0:
+            use_mmap_buffer = create_xing4_tensors(tn); break;
         case LLM_ARCH_MINIMAX_M2:
             use_mmap_buffer = create_minimaxm2_tensors(tn); break;
         case LLM_ARCH_MINIMAX_M3:

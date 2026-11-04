@@ -1,0 +1,112 @@
+{%- macro visible_text(content) -%}
+    {%- if content is string -%}
+        {{- content }}
+    {%- elif content is iterable and content is not mapping -%}
+        {%- for item in content -%}
+            {%- if item is mapping and item.type == 'text' -%}
+                {{- item.text }}
+            {%- elif item is string -%}
+                {{- item }}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{- content }}
+    {%- endif -%}
+{%- endmacro -%}
+{%- if messages[0]["role"] == "system" %}
+    {%- set system_message = messages[0]["content"] %}
+    {%- set loop_messages = messages[1:] %}
+{%- else %}
+    {%- set loop_messages = messages %}
+{%- endif %}
+{%- if not tools is defined %}
+    {%- set tools = [] %}
+{%- endif %}
+{%- set default_system = "你是中国电信星辰语义大模型，英文名是Xing，你是由中电信人工智能科技有限公司研发的人工智能助手。\n" %}
+{%- if system_message is defined %}
+    {{- "<_system>" + default_system + "\n" + visible_text(system_message)}}
+{%- else %}
+    {{- "<_system>" + default_system }}
+{%- endif %}
+{% if tools is iterable and tools | length > 0 %}
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{% for tool in tools %}
+{{ tool | tojson(ensure_ascii=False) }}
+{% endfor %}
+</tools>
+
+For each function call, output the function name and arguments within the following XML format:
+<tool_call>{function-name}<param_key>{param-key-1}</param_key><param_value>{param-value-1}</param_value><param_key>{param-key-2}</param_key><param_value>{param-value-2}</param_value>...</tool_call>
+{%- endif %}
+
+
+{%- set ns = namespace(last_user_index=-1) %}
+{%- for m in loop_messages %}
+    {%- if m.role == 'user' %}
+        {%- set ns.last_user_index = loop.index0 -%}
+    {%- endif %}
+{%- endfor %}
+{%- for m in loop_messages %}
+{%- if m.role == 'user' -%}<_user>{{ visible_text(m.content) }}
+{%- elif m.role == 'assistant' or m.role == 'bot' -%}
+<_bot>
+{%- set reasoning_content = '' %}
+{%- set content = visible_text(m.content) %}
+{%- if m.reasoning_content is string %}
+{%- set reasoning_content = m.reasoning_content %}
+{%- elif m.reasoning is string %}
+{%- set reasoning_content = m.reasoning %}
+{%- else %}
+{%- if '</think>' in content %}
+{%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+{%- set content = content.split('</think>')[-1].lstrip('\n') %}
+{%- endif %}
+{%- endif %}
+{%- if loop.index0 < ns.last_user_index -%}
+{{ '</think>' }}
+{%- elif enable_thinking is not defined or enable_thinking -%}
+{{ '<think>\n' + reasoning_content.strip() +  '\n</think>'}}
+{%- else -%}
+{{ '</think>' }}
+{%- endif -%}
+{%- if content.strip() -%}
+{{ content.strip() }}
+{%- endif -%}
+{% if m.tool_calls %}
+{%- for tc in m.tool_calls %}
+{%- if tc.function %}
+{%- set tc = tc.function %}
+{%- endif %}
+{{- '<tool_call>' + tc.name -}}
+{% set _args = tc.arguments %}
+{%- for k, v in _args.items() %}<param_key>{{ k }}</param_key><param_value>{{ v | tojson(ensure_ascii=False) if v is not string else v }}</param_value>{% endfor %}{{ '</tool_call>' }}{% endfor %}{% endif %}{{- '<_end>\n' }}
+{%- elif m.role == 'tool' -%}
+{%- if loop.index0 > 0 -%}
+{%- set prev_element = loop_messages[loop.index0 - 1] -%}
+{%- if prev_element.role != "tool" -%}
+{{- '<_observation>' -}}
+{%- endif -%}
+{%- endif -%}
+{%- if m.content is string -%}
+{{- '<tool_response>' -}}
+{{- m.content }}
+{{- '</tool_response>' -}}
+{%- else -%}
+{% for tr in m.content %}  
+{{- '<tool_response>' -}}{{ tr.output if tr.output is defined else tr }}{{- '</tool_response>' -}}
+{% endfor -%}
+{% endif -%}
+{%- elif m.role == 'system' -%}
+<_system>{{ visible_text(m.content) }}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    <_bot>{{- '</think>' if (enable_thinking is defined and not enable_thinking) else '<think>\n' -}}
+{%- endif -%}
+

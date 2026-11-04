@@ -28,3 +28,4 @@ These templates can be updated with the following commands:
 ./scripts/get_chat_template.py XHToken/Spark-X2.5-4B                         > models/templates/Spark2.5.jinja
 ./scripts/get_chat_template.py deepseek-ai/DeepSeek-V4                       > models/templates/deepseek-ai-DeepSeek-V4.jinja
 ```
+./scripts/get_chat_template.py XingChen-AGI/Xing4.0-29B-A4B                > models/templates/Xing4.0.jinja

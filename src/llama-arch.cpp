@@ -105,6 +105,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MAPLE,           "maple"        },
     { LLM_ARCH_SPARK2_5,        "spark2_5"     },
     { LLM_ARCH_RAON1,           "raon1"        },
+    { LLM_ARCH_XING4_0,         "xing4_0"      },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
