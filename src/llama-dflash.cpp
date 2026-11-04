@@ -393,9 +393,27 @@ static bool validate_dflash_graph_contract(const llama_context & lctx) {
     return true;
 }
 
+static bool llama_dflash_prepare_impl(
+        struct llama_context & lctx,
+        uint32_t n_tokens,
+        bool set_decode_inputs);
+
+// Injection-only variant: applies pending target features to the draft K/V cache without
+// touching the decode-time graph inputs (masks/tail rows). Safe to call before any decode.
+bool llama_dflash_apply_target_features(struct llama_context & lctx) {
+    return llama_dflash_prepare_impl(lctx, 0, false);
+}
+
 bool llama_prepare_dflash_graph_inputs(
         struct llama_context & lctx,
         uint32_t n_tokens) {
+    return llama_dflash_prepare_impl(lctx, n_tokens, true);
+}
+
+static bool llama_dflash_prepare_impl(
+        struct llama_context & lctx,
+        uint32_t n_tokens,
+        bool set_decode_inputs) {
     const int32_t cross_ctx = lctx.dflash.visible_cross_ctx > 0
             ? lctx.dflash.visible_cross_ctx
             : std::max<int32_t>(1, (int32_t) lctx.cparams.n_ctx - (int32_t) lctx.model.hparams.dflash_block_size);
@@ -455,7 +473,7 @@ bool llama_prepare_dflash_graph_inputs(
                 __func__, n_kv_total, cross_ctx + (int32_t) n_tokens);
         return false;
     }
-    if (draft_tail_rows == nullptr || draft_tail_rows->type != GGML_TYPE_I32 || draft_tail_rows->ne[0] != (int64_t) n_tokens) {
+    if (set_decode_inputs && (draft_tail_rows == nullptr || draft_tail_rows->type != GGML_TYPE_I32 || draft_tail_rows->ne[0] != (int64_t) n_tokens)) {
         LLAMA_LOG_ERROR("%s: DFlash draft tail row input is not initialized for n_tokens=%u\n", __func__, n_tokens);
         return false;
     }
@@ -492,6 +510,9 @@ bool llama_prepare_dflash_graph_inputs(
     const bool have_append_src = append_src != nullptr &&
         append_rows_available == cache_plan.append_rows &&
         append_floats == (size_t) cache_plan.append_rows * (size_t) width;
+
+    if (cache_plan.rebuild_cache && !cache_plan.cache_up_to_date) {
+    }
 
     const int32_t update_rows = cache_plan.cache_up_to_date
             ? 0
@@ -554,7 +575,7 @@ bool llama_prepare_dflash_graph_inputs(
             return false;
         }
 
-        if (cache_plan.rebuild_cache) {
+        if (cache_plan.rebuild_cache && !cache_plan.cache_up_to_date) {
             llama_reset_dflash_kv_cache_state(&lctx);
         }
 
@@ -583,6 +604,7 @@ bool llama_prepare_dflash_graph_inputs(
             lctx.dflash.kv.cache_graph_rows = update_rows;
             lctx.dflash.kv.cache_graph_write_pos = lctx.dflash.kv.cache_write_pos;
         }
+
 
         ggml_backend_t kv_feature_backend = llama_backend_for_tensor(lctx, lctx.dflash.kv.cache_input_target_features);
         if (kv_feature_backend != nullptr) {
@@ -613,6 +635,16 @@ bool llama_prepare_dflash_graph_inputs(
         }
         llama_graph_compute_sched(lctx, lctx.dflash.kv.cache_sched, gf_kv, lctx.cparams.n_threads);
         ggml_backend_sched_synchronize(lctx.dflash.kv.cache_sched);
+
+        if (lctx.dflash.lilicorr_proj_tensor != nullptr) {
+            const ggml_tensor * proj = lctx.dflash.lilicorr_proj_tensor;
+            const int64_t proj_rows = proj->ne[1];
+            if (proj_rows > 0) {
+                lctx.dflash.lilicorr_anchor.resize((size_t) proj->ne[0]);
+                ggml_backend_tensor_get(proj, lctx.dflash.lilicorr_anchor.data(),
+                        (size_t) (proj_rows - 1) * proj->nb[1], proj->ne[0]*sizeof(float));
+            }
+        }
 
         if ((int32_t) lctx.dflash.kv.cache_pos.size() != cross_ctx) {
             lctx.dflash.kv.cache_pos.assign((size_t) cross_ctx, 0);
@@ -645,6 +677,10 @@ bool llama_prepare_dflash_graph_inputs(
         if (lctx.dflash.kv.cache_slot_valid[(size_t) i]) {
             lctx.dflash.target.pos_ctx_data[(size_t) i] = lctx.dflash.kv.cache_pos[(size_t) i];
         }
+    }
+
+    if (!set_decode_inputs) {
+        return true;
     }
 
     std::vector<int32_t> draft_tail_rows_data((size_t) n_tokens);

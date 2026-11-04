@@ -550,6 +550,11 @@ struct llama_context {
         std::vector<float> draft_lattice;
         std::vector<int32_t> draft_lattice_ids;
         int32_t draft_lattice_top_k = 0;
+
+        // LiLiCorr: projected target features of the injected window; the last row is the draft anchor
+        struct ggml_tensor * lilicorr_proj_tensor = nullptr;
+        std::vector<float> lilicorr_anchor; // F32 [n_embd] projected last committed position
+
     };
     dflash_runtime dflash;
     using dflash_capture_state = dflash_runtime::capture_state;

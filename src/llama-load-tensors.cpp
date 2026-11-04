@@ -2973,6 +2973,74 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
 
     const bool use_split_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
 
+    if (hparams.lilicorr_layers > 0) {
+        const int64_t hidden = hparams.lilicorr_hidden_size;
+        const int64_t top_k  = hparams.lilicorr_candidate_topk;
+        const int64_t heads  = hparams.lilicorr_num_heads;
+        const int64_t mlp    = hparams.lilicorr_mlp_hidden_size;
+        const int64_t slots  = (int64_t) hparams.dflash_block_size - 1;
+        const int64_t feature_bid = n_layer + (int64_t) hparams.lilicorr_layers;
+        if (hparams.lilicorr_layers > (uint32_t) model.layers.size()) {
+            throw std::runtime_error("invalid LiLiCorr head layer count");
+        }
+        // The reference LiLiCorr export only carries .scale companions for the projections listed here;
+        // a future export that adds more needs the matching *_s fields wired in build_lilicorr_lattice.
+        model.lilicorr_token_proj   = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_TOKEN_PROJ, "weight"), { n_embd, hidden },
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.lilicorr_token_proj_b = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_TOKEN_PROJ, "bias"),   { hidden },
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.lilicorr_token_proj_s = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_TOKEN_PROJ, "scale"),  { 1 },
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.lilicorr_pass_hidden_proj    = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ, "weight"), { (int64_t) hparams.n_embd, hidden }, 0);
+        model.lilicorr_pass_hidden_proj_b  = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ, "bias"),   { hidden },                           0);
+        model.lilicorr_pass_hidden_proj_s  = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ, "scale"),  { 1 }, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.lilicorr_feature_norm        = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_NORM, "weight", feature_bid), { 5 }, 0);
+        model.lilicorr_feature_norm_b      = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_NORM, "bias",   feature_bid), { 5 }, 0);
+        model.lilicorr_feature_mlp_1       = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_UP,   "weight", feature_bid), { 5, hidden }, 0);
+        model.lilicorr_feature_mlp_1_b     = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_UP,   "bias",   feature_bid), { hidden },    0);
+        model.lilicorr_feature_mlp_3       = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_DOWN, "weight", feature_bid), { hidden, hidden }, 0);
+        model.lilicorr_feature_mlp_3_b     = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_DOWN, "bias",   feature_bid), { hidden },         0);
+        model.lilicorr_slot_embedding      = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_SLOT_EMBD, "weight"), { hidden, slots }, 0);
+        model.lilicorr_rank_embedding      = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_RANK_EMBD, "weight"), { hidden, top_k }, 0);
+        model.lilicorr_attention_bias      = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_ATTN_BIAS, "bias"),   { slots * top_k, slots * top_k, heads }, 0);
+        model.lilicorr_context_proj        = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_CONTEXT_PROJ, "weight"), { (int64_t) hparams.n_embd, hidden }, 0);
+        model.lilicorr_context_proj_b      = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_CONTEXT_PROJ, "bias"),   { hidden },                           0);
+        model.lilicorr_context_proj_s      = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_CONTEXT_PROJ, "scale"),  { 1 }, llama_model_loader::TENSOR_NOT_REQUIRED);
+        warn_missing_nvfp4_scale(model.lilicorr_token_proj,       model.lilicorr_token_proj_s,       "lilicorr.token_proj.weight");
+        warn_missing_nvfp4_scale(model.lilicorr_pass_hidden_proj, model.lilicorr_pass_hidden_proj_s, "lilicorr.pass_hidden_proj.weight");
+        warn_missing_nvfp4_scale(model.lilicorr_context_proj,     model.lilicorr_context_proj_s,     "lilicorr.context_proj.weight");
+        for (uint32_t i = 0; i < hparams.lilicorr_layers; ++i) {
+            const int64_t bid = n_layer + (int64_t) i;
+            auto & layer = model.layers[i];
+            layer.lilicorr_attn_norm       = create_tensor(ctx_output, tn(LLM_TENSOR_ATTN_NORM, "weight", bid), { hidden }, 0);
+            layer.lilicorr_mlp_norm        = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_NORM,  "weight", bid), { hidden }, 0);
+            layer.lilicorr_attn_in_proj    = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_ATTN_IN_PROJ, "weight", i), { hidden, 3 * hidden }, 0);
+            layer.lilicorr_attn_in_proj_b  = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_ATTN_IN_PROJ, "bias",   i), { 3 * hidden },         0);
+            layer.lilicorr_attn_out_proj   = create_tensor(ctx_output, tn(LLM_TENSOR_ATTN_OUT, "weight", bid), { hidden, hidden }, 0);
+            layer.lilicorr_attn_out_proj_b = create_tensor(ctx_output, tn(LLM_TENSOR_ATTN_OUT, "bias",   bid), { hidden },         0);
+            layer.lilicorr_attn_out_proj_s = create_tensor(ctx_output, tn(LLM_TENSOR_ATTN_OUT, "scale",  bid), { 1 }, llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.lilicorr_mlp_0           = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_UP,   "weight", bid), { hidden, mlp }, 0);
+            layer.lilicorr_mlp_0_b         = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_UP,   "bias",   bid), { mlp },         0);
+            layer.lilicorr_mlp_0_s         = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_UP,   "scale",  bid), { 1 }, llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.lilicorr_mlp_2           = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_DOWN, "weight", bid), { mlp, hidden }, 0);
+            layer.lilicorr_mlp_2_b         = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_DOWN, "bias",   bid), { hidden },       0);
+            layer.lilicorr_mlp_2_s         = create_tensor(ctx_output, tn(LLM_TENSOR_FFN_DOWN, "scale",  bid), { 1 }, llama_model_loader::TENSOR_NOT_REQUIRED);
+            warn_missing_nvfp4_scale(layer.lilicorr_attn_out_proj, layer.lilicorr_attn_out_proj_s, "lilicorr.layers.*.attn.out_proj.weight");
+            warn_missing_nvfp4_scale(layer.lilicorr_mlp_0,         layer.lilicorr_mlp_0_s,         "lilicorr.layers.*.mlp.0.weight");
+            warn_missing_nvfp4_scale(layer.lilicorr_mlp_2,         layer.lilicorr_mlp_2_s,         "lilicorr.layers.*.mlp.2.weight");
+        }
+        model.lilicorr_output_norm         = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_OUTPUT_NORM, "weight"), { hidden }, 0);
+        model.lilicorr_anchor_norm         = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_ANCHOR_NORM, "weight"), { hidden }, 0);
+        model.lilicorr_factor_input_proj   = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_FACTOR_INPUT_PROJ, "weight"), { 3 * hidden, hidden }, 0);
+        model.lilicorr_factor_input_proj_b = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_FACTOR_INPUT_PROJ, "bias"),   { hidden },              0);
+        model.lilicorr_out_head            = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_OUT_HEAD, "weight"), { hidden, hparams.lilicorr_factor_dim }, 0);
+        model.lilicorr_out_head_b          = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_OUT_HEAD, "bias"),   { hparams.lilicorr_factor_dim },          0);
+        model.lilicorr_in_head             = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_IN_HEAD, "weight"), { hidden, hparams.lilicorr_factor_dim }, 0);
+        model.lilicorr_in_head_b           = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_IN_HEAD, "bias"),   { hparams.lilicorr_factor_dim },          0);
+        model.lilicorr_anchor_out_head     = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_ANCHOR_OUT_HEAD, "weight"), { hidden, hparams.lilicorr_factor_dim }, 0);
+        model.lilicorr_anchor_out_head_b   = create_tensor(ctx_output, tn(LLM_TENSOR_LILICORR_ANCHOR_OUT_HEAD, "bias"),   { hparams.lilicorr_factor_dim },          0);
+    }
+
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -2985,6 +3053,8 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
     }
     model.output_mtp = model.output;
     model.dflash_fc = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_FC, "weight"), {(int64_t) hparams.dflash_n_target_features, n_embd}, 0);
+    model.dflash_fc_s = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_FC, "scale"), {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
+    warn_missing_nvfp4_scale(model.dflash_fc, model.dflash_fc_s, "fc.weight");
     model.dflash_hidden_norm = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_HIDDEN_NORM, "weight"), {n_embd}, 0);
 
     const ggml_tensor * markov_w1_meta = ml.get_tensor_meta("markov_w1.weight");
@@ -3046,9 +3116,30 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
 
         layer.attn_sinks  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_SINKS,  "weight", i), {n_head}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
+        if (hparams.dflash_conv_kernel_size > 0 && hparams.dflash_conv_group_size > 0) {
+            const int64_t kernel = hparams.dflash_conv_kernel_size;
+            const int64_t n_conv_groups = n_embd / (int64_t) hparams.dflash_conv_group_size;
+            const int64_t n_conv_proj = 2 * kernel * n_conv_groups;
+            layer.dflash_attn_conv_base = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_DFLASH_ATTN_CONV_BASE, i), {n_embd, kernel, 2}, 0);
+            layer.dflash_attn_conv_proj = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_DFLASH_ATTN_CONV_PROJ, "weight", i), {n_embd, n_conv_proj}, 0);
+            layer.dflash_ffn_conv_base = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_DFLASH_FFN_CONV_BASE, i), {n_embd, kernel, 2}, 0);
+            layer.dflash_ffn_conv_proj = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_DFLASH_FFN_CONV_PROJ, "weight", i), {n_embd, n_conv_proj}, 0);
+        }
+
+        layer.ffn_gate_s = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "scale", i), {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_down_s = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "scale", i), {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_up_s   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "scale", i), {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
+
         layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
         layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
         layer.ffn_up = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP, "weight", i), {n_embd, n_ff}, 0);
+        warn_missing_nvfp4_scale(layer.ffn_gate, layer.ffn_gate_s, "ffn_gate.weight");
+        warn_missing_nvfp4_scale(layer.ffn_down, layer.ffn_down_s, "ffn_down.weight");
+        warn_missing_nvfp4_scale(layer.ffn_up,   layer.ffn_up_s,   "ffn_up.weight");
     }
 
     return use_mmap_buffer;

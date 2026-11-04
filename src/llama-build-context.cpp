@@ -112,6 +112,7 @@ void llm_build_context::init() {
         lctx.inp_tokens      = nullptr;
         lctx.inp_embd        = nullptr;
         lctx.inp_mtp_states  = nullptr;
+        lctx.dflash.lilicorr_proj_tensor = nullptr;
         lctx.inp_pos         = nullptr;
         lctx.inp_out_ids     = nullptr;
         lctx.inp_KQ_mask     = nullptr;
@@ -1072,7 +1073,8 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
         struct llama_context & lctx,
          struct ggml_context * ctx0,
           struct ggml_tensor * w,
-          struct ggml_tensor * cur) {
+          struct ggml_tensor * cur,
+          struct ggml_tensor * w_s) {
     struct ggml_tensor * cur_mm = cur;
     if (auto rot = lctx.model.hadamard_rotation(w); rot != nullptr) {
         // several folded weights consume the same input activation; rotate it once per graph.
@@ -1088,6 +1090,10 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
         }
     }
     struct ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
+    if (w_s != nullptr) {
+        // per-tensor output scale (ModelOpt NVFP4 exports carry a .scale companion per weight)
+        res = ggml_mul(ctx0, res, w_s);
+    }
     for (auto & it : lctx.lora_adapters) {
         struct llama_lora_weight * lora = it.first->get_weight(w);
         if (lora == nullptr) {

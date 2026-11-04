@@ -67,3 +67,34 @@ Preparation is round-to-nearest per 16-value group; ModelOpt exports derive thos
 calibration data instead, so a locally quantized file is not identical to an official one. Rows
 whose width is not a multiple of 64 fall back to F16. Requantizing an already quantized model
 needs `--allow-requantize` like any other type.
+
+## LiLiCorr drafter (DFlash family)
+
+NVIDIA's LiLiCorr is a DFlash-family speculative drafter for the Bolt model. It loads as a
+separate draft model and runs through the existing DFlash machinery:
+
+```bash
+llama-cli -m nemotron-bolt-74b.gguf -md nemotron-bolt-lilicorr.gguf \
+  --spec-type dflash:n_max=7 --n-cpu-moe 28 --moe-cache-mib 1024 -ngl 99 -ngld 99
+```
+
+- The draft context is bounded to the drafter's sliding window (1024) plus the block size unless
+  `-cd` is given; that keeps the injected feature window small at any target context length.
+- `p_min` (a per-stage parameter, default 0.75 as a cap) controls how confidently a draft token
+  must be ranked to be kept; the cutoff starts at zero (no truncation) and only becomes strict
+  after a fully rejected block, so it never costs anything on content the drafter can follow.
+- Draft proposals are never skipped, and there is no backoff: every decode is followed by a draft
+  call. This is measured, not assumed. On the documented prompt, three guard configurations gave
+  93/135 accepted drafts without skipping, 0/28 with a skip after a rejected block, and 1/35 with
+  skip plus an empty-walk signal. The rebuild-cause census rules out the bookkeeping explanation
+  (`invalid=1`, no keep-row mismatch), so a skip genuinely leaves the draft state behind the
+  target window. The cost of not skipping is that a proposal the cutoff then refuses has already
+  paid the injection and the draft forward - that is the honest price of this drafter on content
+  it cannot follow, and the remedy there is not to load it.
+- Measured on a 12 GB RTX 3060 with the 74B-A9B on a 6-thread CPU (`--n-cpu-moe 28`), the
+  documented 119-token prompt, greedy, n=128: **37.15 t/s against 23.42 t/s without the drafter
+  (+58.6 %)**, 93/135 drafts accepted (69 %). The fox protocol accepts 8/8 draft tokens in 2/2
+  batches. Per proposal the injection costs 11.7 ms (enqueue, the 6-layer projection), the sync
+  0.25 ms, the anchor readback 0.017 ms and the draft forward 14.1 ms, i.e. acceptance decides
+  everything: 5.4 generated tokens per proposal is 4.8 ms/token of overhead against ~19 ms/token
+  saved, while 6 % acceptance is 24 ms/token of loss.

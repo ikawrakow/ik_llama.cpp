@@ -89,6 +89,8 @@ void llama_set_dflash_dspark(struct llama_context * ctx, bool enabled);
 
 int32_t llama_model_dflash_block_size(const struct llama_model * model);
 int32_t llama_model_dflash_mask_token_id(const struct llama_model * model);
+int32_t llama_model_dflash_swa_window(const struct llama_model * model);
+int32_t llama_model_dflash_lilicorr_top_k(const struct llama_model * model);
 int32_t llama_model_dflash_n_target_layers(const struct llama_model * model);
 int32_t llama_model_dflash_n_target_features(const struct llama_model * model);
 int32_t llama_model_dflash_target_streams(const struct llama_model * model);
@@ -114,6 +116,13 @@ bool llama_set_dflash_target_features_copy(
         int32_t n_rows,
         const llama_pos * target_positions,
         const llama_dflash_window_update * window_update = nullptr);
+
+bool llama_copy_dflash_lilicorr_anchor(const struct llama_context * ctx, float * dst, int32_t n);
+
+
+// Apply the pending DFlash target features to the draft K/V cache immediately (normally done
+// lazily inside llama_decode). Needed by drafters that consume the projected features (LiLiCorr).
+bool llama_apply_dflash_target_features(struct llama_context * ctx);
 
 bool llama_set_dflash_target_features_view(
         struct llama_context * ctx,

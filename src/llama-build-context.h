@@ -478,7 +478,13 @@ struct llm_build_context {
 
     //
     static ggml_tensor * llm_build_lora_mm(llama_context & lctx, ggml_context * ctx0,
-            ggml_tensor * w, ggml_tensor * cur);
+            ggml_tensor * w, ggml_tensor * cur, ggml_tensor * w_s = nullptr);
+
+    // LiLiCorr correlation head over the top-k draft candidates (src/graphs/build_lilicorr.cpp)
+    static void build_lilicorr_lattice(llama_context & lctx, ggml_context * ctx0,
+            const llama_model & model, const llama_hparams & hparams, const llm_build_cb & cb,
+            ggml_cgraph * gf, int64_t n_tokens, ggml_tensor * logits, ggml_tensor * pass_hidden,
+            ggml_tensor * anchors, ggml_tensor * tok_embd);
 
     static ggml_tensor * build_mla_output_gate(llama_context & lctx, ggml_context * ctx0,
             ggml_tensor * output, ggml_tensor * input, ggml_tensor * gate_w,

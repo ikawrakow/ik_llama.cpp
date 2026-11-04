@@ -1,3 +1,4 @@
+#include "llama-dflash.h"
 #include "llama-spec-features.h"
 #include "llama-spec-features-dflash.h"
 
@@ -37,11 +38,11 @@ void llama_reset_dflash_kv_cache_state(struct llama_context * ctx) {
     std::fill(ctx->dflash.kv.cache_pos.begin(), ctx->dflash.kv.cache_pos.end(), 0);
     std::fill(ctx->dflash.kv.cache_slot_valid.begin(), ctx->dflash.kv.cache_slot_valid.end(), 0);
 
-    for (ggml_backend_buffer_t buf : ctx->dflash.kv.cache_bufs) {
-        if (buf != nullptr) {
-            ggml_backend_buffer_clear(buf, 0);
-        }
-    }
+    // The K/V buffers are not wiped here: ggml_backend_buffer_clear() is a blocking memset framed
+    // by two cudaDeviceSynchronize() calls on CUDA, so clearing them on every rebuild drains the
+    // target model's MoE staging pipeline (~40 ms per rebuild here). The buffers are zeroed once
+    // when they are allocated, and rows that are not in cache_slot_valid are never attended to:
+    // the draft mask is built from the slot map, so stale values cannot leak into attention.
 }
 
 llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition_for_ctx(
@@ -103,6 +104,14 @@ int32_t llama_model_dflash_block_size(const struct llama_model * model) {
 
 int32_t llama_model_dflash_mask_token_id(const struct llama_model * model) {
     return model ? (int32_t) model->hparams.dflash_mask_token_id : -1;
+}
+
+int32_t llama_model_dflash_swa_window(const struct llama_model * model) {
+    return model ? (int32_t) model->hparams.n_swa : 0;
+}
+
+int32_t llama_model_dflash_lilicorr_top_k(const struct llama_model * model) {
+    return model ? (int32_t) model->hparams.lilicorr_candidate_topk : 0;
 }
 
 int32_t llama_model_dflash_n_target_layers(const struct llama_model * model) {
@@ -480,6 +489,26 @@ bool llama_set_dflash_target_features_view(
         const llama_pos * target_positions,
         const llama_dflash_window_update * window_update) {
     return llama_set_dflash_target_features_impl(ctx, target_features, n_floats, n_rows, target_positions, false, window_update);
+}
+
+bool llama_copy_dflash_lilicorr_anchor(const struct llama_context * ctx, float * dst, int32_t n) {
+    if (ctx == nullptr || dst == nullptr || n <= 0) {
+        return false;
+    }
+    const auto & anchor = ctx->dflash.lilicorr_anchor;
+    if ((int32_t) anchor.size() != n) {
+        return false;
+    }
+    std::memcpy(dst, anchor.data(), anchor.size()*sizeof(float));
+    return true;
+}
+
+
+bool llama_apply_dflash_target_features(struct llama_context * ctx) {
+    if (ctx == nullptr) {
+        return false;
+    }
+    return llama_dflash_apply_target_features(*ctx);
 }
 
 static bool llama_dflash_parse_layer_id(const struct ggml_tensor * tensor, int32_t & layer_id) {

@@ -102,6 +102,28 @@ struct common_speculative_state_dflash : public common_speculative_state {
     bool is_dspark = false;
     bool is_dsv4_dspark = false;
     bool is_dflash2 = false;
+    bool is_lilicorr = false;
+    // LiLiCorr acceptance guard: the lattice scores are calibrated confidences, so they decide
+    // how many drafts are worth proposing. Starts at 0 (no truncation), rises after a rejected
+    // block; the drafter is idle with n_max=0.
+    static constexpr float   kDraftPMinInit  = 0.00f;
+    static constexpr float   kDraftPMinMin   = 0.00f; // relaxation returns to "no truncation"
+    static constexpr float   kDraftPMinMax   = 0.90f; // cap for hard content
+    static constexpr float   kDraftPMinUp    = 0.15f; // per fully rejected block
+    static constexpr float   kDraftPMinDown  = 0.05f; // per accepted block
+    // Never skip a proposal: the draft state would fall behind the target window and acceptance
+    // collapses. Only the cutoff decides how much to propose.
+    static constexpr int32_t kDraftBackoffMax = 0;
+    static constexpr int32_t kAccWindow     = 24;    // draft tokens per acceptance window
+    static constexpr float   kAccRateResume = 0.50f; // above this the drafter is clearly earning its keep
+    int32_t draft_backoff = 0;   // draft attempts skipped after a fully rejected block
+    int32_t last_draft_n = 0;    // size of the block that is being verified
+    int32_t acc_window_acc = 0;  // accepted / drafted tokens since the last window decision
+    int32_t acc_window_draft = 0;
+    float   draft_p_min = kDraftPMinInit;
+    int32_t n_embd_dft = 0;
+    int32_t n_vocab_tgt = 0; // a lattice id beyond this would verify against a zero embedding
+    std::vector<float> lilicorr_state;
     bool ready = false;
 
     std::vector<common_speculative_token_dist> proposal_dists;
@@ -151,6 +173,9 @@ struct common_speculative_state_dflash : public common_speculative_state {
         if (llama_model_meta_val_str(model_dft, "dflash.selector_top_k", selector_top_k, sizeof(selector_top_k)) >= 0) {
             is_dflash2 = std::atoi(selector_top_k) > 0;
         }
+        char lilicorr_top_k[32] = {};
+        is_lilicorr = llama_model_meta_val_str(model_dft, "lilicorr.candidate_topk", lilicorr_top_k, sizeof(lilicorr_top_k)) >= 0 &&
+                std::atoi(lilicorr_top_k) > 0;
         const bool has_dspark_head = llama_model_dflash_has_dspark_head(model_dft);
         if (is_dspark != has_dspark_head) {
             LOG_ERR("%s: %s stage requires %s DSpark Markov tensors\n", __func__,
@@ -193,9 +218,11 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         const auto * vocab_tgt = llama_model_get_vocab(model_tgt);
         const int32_t target_vocab_size = llama_vocab_n_tokens(vocab_tgt);
+        n_vocab_tgt = target_vocab_size;
         const int32_t target_hidden_size = llama_model_n_embd(model_tgt);
         const int32_t draft_hidden_size = llama_model_n_embd(model_dft);
         const int32_t target_streams = is_dflash2 ? llama_model_dflash_target_streams(model_tgt) : 1;
+        n_embd_dft = draft_hidden_size;
         const int32_t target_mask_token_id = llama_model_dflash_target_mask_token_id(model_tgt);
         const int32_t expected_n_target_features = target_hidden_size > 0
                 ? target_hidden_size * target_streams * n_target_layers
@@ -297,6 +324,13 @@ struct common_speculative_state_dflash : public common_speculative_state {
         GGML_UNUSED(prompt);
         llama_kv_cache_clear(ctx_dft);
         llama_reset_dflash_kv_cache_state(ctx_dft);
+        // a new prompt starts from the permissive defaults, otherwise the previous prompt's
+        // backoff / strict threshold suppresses speculation for the first steps
+        draft_backoff = 0;
+        draft_p_min = kDraftPMinInit;
+        last_draft_n = 0;
+        acc_window_acc = 0;
+        acc_window_draft = 0;
         proposal_dists.clear();
         selector_rng_initialized = false;
         rebuild_count = 0;
@@ -331,10 +365,16 @@ struct common_speculative_state_dflash : public common_speculative_state {
         if (n_keep <= 0) {
             return;
         }
+        if (is_lilicorr && draft_backoff > 0) {
+            --draft_backoff;
+            result.clear();
+            batch.n_tokens = 0;
+            return;
+        }
 
         const float * target_features = nullptr;
         size_t target_feature_floats = 0;
-        const int32_t batch_len = is_dspark ? n_keep : n_keep + 1;
+        const int32_t batch_len = is_lilicorr ? block_size : (is_dspark ? n_keep : n_keep + 1);
         llama_dflash_window_update window_update = {
             target_window_version,
             target_window_keep_rows,
@@ -363,7 +403,9 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         llama_kv_cache_clear(ctx_dft);
         batch.n_tokens = 0;
-        const bool output_seed_row = is_dspark;
+        const bool output_seed_row = is_dspark || is_lilicorr;
+        // Mask rows are outputs too: a missing lattice must fall back to logits sampling instead
+        // of reading an empty logits buffer, which also keeps that tensor at n_tokens rows.
         const bool output_mask_rows = !is_dflash2;
         // id_last's true position is one past the newest committed feature row
         // (last_target_pos): seed there, masks follow. Mirrors mainline's
@@ -377,6 +419,33 @@ struct common_speculative_state_dflash : public common_speculative_state {
         }
 
         llama_set_dflash_want_logits(ctx_dft, params.p_min > 0.0f);
+        if (is_lilicorr && n_embd_dft > 0) {
+            // LiLiCorr: apply the target features NOW so the projected anchor exists before the
+            // draft decode (the decode's own lazy apply then finds the cache up to date)
+            if (!llama_apply_dflash_target_features(ctx_dft)) {
+                LOG_ERR("%s: failed to apply DFlash target features\n", __func__);
+                batch.n_tokens = 0;
+                return;
+            }
+            // every block token carries the projected anchor of the last committed position
+            std::vector<float> anchor((size_t) n_embd_dft);
+            if (!llama_copy_dflash_lilicorr_anchor(ctx_dft, anchor.data(), n_embd_dft)) {
+                LOG_ERR("%s: LiLiCorr anchor is not available\n", __func__);
+                batch.n_tokens = 0;
+                return;
+            }
+            lilicorr_state.resize((size_t) batch_len * (size_t) n_embd_dft);
+            for (int32_t i = 0; i < batch_len; ++i) {
+                std::memcpy(lilicorr_state.data() + (size_t) i * n_embd_dft, anchor.data(),
+                        (size_t) n_embd_dft * sizeof(float));
+            }
+            // feed the anchor through the existing draft hidden-state input (same channel as MTP)
+            if (!llama_set_draft_input_hidden_state_copy(ctx_dft, lilicorr_state.data(), lilicorr_state.size())) {
+                LOG_ERR("%s: failed to set the LiLiCorr draft hidden state\n", __func__);
+                batch.n_tokens = 0;
+                return;
+            }
+        }
 
         const int decode_status = llama_decode(ctx_dft, batch);
         if (cache_plan.rebuild_cache) {
@@ -394,6 +463,8 @@ struct common_speculative_state_dflash : public common_speculative_state {
             return;
         }
         const int32_t selector_top_k = llama_get_dflash_draft_lattice_top_k(ctx_dft);
+        LOG_DBG("%s: lattice top_k=%d n_positions=%d\n", __func__,
+                selector_top_k, llama_get_dflash_draft_lattice_n_positions(ctx_dft));
         if (selector_top_k > 0) {
             const int32_t n_positions = llama_get_dflash_draft_lattice_n_positions(ctx_dft);
             const int32_t n_positions_used = std::min(n_positions, n_keep + 1);
@@ -402,8 +473,9 @@ struct common_speculative_state_dflash : public common_speculative_state {
                 return;
             }
 
-            std::vector<float> scores((size_t) selector_top_k * selector_top_k * n_positions_used);
-            std::vector<int32_t> ids((size_t) selector_top_k * n_positions_used);
+            // the copy API transfers the full lattice: size for n_positions, walk only n_positions_used
+            std::vector<float> scores((size_t) selector_top_k * selector_top_k * n_positions);
+            std::vector<int32_t> ids((size_t) selector_top_k * n_positions);
             if (!llama_copy_dflash_draft_lattice(ctx_dft, scores.data(), scores.size(), ids.data(), ids.size())) {
                 LOG_ERR("%s: failed to copy DFlash2 selector lattice\n", __func__);
                 batch.n_tokens = 0;
@@ -419,10 +491,25 @@ struct common_speculative_state_dflash : public common_speculative_state {
             }
 
             int32_t predecessor = 0;
+            // Calibrated top-1 probability over the candidates: stop adding drafts below p_min,
+            // since a weak margin is almost always rejected and enlarges the verify pass.
+            const bool   lattice_guard  = is_lilicorr && params.p_min > 0.0f;
+            const float  lattice_p_min  = std::min(params.p_min, draft_p_min);
             for (int32_t pos = 1; pos < n_positions_used; ++pos) {
                 const float * row = scores.data() + (size_t) pos * selector_top_k * selector_top_k;
                 const float * path = row + (size_t) predecessor * selector_top_k;
 
+                if (n_vocab_tgt > 0) {
+                    // a draft vocab that is a superset of the target's can propose ids the target
+                    // has no embedding for; the verify row would be decoded from zeros
+                    bool in_range = true;
+                    for (int32_t k = 0; k < selector_top_k; ++k) {
+                        in_range = in_range && ids[(size_t) pos * selector_top_k + k] < n_vocab_tgt;
+                    }
+                    if (!in_range) {
+                        break;
+                    }
+                }
                 common_speculative_token_dist dist;
                 if (temperature > 0.0f) {
                     dist.ids.resize(selector_top_k);
@@ -445,15 +532,33 @@ struct common_speculative_state_dflash : public common_speculative_state {
                     }
                     std::discrete_distribution<int32_t> sample(dist.probs.begin(), dist.probs.end());
                     predecessor = sample(selector_rng);
+                    if (lattice_guard && dist.probs[(size_t) predecessor] < lattice_p_min) {
+                        break;
+                    }
                     result.push_back(dist.ids[(size_t) predecessor]);
                     proposal_dists.push_back(std::move(dist));
                 } else {
                     predecessor = (int32_t) std::distance(path,
                             std::max_element(path, path + selector_top_k));
+                    if (lattice_guard) {
+                        const int32_t best = predecessor;
+                        float runner_up = -INFINITY;
+                        for (int32_t k = 0; k < selector_top_k; ++k) {
+                            if (k != best && path[k] > runner_up) {
+                                runner_up = path[k];
+                            }
+                        }
+                        // softmax over the two leading candidates
+                        const float p1 = 1.0f/(1.0f + std::exp(runner_up - path[best]));
+                        if (p1 < lattice_p_min) {
+                            break;
+                        }
+                    }
                     result.push_back((llama_token) ids[(size_t) pos * selector_top_k + predecessor]);
                 }
             }
 
+            last_draft_n = (int32_t) result.size();
             generated_tokens += (uint64_t) result.size();
             batch.n_tokens = 0;
             return;
@@ -484,7 +589,42 @@ struct common_speculative_state_dflash : public common_speculative_state {
     }
 
     void accept(uint16_t n_accepted) override {
-        GGML_UNUSED(n_accepted);
+        // A fully rejected block means the content is off-distribution for the drafter: back off
+        // so decoding degrades to plain decode instead of costing throughput.
+        if (!is_lilicorr) {
+            GGML_UNUSED(n_accepted);
+            return;
+        }
+        // Asymmetric on purpose: a rejected block backs off at once, while relaxation waits for a
+        // window of good acceptance so one lucky block cannot swing it back.
+        if (n_accepted == 0) {
+            draft_backoff = std::min(draft_backoff + 1, kDraftBackoffMax/2);
+            // Only trim when there is something to trim. Escalating after a single rejected draft
+            // strangles the drafter: the walk then truncates at position 1, proposes one token,
+            // and the next escalation keeps it there (measured: 16 drafts over 122 calls).
+            if (last_draft_n > 1) {
+                draft_p_min = std::min(draft_p_min + kDraftPMinUp, kDraftPMinMax);
+            }
+        } else {
+            // Any accepted token is progress, so relax. Waiting for a whole window of good
+            // acceptance deadlocks: once the cutoff is strict the walk proposes almost nothing,
+            // the window never fills, and p_min stays at its cap - i.e. the drafter keeps paying
+            // for a forward pass while proposing one draft token per call.
+            draft_backoff = 0;
+            draft_p_min   = std::max(draft_p_min - 0.5f*kDraftPMinUp, kDraftPMinMin);
+        }
+
+        acc_window_acc   += n_accepted;
+        acc_window_draft += last_draft_n;
+        if (acc_window_draft < kAccWindow) {
+            return;
+        }
+        const float rate = (float) acc_window_acc / (float) acc_window_draft;
+        if (rate > kAccRateResume) {
+            draft_p_min = std::max(draft_p_min - kDraftPMinDown, kDraftPMinMin);
+        }
+        acc_window_acc   = 0;
+        acc_window_draft = 0;
     }
 };
 

@@ -215,6 +215,20 @@ struct llama_layer {
     struct ggml_tensor * dflash_ffn_conv_base = nullptr;
     struct ggml_tensor * dflash_ffn_conv_proj = nullptr;
 
+    struct ggml_tensor * lilicorr_attn_norm       = nullptr;
+    struct ggml_tensor * lilicorr_mlp_norm        = nullptr;
+    struct ggml_tensor * lilicorr_attn_in_proj    = nullptr;
+    struct ggml_tensor * lilicorr_attn_in_proj_b  = nullptr;
+    struct ggml_tensor * lilicorr_attn_out_proj   = nullptr;
+    struct ggml_tensor * lilicorr_attn_out_proj_b = nullptr;
+    struct ggml_tensor * lilicorr_attn_out_proj_s = nullptr;
+    struct ggml_tensor * lilicorr_mlp_0           = nullptr;
+    struct ggml_tensor * lilicorr_mlp_0_b         = nullptr;
+    struct ggml_tensor * lilicorr_mlp_0_s         = nullptr;
+    struct ggml_tensor * lilicorr_mlp_2           = nullptr;
+    struct ggml_tensor * lilicorr_mlp_2_b         = nullptr;
+    struct ggml_tensor * lilicorr_mlp_2_s         = nullptr;
+
     // attention bias
     struct ggml_tensor * bq = nullptr;
     struct ggml_tensor * bk = nullptr;
@@ -291,6 +305,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate = nullptr; // w1
     struct ggml_tensor * ffn_down = nullptr; // w2
     struct ggml_tensor * ffn_up = nullptr;   // w3
+    struct ggml_tensor * ffn_gate_s = nullptr; // per-tensor scale companion (ModelOpt exports)
+    struct ggml_tensor * ffn_down_s = nullptr;
+    struct ggml_tensor * ffn_up_s   = nullptr;
     struct ggml_tensor * ffn_gate_enc = nullptr;
     struct ggml_tensor * ffn_down_enc = nullptr;
     struct ggml_tensor * ffn_up_enc = nullptr;
@@ -558,10 +575,40 @@ struct llama_model {
     struct ggml_tensor * mtp_token_ordering = nullptr;
     struct ggml_tensor * mtp_centroids = nullptr;
     struct ggml_tensor * dflash_fc = nullptr;
+    struct ggml_tensor * dflash_fc_s = nullptr;
     struct ggml_tensor * dflash_hidden_norm = nullptr;
     struct ggml_tensor * dflash_selector_prev = nullptr;
     struct ggml_tensor * dflash_selector_next = nullptr;
     struct ggml_tensor * dflash_selector_hidden = nullptr;
+
+    struct ggml_tensor * lilicorr_token_proj          = nullptr;
+    struct ggml_tensor * lilicorr_token_proj_b        = nullptr;
+    struct ggml_tensor * lilicorr_token_proj_s        = nullptr;
+    struct ggml_tensor * lilicorr_pass_hidden_proj    = nullptr;
+    struct ggml_tensor * lilicorr_pass_hidden_proj_b  = nullptr;
+    struct ggml_tensor * lilicorr_pass_hidden_proj_s  = nullptr;
+    struct ggml_tensor * lilicorr_feature_norm        = nullptr;
+    struct ggml_tensor * lilicorr_feature_norm_b      = nullptr;
+    struct ggml_tensor * lilicorr_feature_mlp_1       = nullptr;
+    struct ggml_tensor * lilicorr_feature_mlp_1_b     = nullptr;
+    struct ggml_tensor * lilicorr_feature_mlp_3       = nullptr;
+    struct ggml_tensor * lilicorr_feature_mlp_3_b     = nullptr;
+    struct ggml_tensor * lilicorr_slot_embedding      = nullptr;
+    struct ggml_tensor * lilicorr_rank_embedding      = nullptr;
+    struct ggml_tensor * lilicorr_attention_bias      = nullptr;
+    struct ggml_tensor * lilicorr_context_proj        = nullptr;
+    struct ggml_tensor * lilicorr_context_proj_b      = nullptr;
+    struct ggml_tensor * lilicorr_context_proj_s      = nullptr;
+    struct ggml_tensor * lilicorr_output_norm         = nullptr;
+    struct ggml_tensor * lilicorr_anchor_norm         = nullptr;
+    struct ggml_tensor * lilicorr_factor_input_proj   = nullptr;
+    struct ggml_tensor * lilicorr_factor_input_proj_b = nullptr;
+    struct ggml_tensor * lilicorr_out_head            = nullptr;
+    struct ggml_tensor * lilicorr_out_head_b          = nullptr;
+    struct ggml_tensor * lilicorr_in_head             = nullptr;
+    struct ggml_tensor * lilicorr_in_head_b           = nullptr;
+    struct ggml_tensor * lilicorr_anchor_out_head     = nullptr;
+    struct ggml_tensor * lilicorr_anchor_out_head_b   = nullptr;
     std::vector<struct ggml_tensor *> dflash_aux_hidden_norms;
     struct ggml_tensor * dspark_markov_w1 = nullptr;
     struct ggml_tensor * dspark_markov_w2 = nullptr;

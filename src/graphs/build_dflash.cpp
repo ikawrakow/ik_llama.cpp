@@ -177,10 +177,15 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
         cb(target_features, "dflash_kv_normalized_target_features", -1);
     }
 
-    ggml_tensor * fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, target_features);
+    ggml_tensor * fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, target_features,
+            model.dflash_fc_s);
     fused_target = llm_build_norm(ctx0, fused_target, hparams,
             model.dflash_hidden_norm, nullptr, LLM_NORM_RMS, cb, -1);
     cb(fused_target, "dflash_kv_fused_target", -1);
+    if (hparams.lilicorr_candidate_topk > 0) {
+        lctx.dflash.lilicorr_proj_tensor = fused_target;
+        ggml_set_output(fused_target);
+    }
 
     if (hparams.dflash_dsv4) {
         const int64_t n_embd_head = hparams.n_embd_head_k(0);
@@ -427,6 +432,12 @@ ggml_cgraph * llm_build_context::build_dflash() {
     GGML_ASSERT(tok_embd != nullptr);
 
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, tok_embd, cb);
+    // LiLiCorr: the draft loop supplies the anchor through the shared draft hidden-state input
+    // (the same inp_mtp_states channel the MTP stages use).
+    ggml_tensor * inp_lilicorr_state = nullptr;
+    if (hparams.lilicorr_candidate_topk > 0 && n_tokens == (int64_t) hparams.dflash_block_size) {
+        inp_lilicorr_state = build_inp_mtp_states(hparams.n_embd);
+    }
     ggml_tensor * inp_pos = build_inp_pos();
     ggml_tensor * inp_out_ids = (!llm_arch_requires_all_graph_output_rows(model.arch) &&
             n_tokens > 1 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
@@ -441,7 +452,9 @@ ggml_cgraph * llm_build_context::build_dflash() {
         ggml_tensor * input_normed = cur;
 
         ggml_tensor * attn_dynamic = nullptr;
-        if (is_dflash2) {
+        // conv blocks exist whenever the drafter ships the conv tensors (LiLiCorr exports use
+        // arch "dflash" with conv, not only dflash2) - mirror mainline's tensor-presence gate
+        if (model.layers[il].dflash_attn_conv_proj) {
             attn_dynamic = llm_build_lora_mm(lctx, ctx0, model.layers[il].dflash_attn_conv_proj, cur);
             cur = build_dflash2_conv(*this, cur, attn_dynamic, model.layers[il].dflash_attn_conv_base, 0);
             cb(cur, "dflash2_attn_conv_in", il);
@@ -571,7 +584,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
         if (model.layers[il].bo) { cur = ggml_add(ctx0, cur, model.layers[il].bo); }
         cb(cur, "kqv_out", il);
 
-        if (is_dflash2) {
+        if (attn_dynamic) {
             cur = build_dflash2_conv(*this, cur, attn_dynamic, model.layers[il].dflash_attn_conv_base, 1);
             cb(cur, "dflash2_attn_conv_out", il);
         }
@@ -588,23 +601,30 @@ ggml_cgraph * llm_build_context::build_dflash() {
         ggml_tensor * ffn_dynamic = nullptr;
         if (is_dflash2) {
             cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
-            ffn_dynamic = llm_build_lora_mm(lctx, ctx0, model.layers[il].dflash_ffn_conv_proj, cur);
-            cur = build_dflash2_conv(*this, cur, ffn_dynamic, model.layers[il].dflash_ffn_conv_base, 0);
-            cb(cur, "dflash2_ffn_conv_in", il);
+            if (model.layers[il].dflash_ffn_conv_proj) {
+                ffn_dynamic = llm_build_lora_mm(lctx, ctx0, model.layers[il].dflash_ffn_conv_proj, cur);
+                cur = build_dflash2_conv(*this, cur, ffn_dynamic, model.layers[il].dflash_ffn_conv_base, 0);
+                cb(cur, "dflash2_ffn_conv_in", il);
+            }
         } else {
             cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_post_norm", il);
+            if (model.layers[il].dflash_ffn_conv_proj) {
+                ffn_dynamic = llm_build_lora_mm(lctx, ctx0, model.layers[il].dflash_ffn_conv_proj, cur);
+                cur = build_dflash2_conv(*this, cur, ffn_dynamic, model.layers[il].dflash_ffn_conv_base, 0);
+                cb(cur, "dflash2_ffn_conv_in", il);
+            }
         }
 
         cur = llm_build_ffn(ctx0, lctx, nullptr, cur,
-                model.layers[il].ffn_up, nullptr, nullptr,
-                model.layers[il].ffn_gate, nullptr, nullptr,
-                model.layers[il].ffn_down, nullptr, nullptr,
+                model.layers[il].ffn_up, nullptr, model.layers[il].ffn_up_s,
+                model.layers[il].ffn_gate, nullptr, model.layers[il].ffn_gate_s,
+                model.layers[il].ffn_down, nullptr, model.layers[il].ffn_down_s,
                 nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, false, false);
         cb(cur, "ffn_out", il);
 
-        if (is_dflash2) {
+        if (ffn_dynamic) {
             cur = build_dflash2_conv(*this, cur, ffn_dynamic, model.layers[il].dflash_ffn_conv_base, 1);
             cb(cur, "dflash2_ffn_conv_out", il);
         }
@@ -697,6 +717,13 @@ ggml_cgraph * llm_build_context::build_dflash() {
         lctx.dflash.draft_lattice_tensor = packed;
         lctx.dflash.draft_lattice_ids_tensor = candidates;
         lctx.dflash.draft_lattice_top_k = (int32_t) top_k;
+    } else if (model.lilicorr_pass_hidden_proj && inp_lilicorr_state &&
+               hparams.dflash_block_size > 0 && n_tokens == (int64_t) hparams.dflash_block_size) {
+        // LiLiCorr: correlation head over the top-k candidates; the anchor arrives through the
+        // shared draft hidden-state input (input rows = one anchor per block position)
+        ggml_tensor * pass_hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
+        build_lilicorr_lattice(lctx, ctx0, model, hparams, cb, gf, n_tokens, result, pass_hidden,
+                inp_lilicorr_state, tok_embd);
     }
 
     ggml_tensor * draft_tokens = nullptr;

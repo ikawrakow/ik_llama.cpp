@@ -1356,8 +1356,19 @@ common_speculative * common_speculative_init(
 
             const int32_t query_capacity = std::max(block_size, dsv4_dspark_query_capacity);
             const int32_t target_ctx = std::max<int32_t>(1, llama_n_ctx(ctx_tgt));
-            const int32_t requested_draft_ctx = cparams_dft.n_ctx > 0
+            int32_t requested_draft_ctx = cparams_dft.n_ctx > 0
                     ? (int32_t) cparams_dft.n_ctx : target_ctx;
+            // A sliding-window drafter cannot use more target context than its window: bound the
+            // default draft context to SWA + block so the injected feature window stays small and
+            // the cache is fully valid (LiLiCorr: 1024-token window, 4096+ ctx otherwise OOMs).
+            // params.n_ctx is the user's -cd value (0 = unset); cparams_dft.n_ctx already inherits
+            // the target context.
+            if (params.n_ctx <= 0 && llama_model_dflash_lilicorr_top_k(params.model_dft) > 0) {
+                const int32_t swa = llama_model_dflash_swa_window(params.model_dft);
+                if (swa > 0) {
+                    requested_draft_ctx = std::min(requested_draft_ctx, swa + block_size);
+                }
+            }
             const int32_t effective_draft_ctx = std::min(target_ctx, requested_draft_ctx);
             if (requested_draft_ctx > target_ctx) {
                 LOG_INF("%s: DFlash draft context %d exceeds target context %d, clamping to target capacity\n",

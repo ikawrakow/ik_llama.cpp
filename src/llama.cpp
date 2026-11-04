@@ -7851,7 +7851,9 @@ static int llama_decode_internal(
             gf = prev->graph;
         }
 
-        if (cparams.mtp_op_type != MTP_OP_NONE) {
+        // fill the draft hidden-state input (MTP stages and any draft graph that declares it,
+        // e.g. the LiLiCorr anchor)
+        if (cparams.mtp_op_type != MTP_OP_NONE || lctx.inp_mtp_states != nullptr) {
             if (!prepare_mtp_graph_inputs(lctx, cur_token, n_tokens, n_tokens_all)) {
                 return GGML_STATUS_FAILED;
             }
@@ -7992,7 +7994,8 @@ static int llama_decode_internal(
             }
         }
 
-        if (lctx.model.arch == LLM_ARCH_DFLASH2 && lctx.dflash.draft_lattice_tensor != nullptr &&
+        if ((lctx.model.arch == LLM_ARCH_DFLASH2 || lctx.model.hparams.lilicorr_candidate_topk > 0) &&
+                lctx.dflash.draft_lattice_tensor != nullptr &&
                 lctx.dflash.draft_lattice_ids_tensor != nullptr) {
             ggml_backend_t backend_lattice = ggml_backend_sched_get_tensor_backend(
                     lctx.sched, lctx.dflash.draft_lattice_tensor);

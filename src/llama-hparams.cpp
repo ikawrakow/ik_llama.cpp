@@ -2268,6 +2268,22 @@ void llm_load_hparams(
                     uint32_t target_hidden_size = 0;
                     ml.get_key("dflash.target_hidden_size", target_hidden_size, false);
                     ml.get_key(LLM_KV_TOKENIZER_MASK_ID, hparams.dflash_mask_token_id);
+                    const bool has_lilicorr = ml.get_key("lilicorr.hidden_size", hparams.lilicorr_hidden_size, false);
+                    ml.get_key("lilicorr.candidate_topk",  hparams.lilicorr_candidate_topk,   has_lilicorr);
+                    ml.get_key("lilicorr.num_heads",       hparams.lilicorr_num_heads,        has_lilicorr);
+                    ml.get_key("lilicorr.num_layers",      hparams.lilicorr_layers,           has_lilicorr);
+                    ml.get_key("lilicorr.vector_eps",      hparams.lilicorr_vector_eps,       has_lilicorr);
+                    ml.get_key("lilicorr.logit_scale",     hparams.lilicorr_logit_scale,      has_lilicorr);
+                    ml.get_key("lilicorr.factor_dim",      hparams.lilicorr_factor_dim,       has_lilicorr);
+                    ml.get_key("lilicorr.mlp_hidden_size", hparams.lilicorr_mlp_hidden_size,  has_lilicorr);
+                    if (has_lilicorr && (hparams.dflash_block_size < 2 || hparams.lilicorr_hidden_size == 0 ||
+                            hparams.lilicorr_num_heads == 0 || hparams.lilicorr_hidden_size % hparams.lilicorr_num_heads ||
+                            hparams.lilicorr_candidate_topk == 0 || hparams.lilicorr_layers == 0 ||
+                            hparams.lilicorr_factor_dim == 0 || hparams.lilicorr_mlp_hidden_size == 0 ||
+                            hparams.dflash_selector_top_k > 0 ||
+                            (uint64_t) hparams.lilicorr_candidate_topk * (hparams.lilicorr_candidate_topk + 1) > hparams.n_embd)) {
+                        throw std::runtime_error("invalid LiLiCorr DFlash metadata");
+                    }
                     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false);
                     load_dflash_target_layer_ids(ml, "dflash.target_layers", hparams, true);

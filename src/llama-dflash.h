@@ -5,3 +5,4 @@
 struct llama_context;
 
 bool llama_prepare_dflash_graph_inputs(llama_context & lctx, uint32_t n_tokens);
+bool llama_dflash_apply_target_features(llama_context & lctx);
