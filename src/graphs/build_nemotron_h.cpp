@@ -196,7 +196,7 @@ ggml_cgraph * llm_build_context::build_nemotron_h() {
                 }
 
                 const int64_t n_expert_il      = layer.ffn_up_exps->ne[2]; // per-layer expert count
-                const int64_t n_expert_used_il = (int64_t) hparams.n_expert_used;
+                const int64_t n_expert_used_il = (int64_t) hparams.n_expert_used_layer(il);
 
                 ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, inp_latent,
                         gate_inp,            nullptr,

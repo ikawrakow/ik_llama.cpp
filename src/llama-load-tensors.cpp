@@ -3454,14 +3454,26 @@ bool create_tensors_helper::create_nemotron_h_tensors(const LLM_TN & tn) {
             // ---- FFN layer ----
             if (n_expert > 0) {
                 // routed MoE (+ optional shared expert, + optional latent projections).
-                // NOTE: per-layer expert counts / latent projections for the newer
-                // "Puzzle"-style GGUFs are added with the Nemotron 3.5 targets.
-                const int64_t n_ff_exp   = hparams.n_ff_exp ? hparams.n_ff_exp : hparams.n_ff(i) / n_expert_used;
+                // The per-layer expert count is read from the router tensor metadata
+                // ("Puzzle"-style GGUFs have heterogeneous expert counts 240..496).
+                const auto * router_meta = ml.get_tensor_meta(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i).c_str());
+                const int64_t n_expert_layer = router_meta ? router_meta->ne[1] : n_expert;
+                if (n_expert_layer < hparams.n_expert_used_layer(i) || n_expert_layer > n_expert) {
+                    throw std::runtime_error("invalid per-layer expert count for Nemotron-H");
+                }
+                if (hparams.n_expert_used_layer(i) <= 0) {
+                    // would otherwise silently fall back to the global maximum and route too many
+                    // experts in this layer
+                    throw std::runtime_error("nemotron_h: layer " + std::to_string(i) +
+                            " has a router but no expert_used_count entry");
+                }
+                const int64_t n_ff_exp   = hparams.n_ff_exp_layer(i)
+                    ? hparams.n_ff_exp_layer(i) : hparams.n_ff(i) / hparams.n_expert_used_layer(i);
                 const int64_t n_ff_shexp = hparams.n_ff_shexp;
                 const int64_t moe_n_embd = hparams.moe_latent_size > 0 ? hparams.moe_latent_size : n_embd;
 
-                layer.ffn_gate_inp    = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert});
-                layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert},
+                layer.ffn_gate_inp    = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert_layer});
+                layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert_layer},
                                                       llama_model_loader::TENSOR_NOT_REQUIRED);
 
                 layer.ffn_latent_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_LATENT_DOWN, "weight", i), {n_embd, moe_n_embd},
@@ -3469,8 +3481,8 @@ bool create_tensors_helper::create_nemotron_h_tensors(const LLM_TN & tn) {
                 layer.ffn_latent_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_LATENT_UP,   "weight", i), {moe_n_embd, n_embd},
                                                       llama_model_loader::TENSOR_NOT_REQUIRED);
 
-                layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, moe_n_embd, n_expert});
-                layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {moe_n_embd, n_ff_exp, n_expert});
+                layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, moe_n_embd, n_expert_layer});
+                layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {moe_n_embd, n_ff_exp, n_expert_layer});
 
                 if (n_ff_shexp > 0) {
                     layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd});
