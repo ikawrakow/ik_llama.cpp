@@ -1,13 +1,10 @@
-// NVFP4 (type 40) self-test: quantize -> mul_mat round trip against the float reference.
-//
-// NVFP4 is a ModelOpt export format (64-value super-blocks, four UE4M3 scales of 16), so the
-// interesting properties are: the block geometry matches the GGUF layout, the round-to-nearest
-// quantizer lands in the right error band, and the dequantize + vec_dot path used by
-// ggml_mul_mat agrees with the float reference. Everything here is public ggml API.
+// NVFP4 (type 40) self-test: block layout, dot against the dequantized reference, and the
+// rows a quantizer must refuse.
 
 #include "ggml.h"
 
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +18,11 @@ static int n_fail = 0;
         n_fail++; \
     } \
 } while (0)
+
+// NaN must not be swallowed: `std::max(0.0, NaN)` is 0.0, so a NaN from the kernels would pass.
+static double worst_of(double acc, double d) {
+    return (d != d) ? std::numeric_limits<double>::infinity() : (d > acc ? d : acc);
+}
 
 int main() {
     const int64_t nrows = 4;
@@ -44,41 +46,88 @@ int main() {
             nrows, n, nullptr, nullptr);
     CHECK(written == (size_t) nrows * row_size);
 
-    // round trip through ggml_mul_mat: sum_j q[i][j] * 1 == row sum of the dequantized row
-    struct ggml_init_params ip = { 1024 * 1024, nullptr, false };
+    struct ggml_init_params ip = { 16 * 1024 * 1024, nullptr, false };
     struct ggml_context * ctx = ggml_init(ip);
 
     struct ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_NVFP4, n, nrows);
     memcpy(a->data, q.data(), q.size());
 
-    struct ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, 1);
+    // ---- check 1: mul_mat(A, ones) == sum of the dequantized row (dot vs dequantizer)
+    struct ggml_tensor * ones = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, 1);
     for (int64_t j = 0; j < n; ++j) {
-        ((float *) b->data)[j] = 1.0f;
+        ((float *) ones->data)[j] = 1.0f;
     }
-
-    struct ggml_tensor * out = ggml_mul_mat(ctx, a, b);
-    struct ggml_cgraph * gf  = ggml_new_graph(ctx);
-    ggml_build_forward_expand(gf, out);
+    struct ggml_tensor * dots = ggml_mul_mat(ctx, a, ones);
+    struct ggml_cgraph   * gf  = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, dots);
     ggml_graph_compute_with_ctx(ctx, gf, 4);
 
-    const float * got = (const float *) out->data;
-    double worst_rel = 0.0;
+    // per-row dequantization through get_rows (one graph per row)
+    std::vector<float> row_sum((size_t) nrows, 0.0f);
+    std::vector<float> row_amax((size_t) nrows, 0.0f);
+    double worst_dot_rel = 0.0;
+    double worst_rms_rel = 0.0;
     for (int64_t i = 0; i < nrows; ++i) {
-        double ref = 0.0;
-        for (int64_t j = 0; j < n; ++j) {
-            ref += src[(size_t) (i * n + j)];
-        }
-        const double rel = std::fabs((double) got[i] - ref) / (std::fabs(ref) + 1e-9);
-        worst_rel = std::max(worst_rel, rel);
-        if (rel > 0.02) {
-            fprintf(stderr, "row %3d: got %12.6f, reference %12.6f (%.3f%%)\n",
-                    (int) i, (double) got[i], ref, 100.0 * rel);
-        }
-    }
-    // 4-bit E2M1 with one scale per 16 values: per-element error averages out over 256 terms
-    CHECK(worst_rel < 0.02);
+        struct ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+        ((int32_t *) ids->data)[0] = (int32_t) i;
+        struct ggml_tensor * row = ggml_get_rows(ctx, a, ids);
 
-    // all-zero rows must stay exactly zero (the UE4M3 zero scale is special)
+        struct ggml_cgraph * g2 = ggml_new_graph(ctx);
+        ggml_build_forward_expand(g2, row);
+        ggml_graph_compute_with_ctx(ctx, g2, 4);
+
+        const float * deq = (const float *) row->data;
+        double sum = 0.0;
+        double se2 = 0.0;
+        float  amax = 0.0f;
+        for (int64_t j = 0; j < n; ++j) {
+            sum += deq[j];
+            const float d = deq[j] - src[(size_t) (i * n + j)];
+            se2 += (double) d * d;
+            if (std::fabs(src[(size_t) (i * n + j)]) > amax) {
+                amax = std::fabs(src[(size_t) (i * n + j)]);
+            }
+        }
+        row_sum[(size_t) i]  = (float) sum;
+        row_amax[(size_t) i] = amax;
+
+        const float got = ((const float *) dots->data)[i];
+        const double rel = std::fabs((double) got - sum) / (std::fabs(sum) + 1e-9);
+        worst_dot_rel = worst_of(worst_dot_rel, rel);
+        // rms error relative to the row's largest magnitude
+        worst_rms_rel = worst_of(worst_rms_rel, std::sqrt(se2 / (double) n) / (double) (amax + 1e-9));
+    }
+    // diagnostic: the same sum through a pure F32 matmul of the dequantized rows
+    struct ggml_tensor * af = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, nrows);
+    for (int64_t i = 0; i < nrows; ++i) {
+        struct ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+        ((int32_t *) ids->data)[0] = (int32_t) i;
+        struct ggml_tensor * row = ggml_get_rows(ctx, a, ids);
+        struct ggml_cgraph * g3 = ggml_new_graph(ctx);
+        ggml_build_forward_expand(g3, row);
+        ggml_graph_compute_with_ctx(ctx, g3, 4);
+        memcpy((char *) af->data + i * af->nb[1], row->data, n * sizeof(float));
+    }
+    struct ggml_tensor * df32 = ggml_mul_mat(ctx, af, ones);
+    struct ggml_cgraph * g4 = ggml_new_graph(ctx);
+    ggml_build_forward_expand(g4, df32);
+    ggml_graph_compute_with_ctx(ctx, g4, 4);
+    // the dot must also match the same rows summed through a plain F32 matmul of the
+    // dequantized values (a second, independent path through the same quantized bytes)
+    double worst_f32_rel = 0.0;
+    for (int64_t i = 0; i < nrows; ++i) {
+        const double a_i = ((const float *) dots->data)[i];
+        const double b_i = ((const float *) df32->data)[i];
+        worst_f32_rel = std::max(worst_f32_rel, std::fabs(a_i - b_i) / (std::fabs(b_i) + 1e-9));
+    }
+    CHECK(worst_f32_rel < 2e-3); // bf16 scale of the quantized activation
+
+    // the dot and the dequantizer must agree up to fp32 accumulation
+    CHECK(worst_dot_rel < 1e-4);
+    // E2M1 with one scale per 16 values: ~2-4% rms of the group amax in theory
+    CHECK(worst_rms_rel < 0.10); // E2M1 with per-16 scales: ~2-4% rms typical, 10% is a hard bound
+
+    // ---- check 2: all-zero rows stay exactly zero (the UE4M3 zero scale is special)
     std::vector<float> zeros((size_t) n, 0.0f);
     std::vector<uint8_t> qz(row_size);
     ggml_quantize_chunk(GGML_TYPE_NVFP4, zeros.data(), qz.data(), 0, 1, n, nullptr, nullptr);
@@ -88,12 +137,36 @@ int main() {
     }
     CHECK(all_zero);
 
+    // ---- check 3: a large-magnitude row stays in band
+    // amax/6 lands in [256, 448], which is exactly the range the UE4M3 exponent field 15 encodes;
+    // an early version saturated it to 448 and silently scaled the whole group by up to +75%.
+    {
+        std::vector<float> big((size_t) n, 0.0f);
+        for (int64_t j = 0; j < n; ++j) {
+            big[(size_t) j] = (j % 2 ? -1.0f : 1.0f) * (1800.0f * (float) (j + 1) / (float) n);
+        }
+        std::vector<uint8_t> qb(row_size);
+        std::vector<float> back((size_t) n, 0.0f);
+        ggml_quantize_chunk(GGML_TYPE_NVFP4, big.data(), qb.data(), 0, 1, n, nullptr, nullptr);
+        ggml_internal_get_type_traits(GGML_TYPE_NVFP4).to_float(qb.data(), back.data(), n);
+
+        float amax_back = 0.0f;
+        for (float v : back) {
+            amax_back = std::max(amax_back, std::fabs(v));
+        }
+        printf("NVFP4: amax 1800 -> %8.2f (%.2f%%)\n", (double) amax_back,
+                100.0 * ((double) amax_back - 1800.0) / 1800.0);
+        CHECK(std::fabs((double) amax_back - 1800.0) < 0.12 * 1800.0);
+    }
+
     ggml_free(ctx);
 
     if (n_fail == 0) {
-        printf("NVFP4: all checks passed (worst row-sum error %.4f%%)\n", 100.0 * worst_rel);
+        printf("NVFP4: checks passed (dot vs dequant %.1e, dot vs f32 %.1e, rms %.2f%% of amax)\n",
+                worst_dot_rel, worst_f32_rel, 100.0 * worst_rms_rel);
         return 0;
     }
-    fprintf(stderr, "NVFP4: %d check(s) failed\n", n_fail);
+    fprintf(stderr, "NVFP4: %d check(s) failed (dot %.1e, f32 %.1e, rms %.2f%%)\n",
+            n_fail, worst_dot_rel, worst_f32_rel, 100.0 * worst_rms_rel);
     return 1;
 }
