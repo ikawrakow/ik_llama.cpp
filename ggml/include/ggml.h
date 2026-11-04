@@ -2744,7 +2744,10 @@ extern "C" {
             struct ggml_tensor  * mask,
             struct ggml_tensor  * blk_idx,
             enum ggml_unary_op    op,
-            int                   n_top_k);
+            int                   n_top_k,
+            int                   group_size,
+            bool                  select_groups,
+            struct ggml_tensor  * top_k_out);
 
     // Sinkhorn normalization of a flat [S*S, T] batch of S x S matrices into
     // doubly-stochastic form: softmax over columns, then column normalization,

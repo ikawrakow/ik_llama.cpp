@@ -635,6 +635,8 @@ struct llama_context {
             std::vector<struct ggml_tensor *> lid_state_kv;
             std::vector<struct ggml_tensor *> lid_state_score;
 
+            struct ggml_tensor * cand_topk = nullptr;
+
             struct ggml_context * cache_ctx = nullptr;
             std::vector<ggml_backend_buffer_t> cache_bufs;
             uint32_t n_stream = 1;
