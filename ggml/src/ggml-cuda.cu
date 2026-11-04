@@ -54,6 +54,8 @@
 #include "ggml-cuda/set-rows.cuh"
 #include "ggml-cuda/solve_tri.cuh"
 #include "ggml-cuda/ssm-conv.cuh"
+#include "ggml-cuda/ssm-conv-m2.cuh"
+#include "ggml-cuda/ssm-scan.cuh"
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/multiadd.cuh"
 #include "ggml-cuda/hadamard.cuh"
@@ -4333,7 +4335,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_grouped_topk(ctx, dst);
             break;
         case GGML_OP_SSM_CONV:
-            ggml_cuda_op_ssm_conv(ctx, dst);
+            if (dst->src[3] == nullptr) {
+                // Mamba-2 layout (Nemotron-H etc.)
+                ggml_cuda_op_ssm_conv_m2(ctx, dst);
+            } else {
+                ggml_cuda_op_ssm_conv(ctx, dst);
+            }
+            break;
+        case GGML_OP_SSM_SCAN:
+            ggml_cuda_op_ssm_scan(ctx, dst);
             break;
         case GGML_OP_TRI:
             ggml_cuda_op_tri(ctx, dst);
@@ -5302,7 +5312,23 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                    op->src[0]->ne[2] == op->src[1]->ne[2] &&
                    op->src[0]->ne[3] == op->src[1]->ne[3];
         case GGML_OP_SSM_CONV:
-            return op->src[0]->type == GGML_TYPE_F32 &&
+            if (op->src[3] == nullptr) {
+                // Mamba-2 layout: sx = conv_x {d_conv - 1 + n_t, d_inner, n_s}, c = conv1d.weight.
+                // The kernel is instantiated for d_conv 3/4/5/9/15 and requires d_inner % 128 == 0;
+                // anything else has to run on the CPU instead of aborting in the launcher.
+                const int64_t nc = op->src[1]->ne[0];
+                const bool d_conv_ok = nc == 3 || nc == 4 || nc == 5 || nc == 9 || nc == 15;
+                return d_conv_ok &&
+                       op->src[0]->ne[1] % 128 == 0 &&
+                       op->src[0]->type == GGML_TYPE_F32 &&
+                       op->src[1]->type == GGML_TYPE_F32 &&
+                       op->type == GGML_TYPE_F32 &&
+                       op->src[0]->nb[0] == sizeof(float) &&
+                       op->src[1]->nb[0] == sizeof(float) &&
+                       op->src[0]->nb[1] == op->src[0]->ne[0] * sizeof(float);
+            }
+            return op->src[3] != nullptr &&
+                   op->src[0]->type == GGML_TYPE_F32 &&
                    op->src[1]->type == GGML_TYPE_F32 &&
                    op->src[2]->type == GGML_TYPE_F32 &&
                    op->src[3]->type == GGML_TYPE_I32 &&
@@ -5315,6 +5341,22 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                    op->src[2]->ne[1] == op->src[0]->ne[1] &&
                    op->src[1]->ne[0] == op->src[0]->ne[1] &&
                    op->src[3]->ne[0] == op->src[0]->ne[2];
+        case GGML_OP_SSM_SCAN: {
+            const int32_t K = ((const int32_t *) op->op_params)[0];
+            if (K < 1) {
+                return false; // legacy layout runs on the CPU
+            }
+            // Mamba-2 only (the kernel supports d_state 96/128/256 with d_head % 16 == 0).
+            // src[3] is A: the Mamba-2 layout is one scalar per head, and the launcher picks the
+            // kernel from exactly that shape - a legacy-layout scan (2-D A) would otherwise be
+            // claimed here and then abort inside the Mamba-1 branch instead of falling back.
+            if (op->src[3] == nullptr || op->src[3]->ne[0] != 1) {
+                return false;
+            }
+            const int64_t d_state = op->src[0]->ne[0];
+            return (d_state == 96 || d_state == 128 || d_state == 256) && op->src[0]->ne[1] % 16 == 0 &&
+                   op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        }
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
         case GGML_OP_MASK_TOPK:
