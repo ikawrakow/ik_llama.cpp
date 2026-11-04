@@ -1434,6 +1434,31 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
+            {
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // A layer is recurrent (SSM) iff it has no KV heads and no FFN.
+                // Attention layers: n_head_kv != 0, n_ff == 0. FFN layers: n_ff != 0.
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    hparams.recurrent_layer_arr[i] = (hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0);
+                }
+
+                switch (hparams.n_layer) {
+                    case 42: model.type = e_model::MODEL_4B;      break; // Nemotron 3 Nano 4B (dense)
+                    case 52: model.type = e_model::MODEL_30B_A3B; break; // Nemotron 3 Nano 30B-A3B
+                    case 56: model.type = e_model::MODEL_9B;      break; // Nemotron-H-9B
+                    case 88: model.type = e_model::MODEL_70B;     break; // Nemotron 3 Super / 3.5 class
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_XVERSE:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -2845,6 +2870,16 @@ void llm_load_hparams(
     if (hparams.f_max_alibi_bias > 0.0f) {
         hparams.use_alibi = true;
     }
+
+    // qwen3next-family packed recurrent state layout, kept as an explicit flag:
+    // Nemotron-H also has ssm_n_group > 0 but uses the standard Mamba-2 layout
+    // (conv state in the k-side row, d_state * d_inner recurrent state).
+    hparams.use_qnext_state_layout =
+        model.arch == LLM_ARCH_QWEN3NEXT ||
+        model.arch == LLM_ARCH_QWEN4EXP  ||
+        model.arch == LLM_ARCH_QWEN35MOE ||
+        model.arch == LLM_ARCH_QWEN35    ||
+        model.arch == LLM_ARCH_GLM5NEXT;
 
     hparams.rope_type = llama_rope_type(&model);
 }
