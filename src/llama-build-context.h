@@ -322,7 +322,7 @@ struct llm_build_context {
 
     ggml_cgraph * build_nemotron_h();
 
-    ggml_tensor * llm_build_nemotron_mamba2(ggml_cgraph * gf, ggml_tensor * cur, ggml_tensor * ssm_ids, int il);
+    ggml_tensor * build_nemotron_mamba2(ggml_cgraph * gf, ggml_tensor * cur, ggml_tensor * ssm_ids, int il);
 
     ggml_cgraph * build_command_r();
 

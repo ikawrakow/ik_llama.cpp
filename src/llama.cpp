@@ -1480,7 +1480,9 @@ static bool llama_kv_cache_init(
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
-        if (qnext_recurrent && !hparams.use_qnext_state_layout) {
+        // standard Mamba-2 layout: a rolling conv state exists (LFM2/LFM2MOE are recurrent
+        // too, but their state is the shortconv tail, so they fall through below)
+        if (qnext_recurrent && !hparams.use_qnext_state_layout && hparams.n_embd_k_s() > 0) {
             // standard Mamba-2 layout (Nemotron-H and friends): the rolling conv state
             // lives in the k-side slot, the recurrent SSM state in the s slot
             const uint32_t embd_r = hparams.n_embd_k_s();
