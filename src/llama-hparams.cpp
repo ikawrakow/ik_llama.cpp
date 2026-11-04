@@ -1394,8 +1394,17 @@ void llm_load_hparams(
 
                 // A layer is recurrent (SSM) iff it has no KV heads and no FFN.
                 // Attention layers: n_head_kv != 0, n_ff == 0. FFN layers: n_ff != 0.
+                uint32_t n_recurrent = 0;
                 for (uint32_t i = 0; i < hparams.n_layer; ++i) {
                     hparams.recurrent_layer_arr[i] = (hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0);
+                    n_recurrent += hparams.recurrent_layer_arr[i] ? 1 : 0;
+                }
+                if (n_recurrent == 0) {
+                    // a scalar attention.head_count_kv is replicated to every layer by the loader,
+                    // which would make every layer look like attention and fail much later with a
+                    // generic "missing tensor" error
+                    throw std::runtime_error("nemotron_h: no recurrent layers found - the GGUF must "
+                            "provide per-layer attention.head_count_kv / feed_forward_length");
                 }
 
                 switch (hparams.n_layer) {
