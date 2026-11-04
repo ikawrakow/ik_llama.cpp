@@ -1,0 +1,221 @@
+#include "../llama-build-context.h"
+#include "../llama-model.h"
+#include "../llama-context.h"
+
+// Nemotron-H: Mamba-2 + NoPE attention + relu^2 FFN, single sequence per context.
+// Ported from upstream llama.cpp (src/models/nemotron-h.cpp, mamba-base.cpp).
+
+ggml_tensor * llm_build_context::llm_build_nemotron_mamba2(ggml_cgraph * gf, ggml_tensor * cur, ggml_tensor * ssm_ids, int il) {
+    const auto & layer = model.layers[il];
+
+    const int64_t d_conv   = hparams.ssm_d_conv;
+    const int64_t d_inner  = hparams.ssm_d_inner;
+    const int64_t d_state  = hparams.ssm_d_state;
+    const int64_t n_head   = hparams.ssm_dt_rank;   // Mamba-2: dt_rank == n_ssm_heads
+    const int64_t head_dim = d_inner / n_head;
+    const int64_t n_group  = hparams.ssm_n_group;
+    const int64_t n_seqs   = ssm_ids->ne[0];
+    const int64_t n_seq_tokens = n_tokens / n_seqs;
+    const int64_t ch       = d_inner + 2 * n_group * d_state; // wide conv channel count
+
+    GGML_ASSERT(n_seqs == 1); // single-sequence path (matches the state slot allocation)
+    GGML_ASSERT(n_seq_tokens == n_tokens);
+    GGML_ASSERT(d_inner % n_head  == 0);
+    GGML_ASSERT(d_inner % n_group == 0);
+
+    // recurrent state: rolling conv state in k_l, SSM state in s_l
+    ggml_tensor * conv_states_all = kv_self.k_l[il]; // 2D {embd_r, slots}
+    ggml_tensor * ssm_states_all  = kv_self.s_l[il]; // 2D {embd_s, slots}
+    GGML_ASSERT(conv_states_all != nullptr && ssm_states_all != nullptr);
+    const int64_t state_slots = ssm_states_all->ne[1];
+    GGML_ASSERT((int64_t) conv_states_all->ne[0] == (d_conv - 1) * ch);
+    GGML_ASSERT((int64_t) conv_states_all->ne[1] == state_slots);
+    GGML_ASSERT((int64_t) ssm_states_all->ne[0] == d_state * d_inner);
+    GGML_ASSERT(state_slots == 1);
+
+    // conv state -> {d_conv - 1, ch, n_seqs}
+    ggml_tensor * conv = ggml_reshape_3d(ctx0, conv_states_all, d_conv - 1, ch, n_seqs);
+
+    // d_in_proj = 2 * d_inner + 2 * n_group * d_state + n_head
+    // {n_embd, d_in_proj} @ {n_embd, n_tokens} => {d_in_proj, n_tokens}
+    ggml_tensor * zxBCdt = llm_build_lora_mm(lctx, ctx0, layer.ssm_in, cur);
+    cb(zxBCdt, "ssm_in", il);
+
+    // split into z / xBC / dt
+    ggml_tensor * z   = ggml_view_2d(ctx0, zxBCdt, d_inner, n_tokens, zxBCdt->nb[1], 0);
+    ggml_tensor * xBC = ggml_view_3d(ctx0, zxBCdt, ch, n_tokens, 1, zxBCdt->nb[1], zxBCdt->nb[1]*n_tokens,
+                                     d_inner * ggml_element_size(zxBCdt));
+    ggml_tensor * dt  = ggml_view_2d(ctx0, zxBCdt, n_head, n_tokens, zxBCdt->nb[1],
+                                     (2 * d_inner + 2 * n_group * d_state) * ggml_element_size(zxBCdt));
+
+    // conv
+    {
+        // => {d_conv - 1 + n_seq_tokens, ch, n_seqs}
+        ggml_tensor * conv_x = ggml_concat(ctx0, conv, ggml_transpose(ctx0, xBC), 0);
+
+        // copy the last (d_conv - 1) columns back into the state cache
+        ggml_tensor * last_conv = ggml_view_3d(ctx0, conv_x, d_conv - 1, ch, n_seqs, conv_x->nb[1], conv_x->nb[2],
+                                               n_seq_tokens * conv_x->nb[0]);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_conv, ggml_view_1d(ctx0, conv_states_all, (d_conv - 1)*ch*n_seqs, 0)));
+
+        // 1D convolution over the sliding window (Mamba-2 layout)
+        xBC = ggml_ssm_conv(ctx0, conv_x, nullptr, layer.ssm_conv1d, nullptr, nullptr);
+        cb(xBC, "ssm_conv", il);
+
+        // bias
+        if (layer.ssm_conv1d_b) {
+            xBC = ggml_add(ctx0, xBC, layer.ssm_conv1d_b);
+        }
+
+        xBC = ggml_silu(ctx0, xBC);
+        cb(xBC, "ssm_xBC", il);
+    }
+
+    // ssm
+    {
+        ggml_tensor * x = ggml_view_4d(ctx0, xBC, head_dim, n_head, n_seq_tokens, n_seqs,
+                                       head_dim * xBC->nb[0], xBC->nb[1], xBC->nb[2], 0);
+        ggml_tensor * B = ggml_view_4d(ctx0, xBC, d_state, n_group, n_seq_tokens, n_seqs,
+                                       d_state * xBC->nb[0], xBC->nb[1], xBC->nb[2], d_inner * ggml_element_size(xBC));
+        ggml_tensor * C = ggml_view_4d(ctx0, xBC, d_state, n_group, n_seq_tokens, n_seqs,
+                                       d_state * xBC->nb[0], xBC->nb[1], xBC->nb[2], (d_inner + n_group*d_state) * ggml_element_size(xBC));
+
+        // {n_head, n_seq_tokens, n_seqs}
+        dt = ggml_reshape_3d(ctx0, ggml_cont(ctx0, dt), n_head, n_seq_tokens, n_seqs);
+        dt = ggml_add(ctx0, dt, layer.ssm_dt_b);
+
+        // states: {embd_s, slots} -> {d_state, head_dim, n_head, slots}
+        ggml_tensor * ssm = ggml_reshape_4d(ctx0, ssm_states_all, d_state, head_dim, n_head, state_slots);
+
+        struct ggml_tensor * y_ssm = ggml_ssm_scan(ctx0, ssm, x, dt, layer.ssm_a, B, C, ssm_ids, 1);
+        cb(y_ssm, "ssm_scan", il);
+
+        // write the new SSM state back into the cache slot
+        const int64_t d_ssm = d_state * d_inner;
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0,
+                ggml_view_1d(ctx0, y_ssm, d_ssm, ggml_nelements(x) * ggml_element_size(x)),
+                ggml_view_1d(ctx0, ssm_states_all, d_ssm, 0)));
+
+        // y = first nelements(x) values of y_ssm
+        ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_head, n_seq_tokens, n_seqs,
+                                       x->nb[1], n_head * x->nb[1], n_seq_tokens * n_head * x->nb[1], 0);
+
+        // y = y + x * D
+        y = ggml_add(ctx0, y, ggml_mul(ctx0, x, layer.ssm_d));
+
+        // y = swiglu(z, y)
+        y = ggml_swiglu_split(ctx0, ggml_reshape_4d(ctx0, ggml_cont(ctx0, z), head_dim, n_head, n_seq_tokens, n_seqs), y);
+
+        // grouped RMS norm
+        if (layer.ssm_norm) {
+            y = ggml_reshape_4d(ctx0, y, d_inner / n_group, n_group, n_seq_tokens, n_seqs);
+            y = llm_build_norm(ctx0, y, hparams, layer.ssm_norm, NULL, LLM_NORM_RMS, cb, il);
+        }
+
+        y = ggml_reshape_2d(ctx0, y, d_inner, n_seq_tokens * n_seqs);
+
+        // {d_inner, n_embd} @ {d_inner, n_tokens} => {n_embd, n_tokens}
+        cur = llm_build_lora_mm(lctx, ctx0, layer.ssm_out, y);
+    }
+
+    return cur;
+}
+
+ggml_cgraph * llm_build_context::build_nemotron_h() {
+    ggml_cgraph * gf = new_graph_custom();
+
+    struct ggml_tensor * cur;
+    struct ggml_tensor * inpL;
+
+    // {n_embd, n_tokens}
+    inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+    ggml_build_forward_expand(gf, inpL);
+
+    // source state ids for the ssm scan: one slot, filled with 0 at runtime
+    lctx.inp_ssm_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+    cb(lctx.inp_ssm_ids, "inp_ssm_ids", -1);
+    ggml_set_input(lctx.inp_ssm_ids);
+
+    // KQ_mask for the attention layers
+    struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
+
+    for (int il = 0; il < n_layer; ++il) {
+        struct ggml_tensor * inpSA = inpL;
+
+        // pre-block norm (shared by all three layer kinds)
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(cur, "attn_norm", il);
+
+        if (hparams.is_recurrent(il)) {
+            // SSM (mamba2) layer
+            cur = llm_build_nemotron_mamba2(gf, cur, lctx.inp_ssm_ids, il);
+        } else if (hparams.n_ff(il) == 0) {
+            // attention layer — no positional encoding
+            const int64_t n_embd_head = hparams.n_embd_head_k(il);
+            const int64_t n_head_il    = hparams.n_head(il);
+            const int64_t n_head_kv_il = hparams.n_head_kv(il);
+
+            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
+                    model.layers[il].wq, model.layers[il].bq,
+                    model.layers[il].wk, model.layers[il].bk,
+                    model.layers[il].wv, model.layers[il].bv,
+                    0, il);
+
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head_il,    n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv_il, n_tokens);
+            cb(Qcur, "Qcur", il);
+            cb(Kcur, "Kcur", il);
+
+            const float kq_scale = hparams.f_attention_scale == 0.0f
+                ? 1.0f / sqrtf(float(n_embd_head))
+                : hparams.f_attention_scale;
+
+            cur = llm_build_kv(ctx0, lctx, kv_self, gf,
+                    model.layers[il].wo, model.layers[il].bo,
+                    Kcur, Vcur, Qcur, KQ_mask,
+                    n_tokens, kv_head, n_kv, kq_scale, cb, il);
+            cb(cur, "attn_out", il);
+        } else {
+            // FFN layer: dense relu^2 (up/down only, no gate); MoE arrives with the
+            // Nemotron 3.5 targets
+            if (model.layers[il].ffn_gate_inp != nullptr) {
+                GGML_ABORT("nemotron_h_moe: expert FFN graph not implemented yet");
+            }
+
+            cur = llm_build_ffn(ctx0, lctx, /*ffn_norm*/ nullptr, cur,
+                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   nullptr,
+                    nullptr,                    nullptr,                    nullptr,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, nullptr,
+                    nullptr,
+                    LLM_FFN_RELU_SQR, LLM_FFN_PAR, cb, il);
+            cb(cur, "ffn_out", il);
+        }
+
+        if (il == n_layer - 1) {
+            // skip computing output for unused tokens
+            struct ggml_tensor * inp_out_ids = build_inp_out_ids();
+            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+        }
+
+        // residual
+        cur = ggml_add(ctx0, cur, inpSA);
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        cb(cur, "l_out", il);
+
+        // input for next layer
+        inpL = cur;
+    }
+
+    // final rmsnorm
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+    cb(cur, "result_norm", -1);
+
+    // lm_head
+    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cb(cur, "result_output", -1);
+
+    ggml_build_forward_expand(gf, cur);
+
+    return gf;
+}
