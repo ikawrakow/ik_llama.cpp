@@ -1449,6 +1449,12 @@ static bool llama_kv_cache_init(
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
+    if ((model.arch == LLM_ARCH_NEMOTRON_H || model.arch == LLM_ARCH_NEMOTRON_H_MOE) && cparams.n_seq_max > 1) {
+        LLAMA_LOG_ERROR("%s: %s keeps one recurrent state per context, so it supports a single sequence "
+                "(n_seq_max = %u). Use one context per sequence.\n",
+                __func__, llama_model_arch_string(&model), cparams.n_seq_max);
+        return false;
+    }
     const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams, kv_size);
     if (llm_arch_is_hybrid(model.arch) && qnext_state_slots < std::max<uint32_t>(1, cparams.n_seq_max)) {
         LLAMA_LOG_WARN("%s: reducing qwen3next state slots from %u to %u to fit KV cache size\n",
