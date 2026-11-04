@@ -5536,7 +5536,7 @@ uint16_t prune_iq4ks(uint16_t v, const int8_t * values, const float * x, const f
         uint8_t q = (v >> 4*j) & 0xf;
         q4[j] = q;
         auto pc = popcount(q);
-        float diff0 = dl*iq4k_values[q] - x[j];
+        float diff0 = dl*values[q] - x[j];
         int qmin = std::max(int(q)-2,  0);
         int qmax = std::min(int(q)+2, 15);
         for (int iq = qmin; iq <= qmax; ++iq) {
@@ -5623,7 +5623,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                         vm |= (best_index_iq4nl(values, -al) << 4*j);
                     }
                     vp = prune_iq4ks(vp, values, xv, wv,  this_d);
-                    vm = prune_iq4ks(vm, values, xv, wv,  this_d);
+                    vm = prune_iq4ks(vm, values, xv, wv, -this_d);
                     for (int j = 0; j < 4; ++j) {
                         float w = wv[j];
                         float q = values[(vp >> 4*j) & 0xf];
@@ -5663,7 +5663,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                         vm |= (best_index_iq4nl(shifted_values, -al) << 4*j);
                     }
                     vp = prune_iq4ks(vp, shifted_values, xv, wv,  this_d);
-                    vm = prune_iq4ks(vm, shifted_values, xv, wv,  this_d);
+                    vm = prune_iq4ks(vm, shifted_values, xv, wv, -this_d);
                     for (int j = 0; j < 4; ++j) {
                         float w = wv[j];
                         float q = shifted_values[(vp >> 4*j) & 0xf];
