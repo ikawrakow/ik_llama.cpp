@@ -79,6 +79,9 @@ void ggml_cuda_op_mul_mat_q(ggml_backend_cuda_context & ctx, enum ggml_type type
         case GGML_TYPE_MXFP4:
             mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
+        case GGML_TYPE_NVFP4:
+            mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
+            break;
         case GGML_TYPE_IQ2_KL:
             mul_mat_q_case<GGML_TYPE_IQ2_KL>(ctx, args, stream);
             break;
@@ -190,10 +193,17 @@ void ggml_cuda_op_mul_mat_q(
     GGML_UNUSED(src1_ddf_i);
 }
 
-bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
+bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t ne00) {
 #ifdef GGML_CUDA_FORCE_CUBLAS
     return false;
 #endif // GGML_CUDA_FORCE_CUBLAS
+
+    // NVFP4 holds 64 values per block and the MMQ tile loads 4 blocks (256 values) per K step,
+    // with no K-tail loader for this type: a row that is a multiple of 64 but not of 256 would
+    // read past it. Those widths take MMVQ, which bounds every thread itself.
+    if (type == GGML_TYPE_NVFP4 && ne00 % 256 != 0) {
+        return false;
+    }
 
     bool mmq_supported;
 
@@ -230,6 +240,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
         case GGML_TYPE_IQ2_KL:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ3_KS_R16:

@@ -7,6 +7,7 @@
 
 #include "convert.cuh"
 #include "dequantize.cuh"
+#include "nvfp4-cuda.cuh"
 
 #define CUDA_Q8_0_NE_ALIGN 2048
 
@@ -916,6 +917,31 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
         y[j+ 0] = d * kvalues_mxfp4[q4[j] & 0xf];
         y[j+16] = d * kvalues_mxfp4[q4[j] >>  4];
     }
+}
+
+template<typename dst_t>
+static __global__ void dequantize_block_nvfp4(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+
+    const int64_t i = blockIdx.x;
+    const block_nvfp4 * x = (const block_nvfp4 *) vx + i;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il = tid/8; // 0...3 sub-block
+    const int64_t ib = tid%8; // 0...7
+
+    dst_t * y = yy + i*QK_NVFP4 + 16*il + ib;
+    const uint8_t  * q4 = x->qs + 8*il;
+    const float d = ggml_cuda_ue4m3_to_fp32(x->d[il]);
+
+    y[0] = d * kvalues_mxfp4[q4[ib] & 0xf];
+    y[8] = d * kvalues_mxfp4[q4[ib] >>  4];
+}
+
+template<typename dst_t>
+static void dequantize_row_nvfp4_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
+    const int nb = k / QK_NVFP4;
+    dequantize_block_nvfp4<<<nb, 32, 0, stream>>>(vx, y);
 }
 
 template<typename dst_t>
@@ -2323,6 +2349,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq4_nl_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_NVFP4:
+            return dequantize_row_nvfp4_cuda;
         case GGML_TYPE_IQ4_XS:
             return dequantize_row_iq4_xs_cuda;
         case GGML_TYPE_IQ4_KS:
@@ -2436,6 +2464,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq4_nl_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_NVFP4:
+            return dequantize_row_nvfp4_cuda;
         case GGML_TYPE_IQ4_XS:
             return dequantize_row_iq4_xs_cuda;
         case GGML_TYPE_IQ4_KS:

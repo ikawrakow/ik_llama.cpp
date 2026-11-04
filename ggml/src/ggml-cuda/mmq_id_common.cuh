@@ -63,6 +63,7 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
         case GGML_TYPE_Q8_0:
             return MMQ_Q8_1_DS_LAYOUT_D4;
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
             return MMQ_Q8_1_DS_LAYOUT_D4;
         case GGML_TYPE_Q2_K:
             return MMQ_Q8_1_DS_LAYOUT_D2S6;
@@ -385,6 +386,7 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
         case GGML_TYPE_Q6_0    : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_Q8_0:    return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_MXFP4:   return MMQ_DP4A_TXS_Q8_1;
+        case GGML_TYPE_NVFP4:   return MMQ_DP4A_TXS_Q8_0_16;
         case GGML_TYPE_Q2_K:    return MMQ_DP4A_TXS_Q2_K;
         case GGML_TYPE_Q3_K:    return MMQ_DP4A_TXS_Q3_K;
         case GGML_TYPE_Q4_K:    return MMQ_DP4A_TXS_Q4_K;
@@ -459,6 +461,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_Q6_0:    return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_Q8_0:    return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_MXFP4:   return MMQ_MMA_TILE_X_K_Q8_1;
+        case GGML_TYPE_NVFP4:   return MMQ_MMA_TILE_X_K_Q3_K; // the 16-scale row layout
         case GGML_TYPE_Q2_K:    return MMQ_MMA_TILE_X_K_Q2_K;
         case GGML_TYPE_Q3_K:    return MMQ_MMA_TILE_X_K_Q3_K;
         case GGML_TYPE_Q4_K:    return MMQ_MMA_TILE_X_K_Q8_1;
@@ -1098,6 +1101,67 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #else
         x_df[i*(MMQ_TILE_NE_K/QI_MXFP4) + i/QI_MXFP4 + kbxd] = ggml_cuda_e8m0_to_fp32(bxi->e)*0.5f;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
+    }
+}
+
+// NVFP4: 64-element blocks with 4 UE4M3 sub-scales (one per 16 values), so it uses the
+// 16-scale row layouts like IQ2_XS/Q3_K (MMQ_MMA_TILE_X_K_Q3_K / MMQ_DP4A_TXS_Q8_0_16).
+// Same body as load_tiles_nvfp4 in mmq.cuh (the dense MMQ path); only the warp size and
+// the warp count are the ones of this file.
+template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_nvfp4(
+    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride, [[maybe_unused]] int blocks_per_ne00) {
+    constexpr int nwarps = mmq_get_nwarps_device();
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + MMQ_TILE_NE_K*2);
+    constexpr int x_row = MMQ_MMA_TILE_X_K_Q3_K;
+#else
+    constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q8_0_16;
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + txs.qs);
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
+
+    // A 256-element K-chunk holds 4 nvfp4 blocks; 4 threads per block (tx%4 picks the
+    // block, 16*block = the 64-value slot, 4*block = the 4 sub-block scales).
+    // 8 threads per row (tx/4) -> 8 rows per warp per pass, matching the other
+    // 16-scale loaders (load_tiles_iq2_xs) and the dense nvfp4 loader.
+    constexpr int nblk = MMQ_ITER_K / QK_NVFP4;   // 4 nvfp4 blocks per 256-element K-chunk
+    constexpr int rows_per_warp = warp_size / nblk;
+    const int kbx = threadIdx.x % nblk;
+    const int kqs = 16*kbx;
+    const int ksc =  4*kbx;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps*rows_per_warp) {
+        int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/nblk;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_nvfp4 * bxi = (const block_nvfp4 *)(x + i*stride) + kbx0 + kbx;
+        const uint32_t * __restrict__ src_qs = (const uint32_t *) bxi->qs;
+
+#pragma unroll
+        for (int sub = 0; sub < QK_NVFP4 / QK_NVFP4_SUB; ++sub) {
+            const int2 q0 = get_int_from_table_16(src_qs[2*sub + 0], kvalues_mxfp4);
+            const int2 q1 = get_int_from_table_16(src_qs[2*sub + 1], kvalues_mxfp4);
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
+            x_qs[i*x_row + kqs + 4*sub + 0] = q0.x;
+            x_qs[i*x_row + kqs + 4*sub + 1] = q1.x;
+            x_qs[i*x_row + kqs + 4*sub + 2] = q0.y;
+            x_qs[i*x_row + kqs + 4*sub + 3] = q1.y;
+            x_df[i*x_row + ksc + sub] = ggml_cuda_ue4m3_to_fp32(bxi->d[sub]);
+#else
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + kqs + 4*sub + 0] = q0.x;
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + kqs + 4*sub + 1] = q1.x;
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + kqs + 4*sub + 2] = q0.y;
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + kqs + 4*sub + 3] = q1.y;
+            x_df[i*(2*MMQ_TILE_NE_K*2/QI8_0) + i/(QI8_0/4) + ksc + sub] = ggml_cuda_ue4m3_to_fp32(bxi->d[sub]);
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
+        }
     }
 }
 
@@ -3605,6 +3669,14 @@ struct mmq_type_traits_id<mmq_x, mmq_y, need_check, GGML_TYPE_MXFP4> {
 };
 
 template <int mmq_x, int mmq_y, bool need_check>
+struct mmq_type_traits_id<mmq_x, mmq_y, need_check, GGML_TYPE_NVFP4> {
+    //static constexpr int              vdr          = VDR_NVFP4_Q8_1_MMQ;
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_nvfp4<mmq_y, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y>;
+};
+
+template <int mmq_x, int mmq_y, bool need_check>
 struct mmq_type_traits_id<mmq_x, mmq_y, need_check, GGML_TYPE_Q2_K> {
     //static constexpr int              vdr          = VDR_Q2_K_Q8_1_MMQ;
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q2_K<mmq_y, need_check>;
@@ -4464,6 +4536,7 @@ extern DECL_MMQ_CASE(GGML_TYPE_Q5_1);
 extern DECL_MMQ_CASE(GGML_TYPE_Q6_0);
 extern DECL_MMQ_CASE(GGML_TYPE_Q8_0);
 extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
+extern DECL_MMQ_CASE(GGML_TYPE_NVFP4);
 extern DECL_MMQ_CASE(GGML_TYPE_Q2_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q3_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q4_K);

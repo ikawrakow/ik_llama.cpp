@@ -164,6 +164,9 @@ static void ggml_cuda_mul_mat_q_switch_type_id(ggml_backend_cuda_context & ctx, 
         case GGML_TYPE_MXFP4:
             mul_mat_q_case_id<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
+        case GGML_TYPE_NVFP4:
+            mul_mat_q_case_id<GGML_TYPE_NVFP4>(ctx, args, stream);
+            break;
         case GGML_TYPE_Q2_K:
             mul_mat_q_case_id<GGML_TYPE_Q2_K>(ctx, args, stream);
             break;
@@ -510,7 +513,7 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
     ggml_cuda_mul_mat_q_switch_type_id(ctx, args, stream);
 }
 
-bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
+bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11, int64_t ne00) {
     bool mmq_supported;
 
     switch (type) {
@@ -521,6 +524,7 @@ bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
         case GGML_TYPE_Q6_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -568,6 +572,14 @@ bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
     }
 
     if (!mmq_supported) {
+        return false;
+    }
+
+    // same rule as the dense path (ggml_cuda_should_use_mmq): NVFP4's blocks are 64 values and the
+    // MMQ tile loads four of them per K step with no K-tail loader, so a row that is a multiple of
+    // 64 but not of 256 would read past it. Keeping the policy in one place matters: this entry
+    // point used to accept those widths while the dense path refused them.
+    if (type == GGML_TYPE_NVFP4 && ne00 % 256 != 0) {
         return false;
     }
 

@@ -203,6 +203,8 @@ static_assert(sizeof(block_mxfp4) == sizeof(uint8_t) + QK_MXFP4/2, "wrong mxfp4 
 // scale. Same layout as mainline (so NVIDIA NVFP4 GGUFs load).
 #define QK_NVFP4 64
 #define QK_NVFP4_SUB 16  // sub-block size for per-group scales
+#define QR_NVFP4 2
+#define QI_NVFP4 (QK_NVFP4 / (4 * QR_NVFP4))
 typedef struct {
     uint8_t d[QK_NVFP4/QK_NVFP4_SUB]; // UE4M3 scales (4 bytes, one per 16-element sub-block)
     uint8_t qs[QK_NVFP4/2];           // packed 4-bit E2M1 values (32 bytes)

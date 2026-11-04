@@ -87,6 +87,7 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
         case GGML_TYPE_Q2_0:
         case GGML_TYPE_PQ2_0:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
         case GGML_TYPE_IQ2_KS:
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ2_K_R4:
@@ -217,6 +218,7 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
         case GGML_TYPE_Q2_0    : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_PQ2_0   : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_MXFP4   : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_NVFP4   : return MMQ_DP4A_TXS_Q8_0_16;
         case GGML_TYPE_IQ2_KL  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ3_KS  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ3_KS_R16: return MMQ_DP4A_TXS_Q8_0;
@@ -282,6 +284,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_Q2_0    : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_PQ2_0   : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_MXFP4   : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_NVFP4   : return MMQ_MMA_TILE_X_K_Q3_K; // the 16-scale row layout
         case GGML_TYPE_IQ2_KL  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ3_KS  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ3_KS_R16: return MMQ_MMA_TILE_X_K_Q8_0;
@@ -2353,6 +2356,64 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     }
 }
 
+// NVFP4: 64-element blocks, UE4M3 sub-scales. MMA and dp4a layouts use the 16-scale
+// ("_16") row conventions (see MMQ_MMA_TILE_X_K_Q3_K / MMQ_DP4A_TXS_Q8_0_16),
+// matching vec_dot_q8_0_16_q8_1_{mma,dp4a}.
+template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_nvfp4(
+    const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, [[maybe_unused]] int blocks_per_ne00) {
+
+#ifdef INT8_MMA_AVAILABLE
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + WARP_SIZE*2);
+    constexpr int x_row = MMQ_MMA_TILE_X_K_Q3_K;
+#else
+    constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q8_0_16;
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + txs.qs);
+#endif // INT8_MMA_AVAILABLE
+
+    // a 256-element K-chunk holds 4 nvfp4 blocks; 4 threads per block (tx%4 picks the
+    // block, 16*block = the 64-value slot, 4*block = the 4 sub-block scales).
+    // 8 threads per row (tx/4) -> 8 rows per warp per pass, matching the other
+    // 16-scale loaders (load_tiles_iq2_xs) and mainline's nvfp4 loader.
+    constexpr int nblk = WARP_SIZE/8;             // 4 nvfp4 blocks per 256-element K-chunk
+    constexpr int rows_per_warp = WARP_SIZE/nblk; // 8 rows per warp per pass
+    const int kbx = threadIdx.x % nblk;
+    const int kqs = 16*kbx;
+    const int ksc =  4*kbx;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps*rows_per_warp) {
+        int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/nblk;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_nvfp4 * bxi = (const block_nvfp4 *)(x + i*stride) + kbx0 + kbx;
+        const uint32_t * __restrict__ src_qs = (const uint32_t *) bxi->qs;
+
+#pragma unroll
+        for (int sub = 0; sub < QK_NVFP4 / QK_NVFP4_SUB; ++sub) {
+            const int2 q0 = get_int_from_table_16(src_qs[2*sub + 0], kvalues_mxfp4);
+            const int2 q1 = get_int_from_table_16(src_qs[2*sub + 1], kvalues_mxfp4);
+#ifdef INT8_MMA_AVAILABLE
+            x_qs[i*x_row + kqs + 4*sub + 0] = q0.x;
+            x_qs[i*x_row + kqs + 4*sub + 1] = q1.x;
+            x_qs[i*x_row + kqs + 4*sub + 2] = q0.y;
+            x_qs[i*x_row + kqs + 4*sub + 3] = q1.y;
+            x_df[i*x_row + ksc + sub] = ggml_cuda_ue4m3_to_fp32(bxi->d[sub]);
+#else
+            x_qs[i*(2*WARP_SIZE + 1) + kqs + 4*sub + 0] = q0.x;
+            x_qs[i*(2*WARP_SIZE + 1) + kqs + 4*sub + 1] = q1.x;
+            x_qs[i*(2*WARP_SIZE + 1) + kqs + 4*sub + 2] = q0.y;
+            x_qs[i*(2*WARP_SIZE + 1) + kqs + 4*sub + 3] = q1.y;
+            x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + ksc + sub] = ggml_cuda_ue4m3_to_fp32(bxi->d[sub]);
+#endif // INT8_MMA_AVAILABLE
+        }
+    }
+}
+
 template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq2_xxs(
     const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, [[maybe_unused]] int blocks_per_ne00) {
 
@@ -4413,6 +4474,13 @@ struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ4_XS> {
 };
 
 template <int mmq_x, int mmq_y, int nwarps, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_NVFP4> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_nvfp4<mmq_y, nwarps, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y, nwarps>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
+};
+
+template <int mmq_x, int mmq_y, int nwarps, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ2_K> {
     static constexpr bool             requant      = mmq_x >= 48;
     static constexpr load_tiles_mmq_t load_tiles   = requant ? load_tiles_iq2_k_q8<mmq_y, nwarps, need_check>
@@ -5008,6 +5076,7 @@ extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NL);
 extern DECL_MMQ_CASE(GGML_TYPE_Q2_0);
 extern DECL_MMQ_CASE(GGML_TYPE_PQ2_0);
 extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
+extern DECL_MMQ_CASE(GGML_TYPE_NVFP4);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ2_KL);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ3_KS);
@@ -5045,4 +5114,4 @@ void ggml_cuda_op_mul_mat_q(
 
 void ggml_cuda_op_mul_mat_q(ggml_backend_cuda_context & ctx, enum ggml_type type, const mmq_args & args);
 
-bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11);
+bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t ne00);
