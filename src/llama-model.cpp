@@ -3028,7 +3028,8 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
         const size_t state_width = hparams.use_qnext_state_layout
             ? hparams.recurrent_state_layout_for((uint32_t) il).row_width
-            : hparams.n_embd_v_s() + hparams.n_embd_ple_conv((uint32_t) il);
+            // standard Mamba-2 keeps the rolling conv state in k_l in addition to s_l
+            : hparams.n_embd_v_s() + hparams.n_embd_ple_conv((uint32_t) il) + hparams.n_embd_k_s();
         return state_width * (size_t) state_sots * sizeof(float);
     }
     if (arch == LLM_ARCH_OPENPANGU) {
