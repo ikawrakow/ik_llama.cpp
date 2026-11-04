@@ -338,6 +338,7 @@ struct llama_hparams {
         if (this->ssm_d_state != other.ssm_d_state) return true;
         if (this->ssm_dt_rank != other.ssm_dt_rank) return true;
         if (this->ssm_n_group != other.ssm_n_group) return true;
+        if (this->use_qnext_state_layout != other.use_qnext_state_layout) return true;
         if (this->kda_safe_gate != other.kda_safe_gate) return true;
         if (this->recurrent_layer_arr != other.recurrent_layer_arr) return true;
         for (int i = 0; i < 8; ++i) {
@@ -438,22 +439,31 @@ struct llama_hparams {
         return n_head_kv(il) * n_embd_head_v(il);
     }
 
+    // Recurrent state layout discriminator: the qnext family (Qwen3.5 DeltaNet) packs all recurrent
+    // state into the V-cache tail, while the standard Mamba family keeps the rolling conv state
+    // separate and reports it through n_embd_k_s(). Nemotron-H has ssm_n_group > 0, so the old
+    // 'ssm_n_group > 0' marker is ambiguous; this flag disambiguates. Set at the end of
+    // llm_load_hparams, default false.
+    bool use_qnext_state_layout = false;
+
     uint32_t n_embd_k_s() const { // dimension of the rolling state embeddings
-        if (ssm_n_group > 0) {
+        if (use_qnext_state_layout) {
             // qwen3next keeps all recurrent state in the V-cache tail
             return 0;
         }
         // corresponds to Mamba's conv_states size
         // TODO: maybe support other convolution strides than 1
         // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
-        return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * ssm_d_inner;
+        //   Mamba-1 :  n_group = 0  =>  (d_conv - 1) * d_inner
+        //   Mamba-2 / Nemotron-H:  (d_conv - 1) * (d_inner + 2*n_group*d_state)
+        return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2 * ssm_n_group * ssm_d_state);
     }
 
     uint32_t n_embd_v_s() const { // dimension of the recurrent state embeddings
         if (n_shortconv_l_cache > 0) {
             return (n_shortconv_l_cache - 1) * n_embd;
         }
-        if (ssm_n_group > 0) {
+        if (use_qnext_state_layout) {
             // qwen3next recurrent state packs:
             // 1) conv state: (d_conv - 1) * (2 * key_dim + value_dim)
             // 2) delta-net state: head_v_dim * head_v_dim * num_v_heads
@@ -465,7 +475,7 @@ struct llama_hparams {
             const uint32_t ssm_state_dim  = head_v_dim * head_v_dim * ssm_dt_rank;
             return conv_state_dim + ssm_state_dim;
         }
-        // corresponds to Mamba's ssm_states size
+        // corresponds to Mamba's ssm_states size (Mamba-1/2, Nemotron-H)
         return ssm_d_state * ssm_d_inner;
     }
 

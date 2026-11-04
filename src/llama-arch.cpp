@@ -50,6 +50,8 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA3,          "gemma3"       },
     { LLM_ARCH_STARCODER2,      "starcoder2"   },
     { LLM_ARCH_MAMBA,           "mamba"        },
+    { LLM_ARCH_NEMOTRON_H,      "nemotron_h"   },
+    { LLM_ARCH_NEMOTRON_H_MOE,  "nemotron_h_moe" },
     { LLM_ARCH_XVERSE,          "xverse"       },
     { LLM_ARCH_COMMAND_R,       "command-r"    },
     { LLM_ARCH_DBRX,            "dbrx"         },
@@ -391,6 +393,8 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_LFM2:
     case LLM_ARCH_LFM2MOE:
     case LLM_ARCH_RAON1:
+    case LLM_ARCH_NEMOTRON_H:
+    case LLM_ARCH_NEMOTRON_H_MOE:
         return true;
     default:
         return false;

@@ -124,6 +124,7 @@ void llm_build_context::init() {
         lctx.inp_s_mask      = nullptr;
         lctx.inp_s_seq       = nullptr;
         lctx.inp_s_seq_qnext = nullptr;
+        lctx.inp_ssm_ids     = nullptr;
         lctx.inp_pos_bucket    = nullptr;
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
@@ -3168,6 +3169,11 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_MAMBA:
             {
                 result = llm.build_mamba();
+            } break;
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
+            {
+                result = llm.build_nemotron_h();
             } break;
         case LLM_ARCH_XVERSE:
             {
