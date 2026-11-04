@@ -1445,6 +1445,12 @@ void llm_load_hparams(
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp,             false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp,           false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm,  false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_MOE_LATENT_SIZE,                   hparams.moe_latent_size,      false);
+
                 // A layer is recurrent (SSM) iff it has no KV heads and no FFN.
                 // Attention layers: n_head_kv != 0, n_ff == 0. FFN layers: n_ff != 0.
                 for (uint32_t i = 0; i < hparams.n_layer; ++i) {
