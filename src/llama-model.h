@@ -335,6 +335,8 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_shexp = nullptr;
     struct ggml_tensor * ffn_down_shexp = nullptr;
     struct ggml_tensor * ffn_up_shexp = nullptr;
+    struct ggml_tensor * ffn_latent_down = nullptr;
+    struct ggml_tensor * ffn_latent_up = nullptr;
 
     // K2 Horizon MoVA
     struct ggml_tensor * attn_v_gate   = nullptr;
