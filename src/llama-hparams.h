@@ -47,6 +47,10 @@ struct llama_hparams {
     uint32_t n_embd_head_v_swa;
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
+    // per-layer expert settings for heterogeneous-MoE models (Nemotron "Puzzle");
+    // 0 entries fall back to the scalars above
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_expert_used_arr = {};
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_exp_arr      = {};
     uint32_t n_vocab_type = 0; // for BERT-style token types
     uint32_t n_rel_attn_bkts = 0;
 
@@ -506,6 +510,15 @@ struct llama_hparams {
 
     bool is_recurrent(uint32_t il) const {
         return il < n_layer ? recurrent_layer_arr[il] : false;
+    }
+
+    // per-layer expert settings: prefer the array when present
+    int32_t n_expert_used_layer(uint32_t il) const {
+        return il < n_layer && n_expert_used_arr[il] > 0 ? (int32_t) n_expert_used_arr[il] : (int32_t) n_expert_used;
+    }
+
+    int32_t n_ff_exp_layer(uint32_t il) const {
+        return il < n_layer && n_ff_exp_arr[il] > 0 ? (int32_t) n_ff_exp_arr[il] : (int32_t) n_ff_exp;
     }
 
     bool is_ple(uint32_t il) const {

@@ -332,6 +332,8 @@ struct llama_layer {
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
     struct ggml_tensor * ffn_gate_shexp = nullptr;
+    struct ggml_tensor * ssm_in_s    = nullptr; // per-tensor scale (NVFP4 GGUFs)
+    struct ggml_tensor * ssm_out_s   = nullptr; // per-tensor scale (NVFP4 GGUFs)
     struct ggml_tensor * ffn_down_shexp = nullptr;
     struct ggml_tensor * ffn_up_shexp = nullptr;
     struct ggml_tensor * ffn_latent_down = nullptr;

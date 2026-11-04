@@ -39,6 +39,9 @@ ggml_tensor * llm_build_context::llm_build_nemotron_mamba2(ggml_cgraph * gf, ggm
     // d_in_proj = 2 * d_inner + 2 * n_group * d_state + n_head
     // {n_embd, d_in_proj} @ {n_embd, n_tokens} => {d_in_proj, n_tokens}
     ggml_tensor * zxBCdt = llm_build_lora_mm(lctx, ctx0, layer.ssm_in, cur);
+    if (layer.ssm_in_s) {
+        zxBCdt = ggml_mul(ctx0, zxBCdt, layer.ssm_in_s);
+    }
     cb(zxBCdt, "ssm_in", il);
 
     // split into z / xBC / dt
@@ -116,6 +119,9 @@ ggml_tensor * llm_build_context::llm_build_nemotron_mamba2(ggml_cgraph * gf, ggm
 
         // {d_inner, n_embd} @ {d_inner, n_tokens} => {n_embd, n_tokens}
         cur = llm_build_lora_mm(lctx, ctx0, layer.ssm_out, y);
+        if (layer.ssm_out_s) {
+            cur = ggml_mul(ctx0, cur, layer.ssm_out_s);
+        }
     }
 
     return cur;
@@ -196,7 +202,7 @@ ggml_cgraph * llm_build_context::build_nemotron_h() {
                 }
 
                 const int64_t n_expert_il      = layer.ffn_up_exps->ne[2]; // per-layer expert count
-                const int64_t n_expert_used_il = (int64_t) hparams.n_expert_used;
+                const int64_t n_expert_used_il = (int64_t) hparams.n_expert_used_layer(il);
 
                 ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, inp_latent,
                         gate_inp,            nullptr,
