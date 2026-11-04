@@ -1,4 +1,5 @@
 #include "common.h"
+#include "speculative.h"
 #include "llama.h"
 
 #include <cmath>
@@ -69,18 +70,36 @@ int main(int argc, char ** argv) {
     llama_init_result llama_init_tgt = llama_init_from_gpt_params(params);
     model_tgt = llama_init_tgt.model;
     ctx_tgt = llama_init_tgt.context;
+    if (model_tgt == nullptr || ctx_tgt == nullptr) {
+        fprintf(stderr, "%s: failed to initialize target model/context\n", __func__);
+        if (ctx_tgt != nullptr) llama_free(ctx_tgt);
+        if (model_tgt != nullptr) llama_free_model(model_tgt);
+        llama_backend_free();
+        return 1;
+    }
 
     // load the draft model
-    params.devices = params.speculative.devices;
-    params.model = params.speculative.model;
-    params.n_gpu_layers = params.speculative.n_gpu_layers;
+    gpt_params params_dft = params;
+    common_speculative_reset_draft_offload_defaults(params_dft);
+    params_dft.devices = params.speculative.devices;
+    params_dft.model = params.speculative.model;
+    params_dft.n_gpu_layers = params.speculative.n_gpu_layers;
     if (params.speculative.n_threads > 0) {
-        params.n_threads = params.speculative.n_threads;
+        params_dft.n_threads = params.speculative.n_threads;
     }
-    params.n_threads_batch = params.speculative.n_threads_batch;
-    llama_init_result llama_init_dft = llama_init_from_gpt_params(params);
+    params_dft.n_threads_batch = params.speculative.n_threads_batch;
+    llama_init_result llama_init_dft = llama_init_from_gpt_params(params_dft);
     model_dft = llama_init_dft.model;
     ctx_dft = llama_init_dft.context;
+    if (model_dft == nullptr || ctx_dft == nullptr) {
+        fprintf(stderr, "%s: failed to initialize draft model/context\n", __func__);
+        if (ctx_dft != nullptr) llama_free(ctx_dft);
+        if (model_dft != nullptr) llama_free_model(model_dft);
+        llama_free(ctx_tgt);
+        llama_free_model(model_tgt);
+        llama_backend_free();
+        return 1;
+    }
 
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);

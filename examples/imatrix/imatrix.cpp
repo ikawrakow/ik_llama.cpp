@@ -6,6 +6,7 @@
 //
 
 #include "common.h"
+#include "speculative.h"
 #include "llama.h"
 #include "llama-spec-features.h"
 
@@ -872,6 +873,7 @@ static void process_logits(
 
 static gpt_params build_draft_imatrix_params(const gpt_params & params) {
     gpt_params draft_params = params;
+    common_speculative_reset_draft_offload_defaults(draft_params);
 
     draft_params.model = params.speculative.model;
     draft_params.model_url.clear();
