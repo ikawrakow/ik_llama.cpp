@@ -425,6 +425,7 @@ extern "C" {
         GGML_TYPE_Q4_0_8_8  = 33,
         GGML_TYPE_I2_S      = 36,  // So we are able to consume MS BitNet I2_S quants
         GGML_TYPE_MXFP4     = 39,  // so we are compatible with mainline
+        GGML_TYPE_NVFP4     = 40,  // NVFP4 (4 sub-blocks of 16, UE4M3 scales) — compatible with mainline
         GGML_TYPE_Q1_0_G128 = 41,  // Bonsai 1-bit quants
         GGML_TYPE_Q2_0      = 42,  // same type id as mainline GGML_TYPE_Q2_0
         //

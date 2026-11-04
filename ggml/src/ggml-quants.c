@@ -16560,3 +16560,121 @@ void ggml_gemm_pq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void 
         }
     }
 }
+
+//
+// NVFP4 (64-element super-blocks: 4 sub-blocks of 16, each with a UE4M3 scale).
+// Ported from upstream llama.cpp so that NVIDIA's NVFP4 GGUFs (e.g. the official
+// Nemotron 3.5 Bolt "24GB" quant, whose SSM projections are NVFP4) load and run.
+//
+
+static inline int best_index_mxfp4(float x, float e) {
+    int best_index = 0;
+    float best_err = fabsf(kvalues_mxfp4[0]*e - x);
+    for (int i = 1; i < 16; i++) {
+        float err = fabsf(kvalues_mxfp4[i]*e - x);
+        if (err < best_err) {
+            best_index = i;
+            best_err = err;
+        }
+    }
+    return best_index;
+}
+
+void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_NVFP4;
+    static const int qk_sub = QK_NVFP4_SUB;
+    static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        for (int s = 0; s < n_sub; s++) {
+            const float * xb = x + i*qk + s*qk_sub;
+
+            float amax = 0.0f;
+            for (int j = 0; j < qk_sub; j++) {
+                if (amax < fabsf(xb[j])) {
+                    amax = fabsf(xb[j]);
+                }
+            }
+
+            // UE4M3 scale: amax / 6.0 maps the max E2M1 value (6.0) to amax
+            const uint8_t ue = ggml_fp32_to_ue4m3(amax / 6.0f);
+            y[i].d[s] = ue;
+            const float d = ggml_ue4m3_to_fp32(ue);
+
+            for (int j = 0; j < qk_sub/2; ++j) {
+                const uint8_t x0 = best_index_mxfp4(xb[0        + j], d);
+                const uint8_t x1 = best_index_mxfp4(xb[qk_sub/2 + j], d);
+
+                y[i].qs[s*(qk_sub/2) + j] = x0 | (x1 << 4);
+            }
+        }
+    }
+}
+
+void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_nvfp4_ref(x, y, k);
+}
+
+void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_NVFP4;
+    static const int qk_sub = QK_NVFP4_SUB;
+    static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        for (int s = 0; s < n_sub; s++) {
+            const float d = ggml_ue4m3_to_fp32(x[i].d[s]);
+            float * yb = y + i*qk + s*qk_sub;
+
+            for (int j = 0; j < qk_sub/2; ++j) {
+                const int8_t v0 = kvalues_mxfp4[x[i].qs[s*(qk_sub/2) + j] & 0x0F];
+                const int8_t v1 = kvalues_mxfp4[x[i].qs[s*(qk_sub/2) + j] >>   4];
+
+                yb[j + 0       ] = v0*d;
+                yb[j + qk_sub/2] = v1*d;
+            }
+        }
+    }
+}
+
+void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_NVFP4 == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_nvfp4 * GGML_RESTRICT x = vx;
+    const block_q8_0  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_NVFP4;
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int s_idx = 0; s_idx < 4; ++s_idx) {
+            const float d = ggml_ue4m3_to_fp32(x[ib].d[s_idx]);
+            const int q8_block = s_idx / 2;
+            const int q8_off   = (s_idx % 2) * QK_NVFP4_SUB;
+            const float dy = GGML_FP16_TO_FP32(y[2*ib + q8_block].d);
+
+            int sumi_lo = 0, sumi_hi = 0;
+            for (int j = 0; j < QK_NVFP4_SUB/2; ++j) {
+                const uint8_t qv = x[ib].qs[s_idx*(QK_NVFP4_SUB/2) + j];
+                sumi_lo += y[2*ib + q8_block].qs[q8_off + j +               0] * kvalues_mxfp4[qv & 0xf];
+                sumi_hi += y[2*ib + q8_block].qs[q8_off + j + QK_NVFP4_SUB/2] * kvalues_mxfp4[qv >>  4];
+            }
+
+            sumf += dy * d * (sumi_lo + sumi_hi);
+        }
+    }
+    *s = sumf;
+}
