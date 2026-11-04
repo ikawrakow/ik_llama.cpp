@@ -280,6 +280,7 @@ struct cmd_params {
     output_formats output_format_stderr;
     std::vector<int32_t> cpu_affinity;
     bool cpu_affinity_auto = false;
+    int  ncmoe = 0;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -457,18 +458,6 @@ bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tens
             return false;
         }
         overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
-    }
-    return true;
-}
-bool add_cpu_buft_overrides(const char * arg, std::vector<llama_model_tensor_buft_override>& overrides) {
-    int n_layers = std::stoi(arg);
-    if (n_layers < 0) {
-        fprintf(stderr, "error: Invalid value for --n-cpu-moe: %s\n", arg);
-        return false;
-    }
-    for (int32_t l = 0; l < n_layers; ++l) {
-        std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)_exps\\.weight)";
-        overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
     }
     return true;
 }
@@ -900,7 +889,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 invalid_param = true;
                 break;
             }
-            if (!add_cpu_buft_overrides(argv[i], params.buft_overrides)) {
+            params.ncmoe = std::stoi(argv[i]);
+            if (params.ncmoe < 0) {
+                fprintf(stderr, "error: Invalid value for --n-cpu-moe: %s (must be >= 0)\n", argv[i]);
                 invalid_param = true;
                 break;
             }
@@ -1027,11 +1018,13 @@ struct cmd_params_instance {
     int  fit_margin = 0;
     const llama_model_tensor_buft_override* buft_overrides;
     std::vector<int32_t> cpu_affinity;
+    int  ncmoe = 0;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
 
         mparams.n_gpu_layers = n_gpu_layers;
+        mparams.ncmoe = ncmoe;
         if (!rpc_servers.empty()) {
             mparams.rpc_servers = rpc_servers.c_str();
         }
@@ -1071,6 +1064,7 @@ struct cmd_params_instance {
                fit == other.fit &&
                fit_margin == other.fit_margin &&
                max_gpu == other.max_gpu &&
+               ncmoe == other.ncmoe &&
                tensor_split == other.tensor_split;
     }
 
@@ -1171,6 +1165,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .git_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
+            instance.ncmoe = params.ncmoe;
             instances.push_back(instance);
         }
 
@@ -1218,6 +1213,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .git_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
+            instance.ncmoe = params.ncmoe;
             instances.push_back(instance);
         }
 
@@ -1265,6 +1261,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .git_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
+            instance.ncmoe = params.ncmoe;
             instances.push_back(instance);
         }
 
@@ -1312,6 +1309,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .git_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
+            instance.ncmoe = params.ncmoe;
             instances.push_back(instance);
         }
     }
@@ -1367,6 +1365,7 @@ struct test {
     bool max_gpu = 0;
     bool fit = false;
     int  fit_margin = 0;
+    int  ncmoe = 0;
     std::string override_tensor;
     int n_prompt;
     int n_gen;
@@ -1399,6 +1398,7 @@ struct test {
         ser = inst.ser;
         tensor_split = inst.tensor_split;
         cuda_params = inst.cuda_params;
+        ncmoe = inst.ncmoe;
         use_mmap = inst.use_mmap;
         embeddings = inst.embeddings;
         repack = inst.repack;
@@ -1513,7 +1513,8 @@ struct test {
             field == "model_size" || field == "model_n_params" ||
             field == "n_gpu_layers" || field == "main_gpu" ||
             field == "n_prompt" || field == "n_gen" || field == "mla_attn" || field == "attn_max_batch" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu") {
+            field == "avg_ns" || field == "stddev_ns" || field == "max_gpu" ||
+            field == "n_cpu_moe") {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "metal" ||
@@ -1566,6 +1567,7 @@ struct test {
             std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(defer_experts), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
             std::to_string(max_gpu),
+            std::to_string(ncmoe),
             cuda_params, override_tensor,
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
@@ -1586,7 +1588,8 @@ struct test {
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
-            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "cuda_params", "override_tensor",
+            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "n_cpu_moe",
+            "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
