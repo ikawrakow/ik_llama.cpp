@@ -9590,9 +9590,12 @@ static struct ggml_tensor * ggml_soft_max_impl(
     if (mask) {
         GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
         GGML_ASSERT(ggml_is_contiguous(mask));
-        GGML_ASSERT(ggml_is_matrix(mask));
         GGML_ASSERT(mask->ne[0] == a->ne[0]);
         GGML_ASSERT(mask->ne[1] >= a->ne[1]);
+        // per-head masks (e.g. the LiLiCorr lattice attention bias) broadcast over heads/blocks;
+        // the kernels index the mask with head % mask->ne[2]
+        GGML_ASSERT(a->ne[2]%mask->ne[2] == 0);
+        GGML_ASSERT(a->ne[3]%mask->ne[3] == 0);
     }
 
     if (max_bias > 0.0f) {
