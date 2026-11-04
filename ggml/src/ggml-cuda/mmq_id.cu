@@ -66,8 +66,8 @@ static __global__ void mmq_ids_helper(
         }
     } else {
         // Implementation optimized for specific numbers of experts used:
-        static_assert(n_expert_used == 6 || warp_size % n_expert_used == 0, "bad n_expert_used");
-        const int neu_padded = n_expert_used == 6 ? 8 : n_expert_used; // Padded to next higher power of 2.
+        constexpr int neu_padded = n_expert_used_template == 6 ? 8 : n_expert_used_template == 10 ? 16 : n_expert_used_template;
+        static_assert(neu_padded <= warp_size && warp_size % neu_padded == 0, "bad n_expert_used");
         for (int it0 = 0; it0 < n_tokens; it0 += warp_size/neu_padded) {
             const int it = it0 + threadIdx.x / neu_padded;
 
@@ -466,6 +466,10 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
                 break;
             case  8:
                 launch_mmq_ids_helper< 8> ((const int32_t *) ids_tensor->data, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+                break;
+            case 10:
+                launch_mmq_ids_helper<10> ((const int32_t *) ids_tensor->data, ids_src1, ids_dst, expert_bounds,
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case 16:
