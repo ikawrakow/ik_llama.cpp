@@ -176,7 +176,14 @@ void llm_load_hparams(
         hparams.n_embd_out = hparams.n_embd;
     }
     ml.get_key(LLM_KV_EXPERT_COUNT,      hparams.n_expert,      false);
-    ml.get_key(LLM_KV_EXPERT_USED_COUNT, hparams.n_expert_used, false);
+    // expert_used_count may be a scalar OR a per-layer array (Nemotron "Puzzle");
+    // get_key() throws on a type mismatch, so read the array form directly
+    ml.get_key_or_arr(LLM_KV_EXPERT_USED_COUNT, hparams.n_expert_used_arr, hparams.n_layer, false);
+    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+        if (hparams.n_expert_used_arr[i] > hparams.n_expert_used) {
+            hparams.n_expert_used = hparams.n_expert_used_arr[i];
+        }
+    }
 
     GGML_ASSERT(hparams.n_expert <= LLAMA_MAX_EXPERTS);
     GGML_ASSERT(hparams.n_expert_used <= hparams.n_expert);
@@ -1445,7 +1452,13 @@ void llm_load_hparams(
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp,             false);
+                // expert_feed_forward_length may be scalar or per-layer array
+                ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer, false);
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    if (hparams.n_ff_exp_arr[i] > hparams.n_ff_exp) {
+                        hparams.n_ff_exp = hparams.n_ff_exp_arr[i];
+                    }
+                }
                 ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp,           false);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm,  false);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
