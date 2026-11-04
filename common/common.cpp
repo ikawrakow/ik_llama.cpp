@@ -574,24 +574,203 @@ static std::vector<int32_t> cpu_affinity_filter(const std::vector<int32_t> & cpu
     return result;
 }
 
+#elif defined(_WIN32)
+// flat logical CPU id -> owning core, in GetLogicalProcessorInformationEx
+// (RelationProcessorCore) order; same mapping as ggml/src/ggml.c pinning
+struct win_flat_cpu {
+    WORD group;
+    int  bit;
+    int  core;       // index of the RelationProcessorCore record
+    BYTE efficiency; // EfficiencyClass of that core
+};
+
+static std::vector<win_flat_cpu> win_flat_cpus() {
+    std::vector<win_flat_cpu> cpus;
+
+    DWORD len = 0;
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &len)) {
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+            return cpus;
+        }
+    }
+    if (len == 0) {
+        return cpus;
+    }
+
+    // malloc: suitably aligned for SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX * buf =
+        (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) malloc(len);
+    if (!buf) {
+        return cpus;
+    }
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, buf, &len)) {
+        free(buf);
+        return cpus;
+    }
+
+    int core = 0;
+    const char * ptr = (const char *) buf;
+    const char * end = (const char *) buf + len;
+    while (ptr < end) {
+        const auto * info = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *>(ptr);
+        if (info->Size == 0) {
+            break;
+        }
+        if (info->Relationship == RelationProcessorCore) {
+            for (WORD g = 0; g < info->Processor.GroupCount; ++g) {
+                const KAFFINITY mask = (KAFFINITY) info->Processor.GroupMask[g].Mask;
+                const WORD      grp  = info->Processor.GroupMask[g].Group;
+                // bound by KAFFINITY width: 32 LPs/group on 32-bit, 64 on 64-bit
+                for (int bit = 0; bit < (int)(sizeof(KAFFINITY) * 8); ++bit) {
+                    if (!(mask & ((KAFFINITY) 1 << bit))) {
+                        continue;
+                    }
+                    // ids past ggml's topology table cannot be pinned:
+                    // stop so they are reported as out of topology
+                    if ((int) cpus.size() >= GGML_MAX_CPU_AFFINITY) {
+                        free(buf);
+                        return cpus;
+                    }
+                    cpus.push_back({grp, bit, core, info->Processor.EfficiencyClass});
+                }
+            }
+            ++core;
+        }
+        ptr += info->Size;
+    }
+
+    free(buf);
+    return cpus;
+}
+
+// Windows hybrid detection via EfficiencyClass: primaries first, then SMT
+// siblings; respects start affinity, GGML_HYBRID=0 disables. Uniform -> empty.
+static std::vector<int32_t> cpu_detect_cores_win(bool with_siblings, bool efficiency) {
+    std::vector<int32_t> primaries;
+    std::vector<int32_t> extra;
+
+    const char * env = getenv("GGML_HYBRID");
+    if (env && env[0] == '0') {
+        return primaries;
+    }
+
+    const std::vector<win_flat_cpu> flat = win_flat_cpus();
+    if (flat.empty()) {
+        return primaries;
+    }
+
+    // EfficiencyClass range; uniform (min == max) means no hybrid
+    BYTE max_eff = 0, min_eff = 255;
+    for (const win_flat_cpu & cpu : flat) {
+        max_eff = std::max(max_eff, cpu.efficiency);
+        min_eff = std::min(min_eff, cpu.efficiency);
+    }
+    if (min_eff >= max_eff) {
+        return primaries; // uniform cores, no hybrid
+    }
+
+    // process affinity filter for single-group systems
+    DWORD_PTR proc_mask = 0, sys_mask = 0;
+    const bool have_proc_mask =
+        GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask) != 0;
+
+    // primaries then SMT siblings, in flat-id order
+    int  last_core = -1;
+    bool picked    = false;
+    for (int id = 0; id < (int) flat.size(); ++id) {
+        const win_flat_cpu & cpu = flat[id];
+        if (cpu.core != last_core) {
+            last_core = cpu.core;
+            picked    = false; // one thread per physical core (HT-less OK)
+        }
+        const bool is_efficiency = cpu.efficiency != max_eff; // higher class = P-core
+        if (is_efficiency != efficiency) {
+            continue; // other class LP, still counts for flat ids
+        }
+        // single-group filter: skip LPs outside our start affinity (e.g. start /affinity)
+        // multi-group (>64 CPUs): Group != 0 is included (limitation, ggml pin warns on failure)
+        if (have_proc_mask && cpu.group == 0 && !(proc_mask & ((DWORD_PTR) 1 << cpu.bit))) {
+            continue;
+        }
+        if (!picked) {
+            primaries.push_back(id);
+            picked = true;
+        } else if (with_siblings) {
+            extra.push_back(id); // SMT sibling for n_threads overflow
+        }
+    }
+
+    primaries.insert(primaries.end(), extra.begin(), extra.end());
+    return primaries;
+}
+
+std::vector<int32_t> cpu_get_math_cpus() {
+    static const std::vector<int32_t> cpus = cpu_detect_cores_win(false, false);
+    return cpus;
+}
+
+std::vector<int32_t> cpu_get_efficiency_cpus() {
+    static const std::vector<int32_t> cpus = cpu_detect_cores_win(false, true);
+    return cpus;
+}
+
+static std::vector<int32_t> cpu_affinity_auto_cpus() {
+    static const std::vector<int32_t> cpus = cpu_detect_cores_win(true, false);
+    return cpus;
+}
+
+static std::vector<int32_t> cpu_affinity_auto_cpus_draft() {
+    static const std::vector<int32_t> cpus = cpu_detect_cores_win(true, true);
+    return cpus;
+}
+
+// drop CPUs outside the process affinity / available topology (mirrors Linux;
+// auto lists are already filtered by detection, this covers explicit -cm/-cr)
+static std::vector<int32_t> cpu_affinity_filter(const std::vector<int32_t> & cpus) {
+    if (cpus.empty()) {
+        return cpus;
+    }
+
+    const std::vector<win_flat_cpu> flat = win_flat_cpus();
+    if (flat.empty()) {
+        return cpus; // cannot validate, pass through (pin warns on failure)
+    }
+
+    DWORD_PTR proc_mask = 0, sys_mask = 0;
+    const bool have_proc_mask =
+        GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask) != 0;
+
+    const int total = (int) flat.size();
+    std::vector<int32_t> result;
+    for (const int32_t cpu : cpus) {
+        if (cpu < 0 || cpu >= total) {
+            fprintf(stderr, "warning: CPU %d is outside the available topology (%d LPs), ignored\n", cpu, total);
+        } else if (have_proc_mask && flat[cpu].group == 0 &&
+                   !(proc_mask & ((DWORD_PTR) 1 << flat[cpu].bit))) {
+            fprintf(stderr, "warning: CPU %d is outside the process affinity, ignored\n", cpu);
+        } else {
+            result.push_back(cpu);
+        }
+    }
+    return result;
+}
+
 #else
 std::vector<int32_t> cpu_get_math_cpus()       { return {}; }
 std::vector<int32_t> cpu_get_efficiency_cpus() { return {}; }
 static std::vector<int32_t> cpu_affinity_auto_cpus()       { return {}; }
 static std::vector<int32_t> cpu_affinity_auto_cpus_draft() { return {}; }
 static std::vector<int32_t> cpu_affinity_filter(const std::vector<int32_t> & cpus) { return cpus; }
-#endif // __x86_64__ && __linux__
+#endif // x86_64 Linux / Windows
 
 /**
  * Returns number of CPUs on system that are useful for math.
  */
 int32_t cpu_get_num_math() {
-#if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
     const std::vector<int32_t> cpus = cpu_get_math_cpus();
     if (!cpus.empty()) {
         return (int32_t) cpus.size();
     }
-#endif
     return cpu_get_num_physical_cores();
 }
 
@@ -607,6 +786,36 @@ std::vector<int32_t> cpu_affinity_resolve(const std::vector<int32_t> & cpus, boo
 
 std::vector<int32_t> cpu_affinity_resolve_draft(const std::vector<int32_t> & cpus, bool auto_detect) {
     return cpu_affinity_resolve_impl(cpus, auto_detect, cpu_affinity_auto_cpus_draft());
+}
+
+void common_cpu_affinity_resolve(std::vector<int32_t> & cpus, bool auto_detect, int n_threads_batch) {
+    cpus = cpu_affinity_resolve(cpus, auto_detect);
+    if (cpus.empty() && auto_detect) {
+        fprintf(stderr, "warning: auto CPU affinity found no usable CPUs "
+                        "(non-hybrid CPU, GGML_HYBRID=0, or start affinity excludes them), "
+                        "pinning disabled\n");
+        return;
+    }
+    if (auto_detect && n_threads_batch > (int) cpus.size()) {
+        fprintf(stderr, "warning: auto CPU affinity provides only %zu pinned CPUs but n_threads_batch is %d; "
+                        "pinning disabled to avoid oversubscription (use -tb %zu to pin prompt processing)\n",
+                cpus.size(), n_threads_batch, cpus.size());
+        cpus.clear();
+    }
+}
+
+void common_cpu_affinity_apply(llama_context * ctx, const std::vector<int32_t> & cpus, const char * who) {
+    if (ctx == nullptr || cpus.empty()) {
+        return;
+    }
+
+    std::string list;
+    for (size_t i = 0; i < cpus.size(); ++i) {
+        list += (i == 0 ? "" : ",") + std::to_string(cpus[i]);
+    }
+
+    llama_set_cpu_affinity(ctx, cpus.data(), (int) cpus.size());
+    LOG_INF("%s: pinning CPU worker threads to logical CPUs: %s\n", who, list.c_str());
 }
 
 // Parse a CPU bitmask ("0x55", "85") into a list of logical CPU ids.
@@ -1022,7 +1231,7 @@ void gpt_params_parse_from_env(gpt_params & params) {
 
 }
 
-bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
+bool gpt_params_parse(int argc, char ** argv, gpt_params & params, bool draft_affinity) {
     gpt_params_parse_from_env(params);
     const auto params_org = params; // the example can modify the default params
 
@@ -1038,8 +1247,12 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
         return false;
     }
 
-    // resolve the CPU affinity once, so the list stays alive until the context is created
-    params.cpu_affinity = cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto);
+    // Resolve once here so every example sees -ca/-cr/-cm through cparams;
+    // --draft-params stays unresolved (auto = E-cores, see speculative.cpp).
+    if (!draft_affinity) {
+        const int n_threads_batch = params.n_threads_batch > 0 ? params.n_threads_batch : params.n_threads;
+        common_cpu_affinity_resolve(params.cpu_affinity, params.cpu_affinity_auto, n_threads_batch);
+    }
 
     return true;
 }
@@ -2437,8 +2650,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             invalid_param = true;
             return true;
         }
-        params.cpu_affinity_auto = false;
         params.cpu_affinity_configured = true;
+        params.cpu_affinity_auto = false;
         return true;
     }
     if (arg == "--cpu-range" || arg == "-cr") {
@@ -2448,14 +2661,20 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             invalid_param = true;
             return true;
         }
-        params.cpu_affinity_auto = false;
         params.cpu_affinity_configured = true;
+        params.cpu_affinity_auto = false;
         return true;
     }
-    if (arg == "--cpu-affinity") {
-        params.cpu_affinity.clear();
-        params.cpu_affinity_auto = true;
+    if (arg == "--cpu-affinity-auto" || arg == "-ca" || arg == "--cpu-affinity") {
+        params.cpu_affinity.clear(); // last flag wins: drop any explicit list
         params.cpu_affinity_configured = true;
+        params.cpu_affinity_auto = true;
+        return true;
+    }
+    if (arg == "--no-cpu-affinity") {
+        params.cpu_affinity.clear();
+        params.cpu_affinity_configured = true;
+        params.cpu_affinity_auto = false;
         return true;
     }
     if (arg == "-prexp" || arg == "--prefetch-experts") {
@@ -3608,9 +3827,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-prexp, --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
     options.push_back({ "*",           "-prexp-t, --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
-    options.push_back({ "*",           "       --cpu-affinity",          "pin CPU workers to the physical P-cores (hybrid CPUs only)"});
-    options.push_back({ "*",           "-cm,   --cpu-mask MASK",         "pin CPU workers to the logical CPUs set in MASK (hex or decimal bitmask, e.g. 0x55; 64 CPUs max, use --cpu-range for more)"});
-    options.push_back({ "*",           "-cr,   --cpu-range LIST",        "pin CPU workers to the given logical CPUs (e.g. 0-3,8,10-11)"});
+    options.push_back({ "*",           "-cm,   --cpu-mask MASK",         "opt-in: pin CPU worker threads to the logical CPUs set in MASK (hex or decimal bitmask, e.g. 0x55; 64 CPUs max, use --cpu-range for more)"});
+    options.push_back({ "*",           "-cr,   --cpu-range LIST",        "opt-in: pin CPU worker threads to the given logical CPUs (e.g. 0-3,8,10-11)"});
+    options.push_back({ "*",           "       --cpu-affinity",          "opt-in: alias of -ca, auto-pin CPU worker threads to physical P-cores"});
+    options.push_back({ "*",           "-ca,   --cpu-affinity-auto",     "opt-in: auto-pin CPU worker threads to physical P-cores on hybrid CPUs"});
+    options.push_back({ "*",           "       --no-cpu-affinity",       "disable CPU affinity pinning (default: disabled, kept for compat)"});
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
     options.push_back({ "*",           "-gfm,  --gpu-fit-margin N",     "per-layer GPU fit margin as layer_id,margin pairs, comma-separated" });
     options.push_back({ "*",           "-wgt, --worst-graph-tokens N",  "number of tokens to use for worst-case graph"});
@@ -4447,14 +4668,8 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         return iparams;
     }
 
-    // the affinity itself is applied at context creation
-    if (!params.cpu_affinity.empty()) {
-        std::string cpus;
-        for (size_t i = 0; i < params.cpu_affinity.size(); ++i) {
-            cpus += (i == 0 ? "" : ",") + std::to_string(params.cpu_affinity[i]);
-        }
-        LOG_INF("%s: pinning CPU worker threads to logical CPUs: %s\n", __func__, cpus.c_str());
-    }
+    // opt-in pinning: -cm/-cr, or -ca resolved at parse into params.cpu_affinity
+    common_cpu_affinity_apply(lctx, params.cpu_affinity, __func__);
 
     for (auto [op, on_off] : params.offload_policy) {
         llama_set_offload_policy(lctx, op, on_off);
