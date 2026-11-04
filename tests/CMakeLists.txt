@@ -128,6 +128,9 @@ llama_test(test-ngram-cache)
 llama_build(test-nvfp4.cpp)
 llama_test(test-nvfp4)
 
+llama_build(test-mamba2.cpp)
+llama_test(test-mamba2)
+
 llama_build(test-softmax-mask.cpp)
 llama_test(test-softmax-mask)
 
