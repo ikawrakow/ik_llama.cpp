@@ -5232,8 +5232,30 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             return ggml_is_contiguous(op->src[0]);
         //case GGML_OP_ROPE:
         //    return ggml_is_contiguous(op->src[0]);
-        case GGML_OP_ARGSORT:
-            return true;
+        case GGML_OP_ARGSORT: {
+            // Same shared-memory limit as ARGSORT_THRESH: the bitonic sort pads the row to a
+            // power of two and keeps it in shared memory. Rows wider than that use the
+            // wide-row top-k kernel (order DESC with a small ntop = k, as ggml_top_k sets it)
+            // or the CUB device sort in argsort.cu.
+            const int64_t ncols = op->src[0]->ne[0];
+            int64_t ncols_pad = 1;
+            while (ncols_pad < ncols) {
+                ncols_pad *= 2;
+            }
+            if (ncols_pad <= 1024) {
+                return true;
+            }
+            const int ntop  = op->op_params[1];
+            const int order = op->op_params[0];
+            if (order == (int) GGML_SORT_ORDER_DESC && ntop > 0 && ntop <= 8) {
+                return true;
+            }
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+            return true; // CUB device sort (argsort.cu)
+#else
+            return false; // no CUB: falls back to the CPU
+#endif
+        }
         case GGML_OP_ARGSORT_THRESH:
             // The CUDA bitonic argsort launches one thread per (padded) column, so the
             // row width rounded up to a power of 2 must fit in a single CUDA block (<=1024

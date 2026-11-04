@@ -595,6 +595,112 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
 
 #endif  // GGML_CUDA_USE_CUB
 
+// Wide-row top-k (descending): per-thread partial selection, merged per warp, then across
+// warps. The bitonic sort keeps the padded row in shared memory (one thread per element), so
+// rows on the order of the vocabulary size cannot use it. ggml_top_k is an argsort with
+// ntop = k; this path fills the first k entries directly (order DESC), e.g. the 131k-vocab
+// top-k of the LiLiCorr draft lattice.
+// Insert (v, i) into a descending K-sorted register array. The bubble runs over compile-time
+// indices so the arrays stay in registers (a data-dependent insertion index spills them to local
+// memory, which dominated this kernel).
+template <int K>
+static __device__ __forceinline__ void insert_sorted_desc(float (&v)[K], int32_t (&i)[K], float nv, int32_t ni) {
+    if (nv <= v[K - 1]) {
+        return;
+    }
+    v[K - 1] = nv;
+    i[K - 1] = ni;
+#pragma unroll
+    for (int k = K - 1; k > 0; --k) {
+        if (v[k] > v[k - 1]) {
+            const float   tv = v[k - 1];
+            const int32_t ti = i[k - 1];
+            v[k - 1] = v[k];
+            i[k - 1] = i[k];
+            v[k] = tv;
+            i[k] = ti;
+        }
+    }
+}
+
+template <int K>
+static __global__ void k_topk_desc_f32(const float * __restrict__ x, int32_t * __restrict__ dst,
+        const int64_t ncols, const int ntop) {
+    const int64_t row = blockIdx.x;
+    const float * x_row = x + row * ncols;
+    int32_t * dst_row = dst + row * ncols;
+
+    const int tid = threadIdx.x;
+    const int nthreads = blockDim.x;
+    const int n_warps  = nthreads / WARP_SIZE;
+
+    __shared__ float   s_val [256 * K];
+    __shared__ int32_t s_idx [256 * K];
+    __shared__ float   s_val2[ 32 * K];
+    __shared__ int32_t s_idx2[ 32 * K];
+
+    float   best_v[K];
+    int32_t best_i[K];
+#pragma unroll
+    for (int k = 0; k < K; ++k) {
+        best_v[k] = -INFINITY;
+        best_i[k] = -1;
+    }
+
+    for (int64_t col = tid; col < ncols; col += nthreads) {
+        insert_sorted_desc<K>(best_v, best_i, x_row[col], (int32_t) col);
+    }
+
+#pragma unroll
+    for (int k = 0; k < K; ++k) {
+        s_val[tid * K + k] = best_v[k];
+        s_idx[tid * K + k] = best_i[k];
+    }
+    __syncthreads();
+
+    // merge the 32 lanes of each warp (K sorted candidates each) with one thread per warp
+    if ((tid & (WARP_SIZE - 1)) == 0) {
+        float   gv[K];
+        int32_t gi[K];
+#pragma unroll
+        for (int k = 0; k < K; ++k) {
+            gv[k] = -INFINITY;
+            gi[k] = -1;
+        }
+        const int base = tid * K;
+        for (int e = base; e < base + WARP_SIZE * K; ++e) {
+            insert_sorted_desc<K>(gv, gi, s_val[e], s_idx[e]);
+        }
+        const int warp = tid / WARP_SIZE;
+#pragma unroll
+        for (int k = 0; k < K; ++k) {
+            s_val2[warp * K + k] = gv[k];
+            s_idx2[warp * K + k] = gi[k];
+        }
+    }
+    __syncthreads();
+
+    if (tid == 0) {
+        float   gv[K];
+        int32_t gi[K];
+#pragma unroll
+        for (int k = 0; k < K; ++k) {
+            gv[k] = -INFINITY;
+            gi[k] = -1;
+        }
+        const int total = n_warps * K;
+        for (int e = 0; e < total; ++e) {
+            insert_sorted_desc<K>(gv, gi, s_val2[e], s_idx2[e]);
+        }
+        const int nwrite = ntop < K ? ntop : K;
+        for (int k = 0; k < nwrite; ++k) {
+            // a row of all -INFINITY (or NaN) leaves the candidate list empty; emit index 0
+            // instead of -1, which consumers use as a row index
+            dst_row[k] = gi[k] < 0 ? 0 : gi[k];
+        }
+    }
+}
+
 void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const float * src0_d = (const float *)src0->data;
@@ -609,6 +715,23 @@ void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t nrows = ggml_nrows(src0);
 
     enum ggml_sort_order order = (enum ggml_sort_order) dst->op_params[0];
+    const int ntop = dst->op_params[1];
+
+    // wide-row top-k: selection instead of a full sort (the bitonic path needs the padded row
+    // in shared memory, CUB would sort the whole row)
+    if (order == GGML_SORT_ORDER_DESC && ntop > 0 && ntop <= 8 && ncols > 1024) {
+        const dim3 block_dims(256, 1, 1);
+        const dim3 block_nums(nrows, 1, 1);
+        int32_t * dst_i = (int32_t *) dst_d;
+        switch (ntop) {
+            case 1: k_topk_desc_f32<1><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_i, ncols, ntop); break;
+            case 2: k_topk_desc_f32<2><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_i, ncols, ntop); break;
+            case 3:
+            case 4: k_topk_desc_f32<4><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_i, ncols, ntop); break;
+            default: k_topk_desc_f32<8><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_i, ncols, ntop); break;
+        }
+        return;
+    }
 
 #ifdef GGML_CUDA_USE_CUB
     const int    ncols_pad      = next_power_of_2(ncols);
