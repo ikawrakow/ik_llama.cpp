@@ -16528,7 +16528,14 @@ static void ggml_compute_forward_concat(
         case GGML_TYPE_F32:
         case GGML_TYPE_I32:
             {
-                ggml_compute_forward_concat_f32(params, dst);
+                // the f32 fast path requires all tensors to be contiguous along dim 0;
+                // strided views (e.g. the transposed xBC the Mamba-2 conv concatenates)
+                // go through the generic strided implementation
+                if (src0->nb[0] == sizeof(float) && dst->src[1]->nb[0] == sizeof(float) && dst->nb[0] == sizeof(float)) {
+                    ggml_compute_forward_concat_f32(params, dst);
+                } else {
+                    ggml_compute_forward_concat_any(params, dst);
+                }
             } break;
         default:
             {
