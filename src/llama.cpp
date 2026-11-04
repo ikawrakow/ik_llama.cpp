@@ -1024,6 +1024,10 @@ static inline uint32_t llama_kv_k_row_embd(
     if (model.arch == LLM_ARCH_OPENPANGU) {
         return hparams.n_lora_kv + hparams.n_rot;
     }
+    // hybrid arches keep the recurrent state out of the per-token K rows
+    if (llm_arch_is_hybrid(model.arch)) {
+        return hparams.n_embd_k_gqa(il);
+    }
     return hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
 }
 
@@ -1476,6 +1480,28 @@ static bool llama_kv_cache_init(
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
+        if (qnext_recurrent && !hparams.use_qnext_state_layout) {
+            // standard Mamba-2 layout (Nemotron-H and friends): the rolling conv state
+            // lives in the k-side slot, the recurrent SSM state in the s slot
+            const uint32_t embd_r = hparams.n_embd_k_s();
+            const uint32_t embd_s = hparams.n_embd_v_s();
+            GGML_ASSERT(embd_r > 0 && embd_s > 0);
+
+            ggml_tensor * kc = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, embd_r, qnext_state_slots);
+            ggml_format_name(kc, "cache_k_l%d", i);
+            cache.k_l.push_back(kc);
+
+            s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, embd_s, qnext_state_slots);
+            ggml_format_name(s, "cache_s_l%d", i);
+            cache.s_l[i] = s;
+
+            if (needs_v_cache && !is_dsv4_k_only && model.arch != LLM_ARCH_OPENPANGU) {
+                cache.v_l.push_back(nullptr);
+            }
+            LLAMA_LOG_DEBUG("=== Created recurrent cache (conv) %s [%ld x %ld], (ssm) %s [%ld x %ld]\n",
+                    kc->name, kc->ne[0], kc->ne[1], s->name, s->ne[0], s->ne[1]);
+            continue;
+        }
         if (qnext_recurrent) {
             // a PLE layer keeps its convolution history in the tail of the same row, so the
             // delta-net slice it opens with keeps the offsets every other layer uses
@@ -1569,7 +1595,11 @@ static bool llama_kv_cache_init(
         else {
             // Qwen 3 MTP layer always need KV cache in the MTP context
             const bool is_mtp_layer = (cparams.mtp_op_type != MTP_OP_NONE && i >= (int)n_mtp_first_layer);
-            if (!hparams.has_kv(i) && !is_mtp_layer) {
+            // Nemotron-H: only the attention layers have KV heads — plain FFN layers
+            // must not get a (zero-width) standard cache
+            const bool nemotron   = model.arch == LLM_ARCH_NEMOTRON_H || model.arch == LLM_ARCH_NEMOTRON_H_MOE;
+            const bool layer_has_kv = hparams.has_kv(i) && (!nemotron || hparams.n_head_kv(i) != 0);
+            if (!layer_has_kv && !is_mtp_layer) {
                 cache.k_l.push_back(nullptr);
                 if (!is_dsv4_k_only) {
                     cache.v_l.push_back(nullptr);
@@ -7147,6 +7177,18 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
+    if (lctx.inp_ssm_ids) {
+        // Mamba-2 / Nemotron-H: ids[i] is the source state slot of output sequence i.
+        // The recurrent state cache has exactly one slot (single-sequence path).
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_ssm_ids->buffer));
+        int32_t * data = (int32_t *) lctx.inp_ssm_ids->data;
+        const int64_t n_seqs = lctx.inp_ssm_ids->ne[0];
+
+        for (int64_t s = 0; s < n_seqs; ++s) {
+            data[s] = (int32_t) s;
+        }
+    }
+
     if (lctx.inp_ple_rows) {
         const auto & hp = lctx.model.hparams;
 
@@ -10525,6 +10567,8 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_REFACT:
         case LLM_ARCH_BLOOM:
         case LLM_ARCH_MAMBA:
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_T5:
         case LLM_ARCH_T5ENCODER:
@@ -11730,7 +11774,9 @@ struct llama_data_write {
             // a compacted layer holds the only copy of its window, so partial state has to carry it.
             // the openPangu layout is excluded: it records no live_swa(), and seq_rm can move head_swa
             // between save and restore, so writer and reader would disagree on the row count.
-            const bool has_k_cache = kv_self.k_l[il] != nullptr && (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
+            const bool has_k_cache = kv_self.k_l[il] != nullptr &&
+                !(llm_arch_is_hybrid(ctx->model.arch) && hparams.is_recurrent((uint32_t) il)) &&
+                (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
 
             // Write key type
             const int32_t k_type_i = has_k_cache ? (int32_t) kv_self.k_l[il]->type : -1;
@@ -12538,7 +12584,9 @@ struct llama_data_read {
             const uint32_t n_embd_k_gqa = llama_kv_k_row_embd(ctx->model, hparams, il);
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
-            const bool has_k_cache = kv_self.k_l[il] != nullptr && (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
+            const bool has_k_cache = kv_self.k_l[il] != nullptr &&
+                !(llm_arch_is_hybrid(ctx->model.arch) && hparams.is_recurrent((uint32_t) il)) &&
+                (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
 
 
             // Read type of key
