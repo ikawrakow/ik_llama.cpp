@@ -478,7 +478,11 @@ static __global__ void fused_rms_norm_f32_nc(
 
 template <typename T>
 static void norm_f32_cuda(const T * x, float * dst, const int ncols, const int nrows, const float eps, cudaStream_t stream) {
-    GGML_ASSERT(ncols % WARP_SIZE == 0);
+    // Any row width works: threads past the end of a row contribute 0 to the warp reduce, and the
+    // block>warp path fills all 32 shared slots (block_size == 1024). Narrow rows do occur in
+    // practice - the LiLiCorr correlation head normalises 5 values - so there is no alignment
+    // requirement to assert on here (same conclusion as rms_norm_f32_cuda below).
+    GGML_ASSERT(ncols > 0);
     if (ncols < 1024) {
         const dim3 block_dims(WARP_SIZE, 1, 1);
         norm_f32<WARP_SIZE, T><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
