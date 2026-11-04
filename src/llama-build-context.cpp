@@ -1587,7 +1587,10 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         cur = tmp;
     }
 
-    if (type_gate == LLM_FFN_PAR &&
+    // Only fold the parallel gate when a gate weight is actually present.
+    // Gateless FFNs (e.g. Nemotron-H relu^2(up)) arrive here with `cur` already
+    // equal to `tmp`; folding unconditionally would compute op(up)*up instead of op(up).
+    if (gate && type_gate == LLM_FFN_PAR &&
        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
         cur = ggml_fused_mul_unary(ctx, cur, tmp, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                                                   type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU);
@@ -1659,7 +1662,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             GGML_ABORT("fatal error");
     }
 
-    if (type_gate == LLM_FFN_PAR) {
+    if (gate && type_gate == LLM_FFN_PAR) {
         cur = ggml_mul(ctx, cur, tmp);
         cb(cur, "ffn_gate_par", il);
     }
