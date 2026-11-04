@@ -164,6 +164,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_EXPERT_GROUP_COUNT,                "%s.expert_group_count"                },
     { LLM_KV_EXPERT_GROUP_USED_COUNT,           "%s.expert_group_used_count"           },
     { LLM_KV_EXPERT_WEIGHTS_SCALE,              "%s.expert_weights_scale"              },
+    { LLM_KV_MOE_LATENT_SIZE,                   "%s.moe_latent_size"                   },
     { LLM_KV_EXPERT_WEIGHTS_NORM,               "%s.expert_weights_norm"               },
     { LLM_KV_EXPERT_GATING_FUNC,                "%s.expert_gating_func"                },
     // K2 Horizon MoVA

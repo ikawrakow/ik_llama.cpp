@@ -3458,13 +3458,19 @@ bool create_tensors_helper::create_nemotron_h_tensors(const LLM_TN & tn) {
                 // "Puzzle"-style GGUFs are added with the Nemotron 3.5 targets.
                 const int64_t n_ff_exp   = hparams.n_ff_exp ? hparams.n_ff_exp : hparams.n_ff(i) / n_expert_used;
                 const int64_t n_ff_shexp = hparams.n_ff_shexp;
+                const int64_t moe_n_embd = hparams.moe_latent_size > 0 ? hparams.moe_latent_size : n_embd;
 
                 layer.ffn_gate_inp    = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert});
                 layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert},
                                                       llama_model_loader::TENSOR_NOT_REQUIRED);
 
-                layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd, n_expert});
-                layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff_exp, n_expert});
+                layer.ffn_latent_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_LATENT_DOWN, "weight", i), {n_embd, moe_n_embd},
+                                                      llama_model_loader::TENSOR_NOT_REQUIRED);
+                layer.ffn_latent_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_LATENT_UP,   "weight", i), {moe_n_embd, n_embd},
+                                                      llama_model_loader::TENSOR_NOT_REQUIRED);
+
+                layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, moe_n_embd, n_expert});
+                layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {moe_n_embd, n_ff_exp, n_expert});
 
                 if (n_ff_shexp > 0) {
                     layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd});

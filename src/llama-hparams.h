@@ -75,6 +75,7 @@ struct llama_hparams {
     bool     expert_weights_norm  = false;
     uint32_t expert_gating_func   = LLM_EXPERT_GATING_FUNC_SOFTMAX;
     uint32_t moe_every_n_layers   = 0;
+    uint32_t moe_latent_size      = 0; // latent MoE projection width (0 = none)
     uint32_t nextn_predict_layers = 0;
 
     float f_norm_eps;
@@ -360,6 +361,7 @@ struct llama_hparams {
         if (!is_float_close(this->rope_freq_base_train,  other.rope_freq_base_train,  EPSILON)) return true;
         if (!is_float_close(this->rope_freq_scale_train, other.rope_freq_scale_train, EPSILON)) return true;
         if (!is_float_close(this->expert_weights_scale,  other.expert_weights_scale,  EPSILON)) return true;
+        if (this->moe_latent_size != other.moe_latent_size) return true;
         if (!is_float_close(this->rope_yarn_log_mul,     other.rope_yarn_log_mul,     EPSILON)) return true;
         if (!is_float_close(this->f_residual_scale,      other.f_residual_scale,      EPSILON)) return true;
         if (!is_float_close(this->f_embedding_scale,     other.f_embedding_scale,     EPSILON)) return true;
