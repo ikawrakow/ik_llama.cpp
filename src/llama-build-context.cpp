@@ -111,6 +111,7 @@ void llm_build_context::init() {
     if (clear_lctx_inputs) {
         lctx.inp_tokens      = nullptr;
         lctx.inp_embd        = nullptr;
+        lctx.inp_mtp_states  = nullptr;
         lctx.inp_pos         = nullptr;
         lctx.inp_out_ids     = nullptr;
         lctx.inp_KQ_mask     = nullptr;
@@ -1521,11 +1522,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             } break;
         case LLM_FFN_RELU_SQR:
             {
-                cur = ggml_relu(ctx, cur);
-                cb(cur, "ffn_relu", il);
-
-                cur = ggml_sqr(ctx, cur);
-                cb(cur, "ffn_sqr(relu)", il);
+                // relu(x)*x == relu(x)^2 for every x, and the fused op does both in one pass
+                cur = ggml_fused_mul_unary(ctx, cur, cur, GGML_UNARY_OP_RELU);
+                cb(cur, "ffn_relu_sqr", il);
             } break;
         case LLM_FFN_SWIGLU:
             {
@@ -1847,9 +1846,7 @@ llm_expert_gating_func_type   gating_op,
                 cb(par, "ffn_moe_relu", il);
                 break;
             case LLM_FFN_RELU_SQR:
-                par = ggml_relu(ctx, up);
-                cb(par, "ffn_moe_relu", il);
-                par = ggml_sqr(ctx, par);
+                par = ggml_fused_mul_unary(ctx, up, up, GGML_UNARY_OP_RELU); // == relu(up)^2
                 cb(par, "ffn_moe_relu_sqr", il);
                 break;
             case LLM_FFN_SILU:

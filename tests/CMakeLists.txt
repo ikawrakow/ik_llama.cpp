@@ -134,6 +134,9 @@ llama_test(test-mamba2)
 llama_build(test-softmax-mask.cpp)
 llama_test(test-softmax-mask)
 
+llama_build(test-fused-mul-unary.cpp)
+llama_test(test-fused-mul-unary)
+
 # build test-tokenizer-0 target once and add many tests
 add_executable(test-tokenizer-0 test-tokenizer-0.cpp)
 target_link_libraries(test-tokenizer-0 PRIVATE common)
