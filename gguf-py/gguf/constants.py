@@ -2272,6 +2272,7 @@ class GGMLQuantizationType(IntEnum):
     Q4_0_8_8  =  33
     I2_S      =  36
     MXFP4     =  39
+    NVFP4     =  40
     Q8_0_X4   =  97
     Q8_1_X4   =  98
     Q8_2_X4   =  99
@@ -2513,6 +2514,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ1_M       : ( 256,   56),
     GGMLQuantizationType.BF16        : (   1,    2),
     GGMLQuantizationType.MXFP4       : (  32,   17),
+    GGMLQuantizationType.NVFP4       : (  64,   36),
     GGMLQuantizationType.Q4_0_4_4    : (  32,   18),
     GGMLQuantizationType.Q4_0_4_8    : (  32,   18),
     GGMLQuantizationType.Q4_0_8_8    : (  32,   18),
