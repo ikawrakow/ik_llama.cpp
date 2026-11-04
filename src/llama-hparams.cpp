@@ -1380,6 +1380,17 @@ void llm_load_hparams(
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
+                // the graph and the loader divide by these, so reject broken metadata with a
+                // message instead of a SIGFPE or an assert deep inside a builder
+                if (hparams.ssm_d_conv < 1 || hparams.ssm_n_group < 1 || hparams.ssm_dt_rank < 1 ||
+                        hparams.ssm_d_inner < 1 || hparams.ssm_d_state < 1 ||
+                        hparams.ssm_d_inner % hparams.ssm_n_group != 0 ||
+                        hparams.ssm_d_inner % hparams.ssm_dt_rank != 0) {
+                    throw std::runtime_error("nemotron_h: invalid SSM metadata (need "
+                            "ssm.conv_kernel >= 1, ssm.group_count >= 1, ssm.time_step_rank >= 1, "
+                            "ssm.inner_size and ssm.state_size >= 1, inner_size divisible by both)");
+                }
+
                 // expert_feed_forward_length may be scalar or per-layer array
                 ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer, false);
                 for (uint32_t i = 0; i < hparams.n_layer; ++i) {
