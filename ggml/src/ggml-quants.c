@@ -3515,6 +3515,14 @@ static void quantize_row_q4_0_symmetric(const float * restrict x, block_q4_0 * r
     }
 }
 
+size_t quantize_nvfp4(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
+        const struct quantize_user_data * user_data) {
+    GGML_UNUSED(quant_weights);
+    GGML_UNUSED(user_data);
+    quantize_row_nvfp4_ref(src, (block_nvfp4 *) dst, (int64_t) nrow*n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
+}
+
 size_t quantize_q4_0(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights,
         const struct quantize_user_data * user_data) {
     GGML_UNUSED(user_data);
