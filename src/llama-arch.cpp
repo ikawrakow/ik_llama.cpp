@@ -383,6 +383,24 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
     }
 }
 
+bool llm_arch_uses_qnext_state_layout(const llm_arch & arch) {
+    // Used to be inferred from ssm_n_group > 0, but Nemotron-H also sets ssm_n_group
+    // (grouped B/C) while using the standard Mamba-2 layout, so the set is explicit.
+    // RAON1 (KDA) and BAILINGMOE3 qualified through ssm_n_group before and keep that layout.
+    switch (arch) {
+        case LLM_ARCH_QWEN3NEXT:
+        case LLM_ARCH_QWEN4EXP:
+        case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_GLM5NEXT:
+        case LLM_ARCH_RAON1:
+        case LLM_ARCH_BAILINGMOE3:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool llm_arch_is_hybrid(const llm_arch & arch) {
     switch (arch) {
     case LLM_ARCH_QWEN3NEXT:
