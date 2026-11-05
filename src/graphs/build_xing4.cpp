@@ -36,7 +36,6 @@ static ggml_tensor * xing4_hc_post_block(
         llm_build_context & llm, ggml_tensor * x, ggml_tensor * residual,
         ggml_tensor * post, ggml_tensor * comb, int il) {
     auto & ctx0 = llm.ctx0;
-    const int64_t hc = llm.hparams.dsv4_hc_mult;
     auto comb_t = ggml_cont(ctx0, ggml_permute(ctx0, comb, 1, 0, 2, 3));
     auto result = ggml_hc_post(ctx0, x, post, residual, comb_t);
     llm.cb(result, "hc_post_out", il);
@@ -59,7 +58,6 @@ ggml_cgraph * llm_build_context::build_xing4() {
     auto KQ_mask = build_inp_KQ_mask();
     auto * inp_out_ids = (n_outputs != n_tokens) ? build_inp_out_ids() : nullptr;
 
-    const int64_t n_head = hp.n_head(0);
     const int64_t n_embd_head_k = hp.n_embd_head_k_mla();
     const float attn_factor_org = attn_factor * (1.0f + 0.1f * logf(1.0f / freq_scale));
     const float mscale = attn_factor_org * (1.0f + 0.1f * hp.rope_yarn_log_mul * logf(1.0f / freq_scale));
@@ -129,9 +127,8 @@ ggml_cgraph * llm_build_context::build_xing4() {
         flat = ggml_get_rows(ctx0, flat, inp_out_ids);
     }
     const int64_t n_out = flat->ne[1];
-    auto sums = ggml_multi_add(ctx0, ggml_view_2d(ctx0, flat, n_embd, n_out, flat->nb[1], 0), hc);
-    auto cur = ggml_scale(ctx0, sums, 1.0f / hc);
-    cur = llm_build_norm(ctx0, cur, hp, model_.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
+    auto cur = ggml_multi_add(ctx0, ggml_view_2d(ctx0, flat, n_embd, n_out, flat->nb[1], 0), hc);
+    cur = llm_build_norm(ctx0, cur, hp, model_.output_norm, nullptr, LLM_NORM_RMS, cb, -1, hc*hc);
     cb(cur, "result_norm", -1);
     cur = llm_build_lora_mm(lctx, ctx0, model_.output, cur);
     cb(cur, "result_output", -1);
