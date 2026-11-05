@@ -25580,8 +25580,10 @@ static void ggml_compute_forward_kda_f32(int32_t ith, int32_t nth, struct ggml_t
         const float * beta_head = beta_data + batch_idx * bnb3 + head_idx * bnb2;
 
         float * state = state_working + state_head_offset;
-        for (int32_t i = 0; i < head_dim * head_dim; ++i) {
-            state[i] = state_in[state_head_offset + i];
+        if (state_working != state_in) {
+            for (int32_t i = 0; i < head_dim * head_dim; ++i) {
+                state[i] = state_in[state_head_offset + i];
+            }
         }
 
         const int32_t state_head_size = head_dim * head_dim;
@@ -25687,9 +25689,8 @@ static void ggml_compute_forward_delta_net_f32(
     float * state_working = src7 ? (float *) src7->data : out_data + output_size;
 
     if (src7) {
-        // src7 signals that the copy was fused away, so the op writes the state into its own
-        // input - safe because each thread seeds its heads from state_in before writing them
-        // back, and threads own disjoint heads
+        // src7 signals that the copy was fused away, so the op updates the state in its own
+        // input - safe because threads own disjoint heads
         GGML_ASSERT(src7->data == src5->data);
         GGML_ASSERT(src7->type == GGML_TYPE_F32);
         GGML_ASSERT(ggml_is_contiguous(src7));
@@ -25733,8 +25734,10 @@ static void ggml_compute_forward_delta_net_f32(
         const int64_t out_token_stride = head_dim * n_heads;
 
         float * state = state_working + state_head_offset;
-        for (int64_t i = 0; i < head_dim * head_dim; ++i) {
-            state[i] = state_in[state_head_offset + i];
+        if (state_working != state_in) {
+            for (int64_t i = 0; i < head_dim * head_dim; ++i) {
+                state[i] = state_in[state_head_offset + i];
+            }
         }
 
         const int64_t state_head_size = head_dim * head_dim;
