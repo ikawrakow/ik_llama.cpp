@@ -68,6 +68,8 @@ struct post_norm_data {
     float         f_rms_eps;
 };
 
+// MLA pp layout: cache rows are [n_extra (RoPE) | kv_lora_rank (latent)],
+// and q uses the same channel order.
 struct mla_pp_params {
     ggml_cgraph * gf = nullptr;
     int il = -1;
@@ -488,6 +490,7 @@ struct llm_build_context {
 
     ggml_cgraph * build_bailingmoe2();
     ggml_cgraph * build_bailingmoe3();
+    ggml_cgraph * build_kimi_k3();
     ggml_cgraph * build_glm5next();
     ggml_cgraph * build_raon1();
     ggml_cgraph * build_xing4();
@@ -541,6 +544,9 @@ struct llm_build_context {
           const llama_batch & batch,
          struct ggml_tensor * tok_embd,
          const llm_build_cb & cb);
+
+    static ggml_tensor * llm_build_situ(ggml_context * ctx, const llama_hparams & hparams,
+            ggml_tensor * gate, ggml_tensor * up);
 
     static ggml_tensor * llm_build_norm(ggml_context * ctx, ggml_tensor * cur,
          const llama_hparams & hparams,

@@ -673,6 +673,12 @@ class GGUFWriter:
     def add_expert_shared_feed_forward_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
+    def add_expert_latent_length(self, length: int) -> None:
+        self.add_uint32(Keys.LLM.EXPERT_LATENT_LENGTH.format(arch=self.arch), length)
+
+    def add_attn_res_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.ATTN_RES_BLOCK_SIZE.format(arch=self.arch), value)
+
     def add_expert_chunk_feed_forward_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_CHUNK_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 

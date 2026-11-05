@@ -747,6 +747,9 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
     // norm
     cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "attn_norm", il);
+
+    // TODO: issue the q, kv and output-gate matmuls that consume `cur`
+    // back-to-back and expand them immediately, so `cur` is quantized once.
     auto input_normed = cur;
 
     // DSA lightning indexer (GLM-5.2 / DeepSeek-V3.2). Built below from the q_lora latent
@@ -877,23 +880,25 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 
         ggml_build_forward_expand(gf, q_rope);
         ggml_build_forward_expand(gf, k_rope);
-        if (rope_cache) {
-            q_rope = ggml_rope_fast(ctx0, q_rope, rope_cache);
-            k_rope = ggml_rope_fast(ctx0, k_rope, rope_cache);
-        } else if (hparams.use_mrope()) {
-            // BailingMoe3-VL: mrope sections over the rotary part of Q/K
-            int sections[4];
-            std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
-            q_rope = ggml_rope_multi(ctx0, q_rope, inp_pos, nullptr, n_rot, sections, rope_type,
-                    n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor_scaled, beta_fast, beta_slow);
-            k_rope = ggml_rope_multi(ctx0, k_rope, inp_pos, nullptr, n_rot, sections, rope_type,
-                    n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor_scaled, beta_fast, beta_slow);
-        } else {
-            q_rope = ggml_rope_ext(ctx0, q_rope, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+        if (hparams.rope_type != LLAMA_ROPE_TYPE_NONE) {
+            if (rope_cache) {
+                q_rope = ggml_rope_fast(ctx0, q_rope, rope_cache);
+                k_rope = ggml_rope_fast(ctx0, k_rope, rope_cache);
+            } else if (hparams.use_mrope()) {
+                // BailingMoe3-VL: mrope sections over the rotary part of Q/K
+                int sections[4];
+                std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+                q_rope = ggml_rope_multi(ctx0, q_rope, inp_pos, nullptr, n_rot, sections, rope_type,
+                        n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+                k_rope = ggml_rope_multi(ctx0, k_rope, inp_pos, nullptr, n_rot, sections, rope_type,
+                        n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+            } else {
+                q_rope = ggml_rope_ext(ctx0, q_rope, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor_scaled, beta_fast, beta_slow);
 
-            k_rope = ggml_rope_ext(ctx0, k_rope, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+                k_rope = ggml_rope_ext(ctx0, k_rope, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+            }
         }
         cb(q_rope, "q_rope", il);
         cb(k_rope, "k_rope", il);

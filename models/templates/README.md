@@ -29,3 +29,4 @@ These templates can be updated with the following commands:
 ./scripts/get_chat_template.py deepseek-ai/DeepSeek-V4                       > models/templates/deepseek-ai-DeepSeek-V4.jinja
 ```
 ./scripts/get_chat_template.py XingChen-AGI/Xing4.0-29B-A4B                > models/templates/Xing4.0.jinja
+./scripts/get_chat_template.py moonshotai/Kimi-K3                      > models/templates/Kimi-K3.jinja
