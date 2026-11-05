@@ -941,6 +941,10 @@ bool reload_info::reload_tensor(const char * name, llama_model & model) {
         LLAMA_LOG_WARN("hotswap: tensor '%s' cannot be hot-swapped: %s; skipping\n", name, reason);
         return false;
     }
+    if (curr_type == GGML_TYPE_NVFP4) {
+        LLAMA_LOG_WARN("hotswap: tensor '%s' cannot be hot-swapped: the file stores it as NVFP4 (type 40), which is converted only at load time; skipping\n", name);
+        return false;
+    }
 
     ggml_backend_buffer_t old_buf = tensor->buffer;
     bool returning = (curr_type == src.original_type);
