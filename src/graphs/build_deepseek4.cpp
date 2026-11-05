@@ -2433,7 +2433,7 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
                         nullptr, lctx.dsv4.inputs.csa.cand_pin, cand_carry);
                 if (topk_carry) { *topk_carry = top_k; }
             }
-            if (n_tokens == 1 && reuse_rows) {
+            if (n_tokens == 1 && reuse_rows && *comp_kv_ptr != nullptr && *comp_mask_ptr != nullptr) {
                 csa_kv   = *comp_kv_ptr;
                 csa_mask = *comp_mask_ptr;
             } else if (n_tokens == 1) {
@@ -2476,7 +2476,7 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
                         lctx.dsv4.inputs.hca.cand_pin, cand_carry, hca_n_visible);
                 if (topk_carry) { *topk_carry = top_k; }
             }
-            if (n_tokens == 1 && reuse_rows) {
+            if (n_tokens == 1 && reuse_rows && *comp_kv_ptr != nullptr && *comp_mask_ptr != nullptr) {
                 hca_kv   = *comp_kv_ptr;
                 hca_mask = *comp_mask_ptr;
             } else if (n_tokens == 1) {
