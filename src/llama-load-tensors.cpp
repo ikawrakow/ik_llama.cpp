@@ -49,6 +49,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_muse_glimmer_tensors(const LLM_TN & tn);
 
+    bool create_ricursive_tensors(const LLM_TN & tn);
+
     bool create_deci_tensors(const LLM_TN & tn);
 
     bool create_llama4_tensors(const LLM_TN & tn);
@@ -737,6 +739,37 @@ bool create_tensors_helper::create_k2horizon_tensors(const LLM_TN & tn) {
         } else {
             create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
         }
+    }
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_ricursive_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+    create_embd_output(tn, n_embd, n_vocab, true);
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+
+        auto & layer = model.layers[i];
+
+        layer.attn_norm      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd});
+        layer.attn_post_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd});
+
+        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head});
+        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_head_k * n_head_kv});
+        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_head_v * n_head_kv});
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * n_head, n_embd});
+
+        layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k});
+        layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
+
+        layer.wqkv_gate        = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_GATE,        "weight", i), {n_embd, n_embd_head_v * n_head});
+        layer.attn_vres_lambda = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_VRES_LAMBDA, "weight", i), {1});
+
+        layer.ffn_norm      = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM,      "weight", i), {n_embd});
+        layer.ffn_post_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd});
+
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
@@ -6372,6 +6405,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_llama_tensors(tn); break;
         case LLM_ARCH_MUSE_GLIMMER:
             use_mmap_buffer = create_muse_glimmer_tensors(tn); break;
+        case LLM_ARCH_RICURSIVE:
+            use_mmap_buffer = create_ricursive_tensors(tn); break;
         case LLM_ARCH_DECI:
             use_mmap_buffer = create_deci_tensors(tn); break;
         case LLM_ARCH_LLAMA4:
