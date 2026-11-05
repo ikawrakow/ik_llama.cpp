@@ -676,9 +676,23 @@ static llama_token_data_array llama_sampling_prepare_impl(
         const llama_token nl_token = llama_token_nl(llama_get_model(ctx_main));
         const float nl_logit = nl_token != LLAMA_TOKEN_NULL ? logits[nl_token] : 0.0f;
 
-        llama_sample_repetition_penalties(ctx_main, &cur_p,
-                penalty_tokens.data() + penalty_tokens.size() - penalty_tokens_used_size,
-                penalty_tokens_used_size, penalty_repeat, penalty_freq, penalty_present);
+        // cur_p holds token i at index i, and only the tokens in the window can be penalized:
+        // penalize copies of their entries and write them back, instead of looking up every
+        // token of the vocabulary
+        const llama_token * last_tokens = penalty_tokens.data() + penalty_tokens.size() - penalty_tokens_used_size;
+        std::vector<llama_token_data> pen;
+        pen.reserve(penalty_tokens_used_size);
+        for (int i = 0; i < penalty_tokens_used_size; ++i) {
+            if (last_tokens[i] >= 0 && last_tokens[i] < n_vocab) {
+                pen.push_back(cur_p.data[last_tokens[i]]);
+            }
+        }
+        llama_token_data_array pen_p = { pen.data(), pen.size(), false };
+        llama_sample_repetition_penalties(ctx_main, &pen_p, last_tokens, penalty_tokens_used_size,
+                penalty_repeat, penalty_freq, penalty_present);
+        for (const auto & td : pen) {
+            cur_p.data[td.id] = td;
+        }
 
         if (!penalize_nl && nl_token != LLAMA_TOKEN_NULL) {
             for (size_t idx = 0; idx < cur_p.size; idx++) {
