@@ -2194,6 +2194,12 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
         sum += counts[last_bucket];
         if (sum >= ntop) break;
     }
+    if (idx[ngood-1] != ngood-1) {
+        // Some -inf values were not at the end, so values[] (compacted above) no longer lines up with the
+        // indices the comparator below uses. Put the values back where they came from.
+        for (int j = ngood-1; j >= 0; --j) values[idx[j]] = values[j];
+        for (int j = 0; j < ninf; ++j) values[idx_inf[j]] = -INFINITY;
+    }
     int nhave = 0, nlast = 0;
     for (int j = 0; j < ngood; ++j) {
         if (idx_aux[j] < last_bucket) {
