@@ -5073,6 +5073,11 @@ void dequantize_row_nvfp4_ks(const block_nvfp4 * x, float * y, int64_t k) {
 }
 
 void vec_dot_nvfp4_ks_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_NVFP4_KS, vx, 0, ggml_internal_get_type_traits(GGML_TYPE_NVFP4_KS).vec_dot_type, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
     GGML_UNUSED(bs);
     GGML_UNUSED(bx);
     GGML_UNUSED(by);
