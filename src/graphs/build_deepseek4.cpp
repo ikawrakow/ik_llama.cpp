@@ -2107,6 +2107,7 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
         ggml_tensor ** append_csa_state, ggml_tensor ** append_csa_score,
         ggml_tensor * inp_pos, ggml_tensor * KQ_mask, ggml_tensor * KQ_mask_swa_win,
         ggml_tensor * hca_kq_mask_seg, ggml_tensor * hca_n_visible_seg, int il,
+        ggml_tensor ** comp_kv_ptr, ggml_tensor ** comp_mask_ptr,
         ggml_tensor ** topk_carry = nullptr, ggml_tensor * hc_pre_in = nullptr, ggml_tensor ** hc_pre_out = nullptr,
         ggml_tensor ** cand_carry = nullptr);
 static ggml_tensor * dsv4_build_lid_top_k_v41(
@@ -2133,6 +2134,7 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
         ggml_tensor ** append_csa_state, ggml_tensor ** append_csa_score,
         ggml_tensor * inp_pos, ggml_tensor * KQ_mask, ggml_tensor * KQ_mask_swa_win,
         ggml_tensor * hca_kq_mask_seg, ggml_tensor * hca_n_visible_seg, int il,
+        ggml_tensor ** comp_kv_ptr, ggml_tensor ** comp_mask_ptr,
         ggml_tensor ** topk_carry, ggml_tensor * hc_pre_in, ggml_tensor ** hc_pre_out,
         ggml_tensor ** cand_carry) {
 
@@ -2410,6 +2412,9 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
         return std::max(1, n_stream);
     };
 
+    const bool reuse_rows = ratio != 0 && !hparams.dsv41_is_index_source(il) &&
+            hparams.dsv41_kv_source[il] == hparams.dsv41_kv_source[hparams.dsv41_topk_source[il]];
+
     if (ratio == hparams.dsv4_csa_ratio &&
             lctx.dsv4.inputs.csa.kq_mask != nullptr &&
             lctx.dsv4.csa_plan.n_kv > 0 &&
@@ -2428,11 +2433,16 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
                         nullptr, lctx.dsv4.inputs.csa.cand_pin, cand_carry);
                 if (topk_carry) { *topk_carry = top_k; }
             }
-            if (n_tokens == 1) {
+            if (n_tokens == 1 && reuse_rows && *comp_kv_ptr != nullptr && *comp_mask_ptr != nullptr) {
+                csa_kv   = *comp_kv_ptr;
+                csa_mask = *comp_mask_ptr;
+            } else if (n_tokens == 1) {
                 csa_kv = ggml_get_rows_ext(ctx0, csa_kv, top_k, true, false);
                 csa_kv = ggml_reshape_3d(ctx0, csa_kv, csa_kv->ne[0], 1, csa_kv->ne[1]);
                 cb(csa_kv, "csa_kv_getrows", il);
                 csa_mask = ggml_get_rows_ext(ctx0, csa_mask, top_k, true, true);
+                *comp_kv_ptr   = csa_kv;
+                *comp_mask_ptr = csa_mask;
             } else {
                 csa_mask = build_top_k_mask(ctx0, dsv4_build_raw_mask_view(llm, mask_views, lctx.dsv4.inputs.csa.kq_mask, nullptr,
                             lctx.dsv4.csa_plan.n_kv, n_tokens, num_streams(lctx.dsv4.csa_ctx), cb, il), top_k);
@@ -2466,11 +2476,16 @@ static ggml_tensor * ds4_attention_v41(ggml_cgraph * gf, ggml_context * ctx0, ll
                         lctx.dsv4.inputs.hca.cand_pin, cand_carry, hca_n_visible);
                 if (topk_carry) { *topk_carry = top_k; }
             }
-            if (n_tokens == 1) {
+            if (n_tokens == 1 && reuse_rows && *comp_kv_ptr != nullptr && *comp_mask_ptr != nullptr) {
+                hca_kv   = *comp_kv_ptr;
+                hca_mask = *comp_mask_ptr;
+            } else if (n_tokens == 1) {
                 hca_kv = ggml_get_rows_ext(ctx0, hca_kv, top_k, true, false);
                 hca_kv = ggml_reshape_3d(ctx0, hca_kv, hca_kv->ne[0], 1, hca_kv->ne[1]);
                 cb(hca_kv, "hca_kv_getrows", il);
                 hca_mask = ggml_get_rows_ext(ctx0, hca_mask, top_k, true, true);
+                *comp_kv_ptr   = hca_kv;
+                *comp_mask_ptr = hca_mask;
             } else {
                 hca_mask = build_top_k_mask(ctx0, hca_mask, top_k);
                 cb(hca_mask, "hca_mask", il);
@@ -2908,6 +2923,8 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
     cb(inpL, "hc_init", -1);
 
     ggml_tensor * topk_carry = nullptr;
+    ggml_tensor * comp_kv    = nullptr;
+    ggml_tensor * comp_mask  = nullptr;
 
     ggml_tensor * cand_carry_v = nullptr;
     ggml_tensor ** cand_carry = &cand_carry_v;
@@ -2981,7 +2998,7 @@ ggml_cgraph * llm_build_context::build_deepseek41() {
                 &append_csa_state, &append_csa_score,
                 inp_pos, KQ_mask, seg ? KQ_mask_swa_win_keep : KQ_mask_swa_win,
                 seg ? KQ_mask_hca_keep : nullptr, seg ? n_visible_hca_keep : nullptr,
-                il, &topk_carry, hc_pre_mix, &hc_attn_pre, cand_carry);
+                il, &comp_kv, &comp_mask, &topk_carry, hc_pre_mix, &hc_attn_pre, cand_carry);
 
         // ---- MoE FFN ----
         ggml_tensor * residual = inpL;
