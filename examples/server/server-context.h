@@ -120,6 +120,7 @@ struct server_slot {
     void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, float min_reusable_fraction);
 
     llama_pos checkpoint_pos = -1;
+    int64_t   checkpoint_n_tokens = -1; // cache_tokens.n_tokens() when checkpoint_pos was recorded, -1 if not known
     bool do_checkpoint = false;
     bool do_rewind_chekpoint = false;
     bool image_just_processed = false;
