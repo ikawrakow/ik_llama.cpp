@@ -2331,6 +2331,7 @@ class GGMLQuantizationType(IntEnum):
     Q4_0_8_8  =  33
     I2_S      =  36
     MXFP4     =  39
+    NVFP4     =  40
     Q8_0_X4   =  97
     Q8_1_X4   =  98
     Q8_2_X4   =  99
@@ -2353,6 +2354,7 @@ class GGMLQuantizationType(IntEnum):
     TQP5      = 165
     TQP6      = 166
     TQP7      = 167
+    NVFP4_KS  = 168
     IQ4_KS    = 144
     IQ2_KS    = 145
     IQ4_KSS   = 146
@@ -2447,6 +2449,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_Q4_0_4_8      = 34  #except 1d tensors
     MOSTLY_Q4_0_8_8      = 35  #except 1d tensors
     MOSTLY_MXFP4         = 38  #except 1d tensors, 38 to be compatible with mainline
+    MOSTLY_NVFP4         = 39
 
     MOSTLY_Q6_0          = 135 #except 1d tensors
     MOSTLY_IQ1_BN        = 136 #except 1d tensors
@@ -2476,6 +2479,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_TQP5          = 166 #except 1d tensors  (trellis, group-128)
     MOSTLY_TQP6          = 167 #except 1d tensors  (trellis, group-128)
     MOSTLY_TQP7          = 168 #except 1d tensors  (trellis, group-128)
+    MOSTLY_NVFP4_KS      = 169
 
     MOSTLY_Q4_0_R8       = 202 #except 1d tensors
     MOSTLY_Q8_0_R8       = 207 #except 1d tensors
@@ -2584,6 +2588,8 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ1_M       : ( 256,   56),
     GGMLQuantizationType.BF16        : (   1,    2),
     GGMLQuantizationType.MXFP4       : (  32,   17),
+    GGMLQuantizationType.NVFP4       : (  64,   36),
+    GGMLQuantizationType.NVFP4_KS    : (  64,   36),
     GGMLQuantizationType.Q4_0_4_4    : (  32,   18),
     GGMLQuantizationType.Q4_0_4_8    : (  32,   18),
     GGMLQuantizationType.Q4_0_8_8    : (  32,   18),
@@ -2669,6 +2675,7 @@ GGML_ROW_META_SIZES: dict[GGMLQuantizationType, int] = {
     GGMLQuantizationType.IQ2_KL      :  2,
     GGMLQuantizationType.IQ3_KS      :  2,
     GGMLQuantizationType.IQ4_KS      :  4,
+    GGMLQuantizationType.NVFP4_KS    :  4,
     GGMLQuantizationType.IQ4_KS_R4   :  4,
     GGMLQuantizationType.IQ4_KSS     :  4,
     GGMLQuantizationType.IQ5_KS      :  4,

@@ -425,6 +425,7 @@ extern "C" {
         GGML_TYPE_Q4_0_8_8  = 33,
         GGML_TYPE_I2_S      = 36,  // So we are able to consume MS BitNet I2_S quants
         GGML_TYPE_MXFP4     = 39,  // so we are compatible with mainline
+        GGML_TYPE_NVFP4     = 40,
         GGML_TYPE_Q1_0_G128 = 41,  // Bonsai 1-bit quants
         GGML_TYPE_Q2_0      = 42,  // same type id as mainline GGML_TYPE_Q2_0
         //
@@ -470,6 +471,7 @@ extern "C" {
         GGML_TYPE_TQP5       = 165, // pair trellis K=5, group 128 (Agention; on-disk id 147, remapped at load)
         GGML_TYPE_TQP6       = 166, // pair trellis K=6, group 128 (Agention; on-disk id 148, remapped at load)
         GGML_TYPE_TQP7       = 167, // pair trellis K=7, group 128 (Agention; on-disk id 149, remapped at load)
+        GGML_TYPE_NVFP4_KS   = 168,
 
         GGML_TYPE_Q4_0_R8    = 202,
         GGML_TYPE_Q5_0_R4    = 206,
@@ -582,6 +584,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_TQP5    = 153, // except 1d tensors (trellis, group-128)
         GGML_FTYPE_MOSTLY_TQP6    = 154, // except 1d tensors (trellis, group-128)
         GGML_FTYPE_MOSTLY_TQP7    = 155, // except 1d tensors (trellis, group-128)
+        GGML_FTYPE_MOSTLY_NVFP4_KS = 156,
                                          //
         GGML_FTYPE_MOSTLY_Q4_0_R8   = 202, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q8_0_R8   = 207, // except 1d tensors
