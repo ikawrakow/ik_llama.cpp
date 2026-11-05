@@ -1456,6 +1456,114 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
     return data;
 }
 
+// Kimi K3 - XTML tagged format: <|open|>/<|close|>/<|sep|>/<|end_of_msg|>
+static common_chat_params common_chat_params_init_kimi_k3(const common_chat_template &    tmpl,
+                                                          const autoparser::generation_params & inputs) {
+    common_chat_params data;
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking = true;
+
+    const std::string SEP         = "<|sep|>";
+    const std::string MSG_START   = "<|open|>message role=\"assistant\"<|sep|>";
+    const std::string THINK_START = "<|open|>think<|sep|>";
+    const std::string THINK_END   = "<|close|>think<|sep|>";
+    const std::string RESP_START  = "<|open|>response<|sep|>";
+    const std::string RESP_END    = "<|close|>response<|sep|>";
+    const std::string TOOLS_START = "<|open|>tools<|sep|>";
+    const std::string TOOLS_END   = "<|close|>tools<|sep|>";
+    const std::string CALL_START  = "<|open|>call tool=\"";
+    const std::string CALL_END    = "<|close|>call<|sep|>";
+    const std::string ARG_START   = "<|open|>argument key=\"";
+    const std::string ARG_END     = "<|close|>argument<|sep|>";
+    const std::string MSG_END     = "<|close|>message<|sep|>";
+    const std::string EOM_TOKEN   = "<|end_of_msg|>";
+
+    data.thinking_start_tag = THINK_START;
+    data.thinking_end_tag   = THINK_END;
+    data.preserved_tokens   = { "<|open|>", "<|close|>", "<|sep|>", "<|end_of_msg|>" };
+
+    const bool has_tools = inputs.tools.is_array() && !inputs.tools.empty();
+    const bool extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    const bool include_grammar = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto end = p.end();
+        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+        auto start = p.optional(p.literal(MSG_START));
+        auto think_body = extract_reasoning ? p.reasoning(p.until_one_of({ THINK_END, RESP_START }))
+                                           : p.content(p.until_one_of({ THINK_END, RESP_START }));
+        auto reasoning = p.optional(p.optional(p.literal(THINK_START)) + think_body +
+                                    p.optional(p.literal(THINK_END)));
+        auto response = p.optional(p.literal(RESP_START)) +
+                        p.content(p.until_one_of({ RESP_END, TOOLS_START, MSG_END })) +
+                        p.optional(p.literal(RESP_END));
+        auto trailer = p.optional(p.literal(MSG_END)) + p.optional(p.literal(EOM_TOKEN));
+
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return generation_prompt + start + reasoning + response + trailer + end;
+        }
+
+        auto tool_choices = p.choice();
+        size_t tool_index = 0;
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            const std::string name = function.at("name");
+            const json schema = (function.contains("parameters") && function.at("parameters").is_object())
+                      ? function.at("parameters")
+                      : json::object();
+            auto args = p.eps();
+            if (schema.contains("properties") && !schema.at("properties").empty()) {
+                auto arg_choices = p.choice();
+                size_t param_index = 0;
+                for (const auto & prop : schema.at("properties").items()) {
+                    const std::string & key = prop.key();
+                    std::string type = "string";
+                    if (prop.value().is_object() && prop.value().contains("type") &&
+                        prop.value().at("type").is_string()) {
+                        type = prop.value().at("type").get<std::string>();
+                    }
+                    auto value = type == "string" ? p.tool_arg_string_value(p.until(ARG_END))
+                                                  : p.tool_arg_value(p.until(ARG_END));
+                    arg_choices |= p.rule("kimi-k3-arg-" + std::to_string(tool_index) + "-" + std::to_string(param_index++),
+                                          p.tool_arg(p.tool_arg_open(p.literal(ARG_START)) +
+                                                     p.tool_arg_name(p.literal(key)) + p.literal("\"") +
+                                                     p.until(SEP) + p.literal(SEP) + value +
+                                                     p.tool_arg_close(p.literal(ARG_END))));
+                }
+                args = p.zero_or_more(arg_choices);
+            }
+            auto call = p.tool(p.tool_open(p.literal(CALL_START) + p.tool_name(p.literal(name)) + p.literal("\"") +
+                                           p.until(SEP) + p.literal(SEP)) +
+                               p.tool_args(args) + p.tool_close(p.literal(CALL_END)));
+            tool_choices |= p.rule("kimi-k3-tool-" + std::to_string(tool_index++), call);
+        });
+
+        auto tools_section = p.trigger_rule("kimi-k3-tool-call",
+                p.literal(TOOLS_START) + p.one_or_more(tool_choices) + p.literal(TOOLS_END) +
+                p.optional(p.literal(MSG_END)) + p.optional(p.literal(EOM_TOKEN)));
+        auto tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? tools_section : p.optional(tools_section);
+        return generation_prompt + start + reasoning + response + tools + trailer + end;
+    });
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                if (function.contains("parameters") && function.at("parameters").is_object()) {
+                    auto schema = function.at("parameters");
+                    builder.resolve_refs(schema);
+                }
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+        data.grammar_triggers = { { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, TOOLS_START } };
+    }
+    return data;
+}
+
 // MiroThinker - uses MCP style toolcalling
 static common_chat_params common_chat_params_init_mirothinker(const common_chat_template & tmpl,
     const autoparser::generation_params & inputs) {
@@ -2872,6 +2980,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
     if (src.find(">>>all") != std::string::npos && src.find(">>>${recipient}") != std::string::npos) {
         LOG_DBG("Using specialized template: Functionary v3.2\n");
         return common_chat_params_init_functionary_v3_2(tmpl, params);
+    }
+
+    // Kimi K3 - XTML markers are unique to this template.
+    if (src.find("<|open|>") != std::string::npos &&
+        src.find("<|close|>") != std::string::npos &&
+        src.find("<|end_of_msg|>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Kimi K3\n");
+        return common_chat_params_init_kimi_k3(tmpl, params);
     }
 
     // Kimi K2 Thinking - uses unique tool call ID format: functions.<name>:<index>

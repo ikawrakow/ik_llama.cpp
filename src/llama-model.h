@@ -402,6 +402,13 @@ struct llama_layer {
     struct ggml_tensor * ssm_conv1d_b = nullptr;
     struct ggml_tensor * ssm_dt_b = nullptr;
 
+    struct ggml_tensor * ssm_o_norm      = nullptr;
+    struct ggml_tensor * attn_res_score  = nullptr;
+    struct ggml_tensor * ffn_res_score   = nullptr;
+    struct ggml_tensor * ffn_routed_up   = nullptr;
+    struct ggml_tensor * ffn_routed_down = nullptr;
+    struct ggml_tensor * ffn_routed_norm = nullptr;
+
     // DSA (deepseek sparse attention)
     struct ggml_tensor * indexer_k_norm   = nullptr;
     struct ggml_tensor * indexer_k_norm_b = nullptr;
@@ -569,6 +576,7 @@ struct llama_model {
     struct ggml_tensor * dspark_conf_proj_b = nullptr;
 
     struct ggml_tensor * output_norm;
+    struct ggml_tensor * output_res_score;
     struct ggml_tensor * output_norm_b;
     struct ggml_tensor * output;
     struct ggml_tensor * output_b;
@@ -676,6 +684,9 @@ struct llama_model {
     size_t max_nodes(int n_tokens) const {
         auto n_tensors = tensors_by_name.size();
         if (split_mode == LLAMA_SPLIT_MODE_GRAPH && !devices.empty()) n_tensors *= devices.size();
+        if (arch == LLM_ARCH_KIMI_K3) {
+            return std::max<size_t>(n_tokens * 160, 64u * n_tensors);
+        }
         if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5NEXT) {
             return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
         }
@@ -691,7 +702,19 @@ struct llama_model {
     }
 
     bool is_mla_model() const {
-        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_GLM5NEXT || arch == LLM_ARCH_RAON1 || arch == LLM_ARCH_XING4_0;
+        switch (arch) {
+            case LLM_ARCH_DEEPSEEK2:
+            case LLM_ARCH_GLM_DSA:
+            case LLM_ARCH_MISTRAL4:
+            case LLM_ARCH_BAILINGMOE3:
+            case LLM_ARCH_GLM5NEXT:
+            case LLM_ARCH_RAON1:
+            case LLM_ARCH_XING4_0:
+            case LLM_ARCH_KIMI_K3:
+                return true;
+            default:
+                return false;
+        }
     }
 
     float swiglu_limit(uint32_t il, bool shared) const {

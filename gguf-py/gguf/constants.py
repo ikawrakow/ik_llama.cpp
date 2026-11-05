@@ -261,6 +261,7 @@ class MODEL_ARCH(IntEnum):
     MELLUM       = auto()
     RAON1        = auto()
     XING4_0      = auto()
+    KIMI_K3      = auto()
     PHI2         = auto()
     PHI3         = auto()
     PLAMO        = auto()
@@ -471,6 +472,12 @@ class MODEL_TENSOR(IntEnum):
     DFLASH_SELECTOR_NEXT  = auto()
     DFLASH_SELECTOR_HIDDEN = auto()
     ATTN_KV              = auto()
+    ATTN_RES_SCORE       = auto()
+    FFN_RES_SCORE        = auto()
+    OUTPUT_RES_SCORE     = auto()
+    FFN_ROUTED_DOWN      = auto()
+    FFN_ROUTED_UP        = auto()
+    FFN_ROUTED_NORM      = auto()
     ATTN_KV_NORM         = auto()
     ATTN_OUT_A           = auto()
     ATTN_OUT_B           = auto()
@@ -531,6 +538,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MELLUM:         "mellum",
     MODEL_ARCH.RAON1:          "raon1",
     MODEL_ARCH.XING4_0:        "xing4_0",
+    MODEL_ARCH.KIMI_K3:        "kimi-k3",
     MODEL_ARCH.PHI2:           "phi2",
     MODEL_ARCH.PHI3:           "phi3",
     MODEL_ARCH.PLAMO:          "plamo",
@@ -596,6 +604,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ROPE_FACTORS_LONG:    "rope_factors_long",
     MODEL_TENSOR.ROPE_FACTORS_SHORT:   "rope_factors_short",
     MODEL_TENSOR.ATTN_NORM:            "blk.{bid}.attn_norm",
+    MODEL_TENSOR.ATTN_RES_SCORE:       "blk.{bid}.attn_res_score",
+    MODEL_TENSOR.FFN_RES_SCORE:        "blk.{bid}.ffn_res_score",
+    MODEL_TENSOR.OUTPUT_RES_SCORE:     "output_res_score",
+    MODEL_TENSOR.FFN_ROUTED_DOWN:      "blk.{bid}.ffn_routed_down",
+    MODEL_TENSOR.FFN_ROUTED_UP:        "blk.{bid}.ffn_routed_up",
+    MODEL_TENSOR.FFN_ROUTED_NORM:      "blk.{bid}.ffn_routed_norm",
     MODEL_TENSOR.ATTN_NORM_2:          "blk.{bid}.attn_norm_2",
     MODEL_TENSOR.ATTN_QKV:             "blk.{bid}.attn_qkv",
     MODEL_TENSOR.ATTN_Q:               "blk.{bid}.attn_q",
@@ -2148,6 +2162,7 @@ MODEL_TENSORS[MODEL_ARCH.RAON1] = [
     MODEL_TENSOR.ATTN_Q_A,
     MODEL_TENSOR.ATTN_Q_B,
     MODEL_TENSOR.ATTN_KV_A_MQA,
+    MODEL_TENSOR.ATTN_KV_B,
     MODEL_TENSOR.ATTN_K_B,
     MODEL_TENSOR.ATTN_V_B,
     MODEL_TENSOR.ATTN_Q_A_NORM,
@@ -2214,6 +2229,46 @@ MODEL_TENSORS[MODEL_ARCH.XING4_0] = [
     MODEL_TENSOR.FFN_GATE_SHEXP,
     MODEL_TENSOR.FFN_DOWN_SHEXP,
     MODEL_TENSOR.FFN_UP_SHEXP,
+]
+MODEL_TENSORS[MODEL_ARCH.KIMI_K3] = [
+    MODEL_TENSOR.TOKEN_EMBD,
+    MODEL_TENSOR.OUTPUT_NORM,
+    MODEL_TENSOR.OUTPUT,
+    MODEL_TENSOR.ATTN_NORM,
+    MODEL_TENSOR.ATTN_Q_A,
+    MODEL_TENSOR.ATTN_Q_B,
+    MODEL_TENSOR.ATTN_KV_A_MQA,
+    MODEL_TENSOR.ATTN_K_B,
+    MODEL_TENSOR.ATTN_V_B,
+    MODEL_TENSOR.ATTN_Q_A_NORM,
+    MODEL_TENSOR.ATTN_KV_A_NORM,
+    MODEL_TENSOR.ATTN_GATE,
+    MODEL_TENSOR.ATTN_OUT,
+    MODEL_TENSOR.ATTN_RES_SCORE,
+    MODEL_TENSOR.SSM_CONV1D_Q,
+    MODEL_TENSOR.SSM_CONV1D_K,
+    MODEL_TENSOR.SSM_CONV1D_V,
+    MODEL_TENSOR.SSM_A,
+    MODEL_TENSOR.SSM_DT,
+    MODEL_TENSOR.SSM_G,
+    MODEL_TENSOR.SSM_NORM,
+    MODEL_TENSOR.FFN_NORM,
+    MODEL_TENSOR.FFN_GATE,
+    MODEL_TENSOR.FFN_DOWN,
+    MODEL_TENSOR.FFN_UP,
+    MODEL_TENSOR.FFN_RES_SCORE,
+    MODEL_TENSOR.FFN_GATE_INP,
+    MODEL_TENSOR.FFN_EXP_PROBS_B,
+    MODEL_TENSOR.FFN_GATE_EXP,
+    MODEL_TENSOR.FFN_DOWN_EXP,
+    MODEL_TENSOR.FFN_UP_EXP,
+    MODEL_TENSOR.FFN_GATE_SHEXP,
+    MODEL_TENSOR.FFN_DOWN_SHEXP,
+    MODEL_TENSOR.FFN_UP_SHEXP,
+    MODEL_TENSOR.FFN_ROUTED_DOWN,
+    MODEL_TENSOR.FFN_ROUTED_UP,
+    MODEL_TENSOR.FFN_ROUTED_NORM,
+    MODEL_TENSOR.OUTPUT_RES_SCORE,
 ]
 MODEL_TENSORS[MODEL_ARCH.DEEPSEEK41] = MODEL_TENSORS[MODEL_ARCH.DEEPSEEK4]
 

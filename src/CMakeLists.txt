@@ -139,6 +139,7 @@ add_library(llama
             graphs/build_openai.cpp
             graphs/build_bailingmoe2.cpp
             graphs/build_bailingmoe3.cpp
+            graphs/build_kimi_k3.cpp
             graphs/build_glm5next.cpp
             graphs/build_raon1.cpp
             graphs/build_xing4.cpp
