@@ -698,6 +698,20 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     // I keep changing my mind what is the best strategy to split the threads when processing
     // multiple heads. This is my current thinking, the commented out code below was the previous.
     int ntg = nth/simple_gcd(neq2*neq3, nth);
+    {
+        // nth/gcd(heads, nth) can leave many threads idle: 24 heads on 64 threads give 8 groups of 3 heads,
+        // so each working thread processes 3 heads for any neq1 <= 8. Pick the ntg that minimizes the work
+        // per thread instead, keeping the above on a tie.
+        const int nhead = neq2*neq3;
+        int64_t best = int64_t((nhead + nth/ntg - 1)/(nth/ntg)) * ((neq1 + ntg - 1)/ntg);
+        for (int t = 1; t <= nth; ++t) {
+            int64_t work = int64_t((nhead + nth/t - 1)/(nth/t)) * ((neq1 + t - 1)/t);
+            if (work < best) {
+                best = work;
+                ntg = t;
+            }
+        }
+    }
     int neq1g = (neq1 + ntg - 1)/ntg;
     //int64_t work_per_slice = D*nek1*neq1;
     //int ntg = 1;
