@@ -105,6 +105,8 @@ bool common_speculative_load_draft_model(
         common_params_speculative & params,
         const gpt_params         & params_base);
 
+void common_speculative_reset_draft_offload_defaults(gpt_params & params);
+
 bool common_speculative_prepare_mtp_runtime(
         common_params_speculative & params,
         const gpt_params         & params_base,
