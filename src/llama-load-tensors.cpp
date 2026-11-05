@@ -319,7 +319,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
                 throw std::runtime_error("Unexpected device configuration");
             }
             std::vector<int> n_override(counts.size());
-            printf("================= %s: split mode layer with ncmoe = %d, %d devices\n", __func__, ml.ncmoe, (int)model.devices.size());
+            LLAMA_LOG_INFO("================= %s: split mode layer with ncmoe = %d, %d devices\n", __func__, ml.ncmoe, (int)model.devices.size());
             int ntot = 0;
             for (int i = 0; i < int(counts.size()); ++i) {
                 float fraction = 1.f*counts[i]/n_layer;
@@ -359,14 +359,14 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
                 ++ntot;
             }
             for (int i = 0; i < int(counts.size()); ++i) {
-                printf("    device %d: %d layers -> %d overrides\n", i, counts[i], n_override[i]);
+                LLAMA_LOG_INFO("    device %d: %d layers -> %d overrides\n", i, counts[i], n_override[i]);
             }
             // it is better to go backwards to avoid (or at least reduce) issues when there are layers without MoE tensors
             for (int i = n_layer-1; i >= 0; --i) {
                 int id = model.default_layer_device[i];
                 if (n_override[id] > 0) {
                     std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
-                    printf("Adding override %s=%s\n", pattern.c_str(), ggml_backend_buft_name(buft));
+                    LLAMA_LOG_INFO("Adding override %s=%s\n", pattern.c_str(), ggml_backend_buft_name(buft));
                     this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
                     --n_override[id];
                 }

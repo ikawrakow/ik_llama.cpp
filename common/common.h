@@ -650,6 +650,7 @@ void gpt_params_handle_model_default(gpt_params & params);
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);
 bool gpt_params_parse      (int argc, char ** argv, gpt_params & params);
 bool gpt_params_find_arg   (int argc, char ** argv, const std::string & arg, gpt_params & params, int & i, bool & invalid_param);
+void gpt_params_terminate_lists(gpt_params & params);
 void gpt_params_print_usage(int argc, char ** argv, const gpt_params & params);
 
 std::string gpt_params_get_system_info(const gpt_params & params);
@@ -752,6 +753,7 @@ struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
 
 struct llama_model_params   common_model_params_to_llama  (const gpt_params & params);
 struct llama_context_params common_context_params_to_llama(const gpt_params & params);
+void common_check_v_cache_types(const llama_context_params & cparams);
 
 struct llama_model * llama_load_model_from_url(const char * model_url, const char * path_model, const char * hf_token, const struct llama_model_params & params);
 struct llama_model * llama_load_model_from_hf(const char * repo, const char * file, const char * path_model, const char * hf_token, const struct llama_model_params & params);
@@ -883,6 +885,19 @@ llama_control_vector_data llama_control_vector_load(const std::vector<llama_cont
 static const char * const LLM_KV_SPLIT_NO            = "split.no";
 static const char * const LLM_KV_SPLIT_COUNT         = "split.count";
 static const char * const LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count";
+
+//
+// Memory utils
+//
+
+double common_rss_hwm_mib();
+
+struct common_vram_tracker {
+    std::vector<size_t> baseline;
+
+    void start();
+    double sample() const;
+};
 
 //
 // YAML utils

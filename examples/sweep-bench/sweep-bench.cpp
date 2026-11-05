@@ -4,77 +4,12 @@
 #include "speculative.h"
 #include "llama-vocab.h"
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#ifndef NOMINMAX
-#   define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <sys/resource.h>
-#endif
-
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
-
-static double get_rss_hwm_mib() {
-#ifdef _WIN32
-    return -1.0;
-#else
-    struct rusage usage;
-    if (getrusage(RUSAGE_SELF, &usage) != 0) {
-        return -1.0;
-    }
-#ifdef __APPLE__
-    return usage.ru_maxrss / (1024.0 * 1024.0);
-#else
-    return usage.ru_maxrss / 1024.0;
-#endif
-#endif
-}
-
-struct sweep_vram_tracker {
-    std::vector<size_t> baseline;
-
-    void start() {
-#ifdef GGML_USE_CUDA
-        const int count = ggml_backend_cuda_get_device_count();
-        baseline.resize(count);
-        for (int device = 0; device < count; ++device) {
-            size_t free;
-            size_t total;
-            ggml_backend_cuda_get_device_memory(device, &free, &total);
-            baseline[device] = free;
-        }
-#endif
-    }
-
-    double sample() {
-#ifdef GGML_USE_CUDA
-        if (baseline.empty()) {
-            return -1.0;
-        }
-        size_t used = 0;
-        for (int device = 0; device < (int) baseline.size(); ++device) {
-            size_t free;
-            size_t total;
-            ggml_backend_cuda_get_device_memory(device, &free, &total);
-            used += baseline[device] > free ? baseline[device] - free : 0;
-        }
-        return used / (1024.0 * 1024.0);
-#else
-        return -1.0;
-#endif
-    }
-};
 
 static std::string format_mib(double value, int precision, const char * missing) {
     if (value < 0.0) {
@@ -170,7 +105,7 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    sweep_vram_tracker vram_tracker;
+    common_vram_tracker vram_tracker;
     if (params.sweep_memory) {
         vram_tracker.start();
     }
@@ -430,7 +365,7 @@ int main(int argc, char ** argv) {
         double rss_hwm_mib    = -1.0;
         double vram_delta_mib = -1.0;
         if (params.sweep_memory) {
-            rss_hwm_mib    = get_rss_hwm_mib();
+            rss_hwm_mib    = common_rss_hwm_mib();
             vram_delta_mib = vram_tracker.sample();
         }
 
