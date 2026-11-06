@@ -1161,6 +1161,8 @@ if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
                 list(APPEND ARCH_FLAGS -march=native)
             endif()
             list(APPEND ARCH_FLAGS -flax-vector-conversions)
+        elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND GGML_NATIVE AND NOT APPLE)
+            list(APPEND ARCH_FLAGS -mcpu=native)
         endif()
     endif()
 elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LWR MATCHES "^(x86_64|i686|amd64|x64|win32)$" OR
