@@ -2598,7 +2598,7 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
         if (i < nb) {
             deq.prepare_iq1bn_quants_nosub(x+i, v1);
             if constexpr (nrc_y == 1) {
-                auto q = q8.load_quants(0, i/2, 0);
+                auto q = q8.load_quants64(0, i/2, 0);
                 for (int j = 0; j < 4; ++j) {
                     accd[0] = ggml_vdotq_s32(accd[0], q.val[j], v1.val[j]);
                 }
