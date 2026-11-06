@@ -4521,7 +4521,7 @@ struct DequantizerQ51 final : public BaseLegacyDequantizer<block_q5_1> {
         q[1] = vreinterpretq_s8_u8(vorrq_u8(vreinterpretq_u8_s8(q[1]), vandq_u8(mh, hbits.to_bytes(qh+2))));
     }
     inline void prepare1(int i) {
-        bits.prepare1(x[i].qs, bits.b);
+        prepare1(i, bits.b);
     }
 
     inline float16x8_t new_block(int i) {
