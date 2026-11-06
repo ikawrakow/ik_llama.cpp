@@ -1737,6 +1737,11 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
 
     LLAMA_API bool llama_reload_changed_tensors(struct llama_context * ctx);
 
+    LLAMA_API uint32_t llama_compute_analytical_imatrix(
+            const char * fname_inp,
+            const char * fname_out,
+            const llama_model_quantize_params * params);
+
 #ifdef __cplusplus
 }
 #endif

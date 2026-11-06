@@ -445,6 +445,8 @@ int main(int argc, char ** argv) {
 
     bool hide_imatrix = false;
 
+    std::string analytical_imatrix;
+
     std::vector<int> cuda_devs;
     std::vector<float> cuda_ts;
     bool have_cuda_ts = false;
@@ -619,6 +621,12 @@ int main(int argc, char ** argv) {
             } else {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--analytical-imatrix") == 0) {
+            if (arg_idx < argc-1) {
+                analytical_imatrix = argv[++arg_idx];
+            } else {
+                usage(argv[0]);
+            }
         } else if (strcmp(argv[arg_idx], "--hide-imatrix") == 0) {
             hide_imatrix = true;
         } else if (strcmp(argv[arg_idx], "--include-weights") == 0) {
@@ -680,7 +688,9 @@ int main(int argc, char ** argv) {
         params.repack_pattern = &repack_patterns;
     }
 
-    if (argc - arg_idx < 2) {
+    int min_remaining_args = analytical_imatrix.empty() ? 2 : 1;
+
+    if (argc - arg_idx < min_remaining_args) {
         printf("%s: bad arguments\n", argv[0]);
         usage(argv[0]);
     }
@@ -756,6 +766,17 @@ int main(int argc, char ** argv) {
     // parse command line arguments
     const std::string fname_inp = argv[arg_idx];
     arg_idx++;
+
+    if (!analytical_imatrix.empty()) {
+        //if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params)) {
+        auto status = llama_compute_analytical_imatrix(fname_inp.c_str(), analytical_imatrix.c_str(), &params);
+        if (status != 0) {
+            fprintf(stderr, "\nFailed.\n");
+            return 1;
+        }
+        return 0;
+    }
+
     std::string fname_out;
 
     std::string ftype_str;
