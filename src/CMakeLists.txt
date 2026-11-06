@@ -74,6 +74,7 @@ add_library(llama
             # graphs
             graphs/build_llama.cpp
             graphs/build_muse_glimmer.cpp
+            graphs/build_ricursive.cpp
             graphs/build_mistral3.cpp
             graphs/build_deci.cpp
             graphs/build_baichuan.cpp
