@@ -25284,6 +25284,7 @@ static void ggml_compute_forward_hc_pre_f32(
 
     const int S     = dst->op_params[0];
     const int iters = dst->op_params[1];
+    const int trans = dst->op_params[3];
     float eps;
     memcpy(&eps, &dst->op_params[2], sizeof(float));
     const int64_t T = src0->ne[1];
@@ -25354,17 +25355,14 @@ static void ggml_compute_forward_hc_pre_f32(
                 for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
             }
         }
-        for (int i = 0; i < S*S; ++i) {
-            y_comb[i] = m[i];
+        if (trans) {
+            // dst is [row, col, T] (ne0 = row): transpose on write
+            for (int c = 0; c < S; ++c) {
+                for (int r = 0; r < S; ++r) y_comb[c*S + r] = m[r*S + c];
+            }
+        } else {
+            for (int i = 0; i < S*S; ++i) y_comb[i] = m[i];
         }
-        //if (transposed) {
-        //    // dst is [row, col, T] (ne0 = row): transpose on write
-        //    for (int c = 0; c < S; ++c) {
-        //        for (int r = 0; r < S; ++r) y[c*S + r] = m[r*S + c];
-        //    }
-        //} else {
-        //    for (int k = 0; k < S*S; ++k) y[k] = m[k];
-        //}
     }
 }
 

@@ -20,6 +20,7 @@ static ggml_tensor * xing4_hc_pre_block(
 
     auto all = ggml_hc_pre(ctx0, mixes, hc_scale, hc_base, hc,
                            hp.dsv4_hc_sinkhorn_iters, 0.0f);
+    all->op_params[3] = 1; // i.e., store transposed comb
     auto pre  = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), 0);
     *post     = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), hc*nt*sizeof(float));
     if (hp.hc_magnitude != 2.0f) {
@@ -30,16 +31,6 @@ static ggml_tensor * xing4_hc_pre_block(
     llm.cb(*post, "hc_post", il);
     llm.cb(*comb, "hc_comb", il);
     return llm.build_mhc_weighted_sum(x, pre, n_embd, hc);
-}
-
-static ggml_tensor * xing4_hc_post_block(
-        llm_build_context & llm, ggml_tensor * x, ggml_tensor * residual,
-        ggml_tensor * post, ggml_tensor * comb, int il) {
-    auto & ctx0 = llm.ctx0;
-    auto comb_t = ggml_cont(ctx0, ggml_permute(ctx0, comb, 1, 0, 2, 3));
-    auto result = ggml_hc_post(ctx0, x, post, residual, comb_t);
-    llm.cb(result, "hc_post_out", il);
-    return result;
 }
 
 ggml_cgraph * llm_build_context::build_xing4() {
@@ -88,7 +79,8 @@ ggml_cgraph * llm_build_context::build_xing4() {
                     hc, hc, n_outputs);
             out_sliced = true;
         }
-        inpL = xing4_hc_post_block(*this, cur, residual, post, comb, il);
+        inpL = ggml_hc_post(ctx0, cur, post, residual, comb);
+        cb(inpL, "hc_post_attn", il);
 
         residual = inpL;
         cur = xing4_hc_pre_block(*this, residual, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, il);
@@ -119,7 +111,8 @@ ggml_cgraph * llm_build_context::build_xing4() {
                     nullptr, LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf);
             cur = ggml_add(ctx0, moe, shexp);
         }
-        inpL = xing4_hc_post_block(*this, cur, residual, post, comb, il);
+        inpL = ggml_hc_post(ctx0, cur, post, residual, comb);
+        cb(inpL, "hc_post_ffn", il);
     }
 
     auto flat = ggml_reshape_2d(ctx0, inpL, n_embd * hc, inpL->ne[2]);
