@@ -628,6 +628,8 @@ int main(int argc, char ** argv) {
             } else {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--estimate-imatrix") == 0) {
+            params.estimate_imatrix = true;
         } else if (strcmp(argv[arg_idx], "--hide-imatrix") == 0) {
             hide_imatrix = true;
         } else if (strcmp(argv[arg_idx], "--include-weights") == 0) {
@@ -830,7 +832,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (!params.ignore_imatrix_rules && imatrix_data.empty() &&
+    if (!params.estimate_imatrix && !params.ignore_imatrix_rules && imatrix_data.empty() &&
         (params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S  || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4 ||
          params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS_R4 ||
