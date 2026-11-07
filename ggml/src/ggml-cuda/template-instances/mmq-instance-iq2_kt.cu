@@ -60,7 +60,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         }
 
         const float * dptr = (const float *)(x + i*stride);
-        const float d = dptr[0] * 0.92f;
+        const float d = dptr[0] * 1.05f;
         const block_iq2_kt * bxi = (const block_iq2_kt *)(dptr + 1) + kbx0;
         int ib32 = threadIdx.x % 8;
         const int ls = iq4k_values[(bxi->scales[ib32%4] >> 4*(ib32/4)) & 0xf];
