@@ -416,6 +416,10 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, n_split - 1);
     }
 
+    if (import_nvfp4()) {
+        use_mmap = false;
+    }
+
     n_kv      = gguf_get_n_kv(meta);
     n_tensors = weights.size();
 
@@ -525,6 +529,8 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
             case GGML_TYPE_Q6_0_R4: ftype = LLAMA_FTYPE_MOSTLY_Q6_0_R4; break;
             case GGML_TYPE_Q8_0_R8: ftype = LLAMA_FTYPE_MOSTLY_Q8_0_R8; break;
             case GGML_TYPE_MXFP4:   ftype = LLAMA_FTYPE_MOSTLY_MXFP4;   break;
+            case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
+            case GGML_TYPE_NVFP4_KS:ftype = LLAMA_FTYPE_MOSTLY_NVFP4_KS;break;
             case GGML_TYPE_IQ4_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_XS;  break;
             case GGML_TYPE_IQ4_KS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_KS;  break;
             case GGML_TYPE_IQ4_KS_R4:ftype = LLAMA_FTYPE_MOSTLY_IQ4_KS_R4;  break;
@@ -1181,11 +1187,126 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
     }
 }
 
+bool llama_model_loader::import_nvfp4() {
+    int n_import = 0;
+    for (const auto & w : weights) {
+        n_import += w.tensor->type == GGML_TYPE_NVFP4;
+    }
+    if (n_import == 0) {
+        return false;
+    }
+
+    ggml_context * ctx = ggml_init({ n_import*ggml_tensor_overhead(), nullptr, true });
+    contexts.push_back(ctx);
+
+    std::set<const ggml_tensor *> consumed;
+    int n_scale = 0;
+    int n_input_scale = 0;
+    for (auto & w : weights) {
+        if (w.tensor->type != GGML_TYPE_NVFP4) {
+            continue;
+        }
+        const std::string name(w.tensor->name);
+        const std::string base = name.substr(0, name.rfind('.'));
+
+        w.nvfp4_scale = { 1.0f };
+        const auto * s = get_weight((base + ".scale").c_str());
+        if (s && ggml_nelements(s->tensor) == s->tensor->ne[0] && (s->tensor->ne[0] == 1 || s->tensor->ne[0] == w.tensor->ne[2])) {
+            const auto to_float = ggml_internal_get_type_traits(s->tensor->type).to_float;
+            if (s->tensor->type != GGML_TYPE_F32 && !to_float) {
+                throw std::runtime_error(format("%s: tensor '%s' has type %s, which cannot be read as a scale", __func__, ggml_get_name(s->tensor), ggml_type_name(s->tensor->type)));
+            }
+            w.nvfp4_scale.resize(s->tensor->ne[0]);
+            std::vector<uint8_t> raw(ggml_nbytes(s->tensor));
+            files.at(s->idx)->seek(s->offs, SEEK_SET);
+            files.at(s->idx)->read_raw(raw.data(), raw.size());
+            if (to_float) {
+                to_float(raw.data(), w.nvfp4_scale.data(), w.nvfp4_scale.size());
+            } else {
+                memcpy(w.nvfp4_scale.data(), raw.data(), raw.size());
+            }
+            consumed.insert(s->tensor);
+            ++n_scale;
+        }
+        if (const auto * is = get_weight((base + ".input_scale").c_str())) {
+            consumed.insert(is->tensor);
+            ++n_input_scale;
+        }
+
+        ggml_tensor * t = ggml_new_tensor(ctx, GGML_TYPE_NVFP4_KS, GGML_MAX_DIMS, w.tensor->ne);
+        ggml_set_name(t, w.tensor->name);
+        w.tensor = t;
+    }
+
+    weights.erase(std::remove_if(weights.begin(), weights.end(), [&consumed](const llama_tensor_weight & w) {
+        return consumed.count(w.tensor) > 0;
+    }), weights.end());
+
+    LLAMA_LOG_INFO("%s: converted %d %s tensors to %s; consumed %d .scale tensors; dropped %d .input_scale tensors; mmap is off\n",
+            __func__, n_import, ggml_type_name(GGML_TYPE_NVFP4), ggml_type_name(GGML_TYPE_NVFP4_KS), n_scale, n_input_scale);
+    return true;
+}
+
+static void read_nvfp4_rows(const llama_model_loader::llama_tensor_weight & w, const llama_file & file, const ggml_tensor * cur, uint8_t * dst, int r0, int nrows) {
+    const int    ne1     = cur->ne[1];
+    const int    n_scale = w.nvfp4_scale.size();
+    const size_t row_in  = ggml_row_size(GGML_TYPE_NVFP4, cur->ne[0]);
+    const size_t row_out = cur->nb[1];
+    uint8_t * src = dst + nrows*(row_out - row_in);
+    file.seek(w.offs + r0*row_in, SEEK_SET);
+    file.read_raw(src, nrows*row_in);
+    for (int r = 0; r < nrows; ++r) {
+        memmove(dst + r*row_out + sizeof(float), src + r*row_in, row_in);
+        memcpy(dst + r*row_out, &w.nvfp4_scale[((r0 + r)/ne1) % n_scale], sizeof(float));
+    }
+}
+
+static void load_nvfp4_tensor(ggml_tensor * cur, size_t chunk_size, const llama_model_loader::llama_tensor_weight & w, const llama_file & file,
+        std::vector<no_init<uint8_t>> & buf, llama_model * model, std::mutex & mutex, bool check_tensors) {
+    if (cur->buffer == nullptr) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ggml_tensor * owner = cur->view_src ? cur->view_src : cur;
+        if (owner->buffer == nullptr) {
+            ggml_backend_buffer_t owned = ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), ggml_nbytes(owner));
+            if (owned == nullptr) {
+                throw std::runtime_error(format("unable to allocate buffer for tensor '%s'", ggml_get_name(owner)));
+            }
+            ggml_backend_tensor_alloc(owned, owner, ggml_backend_buffer_get_base(owned));
+            ggml_backend_buffer_set_usage(owned, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            model->bufs.push_back(owned);
+        }
+        if (cur->view_src) {
+            ggml_backend_view_init(cur);
+        }
+    }
+    const bool host  = ggml_backend_buffer_is_host(cur->buffer);
+    const int  nrows = ggml_nrows(cur);
+    const int  chunk = host ? nrows : std::max<int>(1, chunk_size/cur->nb[1]);
+    for (int r0 = 0; r0 < nrows; r0 += chunk) {
+        const int    nr   = std::min(chunk, nrows - r0);
+        const size_t size = nr*cur->nb[1];
+        if (!host) {
+            buf.resize(size);
+        }
+        uint8_t * dst = host ? (uint8_t *) cur->data : (uint8_t *) buf.data();
+        read_nvfp4_rows(w, file, cur, dst, r0, nr);
+        if (check_tensors && !ggml_validate_row_data(cur->type, dst, size)) {
+            throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+        }
+        if (!host) {
+            std::lock_guard<std::mutex> lock(mutex);
+            ggml_backend_tensor_set(cur, dst, r0*cur->nb[1], size);
+        }
+    }
+}
+
 // for backwards compatibility, does not support ggml-backend
 void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     const auto & w = require_weight(ggml_get_name(cur));
 
-    if (use_mmap) {
+    if (!w.nvfp4_scale.empty()) {
+        read_nvfp4_rows(w, *files.at(w.idx), cur, (uint8_t *) cur->data, 0, ggml_nrows(cur));
+    } else if (use_mmap) {
         const auto & mapping = mappings.at(w.idx);
         if (cur->data == nullptr) {
             cur->data = (uint8_t *)mapping->addr() + w.offs;
@@ -1222,9 +1343,10 @@ bool llama_model_loader::load_all_data(
 
     std::vector<std::vector<no_init<uint8_t>>> read_bufs(n_workers);
 
+    constexpr size_t buffer_size = 16 * 1024 * 1024; // 16MB
+
 #if defined(GGML_USE_CUDA)
     // One pinned staging buffer per worker for async uploads
-    constexpr size_t buffer_size = 16 * 1024 * 1024; // 16MB
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<void*> host_ptrs;
@@ -1281,6 +1403,11 @@ bool llama_model_loader::load_all_data(
         GGML_ASSERT(weight->idx < files.size());
         const size_t n_size = ggml_nbytes(cur);
         const auto file = files.at(weight->idx)->clone();
+
+        if (!weight->nvfp4_scale.empty()) {
+            load_nvfp4_tensor(cur, buffer_size, *weight, *file, read_bufs[thread_idx], model, load_mutex, check_tensors);
+            return n_size;
+        }
 
         // mmap. Serialized.
         if (use_mmap) {

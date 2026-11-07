@@ -137,3 +137,15 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
     v.y *= d;
 #endif // GGML_CUDA_F16
 }
+
+static __device__ __forceinline__ void dequantize_nvfp4_ks(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
+    const float * dptr = (const float *) vx;
+    const block_nvfp4 * x = (const block_nvfp4 *)(dptr + 1) + ib/4;
+
+    const float d = dptr[0]*0.5f*ggml_cuda_ue4m3_to_fp32(x->d[ib%4]);
+
+    const int vui = x->qs[8*(ib%4) + iqs];
+
+    v.x = d*kvalues_mxfp4[vui & 0xF];
+    v.y = d*kvalues_mxfp4[vui >>  4];
+}

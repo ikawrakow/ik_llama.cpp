@@ -47,6 +47,29 @@ static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
 #define GGML_E8M0_TO_FP32(x) ggml_e8m0_to_fp32(x)
 #define GGML_E8M0_TO_FP32_HALF(x) ggml_e8m0_to_fp32_half(x)
 
+static inline float ggml_ue4m3_to_fp32(uint8_t x) {
+    const uint32_t e = (x >> 3) & 0xf;
+    const uint32_t m = x & 0x7;
+    if (!e) {
+        return m*(1.0f/512);
+    }
+    union { float f; uint32_t u; } helper;
+    helper.u = (e + 120) << 23 | m << 20;
+    return helper.f;
+}
+
+static inline uint8_t ggml_fp32_to_ue4m3(float x) {
+    if (x >= 448.0f) {
+        return 0x7e;
+    }
+    if (x < 0.015625f) {
+        return (uint8_t)nearbyintf(x*512.0f);
+    }
+    union { float f; uint32_t u; } helper;
+    helper.f = x;
+    return (uint8_t)(((helper.u + 0x7ffff + ((helper.u >> 20) & 1)) >> 20) - 960);
+}
+
 /**
  * Converts brain16 to float32.
  *
