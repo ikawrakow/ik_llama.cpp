@@ -1278,9 +1278,19 @@ static void do_quantize_slabbed(int nthread, const ggml_tensor * tensor, ggml_ty
     }
 }
 
+static void estimate_imatrix_internal(const std::string & fname_inp,
+        const llama_model_quantize_params * params, std::unordered_map<std::string, std::vector<float>> & new_imatrix);
+
 static void llama_model_quantize_internal(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
+
+    std::unordered_map<std::string, std::vector<float>> new_imatrix;
+    auto the_imatrix = params->imatrix;
+    if (params->estimate_imatrix) {
+        estimate_imatrix_internal(fname_inp, params, new_imatrix);
+        the_imatrix = &new_imatrix;
+    }
 
     switch (ftype) {
         case LLAMA_FTYPE_MOSTLY_Q4_0: default_type = GGML_TYPE_Q4_0; break;
@@ -1436,8 +1446,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         ftype = model.ftype;
     }
     const std::unordered_map<std::string, std::vector<float>> * imatrix_data = nullptr;
-    if (!params->only_repack && params->imatrix) {
-        imatrix_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
+    if (!params->only_repack && the_imatrix) {
+        imatrix_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(the_imatrix);
         if (imatrix_data) {
             LLAMA_LOG_INFO("================================ Have weights data with %d entries\n",int(imatrix_data->size()));
             qs.has_imatrix = true;
@@ -2140,8 +2150,8 @@ uint32_t llama_model_quantize(
 }
 
 // ==================================================================================
-static void llama_model_imatrix_internal(const std::string & fname_inp, const std::string & fname_out,
-        const llama_model_quantize_params * params) {
+static void estimate_imatrix_internal(const std::string & fname_inp,
+        const llama_model_quantize_params * params, std::unordered_map<std::string, std::vector<float>> & new_imatrix) {
 
     int nthread = params->nthread;
 
@@ -2187,8 +2197,6 @@ static void llama_model_imatrix_internal(const std::string & fname_inp, const st
         }
     }
 
-    ensure_output_directory(fname_out);
-
     std::vector<std::thread> workers;
     workers.reserve(nthread);
 
@@ -2211,7 +2219,6 @@ static void llama_model_imatrix_internal(const std::string & fname_inp, const st
 
     std::unordered_map<std::string, tensor_sums> sum_map;
 
-    std::unordered_map<std::string, std::vector<float>> new_imatrix;
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
         struct ggml_tensor * tensor = weight->tensor;
@@ -2427,6 +2434,22 @@ static void llama_model_imatrix_internal(const std::string & fname_inp, const st
             }
         }
     }
+}
+
+uint32_t llama_compute_analytical_imatrix(
+            const char * fname_inp,
+            const char * fname_out,
+            const llama_model_quantize_params * params) {
+
+    ensure_output_directory(fname_out);
+
+    std::unordered_map<std::string, std::vector<float>> new_imatrix;
+    try {
+        estimate_imatrix_internal(fname_inp, params, new_imatrix);
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: failed to quantize: %s\n", __func__, err.what());
+        return 1;
+    }
 
     int ncall = 1;
     std::ofstream out(fname_out, std::ios::binary);
@@ -2451,20 +2474,8 @@ static void llama_model_imatrix_internal(const std::string & fname_inp, const st
     out.write((const char *) &len, sizeof(len));
     out.write(dum.c_str(), len);
 
-    printf("\n\nWrote imatrix data with %d entries to %s\n\n", int(new_imatrix.size()), fname_out.c_str());
+    LLAMA_LOG_INFO("\n\nWrote imatrix data with %d entries to %s\n\n", int(new_imatrix.size()), fname_out);
 
-}
-
-uint32_t llama_compute_analytical_imatrix(
-            const char * fname_inp,
-            const char * fname_out,
-            const llama_model_quantize_params * params) {
-    try {
-        llama_model_imatrix_internal(fname_inp, fname_out, params);
-        return 0;
-    } catch (const std::exception & err) {
-        LLAMA_LOG_ERROR("%s: failed to quantize: %s\n", __func__, err.what());
-        return 1;
-    }
+    return 0;
 }
 
