@@ -2155,6 +2155,8 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
         return;
     }
     if (max - min < 1e-6f) return; // we got basically the same values, so it doesn't matter which we pick
+    // bv is rounded, so for v close to max av*v + bv can be negative once |bv| >= 2^24 (values clustered
+    // tightly around a large magnitude). This is why the bucket index is clamped from below as well.
     float av = (nbucket - 0.75f)/(min - max);
     float bv = -av*max;
 #ifdef __AVX2__
@@ -2166,13 +2168,14 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
         auto xv = _mm256_fmadd_ps(v_av, v, v_bv);
         auto iv = _mm256_cvtps_epi32(xv);
         iv = _mm256_min_epi32(iv, _mm256_set1_epi32(nbucket-1));
+        iv = _mm256_max_epi32(iv, _mm256_setzero_si256());
         auto aux = idx_aux + 8*j;
         _mm256_storeu_si256((__m256i *)aux, iv);
         for (int k = 0; k < 8; ++k) ++counts[aux[k]];
     }
     for (int j = 8*(ngood/8); j < ngood; ++j) {
         int i = int(av*values[j] + bv);
-        i = std::min(i, nbucket-1);
+        i = std::max(0, std::min(i, nbucket-1));
         idx_aux[j] = i;
         ++counts[i];
     }
@@ -2180,7 +2183,7 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
     for (int i = 0; i < nbucket; ++i) counts[i] = 0;
     for (int j = 0; j < ngood; ++j) {
         int i = int(av*values[j] + bv);
-        i = std::min(i, nbucket-1);
+        i = std::max(0, std::min(i, nbucket-1));
         idx_aux[j] = i;
         ++counts[i];
     }
@@ -2190,6 +2193,12 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
     for (; last_bucket < nbucket-1; ++last_bucket) {
         sum += counts[last_bucket];
         if (sum >= ntop) break;
+    }
+    if (idx[ngood-1] != ngood-1) {
+        // Some -inf values were not at the end, so values[] (compacted above) no longer lines up with the
+        // indices the comparator below uses. Put the values back where they came from.
+        for (int j = ngood-1; j >= 0; --j) values[idx[j]] = values[j];
+        for (int j = 0; j < ninf; ++j) values[idx_inf[j]] = -INFINITY;
     }
     int nhave = 0, nlast = 0;
     for (int j = 0; j < ngood; ++j) {
