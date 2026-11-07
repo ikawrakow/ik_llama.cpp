@@ -124,6 +124,7 @@ void llm_build_context::init() {
         lctx.inp_s_mask      = nullptr;
         lctx.inp_s_seq       = nullptr;
         lctx.inp_s_seq_qnext = nullptr;
+        lctx.inp_ssm_ids     = nullptr;
         lctx.inp_pos_bucket    = nullptr;
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
@@ -1397,7 +1398,8 @@ ggml_tensor * llm_build_context::llm_build_ffn(
          post_norm_data * pnd) {
 
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
-        up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
+        // gateless FFNs (relu^2(up)) have no gate tensor; this used to dereference it
+        up->extra && gate && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU :
@@ -1587,7 +1589,10 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         cur = tmp;
     }
 
-    if (type_gate == LLM_FFN_PAR &&
+    // Only fold the parallel gate when a gate weight is actually present.
+    // Gateless FFNs (e.g. Nemotron-H relu^2(up)) arrive here with `cur` already
+    // equal to `tmp`; folding unconditionally would compute op(up)*up instead of op(up).
+    if (gate && type_gate == LLM_FFN_PAR &&
        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
         cur = ggml_fused_mul_unary(ctx, cur, tmp, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                                                   type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU);
@@ -1659,7 +1664,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             GGML_ABORT("fatal error");
     }
 
-    if (type_gate == LLM_FFN_PAR) {
+    if (gate && type_gate == LLM_FFN_PAR) {
         cur = ggml_mul(ctx, cur, tmp);
         cb(cur, "ffn_gate_par", il);
     }
@@ -1949,7 +1954,45 @@ llm_expert_gating_func_type   gating_op,
     GGML_ASSERT(!up_gate_exps_b);
 
     bool up_gate_done = false;
-    if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type &&
+    if (gate_exps == nullptr) {
+        // gateless expert FFN (Nemotron-H and friends): the activation is applied
+        // directly to the up projection, e.g. relu^2(up) without a gate weight
+        ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts, cached_up, cache_ids); // [n_ff, n_expert_used, n_tokens]
+        cb(up, "ffn_moe_up", il);
+
+        if (graph) {
+            ggml_build_forward_expand(graph, up);
+        }
+
+        if (up_exps_b) {
+            up = ggml_add_id(ctx, up, up_exps_b, selected_experts);
+            cb(up, "ffn_moe_up_biased", il);
+        }
+
+        switch (type_op) {
+            case LLM_FFN_RELU:
+                par = ggml_relu(ctx, up);
+                cb(par, "ffn_moe_relu", il);
+                break;
+            case LLM_FFN_RELU_SQR:
+                par = ggml_relu(ctx, up);
+                cb(par, "ffn_moe_relu", il);
+                par = ggml_sqr(ctx, par);
+                cb(par, "ffn_moe_relu_sqr", il);
+                break;
+            case LLM_FFN_SILU:
+                par = ggml_silu(ctx, up);
+                cb(par, "ffn_moe_silu", il);
+                break;
+            case LLM_FFN_GELU:
+                par = ggml_gelu(ctx, up);
+                cb(par, "ffn_moe_gelu", il);
+                break;
+            default:
+                GGML_ABORT("gateless moe: unsupported activation");
+        }
+        up_gate_done = true;
+    } else if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type &&
             (!cache_ids || (!up_exps_b && !gate_exps_b))) {
         ggml_tensor * up_weight = cached_up ? cached_up : up_exps;
         ggml_tensor * gate_weight = cached_gate ? cached_gate : gate_exps;
@@ -1977,6 +2020,9 @@ llm_expert_gating_func_type   gating_op,
         }
     }
     if (!up_gate_done) {
+        // the gateless case above sets up_gate_done; reaching here without a gate would call
+        // llm_build_lora_mm_id with a null weight and crash inside ggml_mul_mat_id
+        GGML_ASSERT(gate_exps != nullptr);
         ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts, cached_up, cache_ids); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
 
@@ -3314,6 +3360,11 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_MAMBA:
             {
                 result = llm.build_mamba();
+            } break;
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
+            {
+                result = llm.build_nemotron_h();
             } break;
         case LLM_ARCH_XVERSE:
             {

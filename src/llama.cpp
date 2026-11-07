@@ -1024,6 +1024,12 @@ static inline uint32_t llama_kv_k_row_embd(
     if (model.arch == LLM_ARCH_OPENPANGU) {
         return hparams.n_lora_kv + hparams.n_rot;
     }
+    // hybrid arches keep the recurrent state out of the per-token K rows: the conv window has its
+    // own allocation in the k-side slot (see llama_kv_cache_init), so adding n_embd_k_s() here
+    // would size every attention layer's K rows as if they held the whole recurrent state
+    if (llm_arch_is_hybrid(model.arch)) {
+        return hparams.n_embd_k_gqa(il);
+    }
     return hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
 }
 
@@ -1445,6 +1451,12 @@ static bool llama_kv_cache_init(
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
+    if ((model.arch == LLM_ARCH_NEMOTRON_H || model.arch == LLM_ARCH_NEMOTRON_H_MOE) && cparams.n_seq_max > 1) {
+        LLAMA_LOG_ERROR("%s: %s keeps one recurrent state per context, so it supports a single sequence "
+                "(n_seq_max = %u). Use one context per sequence.\n",
+                __func__, llama_model_arch_string(&model), cparams.n_seq_max);
+        return false;
+    }
     const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams, kv_size);
     if (llm_arch_is_hybrid(model.arch) && qnext_state_slots < std::max<uint32_t>(1, cparams.n_seq_max)) {
         LLAMA_LOG_WARN("%s: reducing qwen3next state slots from %u to %u to fit KV cache size\n",
@@ -1476,6 +1488,32 @@ static bool llama_kv_cache_init(
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
+        // standard Mamba-2 layout: a rolling conv state exists (LFM2/LFM2MOE are recurrent
+        // too, but their state is the shortconv tail, so they fall through below)
+        if (qnext_recurrent && !hparams.use_qnext_state_layout && hparams.n_embd_k_s() > 0) {
+            // standard Mamba-2 layout (Nemotron-H and friends): the rolling conv state
+            // lives in the k-side slot, the recurrent SSM state in the s slot
+            const uint32_t embd_r = hparams.n_embd_k_s();
+            const uint32_t embd_s = hparams.n_embd_v_s();
+            GGML_ASSERT(embd_r > 0 && embd_s > 0);
+
+            ggml_tensor * kc = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, embd_r, qnext_state_slots);
+            ggml_format_name(kc, "cache_k_l%d", i);
+            cache.k_l.push_back(kc);
+            cache.conv_state_position_strict = true;
+            cache.conv_state_width = embd_r;
+
+            s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, embd_s, qnext_state_slots);
+            ggml_format_name(s, "cache_s_l%d", i);
+            cache.s_l[i] = s;
+
+            if (needs_v_cache && !is_dsv4_k_only && model.arch != LLM_ARCH_OPENPANGU) {
+                cache.v_l.push_back(nullptr);
+            }
+            LLAMA_LOG_DEBUG("=== Created recurrent cache (conv) %s [%ld x %ld], (ssm) %s [%ld x %ld]\n",
+                    kc->name, kc->ne[0], kc->ne[1], s->name, s->ne[0], s->ne[1]);
+            continue;
+        }
         if (qnext_recurrent) {
             // a PLE layer keeps its convolution history in the tail of the same row, so the
             // delta-net slice it opens with keeps the offsets every other layer uses
@@ -1569,7 +1607,11 @@ static bool llama_kv_cache_init(
         else {
             // Qwen 3 MTP layer always need KV cache in the MTP context
             const bool is_mtp_layer = (cparams.mtp_op_type != MTP_OP_NONE && i >= (int)n_mtp_first_layer);
-            if (!hparams.has_kv(i) && !is_mtp_layer) {
+            // Nemotron-H: only the attention layers have KV heads — plain FFN layers
+            // must not get a (zero-width) standard cache
+            const bool nemotron   = model.arch == LLM_ARCH_NEMOTRON_H || model.arch == LLM_ARCH_NEMOTRON_H_MOE;
+            const bool layer_has_kv = hparams.has_kv(i) && (!nemotron || hparams.n_head_kv(i) != 0);
+            if (!layer_has_kv && !is_mtp_layer) {
                 cache.k_l.push_back(nullptr);
                 if (!is_dsv4_k_only) {
                     cache.v_l.push_back(nullptr);
@@ -2092,6 +2134,7 @@ bool llama_kv_cache::checkpoint_alloc_shadows(llama_ckpt_data ckpt_type, bool co
         ggml_tensor * primary;
         uint32_t      il;
         int           split_idx; // -1 for non-split
+        bool          is_conv;   // k-side row (rolling conv window) instead of the SSM state
     };
 
     std::map<ggml_backend_buffer_type_t, std::vector<tensor_entry>> buft_entries;
@@ -2107,11 +2150,28 @@ bool llama_kv_cache::checkpoint_alloc_shadows(llama_ckpt_data ckpt_type, bool co
             for (int d = 0; d < split_info->n_device; ++d) {
                 if (split_info->splits[d] == nullptr) continue;
                 ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(split_info->splits[d]->buffer);
-                buft_entries[buft].push_back({split_info->splits[d], il, d});
+                buft_entries[buft].push_back({split_info->splits[d], il, d, false});
             }
         } else {
             ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(s_l[il]->buffer);
-            buft_entries[buft].push_back({s_l[il], il, -1});
+            buft_entries[buft].push_back({s_l[il], il, -1, false});
+        }
+    }
+
+    // the standard Mamba-2 layout also keeps the rolling conv window in k_l
+    ckpt.k_l_shadow.assign(n_layer, nullptr);
+    if (!conv_state_position_strict) {
+        // the conv window only lives in k_l in the standard Mamba-2 layout
+        ckpt.k_l_shadow.clear();
+    } else {
+        for (uint32_t il = 0; il < n_layer && il < (uint32_t) k_l.size(); ++il) {
+            // only the recurrent layers' slots hold the conv window; the attention layers' k_l rows
+            // are their K cache and must not be duplicated (that would shadow the whole KV cache)
+            if (k_l[il] == nullptr || k_l[il]->extra != nullptr || k_l[il]->ne[0] != (int64_t) conv_state_width) {
+                continue;
+            }
+            ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(k_l[il]->buffer);
+            buft_entries[buft].push_back({k_l[il], il, -1, true});
         }
     }
 
@@ -2135,7 +2195,9 @@ bool llama_kv_cache::checkpoint_alloc_shadows(llama_ckpt_data ckpt_type, bool co
             } else {
                 shadow = ggml_dup_tensor(ctx, entry.primary);
             }
-            if (entry.split_idx >= 0) {
+            if (entry.is_conv) {
+                ggml_format_name(shadow, "shadow_k_l%d", entry.il);
+            } else if (entry.split_idx >= 0) {
                 ggml_format_name(shadow, "shadow_s_l%d_d%d", entry.il, entry.split_idx);
             } else {
                 ggml_format_name(shadow, "shadow_s_l%d", entry.il);
@@ -2157,7 +2219,9 @@ bool llama_kv_cache::checkpoint_alloc_shadows(llama_ckpt_data ckpt_type, bool co
         ckpt.shadow_bufs.push_back(buf);
 
         for (const auto & entry : entries) {
-            if (entry.split_idx < 0) {
+            if (entry.is_conv) {
+                ckpt.k_l_shadow[entry.il] = entry.primary;
+            } else if (entry.split_idx < 0) {
                 ckpt.s_l_shadow[entry.il] = entry.primary;
             }
         }
@@ -2252,6 +2316,21 @@ bool llama_kv_cache::checkpoint_save(ggml_backend_sched_t sched, llama_ckpt_data
         }
     }
 
+    // the rolling conv window (standard Mamba-2 layout) lives in k_l, so shadow it as well
+    for (uint32_t il = 0; il < n_layer && il < (uint32_t) ckpt.k_l_shadow.size(); ++il) {
+        if (ckpt.k_l_shadow[il] == nullptr || il >= (uint32_t) k_l.size() || k_l[il] == nullptr) {
+            continue;
+        }
+        auto src_backend = ggml_backend_sched_get_tensor_backend(sched, k_l[il]);
+        if (src_backend == nullptr) {
+            sync_sched_once();
+            ggml_backend_tensor_copy(k_l[il], ckpt.k_l_shadow[il]);
+        } else {
+            ggml_backend_tensor_copy_async(src_backend, src_backend, k_l[il], ckpt.k_l_shadow[il]);
+            backends_to_sync.insert(src_backend);
+        }
+    }
+
     for (auto backend : backends_to_sync) {
         ggml_backend_synchronize(backend);
     }
@@ -2317,6 +2396,21 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched, llama_ckpt_d
                 ggml_backend_tensor_copy_async(dst_backend, dst_backend, ckpt.s_l_shadow[il], s_l[il]);
                 backends_to_sync.insert(dst_backend);
             }
+        }
+    }
+
+    for (uint32_t il = 0; il < n_layer && il < (uint32_t) ckpt.k_l_shadow.size(); ++il) {
+        if (ckpt.k_l_shadow[il] == nullptr || il >= (uint32_t) k_l.size() || k_l[il] == nullptr) {
+            continue;
+        }
+        GGML_ASSERT(ggml_nbytes(ckpt.k_l_shadow[il]) == ggml_nbytes(k_l[il]));
+        auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, k_l[il]);
+        if (dst_backend == nullptr) {
+            sync_sched_once();
+            ggml_backend_tensor_copy(ckpt.k_l_shadow[il], k_l[il]);
+        } else {
+            ggml_backend_tensor_copy_async(dst_backend, dst_backend, ckpt.k_l_shadow[il], k_l[il]);
+            backends_to_sync.insert(dst_backend);
         }
     }
 
@@ -2850,6 +2944,11 @@ static void llama_kv_cache_seq_add(
     // re-positioned: rope is baked into the cached k_pe rows and the side state is keyed
     // by absolute position. Fail loudly instead of corrupting.
     GGML_ASSERT(!cache.s_l_position_strict && "K-shift/context shift is not supported for this model's position-indexed KV cache");
+    // a recurrent layer keeps an absolute-position history (conv window + SSM state) that a
+    // cell shift cannot move; the common/server layers already refuse this, so only the raw C
+    // API can get here
+    GGML_ASSERT(!cache.conv_state_position_strict &&
+            "K-shift/context shift is not supported for the Mamba-2 recurrent state");
     // a compacted layer holds window rows rather than one row per context cell, so the cells this
     // would re-position do not describe it
     GGML_ASSERT(!cache.any_compacted() && "K-shift/context shift is not supported for a compacted KV cache (--swa-compress)");
@@ -7147,6 +7246,18 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
+    if (lctx.inp_ssm_ids) {
+        // Mamba-2 / Nemotron-H: ids[i] is the source state slot of output sequence i.
+        // The recurrent state cache has exactly one slot (single-sequence path).
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_ssm_ids->buffer));
+        int32_t * data = (int32_t *) lctx.inp_ssm_ids->data;
+        const int64_t n_seqs = lctx.inp_ssm_ids->ne[0];
+
+        for (int64_t s = 0; s < n_seqs; ++s) {
+            data[s] = (int32_t) s;
+        }
+    }
+
     if (lctx.inp_ple_rows) {
         const auto & hp = lctx.model.hparams;
 
@@ -10525,6 +10636,8 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_REFACT:
         case LLM_ARCH_BLOOM:
         case LLM_ARCH_MAMBA:
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_T5:
         case LLM_ARCH_T5ENCODER:
@@ -11034,6 +11147,16 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
         return false;
     }
 
+    // The standard Mamba-2 layout (Nemotron-H) keeps the rolling conv window in the k-side cache,
+    // not packed in front of the SSM state in s_l, which is the layout the per-step snapshots
+    // assume: restoring one would write the conv block into the front of the SSM state and leave
+    // the window itself untouched. Decline so the chain falls through to a state path that
+    // handles the two caches separately.
+    if (!model.hparams.use_qnext_state_layout && model.hparams.n_embd_k_s() > 0) {
+        kv.save_per_step_ssm = false;
+        return false;
+    }
+
 
     // Split recurrent tensors are supported as long as each layer exposes
     // concrete backend buffers for the per-step tensors. CPU-only and mixed
@@ -11073,6 +11196,7 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
 
 static size_t llama_spec_ckpt_cpu_state_reserve(llama_context * ctx, llama_seq_id seq_id) {
     const auto & kv_self = ctx->kv_self;
+    const auto & hparams = ctx->model.hparams;
 
     if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
         return llama_state_seq_get_size(ctx, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -11100,6 +11224,18 @@ static size_t llama_spec_ckpt_cpu_state_reserve(llama_context * ctx, llama_seq_i
 
     const uint32_t qnext_state = llama_kv_has_qnext_state_storage(kv_self) ? 1 : 0;
     size += sizeof(qnext_state);
+    if (qnext_state != 0) {
+        // standard Mamba-2 layers serialise their rolling conv state (k_l) as one more block
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            const bool has_conv = il < kv_self.k_l.size() && kv_self.k_l[il] != nullptr &&
+                il < hparams.n_layer && hparams.is_recurrent(il) &&
+                !hparams.use_qnext_state_layout && hparams.n_embd_k_s() > 0;
+            size += sizeof(int32_t) + sizeof(uint64_t) + sizeof(uint32_t);
+            if (has_conv) {
+                size += ggml_nbytes(kv_self.k_l[il]);
+            }
+        }
+    }
 
     if (qnext_state != 0) {
         for (uint32_t il = 0; il < n_layer; ++il) {
@@ -11172,6 +11308,8 @@ int llama_spec_ckpt_init(struct llama_context * ctx, llama_ckpt_data ckpt_type, 
             : spec_ckpt_try_per_step(kv, ctx->model, ckpt_type, max_tokens);
     };
     const auto prepare_gpu_fallback = [&]() {
+        // the standard Mamba-2 layout keeps the conv window in k_l; checkpoint_alloc_shadows
+        // mirrors that row too when conv_state_position_strict is set
         return is_dsv4
             ? llama_dsv4_spec_ckpt_prepare(ctx, ckpt_type, LLAMA_SPEC_CKPT_GPU_FALLBACK, max_tokens)
             : kv.checkpoint_alloc_shadows(ckpt_type);
@@ -11731,7 +11869,11 @@ struct llama_data_write {
             // a compacted layer holds the only copy of its window, so partial state has to carry it.
             // the openPangu layout is excluded: it records no live_swa(), and seq_rm can move head_swa
             // between save and restore, so writer and reader would disagree on the row count.
-            const bool has_k_cache = kv_self.k_l[il] != nullptr && (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
+            // a recurrent layer of the standard Mamba-2 layout keeps its rolling conv window in
+            // k_l, so that slot is not a K cache; tie this to the layout, not to the arch
+            const bool has_k_cache = kv_self.k_l[il] != nullptr &&
+                !(hparams.is_recurrent((uint32_t) il) && !hparams.use_qnext_state_layout && hparams.n_embd_k_s() > 0) &&
+                (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
 
             // Write key type
             const int32_t k_type_i = has_k_cache ? (int32_t) kv_self.k_l[il]->type : -1;
@@ -11883,6 +12025,42 @@ struct llama_data_write {
 
                 if (has_s_cache && s_rows > 0) {
                     write_tensor_data(kv_self.s_l[il], s_offset, s_rows * s_size_row, il);
+                }
+            }
+        }
+
+        // standard-layout recurrent layers (Nemotron-H): the rolling conv state lives in k_l
+        if (qnext_state != 0) {
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                const bool has_conv_cache = il < kv_self.k_l.size() && kv_self.k_l[il] != nullptr &&
+                    il < (uint32_t) hparams.n_layer && hparams.is_recurrent(il) &&
+                    !hparams.use_qnext_state_layout && hparams.n_embd_k_s() > 0;
+
+                const int32_t c_type_i = has_conv_cache ? (int32_t) kv_self.k_l[il]->type : -1;
+                write(&c_type_i, sizeof(c_type_i));
+
+                const uint64_t c_size_row = has_conv_cache ? ggml_row_size(kv_self.k_l[il]->type, kv_self.k_l[il]->ne[0]) : 0;
+                write(&c_size_row, sizeof(c_size_row));
+
+                uint32_t c_rows = 0;
+                size_t c_offset = 0;
+                if (has_conv_cache) {
+                    const uint32_t n_slots = (uint32_t) kv_self.k_l[il]->ne[1];
+                    if (seq_id == -1) {
+                        c_rows = n_slots;
+                    } else if (llama_kv_qnext_seq_id_in_range(kv_self, seq_id) && (uint32_t) seq_id < kv_self.size) {
+                        llama_seq_id src_seq_id = kv_self.cells[seq_id].src;
+                        if (llama_kv_qnext_seq_id_in_range(kv_self, src_seq_id)) {
+                            c_rows = 1;
+                            c_offset = (size_t) src_seq_id * c_size_row;
+                        }
+                    }
+                }
+
+                write(&c_rows, sizeof(c_rows));
+
+                if (has_conv_cache && c_rows > 0) {
+                    write_tensor_data(kv_self.k_l[il], c_offset, c_rows * c_size_row, il);
                 }
             }
         }
@@ -12539,7 +12717,11 @@ struct llama_data_read {
             const uint32_t n_embd_k_gqa = llama_kv_k_row_embd(ctx->model, hparams, il);
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
-            const bool has_k_cache = kv_self.k_l[il] != nullptr && (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
+            // a recurrent layer of the standard Mamba-2 layout keeps its rolling conv window in
+            // k_l, so that slot is not a K cache; tie this to the layout, not to the arch
+            const bool has_k_cache = kv_self.k_l[il] != nullptr &&
+                !(hparams.is_recurrent((uint32_t) il) && !hparams.use_qnext_state_layout && hparams.n_embd_k_s() > 0) &&
+                (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
 
 
             // Read type of key
@@ -12781,6 +12963,66 @@ struct llama_data_read {
                     } else {
                         ggml_backend_tensor_set(kv_self.s_l[il], read(s_data_size), s_dst_offset, s_data_size);
                     }
+                }
+            }
+        }
+
+        // standard-layout recurrent layers (Nemotron-H): the rolling conv state lives in k_l
+        if (qnext_state_ref != 0) {
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                const bool has_conv_cache = il < kv_self.k_l.size() && kv_self.k_l[il] != nullptr &&
+                    il < (uint32_t) hparams.n_layer && hparams.is_recurrent(il) &&
+                    !hparams.use_qnext_state_layout && hparams.n_embd_k_s() > 0;
+
+                int32_t c_type_i_ref = 0;
+                read_to(&c_type_i_ref, sizeof(c_type_i_ref));
+                if (!has_conv_cache) {
+                    if (c_type_i_ref != -1) {
+                        LLAMA_LOG_ERROR("%s: missing conv state cache for layer %d\n", __func__, il);
+                        return false;
+                    }
+                } else {
+                    const int32_t c_type_i = (int32_t) kv_self.k_l[il]->type;
+                    if (c_type_i != c_type_i_ref) {
+                        LLAMA_LOG_ERROR("%s: mismatched conv state type (%d != %d, layer %d)\n", __func__, c_type_i, c_type_i_ref, il);
+                        return false;
+                    }
+                }
+
+                uint64_t c_size_row_ref = 0;
+                read_to(&c_size_row_ref, sizeof(c_size_row_ref));
+
+                const uint64_t c_size_row = has_conv_cache ? ggml_row_size(kv_self.k_l[il]->type, kv_self.k_l[il]->ne[0]) : 0;
+                if (c_size_row != c_size_row_ref) {
+                    LLAMA_LOG_ERROR("%s: mismatched conv state row size (%zu != %zu, layer %d)\n",
+                            __func__, (size_t) c_size_row, (size_t) c_size_row_ref, il);
+                    return false;
+                }
+
+                uint32_t c_rows_ref = 0;
+                read_to(&c_rows_ref, sizeof(c_rows_ref));
+
+                uint32_t c_rows = 0;
+                uint32_t c_dst_row = 0;
+                if (has_conv_cache) {
+                    const uint32_t n_slots = (uint32_t) kv_self.k_l[il]->ne[1];
+                    if (seq_id == -1) {
+                        c_rows = n_slots;
+                    } else if (llama_kv_qnext_seq_id_in_range(kv_self, seq_id)) {
+                        c_rows = 1;
+                        c_dst_row = (uint32_t) seq_id;
+                    }
+                }
+
+                if (c_rows_ref != c_rows) {
+                    LLAMA_LOG_ERROR("%s: mismatched conv state row count (%u != %u, layer %d)\n", __func__, c_rows, c_rows_ref, il);
+                    return false;
+                }
+
+                if (c_rows > 0) {
+                    const size_t c_data_size = c_rows * c_size_row;
+                    const size_t c_dst_offset = (size_t) c_dst_row * c_size_row;
+                    ggml_backend_tensor_set(kv_self.k_l[il], read(c_data_size), c_dst_offset, c_data_size);
                 }
             }
         }

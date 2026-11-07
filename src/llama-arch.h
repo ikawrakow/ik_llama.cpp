@@ -48,6 +48,8 @@ enum llm_arch {
     LLM_ARCH_GEMMA3,
     LLM_ARCH_STARCODER2,
     LLM_ARCH_MAMBA,
+    LLM_ARCH_NEMOTRON_H,
+    LLM_ARCH_NEMOTRON_H_MOE,
     LLM_ARCH_XVERSE,
     LLM_ARCH_COMMAND_R,
     LLM_ARCH_DBRX,
@@ -142,6 +144,7 @@ enum llm_kv {
     LLM_KV_EXPERT_GROUP_USED_COUNT,
     LLM_KV_EXPERT_WEIGHTS_SCALE,
     LLM_KV_EXPERT_WEIGHTS_NORM,
+    LLM_KV_MOE_LATENT_SIZE,
     LLM_KV_EXPERT_GATING_FUNC,
     // K2 Horizon MoVA
     LLM_KV_ATTENTION_GROUPNORM_GROUPS,
@@ -391,6 +394,8 @@ enum llm_tensor {
     LLM_TENSOR_FFN_UP_SHEXP,
     LLM_TENSOR_FFN_EXP_PROBS_B,             // 40
     LLM_TENSOR_FFN_EXP_PROBS_B_VL,
+    LLM_TENSOR_FFN_LATENT_DOWN,
+    LLM_TENSOR_FFN_LATENT_UP,
     LLM_TENSOR_ATTN_Q_NORM,
     LLM_TENSOR_ATTN_K_NORM,
     LLM_TENSOR_LAYER_OUT_NORM,
@@ -586,6 +591,9 @@ const char * llama_model_arch_name(llm_arch arch);
 
 bool llm_arch_is_recurrent(const llm_arch & arch);
 bool llm_arch_is_hybrid(const llm_arch & arch);
+
+// true for archs whose recurrent state is packed into the V-cache tail / s_l slot
+bool llm_arch_uses_qnext_state_layout(const llm_arch & arch);
 bool llm_arch_is_dflash_family(const llm_arch & arch);
 // DFlash2 consumes every anchor/mask row to construct its selector lattice
 bool llm_arch_requires_all_graph_output_rows(const llm_arch & arch);

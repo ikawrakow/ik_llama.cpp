@@ -92,6 +92,13 @@ struct llama_kv_cache {
     // seq ops and generic serialization skip it, the openPangu state layouts carry it instead.
     bool s_l_position_strict = false;
 
+    // standard Mamba-2 (Nemotron-H): the rolling conv window in k_l is keyed by absolute position,
+    // so a cell shift would corrupt it. Set when such a cache is created.
+    bool conv_state_position_strict = false;
+    // row width of the rolling conv state (k-side slot); 0 when this cache has none. The
+    // checkpoint shadows only rows of this width, so attention layers' K caches are skipped.
+    uint32_t conv_state_width = 0;
+
     // Note: The value of head isn't only used to optimize searching
     // for a free KV slot. llama_decode_internal also uses it, so it
     // cannot be freely changed after a slot has been allocated.
@@ -171,6 +178,9 @@ struct llama_kv_cache {
         uint32_t used_snapshot = 0;
 
         std::vector<ggml_tensor *> s_l_shadow;
+        // the standard Mamba-2 layout keeps the rolling conv window in the k-side cache, so a
+        // full-state checkpoint has to shadow that row as well
+        std::vector<ggml_tensor *> k_l_shadow;
 
         std::vector<std::vector<ggml_tensor *>> split_s_l_shadow;
 
@@ -276,6 +286,7 @@ struct llama_kv_cache {
             }
             shadow_bufs.clear();
             s_l_shadow.clear();
+            k_l_shadow.clear();
             split_s_l_shadow.clear();
             allocated = false;
             saved = false;
@@ -692,6 +703,7 @@ struct llama_context {
     struct ggml_tensor * inp_s_mask;      // F32 [1, n_kv]
     struct ggml_tensor * inp_s_seq;       // I32 [n_kv, n_batch]
     struct ggml_tensor * inp_s_seq_qnext; // I32 [1, n_batch]
+    struct ggml_tensor * inp_ssm_ids;     // I32 [n_seqs] — ssm_scan source state ids (Mamba-2 / Nemotron-H)
     struct ggml_tensor * inp_ple_rows = nullptr; // I32 [ple_n_heads * n_batch], qwen4exp n-gram rows
     struct ggml_tensor * inp_pos_bucket;    // I32 [n_batch|n_kv, n_batch]
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]

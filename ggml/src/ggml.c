@@ -11612,6 +11612,33 @@ struct ggml_tensor * ggml_ssm_conv(
         struct ggml_tensor  * c,
         struct ggml_tensor  * sq,
         struct ggml_tensor  * saved_steps) {
+    if (x == NULL) {
+        // Mamba-2 layout (Nemotron-H etc.): s = conv_x {d_conv - 1 + n_t, d_inner, n_s},
+        // c = conv1d.weight; returns the conv result only (caller slides the state window
+        // in the graph). Mirrors upstream llama.cpp.
+        GGML_ASSERT(ggml_is_3d(s));
+        GGML_ASSERT(ggml_is_matrix(c));
+        GGML_ASSERT(sq == NULL);
+
+        const int64_t d_conv  = c->ne[0];
+        const int64_t d_inner = c->ne[1];
+        const int64_t n_t     = s->ne[0] - d_conv + 1; // tokens per sequence
+        const int64_t n_s     = s->ne[2];
+
+        // TODO: maybe support other strides than 1?
+        GGML_ASSERT(s->ne[0] == d_conv - 1 + n_t);
+        GGML_ASSERT(s->ne[1] == d_inner);
+        GGML_ASSERT(n_t >= 0);
+
+        struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_inner, n_t, n_s);
+
+        result->op     = GGML_OP_SSM_CONV;
+        result->src[0] = s;
+        result->src[1] = c;
+
+        return result;
+    }
+
     GGML_ASSERT(ggml_is_3d(s));
     GGML_ASSERT(ggml_is_matrix(x));
     GGML_ASSERT(ggml_is_matrix(c));
@@ -11658,7 +11685,7 @@ struct ggml_tensor * ggml_ssm_conv(
 
 // ggml_ssm_scan
 
-struct ggml_tensor * ggml_ssm_scan(
+static struct ggml_tensor * ggml_ssm_scan_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * s,
         struct ggml_tensor  * x,
@@ -11666,7 +11693,73 @@ struct ggml_tensor * ggml_ssm_scan(
         struct ggml_tensor  * A,
         struct ggml_tensor  * B,
         struct ggml_tensor  * C,
-        struct ggml_tensor  * sq) {
+        struct ggml_tensor  * sq,
+        int64_t               K) {
+    if (K >= 1) {
+        // Mamba-2 layout (Nemotron-H etc.). sq is the {n_seqs} int32 ids tensor and K is
+        // the number of state snapshots kept in the result. Mirrors upstream llama.cpp.
+        GGML_ASSERT(K <= INT32_MAX);
+        GGML_ASSERT(ggml_is_contiguous(s));
+        GGML_ASSERT(ggml_is_contiguous(dt));
+        GGML_ASSERT(ggml_is_contiguous(A));
+        GGML_ASSERT(x->nb[0] == ggml_type_size(x->type));
+        GGML_ASSERT(B->nb[0] == ggml_type_size(B->type));
+        GGML_ASSERT(C->nb[0] == ggml_type_size(C->type));
+        GGML_ASSERT(x->nb[1] == x->ne[0]*x->nb[0]);
+        GGML_ASSERT(B->nb[1] == B->ne[0]*B->nb[0]);
+        GGML_ASSERT(C->nb[1] == C->ne[0]*C->nb[0]);
+        GGML_ASSERT(ggml_are_same_shape(B, C));
+        GGML_ASSERT(sq->type == GGML_TYPE_I32);
+
+        {
+            const int64_t d_state      = s->ne[0];
+            const int64_t head_dim     = x->ne[0];
+            const int64_t n_head       = x->ne[1];
+            const int64_t n_seq_tokens = x->ne[2];
+            const int64_t n_seqs       = x->ne[3];
+
+            GGML_ASSERT(dt->ne[0] == n_head);
+            GGML_ASSERT(dt->ne[1] == n_seq_tokens);
+            GGML_ASSERT(dt->ne[2] == n_seqs);
+            GGML_ASSERT(ggml_is_3d(dt));
+            GGML_ASSERT(s->ne[1] == head_dim);
+            GGML_ASSERT(s->ne[2] == n_head);
+            GGML_ASSERT(B->ne[0] == d_state);
+            GGML_ASSERT(B->ne[2] == n_seq_tokens);
+            GGML_ASSERT(B->ne[3] == n_seqs);
+            GGML_ASSERT(sq->ne[0] == n_seqs);
+            GGML_ASSERT(ggml_is_vector(sq));
+            // snapshots are written for slots 1..K-1; a K larger than the token count would leave
+            // the tail of the snapshot block uninitialised
+            GGML_ASSERT(K <= n_seq_tokens);
+            GGML_ASSERT(A->ne[1] == n_head);
+            GGML_ASSERT(ggml_is_matrix(A));
+
+            if (A->ne[0] != 1) {
+                // Mamba-1 has more granular decay factors
+                GGML_ASSERT(A->ne[0] == d_state);
+                GGML_ASSERT(K == 1);
+            }
+        }
+
+        // concatenated y + ssm_states
+        struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32,
+                ggml_nelements(x) + K*s->ne[0]*s->ne[1]*s->ne[2]*sq->ne[0]);
+
+        result->op   = GGML_OP_SSM_SCAN;
+        result->src[0] = s;
+        result->src[1] = x;
+        result->src[2] = dt;
+        result->src[3] = A;
+        result->src[4] = B;
+        result->src[5] = C;
+        result->src[6] = sq;
+
+        ggml_set_op_params_i32(result, 0, (int32_t) K);
+
+        return result;
+    }
+
     GGML_ASSERT(ggml_is_contiguous(s));
     GGML_ASSERT(ggml_is_contiguous(x));
     GGML_ASSERT(ggml_is_contiguous(dt));
@@ -11710,7 +11803,43 @@ struct ggml_tensor * ggml_ssm_scan(
     result->src[5] = C;
     result->src[6] = sq;
 
+    // legacy layout marker (see ggml.h)
+    ggml_set_op_params_i32(result, 0, -1);
+
     return result;
+}
+
+struct ggml_tensor * ggml_ssm_scan(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * s,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * dt,
+        struct ggml_tensor  * A,
+        struct ggml_tensor  * B,
+        struct ggml_tensor  * C,
+        struct ggml_tensor  * sq) {
+    return ggml_ssm_scan_impl(ctx, s, x, dt, A, B, C, sq, -1);
+}
+
+struct ggml_tensor * ggml_ssm_scan_m2(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * s,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * dt,
+        struct ggml_tensor  * A,
+        struct ggml_tensor  * B,
+        struct ggml_tensor  * C,
+        struct ggml_tensor  * sq,
+        int64_t               K) {
+    GGML_ASSERT(K >= 1);
+    return ggml_ssm_scan_impl(ctx, s, x, dt, A, B, C, sq, K);
+}
+
+struct ggml_tensor * ggml_ssm_conv_m2(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * s,
+        struct ggml_tensor  * c) {
+    return ggml_ssm_conv(ctx, s, NULL, c, NULL, NULL);
 }
 
 // ggml_win_part
@@ -16528,7 +16657,14 @@ static void ggml_compute_forward_concat(
         case GGML_TYPE_F32:
         case GGML_TYPE_I32:
             {
-                ggml_compute_forward_concat_f32(params, dst);
+                // the f32 fast path requires all tensors to be contiguous along dim 0;
+                // strided views (e.g. the transposed xBC the Mamba-2 conv concatenates)
+                // go through the generic strided implementation
+                if (src0->nb[0] == sizeof(float) && dst->src[1]->nb[0] == sizeof(float) && dst->nb[0] == sizeof(float)) {
+                    ggml_compute_forward_concat_f32(params, dst);
+                } else {
+                    ggml_compute_forward_concat_any(params, dst);
+                }
             } break;
         default:
             {
@@ -24622,11 +24758,74 @@ static int ggml_compute_forward_ssm_conv_f32(
     return node;
 }
 
+// Mamba-2 layout: s = conv_x {d_conv - 1 + n_t, d_inner, n_s}, c = conv1d.weight.
+// Ported from upstream llama.cpp (ggml/src/ggml-cpu/ops.cpp).
+static void ggml_compute_forward_ssm_conv_m2_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0]; // conv_x
+    const struct ggml_tensor * src1 = dst->src[1]; // conv1d.weight
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc  = src1->ne[0]; // d_conv
+    const int ncs = src0->ne[0]; // d_conv - 1 + n_t
+    const int nr  = src0->ne[1]; // d_inner
+    const int n_t =  dst->ne[1]; // tokens per sequence
+    const int n_s =  dst->ne[2]; // number of sequences in the batch
+
+    GGML_ASSERT( dst->ne[0] == nr);
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+    GGML_ASSERT(src0->nb[1] == src0->ne[0]*sizeof(float));
+    // the weight is indexed as c[i0 + i1*nc]; a non-contiguous slice would silently
+    // convolve with the wrong taps (the CUDA twin honours the stride)
+    GGML_ASSERT(src1->nb[1] == nc*sizeof(float));
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+    const int ir  = ir1 - ir0;
+
+    for (int i3 = 0; i3 < n_s; ++i3) {
+        for (int i2 = 0; i2 < n_t; ++i2) {
+            // {d_conv - 1 + n_t, d_inner, n_seqs}
+            // sliding window
+            const float * s = (const float *) ((const char *) src0->data + ir0*(src0->nb[1]) + i2*(src0->nb[0]) + i3*(src0->nb[2])); // {d_conv, d_inner, n_s}
+            const float * c = (const float *) ((const char *) src1->data + ir0*(src1->nb[1])); // {d_conv, d_inner}
+            float * x = (float *) ((char *) dst->data + ir0*(dst->nb[0]) + i2*(dst->nb[1]) + i3*(dst->nb[2])); // {d_inner, n_t, n_s}
+
+            // d_inner
+            for (int i1 = 0; i1 < ir; ++i1) {
+                // rowwise dot product
+                // NOTE: not using ggml_vec_dot_f32, because its sum is in double precision
+                float sumf = 0.0f;
+
+                // d_conv
+                for (int i0 = 0; i0 < nc; ++i0) {
+                    sumf += s[i0 + i1*ncs] * c[i0 + i1*nc];
+                }
+                x[i1] = sumf;
+            }
+        }
+    }
+}
+
 static int ggml_compute_forward_ssm_conv(const struct ggml_compute_params * params,
         struct ggml_tensor * dst, int node, const struct ggml_cgraph * cgraph) {
     switch (dst->src[0]->type) {
         case GGML_TYPE_F32:
             {
+                if (dst->src[3] == NULL) {
+                    // Mamba-2 layout (Nemotron-H etc.): no per-token state tracking,
+                    // the caller slides the state window in the graph.
+                    ggml_compute_forward_ssm_conv_m2_f32(params, dst);
+                    return node;
+                }
                 return ggml_compute_forward_ssm_conv_f32(params, dst, node, cgraph);
             } break;
         default:
@@ -24742,12 +24941,180 @@ static void ggml_compute_forward_ssm_scan_f32(
     }
 }
 
+// Mamba-2 layout: s {d_state, dim, n_head, n_slots}, x {dim, n_head, n_seq_tokens, n_seqs},
+// dt {n_head, n_seq_tokens, n_seqs}, A {1|d_state, n_head}, B/C {d_state, n_group, n_seq_tokens, n_seqs},
+// ids {n_seqs}; K >= 1 snapshots of the state are kept in the result after the y part.
+// Ported from upstream llama.cpp (ggml/src/ggml-cpu/ops.cpp).
+static void ggml_compute_forward_ssm_scan_m2_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0]; // s
+    const struct ggml_tensor * src1 = dst->src[1]; // x
+    const struct ggml_tensor * src2 = dst->src[2]; // dt
+    const struct ggml_tensor * src3 = dst->src[3]; // A
+    const struct ggml_tensor * src4 = dst->src[4]; // B
+    const struct ggml_tensor * src5 = dst->src[5]; // C
+    const struct ggml_tensor * src6 = dst->src[6]; // ids
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t nc = src0->ne[0]; // d_state
+    const int64_t nr = src0->ne[1]; // dim
+    const int64_t nh = src1->ne[1]; // n_head
+    const int64_t ng = src4->ne[1];
+    const int64_t nt = src1->ne[2]; // number of tokens per sequence
+    const int64_t ns = src1->ne[3]; // number of sequences in the batch
+    const int64_t K  = ggml_get_op_params_i32(dst, 0);
+
+    // can't use ggml_nbytes because src1 is not necessarily contiguous
+    const int64_t s_off = ggml_nelements(src1) * ggml_element_size(src1);
+
+    GGML_ASSERT(K >= 1);
+    GGML_ASSERT(ggml_nelements(src1) + K*nc*nr*nh*ns == ggml_nelements(dst));
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+    GGML_ASSERT(src2->nb[0] == sizeof(float));
+    GGML_ASSERT(src3->nb[0] == sizeof(float));
+    GGML_ASSERT(src4->nb[0] == sizeof(float));
+    GGML_ASSERT(src5->nb[0] == sizeof(float));
+    GGML_ASSERT(src6->nb[0] == sizeof(int32_t));
+    GGML_ASSERT(nh % ng == 0);
+    GGML_ASSERT(src3->ne[0] == 1 || K == 1);
+
+    // heads per thread
+    const int dh = (nh + nth - 1)/nth;
+
+    // head range for this thread
+    const int ih0 = dh*ith;
+    const int ih1 = MIN(ih0 + dh, nh);
+
+    const int32_t * ids = (const int32_t *) src6->data;
+
+    for (int i3 = 0; i3 < ns; ++i3) {
+        const float * s0 = (const float *) ((const char *) src0->data + ids[i3]*(src0->nb[3])); // {d_state, dim, nh, n_slots}
+              float * s  = (      float *) ((      char *) dst->data  + i3*(src0->nb[3]) + s_off); // {d_state, dim, nh, ns}
+
+        for (int i2 = 0; i2 < nt; ++i2) {
+            const float * x  = (const float *) ((const char *) src1->data + i2*(src1->nb[2]) + i3*(src1->nb[3])); // {dim, nh, nt, ns}
+            const float * dt = (const float *) ((const char *) src2->data + i2*(src2->nb[1]) + i3*(src2->nb[2])); // {nh, nt, ns}
+            const float * A  = (const float *) ((const char *) src3->data); // {d_state, nh} or {1, nh}
+            const float * B  = (const float *) ((const char *) src4->data + i2*(src4->nb[2]) + i3*(src4->nb[3])); // {d_state, ng, nt, ns}
+            const float * C  = (const float *) ((const char *) src5->data + i2*(src5->nb[2]) + i3*(src5->nb[3])); // {d_state, ng, nt, ns}
+                  float * y  = (      float *) ((      char *) dst->data + i2*(nh*nr*sizeof(float)) + i3*(nt*nh*nr*sizeof(float))); // {dim, nh, nt, ns}
+
+            if (src3->ne[0] == 1) {
+                // Mamba-2 has a scalar decay factor per head; dA can be outside the state-wise loop
+
+                // n_head
+                for (int h = ih0; h < ih1; ++h) {
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
+                    const float dA = expf(dt_soft_plus * A[h]);
+                    const int g = h / (nh / ng); // repeat_interleave
+
+                    // dim
+                    for (int i1 = 0; i1 < nr; ++i1) {
+                        const int ii = i1 + h*nr;
+                        const float x_dt = x[ii] * dt_soft_plus;
+                        float sumf = 0.0f;
+#if defined(GGML_SIMD)
+                        const int np = (nc & ~(GGML_F32_STEP - 1));
+
+                        GGML_F32_VEC sum[GGML_F32_ARR] = { GGML_F32_VEC_ZERO };
+
+                        GGML_F32_VEC adA = GGML_F32_VEC_SET1(dA);
+                        GGML_F32_VEC axdt = GGML_F32_VEC_SET1(x_dt);
+
+                        GGML_F32_VEC ax[GGML_F32_ARR];
+                        GGML_F32_VEC ay[GGML_F32_ARR];
+                        GGML_F32_VEC az[GGML_F32_ARR];
+
+                        for (int i = 0; i < np; i += GGML_F32_STEP) {
+                            for (int j = 0; j < GGML_F32_ARR; j++) {
+                                ax[j] = GGML_F32_VEC_LOAD(s0 + i + j*GGML_F32_EPR + ii*nc);
+                                ay[j] = GGML_F32_VEC_LOAD(B + i + j*GGML_F32_EPR + g*nc);
+                                az[j] = GGML_F32_VEC_LOAD(C + i + j*GGML_F32_EPR + g*nc);
+
+                                ax[j] = GGML_F32_VEC_MUL(ax[j], adA);
+                                ay[j] = GGML_F32_VEC_MUL(ay[j], axdt);
+
+                                ax[j] = GGML_F32_VEC_ADD(ax[j], ay[j]);
+
+                                sum[j] = GGML_F32_VEC_FMA(sum[j], ax[j], az[j]);
+
+                                GGML_F32_VEC_STORE(s + i + j*GGML_F32_EPR + ii*nc, ax[j]);
+                            }
+                        }
+
+                        // reduce sum0..sum3 to sum0
+                        GGML_F32_VEC_REDUCE(sumf, sum);
+#else
+                        const int np = 0;
+#endif
+                        // d_state
+                        for (int i0 = np; i0 < nc; ++i0) {
+                            const int i = i0 + ii*nc;
+                            const int ig = i0 + g*nc;
+                            // state = prev_state * dA + dB * x
+                            const float state = (s0[i] * dA) + (B[ig] * x_dt);
+                            // y = rowwise_dotprod(state, C)
+                            sumf += state * C[ig];
+                            s[i] = state;
+                        }
+                        y[ii] = sumf;
+                    }
+                }
+            } else {
+                // Mamba-1 has an element-wise decay factor for the states (K == 1 here)
+
+                // n_head
+                for (int h = ih0; h < ih1; ++h) {
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
+                    const int g = h / (nh / ng); // repeat_interleave
+
+                    // dim
+                    for (int i1 = 0; i1 < nr; ++i1) {
+                        const int ii = i1 + h*nr;
+                        const float x_dt = x[ii] * dt_soft_plus;
+                        float sumf = 0.0f;
+                        // d_state
+                        for (int i0 = 0; i0 < nc; ++i0) {
+                            const int i = i0 + ii*nc;
+                            const int ig = i0 + g*nc;
+                            // state = prev_state * dA + dB * x
+                            const float state = (s0[i] * expf(dt_soft_plus * A[i0 + h*nc])) + (B[ig] * x_dt);
+                            // y = rowwise_dotprod(state, C)
+                            sumf += state * C[ig];
+                            s[i] = state;
+                        }
+                        y[ii] = sumf;
+                    }
+                }
+            }
+            const int64_t slot = nt - 1 - i2;
+            if (K > 1 && slot > 0 && slot < K) {
+                float * s_snapshot = (float *) ((char *) dst->data + s_off + (slot*ns + i3)*(src0->nb[3]));
+                for (int h = ih0; h < ih1; ++h) {
+                    memcpy((char *) s_snapshot + h*src0->nb[2], (char *) s + h*src0->nb[2], src0->nb[2]);
+                }
+            }
+            // use the output as the source when it's not the first token-wise iteration
+            s0 = s;
+        }
+    }
+}
+
 static void ggml_compute_forward_ssm_scan(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
     switch (dst->src[0]->type) {
         case GGML_TYPE_F32:
             {
+                if (ggml_get_op_params_i32(dst, 0) >= 1) {
+                    // Mamba-2 layout (Nemotron-H etc.)
+                    ggml_compute_forward_ssm_scan_m2_f32(params, dst);
+                    break;
+                }
                 ggml_compute_forward_ssm_scan_f32(params, dst);
             } break;
         default:

@@ -2651,6 +2651,12 @@ extern "C" {
            struct ggml_tensor  * d,
            bool                  masked);
 
+    // ssm_conv: two layouts, selected by the caller
+    //   legacy (Mamba-1 / GDN / LFM2 / OpenPangu): s = conv state {d_conv-1, d_inner, n_kv},
+    //       x = input {d_inner, n_tokens}, sq = per-token seq slots {n_kv, n_tokens}.
+    //   mamba-2 (Nemotron-H etc.): s = conv_x {d_conv-1 + n_t, d_inner, n_s}, x = NULL,
+    //       c = conv1d.weight, sq = NULL. Returns only the conv result; the caller slides
+    //       the state window in the graph (mirrors upstream llama.cpp).
     GGML_API struct ggml_tensor * ggml_ssm_conv(
             struct ggml_context * ctx,
             struct ggml_tensor  * s,
@@ -2668,6 +2674,30 @@ extern "C" {
             struct ggml_tensor  * B,
             struct ggml_tensor  * C,
             struct ggml_tensor  * sq);
+
+    // Mamba-2 layout (Nemotron-H etc.): x is {head_dim, n_head, n_seq_tokens, n_seqs}, sq is
+    // the {n_seqs} int32 ids tensor and K (>= 1) selects the number of state snapshots kept in
+    // the result. Separate entry point so the legacy signature above stays untouched.
+    GGML_API struct ggml_tensor * ggml_ssm_scan_m2(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * s,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * dt,
+            struct ggml_tensor  * A,
+            struct ggml_tensor  * B,
+            struct ggml_tensor  * C,
+            struct ggml_tensor  * sq,
+            int64_t               K);
+
+    // Mamba-2 layout of the 1-D convolution: s is conv_x {d_conv - 1 + n_t, ch, n_s} and c is
+    // the conv weight {d_conv, ch}; returns the convolution of the sliding window. This builds
+    // the same op as the legacy call with x == NULL (the encoding upstream llama.cpp uses for
+    // the Mamba-2 form, and the one the CUDA backend dispatches on); the named entry point just
+    // keeps callers from passing a null argument.
+    GGML_API struct ggml_tensor * ggml_ssm_conv_m2(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * s,
+            struct ggml_tensor  * c);
 
     // partition into non-overlapping windows with padding if needed
     // example:

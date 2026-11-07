@@ -176,7 +176,14 @@ void llm_load_hparams(
         hparams.n_embd_out = hparams.n_embd;
     }
     ml.get_key(LLM_KV_EXPERT_COUNT,      hparams.n_expert,      false);
-    ml.get_key(LLM_KV_EXPERT_USED_COUNT, hparams.n_expert_used, false);
+    // expert_used_count may be a scalar OR a per-layer array (Nemotron "Puzzle");
+    // get_key() throws on a type mismatch, so read the array form directly
+    ml.get_key_or_arr(LLM_KV_EXPERT_USED_COUNT, hparams.n_expert_used_arr, hparams.n_layer, false);
+    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+        if (hparams.n_expert_used_arr[i] > hparams.n_expert_used) {
+            hparams.n_expert_used = hparams.n_expert_used_arr[i];
+        }
+    }
 
     GGML_ASSERT(hparams.n_expert <= LLAMA_MAX_EXPERTS);
     GGML_ASSERT(hparams.n_expert_used <= hparams.n_expert);
@@ -1431,6 +1438,72 @@ void llm_load_hparams(
                             case 2560: model.type = e_model::MODEL_3B; break;
                             default: model.type = e_model::MODEL_UNKNOWN;
                         } break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
+            {
+                // an appended NextN/MTP block is dense and would be built as an ordinary layer,
+                // i.e. wrong logits with no error; refuse instead
+                uint32_t n_nextn = 0;
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, n_nextn, false);
+                if (n_nextn > 0) {
+                    throw std::runtime_error("nemotron_h: NextN/MTP blocks are not supported "
+                            "(nextn_predict_layers = " + std::to_string(n_nextn) + ")");
+                }
+
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // the graph and the loader divide by these, so reject broken metadata with a
+                // message instead of a SIGFPE or an assert deep inside a builder
+                if (hparams.ssm_d_conv < 1 || hparams.ssm_n_group < 1 || hparams.ssm_dt_rank < 1 ||
+                        hparams.ssm_d_inner < 1 || hparams.ssm_d_state < 1 ||
+                        hparams.ssm_d_inner % hparams.ssm_n_group != 0 ||
+                        hparams.ssm_d_inner % hparams.ssm_dt_rank != 0) {
+                    throw std::runtime_error("nemotron_h: invalid SSM metadata (need "
+                            "ssm.conv_kernel >= 1, ssm.group_count >= 1, ssm.time_step_rank >= 1, "
+                            "ssm.inner_size and ssm.state_size >= 1, inner_size divisible by both)");
+                }
+
+                // expert_feed_forward_length may be scalar or per-layer array
+                ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer, false);
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    if (hparams.n_ff_exp_arr[i] > hparams.n_ff_exp) {
+                        hparams.n_ff_exp = hparams.n_ff_exp_arr[i];
+                    }
+                }
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp,           false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm,  false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_MOE_LATENT_SIZE,                   hparams.moe_latent_size,      false);
+
+                // A layer is recurrent (SSM) iff it has no KV heads and no FFN.
+                // Attention layers: n_head_kv != 0, n_ff == 0. FFN layers: n_ff != 0.
+                uint32_t n_recurrent = 0;
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    hparams.recurrent_layer_arr[i] = (hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0);
+                    n_recurrent += hparams.recurrent_layer_arr[i] ? 1 : 0;
+                }
+                if (n_recurrent == 0) {
+                    // a scalar attention.head_count_kv is replicated to every layer by the loader,
+                    // which would make every layer look like attention and fail much later with a
+                    // generic "missing tensor" error
+                    throw std::runtime_error("nemotron_h: no recurrent layers found - the GGUF must "
+                            "provide per-layer attention.head_count_kv / feed_forward_length");
+                }
+
+                switch (hparams.n_layer) {
+                    case 42: model.type = e_model::MODEL_4B;      break; // Nemotron 3 Nano 4B (dense)
+                    case 52: model.type = e_model::MODEL_30B_A3B; break; // Nemotron 3 Nano 30B-A3B
+                    case 56: model.type = e_model::MODEL_9B;      break; // Nemotron-H-9B
+                    case 88: model.type = e_model::MODEL_70B;     break; // Nemotron 3 Super / 3.5 class
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
@@ -2865,6 +2938,11 @@ void llm_load_hparams(
     if (hparams.f_max_alibi_bias > 0.0f) {
         hparams.use_alibi = true;
     }
+
+    // qwen3next-family packed recurrent state layout, kept as an explicit flag:
+    // Nemotron-H also has ssm_n_group > 0 but uses the standard Mamba-2 layout
+    // (conv state in the k-side row, d_state * d_inner recurrent state).
+    hparams.use_qnext_state_layout = llm_arch_uses_qnext_state_layout(model.arch);
 
     hparams.rope_type = llama_rope_type(&model);
 }

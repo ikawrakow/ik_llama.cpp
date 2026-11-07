@@ -50,6 +50,8 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA3,          "gemma3"       },
     { LLM_ARCH_STARCODER2,      "starcoder2"   },
     { LLM_ARCH_MAMBA,           "mamba"        },
+    { LLM_ARCH_NEMOTRON_H,      "nemotron_h"   },
+    { LLM_ARCH_NEMOTRON_H_MOE,  "nemotron_h_moe" },
     { LLM_ARCH_XVERSE,          "xverse"       },
     { LLM_ARCH_COMMAND_R,       "command-r"    },
     { LLM_ARCH_DBRX,            "dbrx"         },
@@ -163,6 +165,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_EXPERT_GROUP_COUNT,                "%s.expert_group_count"                },
     { LLM_KV_EXPERT_GROUP_USED_COUNT,           "%s.expert_group_used_count"           },
     { LLM_KV_EXPERT_WEIGHTS_SCALE,              "%s.expert_weights_scale"              },
+    { LLM_KV_MOE_LATENT_SIZE,                   "%s.moe_latent_size"                   },
     { LLM_KV_EXPERT_WEIGHTS_NORM,               "%s.expert_weights_norm"               },
     { LLM_KV_EXPERT_GATING_FUNC,                "%s.expert_gating_func"                },
     // K2 Horizon MoVA
@@ -382,6 +385,24 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
     }
 }
 
+bool llm_arch_uses_qnext_state_layout(const llm_arch & arch) {
+    // Used to be inferred from ssm_n_group > 0, but Nemotron-H also sets ssm_n_group
+    // (grouped B/C) while using the standard Mamba-2 layout, so the set is explicit.
+    // RAON1 (KDA) and BAILINGMOE3 qualified through ssm_n_group before and keep that layout.
+    switch (arch) {
+        case LLM_ARCH_QWEN3NEXT:
+        case LLM_ARCH_QWEN4EXP:
+        case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_GLM5NEXT:
+        case LLM_ARCH_RAON1:
+        case LLM_ARCH_BAILINGMOE3:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool llm_arch_is_hybrid(const llm_arch & arch) {
     switch (arch) {
     case LLM_ARCH_QWEN3NEXT:
@@ -397,6 +418,8 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_LFM2MOE:
     case LLM_ARCH_LFM3:
     case LLM_ARCH_RAON1:
+    case LLM_ARCH_NEMOTRON_H:
+    case LLM_ARCH_NEMOTRON_H_MOE:
         return true;
     default:
         return false;
