@@ -2300,7 +2300,7 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
             auto result_c = sum_c.data();
             auto result_r = sum_r.data();
             for (int i02 = 0; i02 < int(tensor->ne[2]); ++i02) {
-                auto values = f32_data + i02*tensor->ne[0]*tensor->ne[2];
+                auto values = f32_data + i02*tensor->ne[0]*tensor->ne[1];
                 for (int row = 0; row < int(tensor->ne[1]); ++row) {
                     float sum = 0;
                     for (int j = 0; j < int(tensor->ne[0]); ++j) {
