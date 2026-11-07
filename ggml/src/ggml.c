@@ -25292,6 +25292,7 @@ static void ggml_compute_forward_hc_pre_f32(
     float clamp;
     memcpy(&clamp, &dst->op_params[4], sizeof(float));
     const int64_t T = src0->ne[1];
+    const bool with_clamp = clamp > 0.0f;
 
     GGML_ASSERT(S >= 1 && S <= 8);
     GGML_ASSERT(src0->ne[0] == (int64_t) S * S + 2 * S);
@@ -25322,53 +25323,98 @@ static void ggml_compute_forward_hc_pre_f32(
         for (int i = 0; i < S; ++i) {
             float val = x_pre[i] * scale[0] + bias[i];
             val = 1.f / (1.f + expf(-val));
-            y_pre[i] = val + eps;
+            y_pre[i] = val + (with_clamp ? 0.0f : eps);
 
             val = x_post[i] * scale[1] + bias[S + i];
             val = 1.f / (1.f + expf(-val));
             y_post[i] = 2.0f * val;
         }
 
-        for (int i = 0; i < S*S; ++i) {
-            m[i] = x_comb[i] * scale[2] + bias[2*S + i];
-            if (clamp > 0.0f) {
-                m[i] = MIN(MAX(m[i], -clamp), clamp);
+        // comb[m] uses [src, dst] layout: m[src*S + dst].
+        // This is the layout expected by ggml_hc_post.
+        for (int src = 0; src < S; ++src) {
+            for (int d = 0; d < S; ++d) {
+                const int i = src*S + d;
+                m[i] = x_comb[i] * scale[2] + bias[2*S + i];
+                if (with_clamp) {
+                    m[i] = MIN(MAX(m[i], -clamp), clamp);
+                }
             }
         }
 
-        for (int r = 0; r < S; ++r) {
-            float mx = m[r*S];
-            for (int c = 1; c < S; ++c) mx = MAX(mx, m[r*S + c]);
-            float sum = 0.0f;
-            for (int c = 0; c < S; ++c) { m[r*S + c] = expf(m[r*S + c] - mx); sum += m[r*S + c]; }
-            for (int c = 0; c < S; ++c) m[r*S + c] = m[r*S + c]/sum + eps;
-        }
+        if (with_clamp) {
+            // Xing's raw comb is stored as [src, dst] with ne0 = src, while
+            // ggml_hc_post consumes the C-order [src, dst] layout. Transpose
+            // it once here so the reference with_clamp math below is plain
+            // row/column indexing.
+            {
+                float tmp[64];
+                for (int src = 0; src < S; ++src) {
+                    for (int d = 0; d < S; ++d) tmp[src*S + d] = m[d*S + src];
+                }
+                memcpy(m, tmp, sizeof(float)*S*S);
+            }
 
-        for (int c = 0; c < S; ++c) {
-            float sum = eps;
-            for (int r = 0; r < S; ++r) sum += m[r*S + c];
-            for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
-        }
+            // Softmax per dst over src, without sum normalization. Every
+            // Sinkhorn pass is dst-normalization first, then src-normalization;
+            // eps is only in the denominators.
+            for (int d = 0; d < S; ++d) {
+                float mx = -INFINITY;
+                for (int src = 0; src < S; ++src) mx = MAX(mx, m[src*S + d]);
+                for (int src = 0; src < S; ++src) m[src*S + d] = expf(m[src*S + d] - mx);
+            }
 
-        for (int i = 0; i < iters - 1; ++i) {
+            for (int it = 0; it < iters; ++it) {
+                for (int d = 0; d < S; ++d) {
+                    float sum = eps;
+                    for (int src = 0; src < S; ++src) sum += m[src*S + d];
+                    const float inv_sum = 1.0f / sum;
+                    for (int src = 0; src < S; ++src) m[src*S + d] *= inv_sum;
+                }
+                for (int src = 0; src < S; ++src) {
+                    float sum = eps;
+                    for (int d = 0; d < S; ++d) sum += m[src*S + d];
+                    const float inv_sum = 1.0f / sum;
+                    for (int d = 0; d < S; ++d) m[src*S + d] *= inv_sum;
+                }
+            }
+
+            for (int i = 0; i < S*S; ++i) y_comb[i] = m[i];
+        } else {
             for (int r = 0; r < S; ++r) {
-                float sum = eps;
-                for (int c = 0; c < S; ++c) sum += m[r*S + c];
-                for (int c = 0; c < S; ++c) m[r*S + c] /= sum;
+                float mx = m[r*S];
+                for (int c = 1; c < S; ++c) mx = MAX(mx, m[r*S + c]);
+                float sum = 0.0f;
+                for (int c = 0; c < S; ++c) { m[r*S + c] = expf(m[r*S + c] - mx); sum += m[r*S + c]; }
+                for (int c = 0; c < S; ++c) m[r*S + c] = m[r*S + c]/sum + eps;
             }
+
             for (int c = 0; c < S; ++c) {
                 float sum = eps;
                 for (int r = 0; r < S; ++r) sum += m[r*S + c];
                 for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
             }
-        }
-        if (trans) {
-            // dst is [row, col, T] (ne0 = row): transpose on write
-            for (int c = 0; c < S; ++c) {
-                for (int r = 0; r < S; ++r) y_comb[c*S + r] = m[r*S + c];
+
+            for (int i = 0; i < iters - 1; ++i) {
+                for (int r = 0; r < S; ++r) {
+                    float sum = eps;
+                    for (int c = 0; c < S; ++c) sum += m[r*S + c];
+                    for (int c = 0; c < S; ++c) m[r*S + c] /= sum;
+                }
+                for (int c = 0; c < S; ++c) {
+                    float sum = eps;
+                    for (int r = 0; r < S; ++r) sum += m[r*S + c];
+                    for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
+                }
             }
-        } else {
-            for (int i = 0; i < S*S; ++i) y_comb[i] = m[i];
+            if (trans) {
+                // dst is [row, col, T] (ne0 = row): transpose on write
+                for (int c = 0; c < S; ++c) {
+                    for (int r = 0; r < S; ++r) y_comb[c*S + r] = m[r*S + c];
+                }
+            } else {
+                for (int i = 0; i < S*S; ++i) y_comb[i] = m[i];
+            }
         }
     }
 }
