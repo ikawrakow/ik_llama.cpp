@@ -65,7 +65,7 @@ static __global__ void k_sinkhorn(const float * __restrict__ x, float * __restri
 template <int S>
 static __global__ void k_hc_pre(const float * __restrict__ x, const float * __restrict__ scale,
         const float * __restrict__ bias, float * __restrict__ dst,
-        const int64_t T, const int iters, const float eps, bool transposed, const int64_t nb1) {
+        const int64_t T, const int iters, const float eps, bool transposed, const float clamp, const int64_t nb1) {
     const int64_t t = (int64_t) blockIdx.x*blockDim.x + threadIdx.x;
     if (t >= T) {
         return;
@@ -96,6 +96,9 @@ static __global__ void k_hc_pre(const float * __restrict__ x, const float * __re
     #pragma unroll
     for (int i = 0; i < S*S; ++i) {
         m[i] = x_comb[i] * scale[2] + bias[2*S + i];
+        if (clamp > 0.0f) {
+            m[i] = fminf(fmaxf(m[i], -clamp), clamp);
+        }
     }
 
     #pragma unroll
@@ -227,6 +230,8 @@ void ggml_cuda_op_hc_pre(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int trans = dst->op_params[3];
     float eps;
     memcpy(&eps, &dst->op_params[2], sizeof(float));
+    float clamp;
+    memcpy(&clamp, &dst->op_params[4], sizeof(float));
     const int64_t T = src0->ne[1];
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && src2->type == GGML_TYPE_F32);
@@ -252,14 +257,14 @@ void ggml_cuda_op_hc_pre(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     float * y = (float *) dst->data;
 
     switch (S) {
-        case 1: k_hc_pre<1><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, src0->nb[1]); break;
-        case 2: k_hc_pre<2><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, src0->nb[1]); break;
-        case 3: k_hc_pre<3><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, src0->nb[1]); break;
-        case 4: k_hc_pre<4><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, src0->nb[1]); break;
-        case 5: k_hc_pre<5><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, src0->nb[1]); break;
-        case 6: k_hc_pre<6><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, src0->nb[1]); break;
-        case 7: k_hc_pre<7><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, src0->nb[1]); break;
-        case 8: k_hc_pre<8><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, src0->nb[1]); break;
+        case 1: k_hc_pre<1><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, clamp, src0->nb[1]); break;
+        case 2: k_hc_pre<2><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, clamp, src0->nb[1]); break;
+        case 3: k_hc_pre<3><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, clamp, src0->nb[1]); break;
+        case 4: k_hc_pre<4><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, clamp, src0->nb[1]); break;
+        case 5: k_hc_pre<5><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, clamp, src0->nb[1]); break;
+        case 6: k_hc_pre<6><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, clamp, src0->nb[1]); break;
+        case 7: k_hc_pre<7><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, clamp, src0->nb[1]); break;
+        case 8: k_hc_pre<8><<<grid, block, 0, stream>>>(x, s, b, y, T, iters, eps, trans, clamp, src0->nb[1]); break;
         default: GGML_ABORT("hc_pre: unsupported S");
     }
 }

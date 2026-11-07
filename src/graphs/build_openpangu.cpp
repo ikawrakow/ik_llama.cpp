@@ -1161,7 +1161,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         }
         ggml_tensor * mixes = build_mhc_pre_projection(
                 Rin, phi, gamma, n_embd, S, hparams.f_norm_rms_eps, true); // [(S+2)*S, T]
-        ggml_tensor * all = ggml_hc_pre(ctx0, mixes, alpha, beta, (int) S, sink_iters, 0.0f);
+        ggml_tensor * all = ggml_hc_pre(ctx0, mixes, alpha, beta, (int) S, sink_iters, 0.0f, 0.0f);
         ggml_tensor * h_pre  = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), 0);
         ggml_tensor * h_post = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), S*n_tokens*sizeof(float));
         ggml_tensor * h_res  = ggml_view_3d(ctx0, all, S, S, n_tokens,

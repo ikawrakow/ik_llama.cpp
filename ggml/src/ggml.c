@@ -10907,7 +10907,8 @@ struct ggml_tensor * ggml_hc_pre(
             struct ggml_tensor  * bias,
             int                   S,
             int                   n_iters,
-            float                 eps) {
+            float                 eps,
+            float                 clamp) {
     GGML_ASSERT(x->type == GGML_TYPE_F32 && scale->type == GGML_TYPE_F32 && bias->type == GGML_TYPE_F32);
     int ntot = S*S + 2*S;
     GGML_ASSERT(scale->ne[0] == 3 && ggml_nrows(scale) == 1);
@@ -10923,6 +10924,7 @@ struct ggml_tensor * ggml_hc_pre(
     result->op_params[0] = S;
     result->op_params[1] = n_iters;
     memcpy(&result->op_params[2], &eps, sizeof(eps));
+    memcpy(&result->op_params[4], &clamp, sizeof(clamp));
 
     return result;
 }
@@ -25287,6 +25289,8 @@ static void ggml_compute_forward_hc_pre_f32(
     const int trans = dst->op_params[3];
     float eps;
     memcpy(&eps, &dst->op_params[2], sizeof(float));
+    float clamp;
+    memcpy(&clamp, &dst->op_params[4], sizeof(float));
     const int64_t T = src0->ne[1];
 
     GGML_ASSERT(S >= 1 && S <= 8);
@@ -25327,6 +25331,9 @@ static void ggml_compute_forward_hc_pre_f32(
 
         for (int i = 0; i < S*S; ++i) {
             m[i] = x_comb[i] * scale[2] + bias[2*S + i];
+            if (clamp > 0.0f) {
+                m[i] = MIN(MAX(m[i], -clamp), clamp);
+            }
         }
 
         for (int r = 0; r < S; ++r) {
