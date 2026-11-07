@@ -1257,6 +1257,30 @@ static __device__ __forceinline__ int requant_int_q8(const int & v, const half2 
 
     return __byte_perm(x02, x13, 0x6240);
 }
+
+static __device__ __forceinline__ float nvfp4_to_q8(const block_nvfp4 * b, int ib16, int * qs) {
+    int lut[4];
+#pragma unroll
+    for (int k = 0; k < 4; ++k) {
+        // kvalues_mxfp4 * 8 as int8, from the 5-bit two's complement in the low bits of each byte
+        lut[k] = (((const uint32_t *)kvalues_mxfp4)[k] & 0x1f1f1f1f) << 3;
+    }
+    const float s0 = ggml_cuda_ue4m3_to_fp32(b->d[ib16+0]);
+    const float s1 = ggml_cuda_ue4m3_to_fp32(b->d[ib16+1]);
+    const float d = fmaxf(s0, s1);
+    const uint32_t bias = 0xe480u * 0x10001u;
+#pragma unroll
+    for (int l = 0; l < 2; ++l) {
+        const half2 r = __float2half2_rn((l ? s1 : s0)/d);
+        const int2 v1 = get_int_from_table_16_q8(get_int_b4(b->qs, 2*(ib16+l)+0), (const int8_t *)lut, bias, r, bias, r);
+        const int2 v2 = get_int_from_table_16_q8(get_int_b4(b->qs, 2*(ib16+l)+1), (const int8_t *)lut, bias, r, bias, r);
+        qs[4*l+0] = v1.x;
+        qs[4*l+1] = v2.x;
+        qs[4*l+2] = v1.y;
+        qs[4*l+3] = v2.y;
+    }
+    return d*0.125f;
+}
 #endif // INT8_MMA_AVAILABLE
 
 #define VDR_IQ4_NL_Q8_1_MMVQ 2
