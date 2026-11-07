@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Itera
 from itertools import chain
 
 import math
+import tempfile
 import numpy as np
 import torch
 
@@ -42,6 +43,24 @@ class SentencePieceTokenTypes(IntEnum):
 
 
 AnyModel = TypeVar("AnyModel", bound="type[Model]")
+
+
+def repack_mxfp4_blocks(packed, scale):
+    """Repack MXFP4 nibble pairs into ggml block_mxfp4 layout."""
+    packed = packed.contiguous().view(torch.uint8)
+    scale = scale.contiguous().view(torch.uint8)
+    rows, packed_cols = packed.shape
+    cols = packed_cols * 2
+    if cols % 32:
+        raise ValueError(f"MXFP4 source row has {cols} values, expected a multiple of 32")
+    n_blocks = cols // 32
+    if tuple(scale.shape) != (rows, n_blocks):
+        raise ValueError(f"MXFP4 scale shape {tuple(scale.shape)} does not match {(rows, n_blocks)}")
+    src = packed.reshape(rows, n_blocks, 16)
+    lo, hi = src & 0x0F, (src >> 4) & 0x0F
+    vals = torch.stack((lo, hi), dim=-1).reshape(rows, n_blocks, 32)
+    qs = vals[:, :, :16] | (vals[:, :, 16:] << 4)
+    return torch.cat((scale.unsqueeze(-1), qs.to(torch.uint8)), dim=-1).reshape(rows, n_blocks * 17)
 
 
 class Model:
@@ -5410,27 +5429,7 @@ class DeepseekV4Model(DeepseekV2Model):
 
     @staticmethod
     def _pack_mxfp4_blocks(weight: Tensor, scale: Tensor) -> Tensor:
-        weight = LazyTorchTensor.to_eager(weight)
-        scale = LazyTorchTensor.to_eager(scale)
-        packed = weight.contiguous().view(torch.uint8)
-        scale_u8 = scale.contiguous().view(torch.uint8)
-
-        out_features, packed_cols = packed.shape
-        logical_cols = packed_cols * 2
-        if logical_cols % 32 != 0:
-            raise ValueError(f"MXFP4 source row has {logical_cols} values, expected a multiple of 32")
-
-        n_blocks = logical_cols // 32
-        if tuple(scale_u8.shape) != (out_features, n_blocks):
-            raise ValueError(f"MXFP4 scale shape {tuple(scale_u8.shape)} does not match {(out_features, n_blocks)}")
-
-        src = packed.reshape(out_features, n_blocks, 16)
-        low = src & 0x0F
-        high = (src >> 4) & 0x0F
-        vals = torch.stack((low, high), dim=-1).reshape(out_features, n_blocks, 32)
-        qs = vals[:, :, :16] | (vals[:, :, 16:] << 4)
-        raw = torch.cat((scale_u8.unsqueeze(-1), qs.to(torch.uint8)), dim=-1)
-        return raw.reshape(out_features, n_blocks * 17)
+        return repack_mxfp4_blocks(weight, scale)
 
     @staticmethod
     def _dequantize_mtp_weight(weight: Tensor, scale: Tensor) -> Tensor:
@@ -8029,6 +8028,182 @@ def main() -> None:
             model_instance.write()
             out_path = f"{model_instance.fname_out.parent}{os.sep}" if is_split else model_instance.fname_out
             logger.info(f"Model successfully exported to {out_path}")
+
+
+@Model.register("KimiK3ForCausalLM")
+@Model.register("KimiK3ForConditionalGeneration")
+class KimiK3Model(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.KIMI_K3
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._res_parts = {}
+        self._mxfp4_mmaps = []
+
+    def __del__(self):
+        for mm, name in getattr(self, "_mxfp4_mmaps", []):
+            try: mm.flush()
+            except Exception: pass
+            try:
+                if getattr(mm, "_mmap", None) is not None:
+                    mm._mmap.close()
+            except Exception: pass
+            try: del mm
+            except Exception: pass
+            try: os.unlink(name)
+            except OSError: pass
+
+    def set_vocab(self):
+        has_template = False
+        cfg = self.dir_model / "tokenizer_config.json"
+        if cfg.is_file():
+            try:
+                has_template = bool(json.loads(cfg.read_text()).get("chat_template"))
+            except Exception:
+                pass
+        DeepseekV2Model.set_vocab(self)
+        if not has_template:
+            template = Path(__file__).resolve().parent / "models/templates/Kimi-K3.jinja"
+            if template.is_file():
+                self.gguf_writer.add_chat_template(template.read_text())
+        eos = self.hparams.get("eos_token_id")
+        if eos is not None:
+            self.gguf_writer.add_eos_token_id(eos)
+
+    def set_gguf_parameters(self):
+        hp = self.hparams
+        hp["n_routed_experts"] = hp.get("num_experts", hp.get("n_routed_experts", 0))
+        hp["n_shared_experts"] = hp.get("num_shared_experts", 0)
+        hp["norm_topk_prob"] = hp.get("moe_renormalize", False)
+        hp["scoring_func"] = hp.get("moe_router_activation_func", "sigmoid")
+        hp["first_k_dense_replace"] = hp.get("first_k_dense_replace", 0)
+
+        self.gguf_writer.add_block_count(self.block_count)
+        self.gguf_writer.add_context_length(hp["max_position_embeddings"])
+        self.gguf_writer.add_embedding_length(hp["hidden_size"])
+        self.gguf_writer.add_feed_forward_length(hp["intermediate_size"])
+        self.gguf_writer.add_head_count(hp["num_attention_heads"])
+        self.gguf_writer.add_layer_norm_rms_eps(hp["rms_norm_eps"])
+        self.gguf_writer.add_vocab_size(hp["vocab_size"])
+
+        cfg = hp["linear_attn_config"]
+        full = cfg["full_attn_layers"]
+        n_kv = [hp.get("num_key_value_heads", 1) if i + 1 in full else 0 for i in range(hp["num_hidden_layers"])]
+        self.gguf_writer.add_head_count_kv(n_kv)
+        self.gguf_writer.add_ssm_conv_kernel(cfg["short_conv_kernel_size"])
+        self.gguf_writer.add_kda_head_dim(cfg["head_dim"])
+        if (lb := cfg.get("gate_lower_bound")) is not None:
+            self.gguf_writer.add_kda_gate_lower_bound(lb)
+
+        if hp.get("q_lora_rank") is not None:
+            self.gguf_writer.add_q_lora_rank(hp["q_lora_rank"])
+        self.gguf_writer.add_kv_lora_rank(hp["kv_lora_rank"])
+        qk_nope = hp["qk_nope_head_dim"]
+        qk_rope = hp["qk_rope_head_dim"]
+        v_head = hp["v_head_dim"]
+        self.gguf_writer.add_rope_dimension_count(qk_rope)
+        self.gguf_writer.add_key_length(hp["kv_lora_rank"] + qk_rope)
+        self.gguf_writer.add_value_length(hp["kv_lora_rank"])
+        self.gguf_writer.add_key_length_mla(qk_nope + qk_rope)
+        self.gguf_writer.add_value_length_mla(v_head)
+
+        self.gguf_writer.add_expert_feed_forward_length(hp["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_count(hp["num_shared_experts"])
+        self.gguf_writer.add_leading_dense_block_count(hp["first_k_dense_replace"])
+        self.gguf_writer.add_expert_weights_scale(hp["routed_scaling_factor"])
+        self.gguf_writer.add_expert_weights_norm(hp["moe_renormalize"])
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        if hp.get("routed_expert_hidden_size") is not None:
+            self.gguf_writer.add_expert_latent_length(hp["routed_expert_hidden_size"])
+        self.gguf_writer.add_activation_situ_beta(hp["activation_situ_beta"])
+        self.gguf_writer.add_activation_situ_linear_beta(hp["activation_situ_linear_beta"])
+        self.gguf_writer.add_attn_res_block_size(hp["attn_res_block_size"])
+
+    def modify_tensors(self, data_torch, name, bid):
+        if name.endswith("kv_b_proj.weight"):
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_KV_B, bid), data_torch)]
+        m = re.match(r"(?:model\.)?(?:layers\.(\d+)\.)?(self_attn|mlp|output)_res_(norm|proj)\.weight$", name)
+        if m:
+            layer, kind, part = m.group(1), m.group(2), m.group(3)
+            key = f"{layer or ''}/{kind}"
+            if key in self._res_parts and self._res_parts[key][0] != part:
+                other = self._res_parts.pop(key)[1]
+                fused = (other.float().flatten() * data_torch.float().flatten())
+                if kind == "output":
+                    tn = gguf.MODEL_TENSOR.OUTPUT_RES_SCORE
+                    bid_out = None
+                else:
+                    tn = gguf.MODEL_TENSOR.ATTN_RES_SCORE if kind == "self_attn" else gguf.MODEL_TENSOR.FFN_RES_SCORE
+                    bid_out = int(layer)
+                return [(self.format_tensor_name(tn, bid_out), fused)]
+            self._res_parts[key] = (part, data_torch)
+            return []
+        return super().modify_tensors(data_torch, name, bid)
+
+    def _safetensor_names(self):
+        names = {}
+        if not self.is_safetensors:
+            return names
+        from safetensors import safe_open
+        for part in self.part_names:
+            with safe_open(self.dir_model / part, framework="pt", device="cpu") as f:
+                for name in f.keys():
+                    names[name] = part
+        return names
+
+    def _load_safetensor(self, name, parts):
+        from safetensors import safe_open
+        with safe_open(self.dir_model / parts[name], framework="pt", device="cpu") as f:
+            return f.get_tensor(name)
+
+    def _write_mxfp4_experts(self, names):
+        groups = {}
+        pat = re.compile(r"(?:model\.)?layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.(w1|w2|w3)\.(weight|weight_scale)$")
+        for name in names:
+            m = pat.match(name)
+            if m:
+                il, eid, proj, kind = m.groups()
+                groups.setdefault((int(il), proj), {}).setdefault(int(eid), {})[kind] = name
+        if not groups:
+            return set()
+        skipped = set()
+        tmap = {"w1": gguf.MODEL_TENSOR.FFN_GATE_EXP,
+                "w2": gguf.MODEL_TENSOR.FFN_DOWN_EXP,
+                "w3": gguf.MODEL_TENSOR.FFN_UP_EXP}
+        for (il, proj), experts in sorted(groups.items()):
+            eids = sorted(experts)
+            out = None
+            for i, eid in enumerate(eids):
+                w = experts[eid].get("weight")
+                s = experts[eid].get("weight_scale")
+                if w is None or s is None:
+                    raise ValueError(f"Kimi-K3 MXFP4 expert {il}/{eid}/{proj} is incomplete")
+                row = repack_mxfp4_blocks(self._load_safetensor(w, names),
+                                          self._load_safetensor(s, names)).numpy()
+                if out is None:
+                    tmp = tempfile.NamedTemporaryFile(prefix="kimi-k3-mxfp4-", suffix=".raw",
+                                                      dir=self.fname_out.parent, delete=False)
+                    out = np.memmap(tmp.name, dtype=row.dtype, mode="w+", shape=(len(eids), *row.shape))
+                    self._mxfp4_mmaps.append((out, tmp.name))
+                out[i] = row
+                skipped.update((w, s))
+            out.flush()
+            self.gguf_writer.add_tensor(self.format_tensor_name(tmap[proj], il), out,
+                                        raw_dtype=gguf.GGMLQuantizationType.MXFP4)
+        return skipped
+
+    def get_tensors(self):
+        skip = getattr(self, "_mxfp4_skip", set())
+        for name, data in super().get_tensors():
+            if name not in skip:
+                yield name, data
+
+    def prepare_tensors(self):
+        names = self._safetensor_names()
+        self._mxfp4_skip = self._write_mxfp4_experts(names)
+        super().prepare_tensors()
+        if self._res_parts:
+            raise ValueError(f"Unpaired attention-residual tensors: {sorted(self._res_parts)}")
 
 
 if __name__ == '__main__':

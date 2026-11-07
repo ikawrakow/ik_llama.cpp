@@ -61,6 +61,8 @@ struct llama_hparams {
     uint32_t n_ff_exp           = 0;
     uint32_t n_ff_shexp         = 0;
     uint32_t n_expert_shared    = 0;
+    uint32_t n_expert_latent    = 0;
+    uint32_t attn_res_block_size = 0;
     // K2 Horizon MoVA
     uint32_t n_value_expert      = 0;
     uint32_t n_value_expert_used = 0;
@@ -115,6 +117,8 @@ struct llama_hparams {
     uint32_t ssm_n_group = 0;
     bool     kda_safe_gate = false;
     float    kda_gate_lower_bound = 0.0f;
+    float    situ_beta          = 4.0f;
+    float    situ_linear_beta   = 25.0f;
 
     // for hybrid state-space models (e.g. qwen3next)
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
@@ -172,8 +176,6 @@ struct llama_hparams {
     float    dsv4_compress_rope_base = 0.0f;
     float    dsv4_hc_eps             = 0.0f;
     float    hc_magnitude            = 0.0f;
-    float    situ_beta               = 4.0f;
-    float    situ_linear_beta        = 25.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios = {};
 
     // The two compressed-stream plan slots. V4 hardcodes 4 (overlapping groups) and 128;
@@ -327,6 +329,8 @@ struct llama_hparams {
         if (this->n_expert_shared    != other.n_expert_shared)    return true;
         if (this->rope_pattern       != other.rope_pattern)       return true;
         if (this->swa_layers         != other.swa_layers)         return true;
+        if (this->n_expert_latent      != other.n_expert_latent)      return true;
+        if (this->attn_res_block_size  != other.attn_res_block_size)  return true;
         if (this->n_value_expert      != other.n_value_expert)      return true;
         if (this->n_value_expert_used != other.n_value_expert_used) return true;
 

@@ -1005,6 +1005,9 @@ static inline uint32_t llama_kv_v_row_embd(
     if (model.arch == LLM_ARCH_OPENPANGU) {
         return hparams.n_lora_kv;
     }
+    if (model.arch == LLM_ARCH_KIMI_K3) {
+        return hparams.n_lora_kv;
+    }
 
     // qwen3next recurrent state is stored in a dedicated V-cache tail (per sequence),
     // so per-token V rows include only attention values.
@@ -1538,7 +1541,7 @@ static bool llama_kv_cache_init(
                 ggml_format_name(kr, "cache_kr_l%d", i);
                 cache.kr_l[i] = kr;
             }
-            if (!cparams.flash_attn && cparams.mla_attn == 1) {
+            if (!cparams.flash_attn && cparams.mla_attn == 1 && model.arch != LLM_ARCH_KIMI_K3) {
                 ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
                 ggml_format_name(kvt, "cache_v_l%d", i);
                 cache.v_l.push_back(kvt);
@@ -1618,7 +1621,9 @@ static bool llama_kv_cache_init(
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*cache.rows(i));
             } else {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*cache.rows(i));
-                v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
+                if (model.arch != LLM_ARCH_KIMI_K3) {
+                    v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
+                }
             }
 
             // a PLE layer that is not recurrent has no state row to extend, so it gets one
@@ -1713,7 +1718,9 @@ static bool llama_kv_cache_init(
                 split_v_l.ggml.split_dim = 0;
                 split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
                 k->extra = (void *)&split_k_l.ggml;
-                v->extra = (void *)&split_v_l.ggml;
+                if (v) {
+                    v->extra = (void *)&split_v_l.ggml;
+                }
             }
             cache.k_l.push_back(k);
             if (!is_dsv4_k_only && model.arch != LLM_ARCH_OPENPANGU) {
@@ -9719,7 +9726,7 @@ struct llama_context * llama_init_from_model(
 
     if (!model->is_mla_model() && cparams.mla_attn != 0) {
         cparams.mla_attn = 0;
-    } else {
+    } else if (model->is_mla_model()) {
         if (model->n_gpu_layers > 0 && model->n_gpu_layers < model->hparams.n_layer && cparams.mla_attn != 3) {
             LLAMA_LOG_WARN("=============================================================================\n");
             LLAMA_LOG_WARN("MLA models with ngl < n_layer and split mode graph do not work with mla = %d\n", cparams.mla_attn);
@@ -10529,6 +10536,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_T5:
         case LLM_ARCH_T5ENCODER:
         case LLM_ARCH_JAIS:
+        case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_GLM5NEXT:
         case LLM_ARCH_GLM5NEXT_DASHED:
             return LLAMA_ROPE_TYPE_NONE;
