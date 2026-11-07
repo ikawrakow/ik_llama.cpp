@@ -1282,6 +1282,64 @@ static void do_quantize_slabbed(int nthread, const ggml_tensor * tensor, ggml_ty
 static void estimate_imatrix_internal(const std::string & fname_inp,
         const llama_model_quantize_params * params, std::unordered_map<std::string, std::vector<float>> & new_imatrix);
 
+static const float * find_imatrix_data(const std::string & name, size_t expected_size,
+        const std::unordered_map<std::string, std::vector<float>> * imatrix_data) {
+    const float * imatrix = nullptr;
+    if (imatrix_data) {
+        auto it = imatrix_data->find(name);
+        if (it == imatrix_data->end()) {
+            if (auto pos1 = name.find("ffn_up_exps.weight"), pos2 = name.find("ffn_gate_exps.weight"); pos1 != std::string::npos || pos2 != std::string::npos) {
+                // Merged ffn_up/gate_exps hack
+                auto pos = pos1 != std::string::npos ? pos1 : pos2;
+                auto merged_name = name.substr(0, pos) + "ffn_gate_up_exps.weight";
+                it = imatrix_data->find(merged_name);
+                if (it == imatrix_data->end()) {
+                    auto up_name = name.substr(0, pos) + "ffn_up_exps.weight";
+                    it = imatrix_data->find(up_name);
+                }
+            } else if (auto pos = name.find("ffn_gate_up_exps.weight"); pos != std::string::npos) {
+                auto not_merged_name = name.substr(0, pos) + "ffn_up_exps.weight";
+                it = imatrix_data->find(not_merged_name);
+            } else if (auto pos2 = name.find("ffn_gate.weight"); pos2 != std::string::npos) {
+                auto up_name = name.substr(0, pos2) + "ffn_up.weight";
+                it = imatrix_data->find(up_name);
+            } else if (auto pos3 = name.find("_down_inject.weight"); pos3 != std::string::npos) {
+                it = imatrix_data->find(name.substr(0, pos3) + "_down.weight");
+            } else if (auto pos4 = name.find("attn_qkv_gate.weight"); pos4 != std::string::npos) {
+                it = imatrix_data->find(name.substr(0, pos4) + "attn_qkv.weight");
+            } else if (auto pos5 = name.find("ssm_beta_alpha.weight"); pos5 != std::string::npos) {
+                it = imatrix_data->find(name.substr(0, pos5) + "ssm_beta.weight");
+            } else {
+                // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
+                //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
+                //           required by MLA. But the *.attn_v_b.weight tensors "see" the exact same activations as the
+                //           *.attn_kv_b.weight tensors used in standard attention. Hence, if we find imatrix data for
+                //           *.attn_kv_b.weight we can use it for *.attn_v_b.weight and vice versa.
+                static std::array<std::string, 2> alternatives{".attn_v_b.weight", ".attn_kv_b.weight"};
+                for (int j = 0; j < int(alternatives.size()); ++j) {
+                    if (auto pos = name.find(alternatives[j]); pos != std::string::npos) {
+                        int j1 = (j + 1) % alternatives.size();
+                        auto alternative_name = name.substr(0, pos) + alternatives[j1];
+                        it = imatrix_data->find(alternative_name);
+                        break;
+                    }
+                }
+            }
+        }
+        if (it == imatrix_data->end()) {
+            LLAMA_LOG_INFO("Did not find input imatrix data for %s\n", name.c_str());
+        } else {
+            if (it->second.size() == expected_size) {
+                imatrix = it->second.data();
+            } else {
+                LLAMA_LOG_INFO("imatrix size %d is different from expected size %d for tensor %s -> ignoring\n",
+                        int(it->second.size()), int(expected_size), name.c_str());
+            }
+        }
+    }
+    return imatrix;
+}
+
 static void llama_model_quantize_internal(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
@@ -1711,7 +1769,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         ::zeros(fout, meta_size);
     };
 
-    const auto tn = LLM_TN(model.arch);
     new_ofstream(0);
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
@@ -1928,69 +1985,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         } else {
             const int64_t nelements = ggml_nelements(tensor);
 
-            const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it = imatrix_data->find(tensor->name);
-                if (it == imatrix_data->end()) {
-                    if (auto pos1 = name.find("ffn_up_exps.weight"), pos2 = name.find("ffn_gate_exps.weight"); pos1 != std::string::npos || pos2 != std::string::npos) {
-                        // Merged ffn_up/gate_exps hack
-                        auto pos = pos1 != std::string::npos ? pos1 : pos2;
-                        auto merged_name = name.substr(0, pos) + "ffn_gate_up_exps.weight";
-                        it = imatrix_data->find(merged_name);
-                        if (it == imatrix_data->end()) {
-                            auto up_name = name.substr(0, pos) + "ffn_up_exps.weight";
-                            it = imatrix_data->find(up_name);
-                        }
-                    } else if (auto pos = name.find("ffn_gate_up_exps.weight"); pos != std::string::npos) {
-                        auto not_merged_name = name.substr(0, pos) + "ffn_up_exps.weight";
-                        it = imatrix_data->find(not_merged_name);
-                    } else if (auto pos2 = name.find("ffn_gate.weight"); pos2 != std::string::npos) {
-                        auto up_name = name.substr(0, pos2) + "ffn_up.weight";
-                        it = imatrix_data->find(up_name);
-                    } else if (auto pos3 = name.find("_down_inject.weight"); pos3 != std::string::npos) {
-                        it = imatrix_data->find(name.substr(0, pos3) + "_down.weight");
-                    } else if (auto pos4 = name.find("attn_qkv_gate.weight"); pos4 != std::string::npos) {
-                        it = imatrix_data->find(name.substr(0, pos4) + "attn_qkv.weight");
-                    } else if (auto pos5 = name.find("ssm_beta_alpha.weight"); pos5 != std::string::npos) {
-                        it = imatrix_data->find(name.substr(0, pos5) + "ssm_beta.weight");
-                    } else {
-                        // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
-                        //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
-                        //           required by MLA. But the *.attn_v_b.weight tensors "see" the exact same activations as the
-                        //           *.attn_kv_b.weight tensors used in standard attention. Hence, if we find imatrix data for
-                        //           *.attn_kv_b.weight we can use it for *.attn_v_b.weight and vice versa.
-                        std::string name{tensor->name};
-                        static std::array<std::string, 2> alternatives{".attn_v_b.weight", ".attn_kv_b.weight"};
-                        for (int j = 0; j < int(alternatives.size()); ++j) {
-                            if (auto pos = name.find(alternatives[j]); pos != std::string::npos) {
-                                int j1 = (j + 1) % alternatives.size();
-                                auto alternative_name = name.substr(0, pos) + alternatives[j1];
-                                it = imatrix_data->find(alternative_name);
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (it == imatrix_data->end()) {
-                    LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
-                } else {
-                    if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
-                        imatrix = it->second.data();
-                    } else {
-                        LLAMA_LOG_INFO("\n====== %s: imatrix size %d is different from tensor size %d for %s\n", __func__,
-                                int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
-
-                        // this can happen when quantizing an old mixtral model with split tensors with a new incompatible imatrix
-                        // this is a significant error and it may be a good idea to abort the process if this happens,
-                        // since many people will miss the error and not realize that most of the model is being quantized without an imatrix
-                        // tok_embd should be ignored in this case, since it always causes this warning
-                        if (name != tn(LLM_TENSOR_TOKEN_EMBD, "weight")) {
-                            throw std::runtime_error(format("imatrix size %d is different from tensor size %d for %s",
-                                    int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name));
-                        }
-                    }
-                }
-            }
+            auto imatrix = find_imatrix_data(name, tensor->ne[0]*tensor->ne[2], imatrix_data);
             if (!params->ignore_imatrix_rules && !imatrix) {
                 bool is_very_low_bpw_quant = new_type == GGML_TYPE_IQ2_XXS    ||
                                              new_type == GGML_TYPE_IQ2_XXS_R4 ||
@@ -2366,59 +2361,7 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
     for (auto & [name, sums] : sum_map) {
         auto & values = new_imatrix[name];
         values = sums.sum_c;
-        const float * imatrix = nullptr;
-        if (imatrix_data) {
-            auto it = imatrix_data->find(name);
-            if (it == imatrix_data->end()) {
-                if (auto pos1 = name.find("ffn_up_exps.weight"), pos2 = name.find("ffn_gate_exps.weight"); pos1 != std::string::npos || pos2 != std::string::npos) {
-                    // Merged ffn_up/gate_exps hack
-                    auto pos = pos1 != std::string::npos ? pos1 : pos2;
-                    auto merged_name = name.substr(0, pos) + "ffn_gate_up_exps.weight";
-                    it = imatrix_data->find(merged_name);
-                    if (it == imatrix_data->end()) {
-                        auto up_name = name.substr(0, pos) + "ffn_up_exps.weight";
-                        it = imatrix_data->find(up_name);
-                    }
-                } else if (auto pos = name.find("ffn_gate_up_exps.weight"); pos != std::string::npos) {
-                    auto not_merged_name = name.substr(0, pos) + "ffn_up_exps.weight";
-                    it = imatrix_data->find(not_merged_name);
-                } else if (auto pos2 = name.find("ffn_gate.weight"); pos2 != std::string::npos) {
-                    auto up_name = name.substr(0, pos2) + "ffn_up.weight";
-                    it = imatrix_data->find(up_name);
-                } else if (auto pos3 = name.find("_down_inject.weight"); pos3 != std::string::npos) {
-                    it = imatrix_data->find(name.substr(0, pos3) + "_down.weight");
-                } else if (auto pos4 = name.find("attn_qkv_gate.weight"); pos4 != std::string::npos) {
-                    it = imatrix_data->find(name.substr(0, pos4) + "attn_qkv.weight");
-                } else if (auto pos5 = name.find("ssm_beta_alpha.weight"); pos5 != std::string::npos) {
-                    it = imatrix_data->find(name.substr(0, pos5) + "ssm_beta.weight");
-                } else {
-                    // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
-                    //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
-                    //           required by MLA. But the *.attn_v_b.weight tensors "see" the exact same activations as the
-                    //           *.attn_kv_b.weight tensors used in standard attention. Hence, if we find imatrix data for
-                    //           *.attn_kv_b.weight we can use it for *.attn_v_b.weight and vice versa.
-                    static std::array<std::string, 2> alternatives{".attn_v_b.weight", ".attn_kv_b.weight"};
-                    for (int j = 0; j < int(alternatives.size()); ++j) {
-                        if (auto pos = name.find(alternatives[j]); pos != std::string::npos) {
-                            int j1 = (j + 1) % alternatives.size();
-                            auto alternative_name = name.substr(0, pos) + alternatives[j1];
-                            it = imatrix_data->find(alternative_name);
-                            break;
-                        }
-                    }
-                }
-            }
-            if (it == imatrix_data->end()) {
-                LLAMA_LOG_INFO("Did not find input imatrix data for %s\n", name.c_str());
-            } else {
-                if (it->second.size() == values.size()) {
-                    imatrix = it->second.data();
-                } else {
-                    LLAMA_LOG_INFO("imatrix size %d is different from tensor size %d for %s -> ignoring\n",
-                            int(it->second.size()), int(values.size()), name.c_str());
-                }
-            }
-        }
+        auto imatrix = find_imatrix_data(name, values.size(), imatrix_data);
         bool check_ffn = true;
         check_ffn = check_ffn && !check_up_gate(name, values, "ffn_up.weight", "ffn_gate.weight");
         check_ffn = check_ffn && !check_up_gate(name, values, "ffn_gate.weight", "ffn_up.weight");
