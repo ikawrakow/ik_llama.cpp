@@ -55,6 +55,7 @@ struct llama_cparams {
     int  min_experts;
     float thresh_experts;
     size_t moe_cache_size = 0;
+    enum llama_moe_cache_policy moe_cache_policy = LLAMA_MOE_CACHE_POLICY_LRU;
     bool mtp;
     int  worst_graph_tokens;
     int  dflash_query_capacity = 0; // internal DFlash query capacity override
