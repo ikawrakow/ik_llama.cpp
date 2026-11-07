@@ -72,6 +72,7 @@ static __global__ void k_hc_pre(const float * __restrict__ x, const float * __re
     }
 
     float m[S*S];
+    const bool with_clamp = clamp > 0.0f;
 
     const float * x_pre  = (const float *)((const char *) x + t*nb1);
     const float * x_post = x_pre + S;
@@ -84,7 +85,7 @@ static __global__ void k_hc_pre(const float * __restrict__ x, const float * __re
     #pragma unroll
     for (int i = 0; i < S; ++i) {
         float val = x_pre[i] * scale[0] + bias[i];
-        y_pre[i]  = 1.f / (1.f + expf(-val)) + eps;
+        y_pre[i]  = 1.f / (1.f + expf(-val)) + (with_clamp ? 0.0f : eps);
     }
 
     #pragma unroll
@@ -96,31 +97,65 @@ static __global__ void k_hc_pre(const float * __restrict__ x, const float * __re
     #pragma unroll
     for (int i = 0; i < S*S; ++i) {
         m[i] = x_comb[i] * scale[2] + bias[2*S + i];
-        if (clamp > 0.0f) {
+        if (with_clamp) {
             m[i] = fminf(fmaxf(m[i], -clamp), clamp);
         }
     }
 
-    #pragma unroll
-    for (int r = 0; r < S; ++r) {
-        float mx = m[r*S];
-        for (int c = 1; c < S; ++c) mx = fmaxf(mx, m[r*S + c]);
-        float sum = 0.0f;
-        for (int c = 0; c < S; ++c) { m[r*S + c] = expf(m[r*S + c] - mx); sum += m[r*S + c]; }
-        for (int c = 0; c < S; ++c) m[r*S + c] = m[r*S + c]/sum + eps;
-    }
-    #pragma unroll
-    for (int c = 0; c < S; ++c) {
-        float sum = eps;
-        for (int r = 0; r < S; ++r) sum += m[r*S + c];
-        for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
-    }
-    for (int i = 0; i < iters - 1; ++i) {
+    if (with_clamp) {
+        // Xing with_clamp: raw comb is [src, dst] with ne0 = src, while
+        // hc_post consumes C-order [src, dst]. Transpose once, then use the
+        // reference softmax/Sinkhorn order.
+        float tmp[S*S];
+        #pragma unroll
+        for (int r = 0; r < S; ++r) {
+            #pragma unroll
+            for (int c = 0; c < S; ++c) tmp[r*S + c] = m[c*S + r];
+        }
+        #pragma unroll
+        for (int i = 0; i < S*S; ++i) m[i] = tmp[i];
+
+        // softmax per dst over src, no sum normalization
+        #pragma unroll
+        for (int c = 0; c < S; ++c) {
+            float mx = -INFINITY;
+            for (int r = 0; r < S; ++r) mx = fmaxf(mx, m[r*S + c]);
+            for (int r = 0; r < S; ++r) m[r*S + c] = expf(m[r*S + c] - mx);
+        }
+
+        // first pass normalizes over dst
         #pragma unroll
         for (int r = 0; r < S; ++r) {
             float sum = eps;
             for (int c = 0; c < S; ++c) sum += m[r*S + c];
             for (int c = 0; c < S; ++c) m[r*S + c] /= sum;
+        }
+        for (int i = 1; i < iters; ++i) {
+            // then src, then dst
+            #pragma unroll
+            for (int c = 0; c < S; ++c) {
+                float sum = eps;
+                for (int r = 0; r < S; ++r) sum += m[r*S + c];
+                for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
+            }
+            #pragma unroll
+            for (int r = 0; r < S; ++r) {
+                float sum = eps;
+                for (int c = 0; c < S; ++c) sum += m[r*S + c];
+                for (int c = 0; c < S; ++c) m[r*S + c] /= sum;
+            }
+        }
+
+        #pragma unroll
+        for (int i = 0; i < S*S; ++i) y_comb[i] = m[i];
+    } else {
+        #pragma unroll
+        for (int r = 0; r < S; ++r) {
+            float mx = m[r*S];
+            for (int c = 1; c < S; ++c) mx = fmaxf(mx, m[r*S + c]);
+            float sum = 0.0f;
+            for (int c = 0; c < S; ++c) { m[r*S + c] = expf(m[r*S + c] - mx); sum += m[r*S + c]; }
+            for (int c = 0; c < S; ++c) m[r*S + c] = m[r*S + c]/sum + eps;
         }
         #pragma unroll
         for (int c = 0; c < S; ++c) {
@@ -128,17 +163,31 @@ static __global__ void k_hc_pre(const float * __restrict__ x, const float * __re
             for (int r = 0; r < S; ++r) sum += m[r*S + c];
             for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
         }
-    }
-
-    if (transposed) {
-        #pragma unroll
-        for (int c = 0; c < S; ++c) {
+        for (int i = 0; i < iters - 1; ++i) {
             #pragma unroll
-            for (int r = 0; r < S; ++r) y_comb[c*S + r] = m[r*S + c];
+            for (int r = 0; r < S; ++r) {
+                float sum = eps;
+                for (int c = 0; c < S; ++c) sum += m[r*S + c];
+                for (int c = 0; c < S; ++c) m[r*S + c] /= sum;
+            }
+            #pragma unroll
+            for (int c = 0; c < S; ++c) {
+                float sum = eps;
+                for (int r = 0; r < S; ++r) sum += m[r*S + c];
+                for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
+            }
         }
-    } else {
-        #pragma unroll
-        for (int i = 0; i < S*S; ++i) y_comb[i] = m[i];
+
+        if (transposed) {
+            #pragma unroll
+            for (int c = 0; c < S; ++c) {
+                #pragma unroll
+                for (int r = 0; r < S; ++r) y_comb[c*S + r] = m[r*S + c];
+            }
+        } else {
+            #pragma unroll
+            for (int i = 0; i < S*S; ++i) y_comb[i] = m[i];
+        }
     }
 }
 
