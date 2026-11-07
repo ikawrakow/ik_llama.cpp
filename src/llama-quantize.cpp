@@ -2326,13 +2326,31 @@ static void llama_model_imatrix_internal(const std::string & fname_inp, const st
 
     LLAMA_LOG_INFO("============== Have %d entries in sum map\n", int(sum_map.size()));
 
-    auto check_up_gate = [&sum_map] (const std::string & name, const std::string & name_part, const std::string & other_name_part) {
+    auto check_up_gate = [&sum_map] (const std::string & name, std::vector<float> & values,
+            const std::string & name_part, const std::string & other_name_part) {
         if (auto pos = name.find(name_part); pos != std::string::npos) {
-            auto other_name = name.substr(0, pos) + other_name_part
+            auto other_name = name.substr(0, pos) + other_name_part;
             if (auto it = sum_map.find(other_name); it != sum_map.end()) {
                 LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name.c_str());
                 GGML_ASSERT(values.size() == it->second.sum_c.size());
                 for (int j = 0; j < int(values.size()); ++j) values[j] *= it->second.sum_c[j];
+                return true;
+            }
+        }
+        return false;
+    };
+    auto check_down = [&sum_map] (const std::string & name, std::vector<float> & values, const std::string & name_part,
+            const std::string & other_name_part1, const std::string & other_name_part2) {
+        if (auto pos = name.find(name_part); pos != std::string::npos) {
+            auto other_name_u = name.substr(0, pos) + other_name_part1;
+            auto other_name_g = name.substr(0, pos) + other_name_part2;
+            if (auto itu = sum_map.find(other_name_u), itg = sum_map.find(other_name_g); itu != sum_map.end() && itg != sum_map.end()) {
+                GGML_ASSERT(values.size() == itu->second.sum_r.size());
+                GGML_ASSERT(values.size() == itg->second.sum_r.size());
+                LLAMA_LOG_INFO("Combining %s and %s, %s\n", name.c_str(), other_name_u.c_str(), other_name_g.c_str());
+                for (int j = 0; j < int(values.size()); ++j) {
+                    values[j] *= (itu->second.sum_r[j] * itg->second.sum_r[j] + 1e-12f);
+                }
                 return true;
             }
         }
@@ -2394,62 +2412,13 @@ static void llama_model_imatrix_internal(const std::string & fname_inp, const st
                 }
             }
         }
-        if (auto pos = name.find("ffn_up.weight"); pos != std::string::npos) {
-            auto other_name = name.substr(0, pos) + "ffn_gate.weight";
-            if (auto it = sum_map.find(other_name); it != sum_map.end()) {
-                LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name.c_str());
-                GGML_ASSERT(values.size() == it->second.sum_c.size());
-                for (int j = 0; j < int(values.size()); ++j) values[j] *= it->second.sum_c[j];
-            }
-        }
-        if (auto pos = name.find("ffn_gate.weight"); pos != std::string::npos) {
-            auto other_name = name.substr(0, pos) + "ffn_up.weight";
-            if (auto it = sum_map.find(other_name); it != sum_map.end()) {
-                LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name.c_str());
-                GGML_ASSERT(values.size() == it->second.sum_c.size());
-                for (int j = 0; j < int(values.size()); ++j) values[j] *= it->second.sum_c[j];
-            }
-        }
-        if (auto pos = name.find("ffn_down.weight"); pos != std::string::npos) {
-            auto other_name_u = name.substr(0, pos) + "ffn_up.weight";
-            auto other_name_g = name.substr(0, pos) + "ffn_gate.weight";
-            if (auto itu = sum_map.find(other_name_u), itg = sum_map.find(other_name_g); itu != sum_map.end() && itg != sum_map.end()) {
-                GGML_ASSERT(values.size() == itu->second.sum_r.size());
-                GGML_ASSERT(values.size() == itg->second.sum_r.size());
-                LLAMA_LOG_INFO("Combining %s and %s, %s\n", name.c_str(), other_name_u.c_str(), other_name_g.c_str());
-                for (int j = 0; j < int(values.size()); ++j) {
-                    values[j] *= (itu->second.sum_r[j] * itg->second.sum_r[j] + 1e-12f);
-                }
-            }
-        }
-        if (auto pos = name.find("ffn_up_exps.weight"); pos != std::string::npos) {
-            auto other_name = name.substr(0, pos) + "ffn_gate_exps.weight";
-            if (auto it = sum_map.find(other_name); it != sum_map.end()) {
-                LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name.c_str());
-                GGML_ASSERT(values.size() == it->second.sum_c.size());
-                for (int j = 0; j < int(values.size()); ++j) values[j] *= it->second.sum_c[j];
-            }
-        }
-        if (auto pos = name.find("ffn_gate_exps.weight"); pos != std::string::npos) {
-            auto other_name = name.substr(0, pos) + "ffn_up_exps.weight";
-            if (auto it = sum_map.find(other_name); it != sum_map.end()) {
-                LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name.c_str());
-                GGML_ASSERT(values.size() == it->second.sum_c.size());
-                for (int j = 0; j < int(values.size()); ++j) values[j] *= it->second.sum_c[j];
-            }
-        }
-        if (auto pos = name.find("ffn_down_exps.weight"); pos != std::string::npos) {
-            auto other_name_u = name.substr(0, pos) + "ffn_up_exps.weight";
-            auto other_name_g = name.substr(0, pos) + "ffn_gate_exps.weight";
-            if (auto itu = sum_map.find(other_name_u), itg = sum_map.find(other_name_g); itu != sum_map.end() && itg != sum_map.end()) {
-                GGML_ASSERT(values.size() == itu->second.sum_r.size());
-                GGML_ASSERT(values.size() == itg->second.sum_r.size());
-                LLAMA_LOG_INFO("Combining %s and %s, %s\n", name.c_str(), other_name_u.c_str(), other_name_g.c_str());
-                for (int j = 0; j < int(values.size()); ++j) {
-                    values[j] *= (itu->second.sum_r[j] * itg->second.sum_r[j] + 1e-12f);
-                }
-            }
-        }
+        bool check_ffn = true;
+        check_ffn = check_ffn && !check_up_gate(name, values, "ffn_up.weight", "ffn_gate.weight");
+        check_ffn = check_ffn && !check_up_gate(name, values, "ffn_gate.weight", "ffn_up.weight");
+        check_ffn = check_ffn && !check_down(name, values, "ffn_down.weight", "ffn_up.weight", "ffn_gate.weight");
+        check_ffn = check_ffn && !check_up_gate(name, values, "ffn_up_exps.weight", "ffn_gate_exps.weight");
+        check_ffn = check_ffn && !check_up_gate(name, values, "ffn_gate_exps.weight", "ffn_up_exps.weight");
+        check_ffn = check_ffn && !check_down(name, values, "ffn_down_exps.weight", "ffn_up_exps.weight", "ffn_gate_exps.weight");
         if (imatrix) {
             double sum1 = 0, sum2 = 0;
             for (int j = 0; j < int(values.size()); ++j) sum1 += (double)imatrix[j];
@@ -2458,8 +2427,6 @@ static void llama_model_imatrix_internal(const std::string & fname_inp, const st
                 float norm = float(0.125*sum1/sum2);
                 for (int j = 0; j < int(values.size()); ++j) values[j] = imatrix[j] + norm*values[j];
             }
-            ////printf("XXXXXXXXXXXXXXXXXXXXX %s: %g, %g\n", name.c_str(), sum1, sum2);
-            //for (int j = 0; j < int(values.size()); ++j) values[j] = imatrix[j] * sqrtf(values[j]);
         }
     }
 
