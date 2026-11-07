@@ -2774,7 +2774,8 @@ extern "C" {
             struct ggml_tensor  * bias,
             int                   S,
             int                   n_iters,
-            float                 eps);
+            float                 eps,
+            float                 clamp);
 
     GGML_API struct ggml_tensor * ggml_hc_post(
             struct ggml_context * ctx,

@@ -749,7 +749,7 @@ static ggml_tensor * build_hc_pre(
     auto mixes  = ggml_mul_mat(ctx0, hc_fn, normed);
     cb(mixes, "hc_pre_mixes", il);
 
-    auto all = ggml_hc_pre(ctx0, mixes, hc_scale, hc_base, hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps);
+    auto all = ggml_hc_pre(ctx0, mixes, hc_scale, hc_base, hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps, 0.0f);
 
     auto pre  = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), 0);
     auto post = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), hc*nt*sizeof(float));
