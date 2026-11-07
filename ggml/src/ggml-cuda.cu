@@ -2709,14 +2709,38 @@ static void mul_mat_1row(const ggml_tensor * src0, const ggml_tensor * src1, ggm
     }
 }
 
-static __global__ void k_simple_gemm_f32(int n, int nx, const float * x, const float * y, float * z, size_t nb01, size_t nb11) {
+template <typename src_t>
+static __global__ void k_simple_gemm_T(int n, int nx, const src_t * x, const float * y, float * z, size_t nb01, size_t nb11) {
     int ix = blockIdx.x;
     int iy = blockIdx.y;
     x += nb01 * ix;
     y += nb11 * iy;
     float sum = 0;
-    for (int j = threadIdx.x; j < n; j += blockDim.x) {
-        sum += x[j]*y[j];
+    if constexpr (std::is_same_v<src_t, float>) {
+        for (int j = threadIdx.x; j < n; j += blockDim.x) {
+            sum += x[j]*y[j];
+        }
+    }
+    else if constexpr (std::is_same_v<src_t, half>) {
+        auto x2 = (const half2 *)x;
+        auto y2 = (const float2 *)y;
+        float2 sum2 = {};
+        for (int j = threadIdx.x; j < n/2; j += blockDim.x) {
+            float2 val = __half22float2(x2[j]);
+            sum2.x = fmaf(val.x, y2[j].x, sum2.x);
+            sum2.y = fmaf(val.y, y2[j].y, sum2.y);
+        }
+        sum = sum2.x + sum2.y;
+    } else {
+        auto x2 = (const nv_bfloat162 *)x;
+        auto y2 = (const float2 *)y;
+        float2 sum2 = {};
+        for (int j = threadIdx.x; j < n/2; j += blockDim.x) {
+            float2 val = __bfloat1622float2(x2[j]);
+            sum2.x = fmaf(val.x, y2[j].x, sum2.x);
+            sum2.y = fmaf(val.y, y2[j].y, sum2.y);
+        }
+        sum = sum2.x + sum2.y;
     }
     sum = warp_reduce_sum(sum);
     __shared__ float tmp[32];
@@ -2734,13 +2758,24 @@ static __global__ void k_simple_gemm_f32(int n, int nx, const float * x, const f
 static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
         const ggml_cgraph * cgraph, int node_n) {
 
-    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-        src0->ne[0] >= 1024 && src0->ne[2]*src0->ne[3] == 1 && src1->ne[2]*src1->ne[3] == 1 && src1->ne[1] <= 8) {
+    if ((src0->type == GGML_TYPE_F32 || ((src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) && src0->ne[0] % 2 == 0)) &&
+         src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+         src0->ne[0] >= 1024 && src0->ne[2]*src0->ne[3] == 1 && src1->ne[2]*src1->ne[3] == 1 && src1->ne[1] <= 8) {
         auto nsm = ggml_cuda_info().devices[ctx.device].nsm;
         if (src0->ne[1] * src1->ne[1] <= nsm) {
             dim3 grid(src0->ne[1], src1->ne[1], 1);
-            k_simple_gemm_f32<<<grid, 1024, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], (const float *)src0->data, (const float *)src1->data, (float *)dst->data,
-                    src0->nb[1]/sizeof(float), src1->nb[1]/sizeof(float));
+            if (src0->type == GGML_TYPE_F32) {
+                k_simple_gemm_T<<<grid, 1024, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], (const float *)src0->data,
+                        (const float *)src1->data, (float *)dst->data, src0->nb[1]/sizeof(float), src1->nb[1]/sizeof(float));
+            }
+            else if (src0->type == GGML_TYPE_F16) {
+                k_simple_gemm_T<<<grid, 1024, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], (const half *)src0->data,
+                        (const float *)src1->data, (float *)dst->data, src0->nb[1]/sizeof(half), src1->nb[1]/sizeof(float));
+            }
+            else {
+                k_simple_gemm_T<<<grid, 1024, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], (const nv_bfloat16 *)src0->data,
+                        (const float *)src1->data, (float *)dst->data, src0->nb[1]/sizeof(nv_bfloat16), src1->nb[1]/sizeof(float));
+            }
             return node_n;
         }
     }
