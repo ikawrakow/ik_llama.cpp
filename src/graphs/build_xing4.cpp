@@ -19,7 +19,7 @@ static ggml_tensor * xing4_hc_pre_block(
     llm.cb(mixes, "hc_mixes", il);
 
     auto all = ggml_hc_pre(ctx0, mixes, hc_scale, hc_base, hc,
-                           hp.dsv4_hc_sinkhorn_iters, 0.0f, 30.0f);
+                           hp.dsv4_hc_sinkhorn_iters, hp.dsv4_hc_eps, 30.0f);
     all->op_params[3] = 1; // i.e., store transposed comb
     auto pre  = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), 0);
     *post     = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), hc*nt*sizeof(float));
