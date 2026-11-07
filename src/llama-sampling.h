@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama-impl.h"
+#include <random>
 #include <unordered_map>
 struct llama_sampling {
     llama_sampling(int32_t n_vocab) : n_vocab(n_vocab) {}
