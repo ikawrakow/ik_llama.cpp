@@ -62,7 +62,10 @@ ggml_cgraph * llm_build_context::build_orion() {
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
+        cb(cur, "ffn_norm", il);
+
+        cur = llm_build_ffn(ctx0, lctx, nullptr, cur,
                 model.layers[il].ffn_up,   NULL, NULL,
                 model.layers[il].ffn_gate, NULL, NULL,
                 model.layers[il].ffn_down, NULL, NULL,
