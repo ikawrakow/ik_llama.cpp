@@ -1242,18 +1242,28 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
 }
 
 bool llama_model_loader::import_nvfp4(llama_nvfp4_precision precision) {
+    auto is_mxfp4 = [](const ggml_tensor * t) {
+#ifdef GGML_USE_METAL
+        GGML_UNUSED(t);
+        return false;
+#else
+        return t->type == GGML_TYPE_MXFP4 && t->ne[0] % ggml_blck_size(GGML_TYPE_NVFP4_KS) == 0;
+#endif
+    };
     int n_import = 0;
     int n_native = 0;
+    int n_mxfp4  = 0;
     for (const auto & w : weights) {
         n_import += w.tensor->type == GGML_TYPE_NVFP4;
         n_native += w.tensor->type == GGML_TYPE_NVFP4_KS;
+        n_mxfp4  += is_mxfp4(w.tensor);
     }
-    if (n_import + n_native == 0) {
+    if (n_import + n_native + n_mxfp4 == 0) {
         return false;
     }
     ggml_context * ctx = nullptr;
-    if (n_import) {
-        ctx = ggml_init({ n_import*ggml_tensor_overhead(), nullptr, true });
+    if (n_import + n_mxfp4) {
+        ctx = ggml_init({ (n_import + n_mxfp4)*ggml_tensor_overhead(), nullptr, true });
         contexts.push_back(ctx);
     }
 
@@ -1302,8 +1312,9 @@ bool llama_model_loader::import_nvfp4(llama_nvfp4_precision precision) {
     int n_scale = 0;
     int n_input_scale = 0;
     int n_kept = 0;
+    int n_repack = 0;
     for (auto & w : weights) {
-        if (w.tensor->type != GGML_TYPE_NVFP4 && w.tensor->type != GGML_TYPE_NVFP4_KS) {
+        if (w.tensor->type != GGML_TYPE_NVFP4 && w.tensor->type != GGML_TYPE_NVFP4_KS && !is_mxfp4(w.tensor)) {
             continue;
         }
         const std::string name(w.tensor->name);
@@ -1334,7 +1345,16 @@ bool llama_model_loader::import_nvfp4(llama_nvfp4_precision precision) {
             ++n_input_scale;
         }
 
-        if (w.tensor->type == GGML_TYPE_NVFP4) {
+        if (w.tensor->type == GGML_TYPE_MXFP4) {
+            if (input_scale == 0.0f) {
+                continue;
+            }
+            w.mxfp4_repack = true;
+            ggml_tensor * t = ggml_new_tensor(ctx, GGML_TYPE_NVFP4_KS, GGML_MAX_DIMS, w.tensor->ne);
+            ggml_set_name(t, w.tensor->name);
+            w.tensor = t;
+            ++n_repack;
+        } else if (w.tensor->type == GGML_TYPE_NVFP4) {
             w.nvfp4_scale = { 1.0f };
             const auto * s = get_weight((base + ".scale").c_str());
             if (s && valid_scale_shape(s->tensor, w.tensor)) {
@@ -1382,17 +1402,34 @@ bool llama_model_loader::import_nvfp4(llama_nvfp4_precision precision) {
         LLAMA_LOG_INFO("%s: converted %d %s tensors to %s; consumed %d .scale tensors; kept %d of %d .input_scale values%s\n",
                 __func__, n_import, ggml_type_name(GGML_TYPE_NVFP4), ggml_type_name(GGML_TYPE_NVFP4_KS), n_scale, n_kept, n_input_scale, n_import ? "; mmap is off" : "");
     }
-    return n_import != 0;
+    if (n_repack) {
+        LLAMA_LOG_INFO("%s: repacking %d %s tensors to %s for W4A4; mmap is off\n",
+                __func__, n_repack, ggml_type_name(GGML_TYPE_MXFP4), ggml_type_name(GGML_TYPE_NVFP4_KS));
+    }
+    return n_import + n_repack != 0;
 }
 
 static void read_nvfp4_rows(const llama_model_loader::llama_tensor_weight & w, const llama_file & file, const ggml_tensor * cur, uint8_t * dst, int r0, int nrows) {
     const int    ne1     = cur->ne[1];
     const int    n_scale = w.nvfp4_scale.size();
-    const size_t row_in  = ggml_row_size(GGML_TYPE_NVFP4, cur->ne[0]);
+    const size_t row_in  = ggml_row_size(w.mxfp4_repack ? GGML_TYPE_MXFP4 : GGML_TYPE_NVFP4, cur->ne[0]);
     const size_t row_out = cur->nb[1];
     uint8_t * src = dst + nrows*(row_out - row_in);
     file.seek(w.offs + r0*row_in, SEEK_SET);
     file.read_raw(src, nrows*row_in);
+    if (w.mxfp4_repack) {
+        std::vector<uint8_t> row(row_in);
+        int n_inexact = 0;
+        for (int r = 0; r < nrows; ++r) {
+            memcpy(row.data(), src + r*row_in, row_in);
+            n_inexact += !ggml_mxfp4_to_nvfp4_ks(row.data(), dst + r*row_out, cur->ne[0]);
+        }
+        if (n_inexact) {
+            LLAMA_LOG_WARN("%s: %s: %d of %d rows have block scales outside the UE4M3 range; those blocks were requantized\n",
+                    __func__, ggml_get_name(cur), n_inexact, nrows);
+        }
+        return;
+    }
     for (int r = 0; r < nrows; ++r) {
         memmove(dst + r*row_out + sizeof(float), src + r*row_in, row_in);
         memcpy(dst + r*row_out, &w.nvfp4_scale[((r0 + r)/ne1) % n_scale], sizeof(float));
@@ -1442,7 +1479,7 @@ static void load_nvfp4_tensor(ggml_tensor * cur, size_t chunk_size, const llama_
 void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     const auto & w = require_weight(ggml_get_name(cur));
 
-    if (!w.nvfp4_scale.empty()) {
+    if (!w.nvfp4_scale.empty() || w.mxfp4_repack) {
         read_nvfp4_rows(w, *files.at(w.idx), cur, (uint8_t *) cur->data, 0, ggml_nrows(cur));
     } else if (use_mmap) {
         const auto & mapping = mappings.at(w.idx);
@@ -1542,7 +1579,7 @@ bool llama_model_loader::load_all_data(
         const size_t n_size = ggml_nbytes(cur);
         const auto file = files.at(weight->idx)->clone();
 
-        if (!weight->nvfp4_scale.empty()) {
+        if (!weight->nvfp4_scale.empty() || weight->mxfp4_repack) {
             load_nvfp4_tensor(cur, buffer_size, *weight, *file, read_bufs[thread_idx], model, load_mutex, check_tensors);
             return n_size;
         }
