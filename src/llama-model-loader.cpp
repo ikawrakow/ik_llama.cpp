@@ -304,7 +304,8 @@ static void coalesce_ranges(std::vector<llama_file_range> & ranges) {
 llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors,
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        const std::string & ngram_fname) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -362,6 +363,29 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     uint16_t n_split = 0;
     get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);
 
+    // A separate GGUF with the model's n-gram tables (per-layer token embedding, Engram).
+    // If it is a shard of this split (same split.count), it is loaded as shard split.no
+    // in place of the file next to the first one; otherwise it is added as one more file.
+    struct ggml_context * ctx_ngram  = NULL;
+    struct gguf_context * gguf_ngram = NULL;
+    int ngram_split_no = -1;
+    int ngram_file_idx = -1;
+    if (!ngram_fname.empty()) {
+        struct gguf_init_params ngram_params = {
+            /*.no_alloc = */ true,
+            /*.ctx      = */ &ctx_ngram,
+        };
+        gguf_ngram = gguf_init_from_file(ngram_fname.c_str(), ngram_params);
+        if (!gguf_ngram) {
+            throw std::runtime_error(format("%s: failed to load n-gram file %s\n", __func__, ngram_fname.c_str()));
+        }
+        const int kid_no    = gguf_find_key(gguf_ngram, llm_kv(LLM_KV_SPLIT_NO).c_str());
+        const int kid_count = gguf_find_key(gguf_ngram, llm_kv(LLM_KV_SPLIT_COUNT).c_str());
+        if (n_split > 1 && kid_no >= 0 && kid_count >= 0 && GGUFMeta::GKV<uint16_t>::get_kv(gguf_ngram, kid_count) == n_split) {
+            ngram_split_no = GGUFMeta::GKV<uint16_t>::get_kv(gguf_ngram, kid_no);
+        }
+    }
+
     // Load additional GGML contexts
     if (n_split > 1) {
         uint16_t idx = 0;
@@ -383,16 +407,26 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         for (idx = 1; idx < n_split; idx++) {
             llama_split_path(split_path, sizeof(split_path), split_prefix, idx, n_split);
 
-            struct gguf_init_params split_params = {
-                /*.no_alloc = */ true,
-                /*.ctx      = */ &ctx,
-            };
-            struct gguf_context * ctx_gguf = gguf_init_from_file(split_path, split_params);
-            if (!ctx_gguf) {
-                throw std::runtime_error(format("%s: failed to load GGUF split from %s\n", __func__, split_path));
+            struct gguf_context * ctx_gguf = NULL;
+            if (idx == ngram_split_no) {
+                LLAMA_LOG_INFO("%s: n-gram file %s: %d tensors, loaded as split %d of %d\n", __func__,
+                        ngram_fname.c_str(), gguf_get_n_tensors(gguf_ngram), idx + 1, n_split);
+                ctx_gguf   = gguf_ngram;
+                ctx        = ctx_ngram;
+                gguf_ngram = NULL;
+                ngram_file_idx = idx;
+                files.emplace_back(new llama_file(ngram_fname.c_str(), "rb"));
+            } else {
+                struct gguf_init_params split_params = {
+                    /*.no_alloc = */ true,
+                    /*.ctx      = */ &ctx,
+                };
+                ctx_gguf = gguf_init_from_file(split_path, split_params);
+                if (!ctx_gguf) {
+                    throw std::runtime_error(format("%s: failed to load GGUF split from %s\n", __func__, split_path));
+                }
+                files.emplace_back(new llama_file(split_path, "rb"));
             }
-
-            files.emplace_back(new llama_file(split_path, "rb"));
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.
@@ -416,8 +450,21 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         LLAMA_LOG_INFO("%s: additional %d GGUFs metadata loaded.\n",  __func__, n_split - 1);
     }
 
+
     if (import_nvfp4()) {
         use_mmap = false;
+    }
+  
+    if (gguf_ngram) {
+        LLAMA_LOG_INFO("%s: n-gram file %s: %d tensors, added to the model\n", __func__,
+                ngram_fname.c_str(), gguf_get_n_tensors(gguf_ngram));
+        ngram_file_idx = (int) files.size();
+        files.emplace_back(new llama_file(ngram_fname.c_str(), "rb"));
+        contexts.emplace_back(ctx_ngram);
+        for (ggml_tensor * cur = ggml_get_first_tensor(ctx_ngram); cur; cur = ggml_get_next_tensor(ctx_ngram, cur)) {
+            weights.emplace_back(files.back().get(), ngram_file_idx, cur->name, gguf_ngram, cur);
+        }
+        gguf_free(gguf_ngram);
     }
 
     n_kv      = gguf_get_n_kv(meta);
@@ -433,6 +480,9 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         const std::string name(w.tensor->name);
         auto found = tensor_names.find(name);
         if (found != tensor_names.end()) {
+            if (w.idx == ngram_file_idx) {
+                throw std::runtime_error(format("tensor '%s' is in both the model and the n-gram file %s", w.tensor->name, ngram_fname.c_str()));
+            }
             throw std::runtime_error(format("invalid model: tensor '%s' is duplicated", w.tensor->name));
         }
         tensor_names.insert(name);

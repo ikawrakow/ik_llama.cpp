@@ -2029,6 +2029,7 @@ void common_speculative_reset_draft_offload_defaults(gpt_params & params) {
     params.tensor_buft_overrides.clear();
     params.offload_policy.clear();
     params.moe_cache_size = 0;
+    params.ngram_file.clear();
 }
 
 // apply -td/--threads-draft to a draft params copy
