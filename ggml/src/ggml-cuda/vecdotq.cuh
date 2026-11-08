@@ -467,6 +467,13 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq(
     return dm4f.x*sumf_d - dm4f.y*sumf_m;
 }
 
+// exact in fp32: the integer products and sums here are <= 2^24 in magnitude
+#if __CUDA_ARCH__ == 610
+typedef float mmq_kscale_t;
+#else
+typedef int   mmq_kscale_t;
+#endif // __CUDA_ARCH__ == 610
+
 // contiguous v/x + u/y values
 static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(
     const int * __restrict__ v, const int * __restrict__ u, const uint8_t * __restrict__ sc,
@@ -486,7 +493,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(
 
         const float2 ds8f = __half22float2(ds8[i]);
 
-        sumf_d += ds8f.x * (sc[i] * sumi_d);
+        sumf_d += ds8f.x * ((mmq_kscale_t)sc[i] * sumi_d);
         sumf_m += ds8f.y *   m[i]; // sum of q8_1 block * q4_K min val
     }
 
@@ -549,7 +556,7 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_mmq(
 
         const float2 ds8f = __half22float2(ds8[i]);
 
-        sumf_d += ds8f.x * (sc[i] * sumi_d);
+        sumf_d += ds8f.x * ((mmq_kscale_t)sc[i] * sumi_d);
         sumf_m += ds8f.y *   m[i]; // sum of q8_1 block * q4_K min val
     }
 
@@ -607,7 +614,7 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmq(
             sumi_d.y = ggml_cuda_dp4a(v[2*i+5], u[2*i+5], sumi_d.y); // SIMD dot product
         }
 
-        sumf_d += d8[i0/4] * (sc_reg[i0/2+0]*sumi_d.x + sc_reg[i0/2+1]*sumi_d.y);
+        sumf_d += d8[i0/4] * ((mmq_kscale_t)sc_reg[i0/2+0]*sumi_d.x + (mmq_kscale_t)sc_reg[i0/2+1]*sumi_d.y);
     }
 
     return d6 * sumf_d;
