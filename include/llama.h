@@ -509,6 +509,7 @@ extern "C" {
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
         size_t moe_cache_size; // total device-cache budget for host-resident MoE experts, split across GPUs [EXPERIMENTAL]
         enum llama_moe_cache_policy moe_cache_policy; // replacement policy for the MoE cache
+        float moe_cache_cpu_share; // fixed fraction of unique cache misses assigned to CPU [EXPERIMENTAL]
         enum ggml_type idx_type_k; // data type for indexer K cache [EXPERIMENTAL]
         enum ggml_type type_reduce; // data type for reduce operations
         enum ggml_type type_graph_attn; // flash-attn precision under -sm graph
