@@ -3054,7 +3054,8 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         }
     }
 
-    if (src1->ne[2] <= ctx.mmq_id_thresh*src0->ne[2] &&
+    if ((src1->ne[2] <= ctx.mmq_id_thresh*src0->ne[2] ||
+         (ggml_cuda_can_mul_mat_nvfp4_id(src0, src1, ggml_cuda_info().devices[ctx.device].cc) && ggml_cuda_can_compute_row_ids(ctx.device, src1->ne[2]))) &&
         ggml_is_quantized(src0->type) && ggml_cuda_can_use_mmq_id(src0->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
         ggml_cuda_mul_mat_q_id(ctx, src0, src1, ids, dst, nullptr, nullptr);
         return false;
@@ -3377,7 +3378,8 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     // My original hypothesis was that it is dependent on the total/active experts ratio, but from these 3 it
     // looks like it really depends just on the total number of experts.
     // TODO: verify with more models, or perhaps make the magic constant '32' to be defined via a compile time define.
-    if (src1->ne[2] <= ctx.mmq_id_thresh*src0->ne[2] &&
+    const bool native = ggml_cuda_can_mul_mat_nvfp4_id(src0_1, src1, cc) && (!src0_2 || ggml_cuda_can_mul_mat_nvfp4_id(src0_2, src1, cc));
+    if ((src1->ne[2] <= ctx.mmq_id_thresh*src0->ne[2] || (native && ggml_cuda_can_compute_row_ids(ctx.device, src1->ne[2]))) &&
         ggml_is_quantized(src0_1->type) && (!src0_2 || src0_1->type == src0_2->type) && src1->ne[1] == 1 && src1->ne[3] == 1 &&
         ggml_cuda_can_use_mmq_id(src0_1->type, cc, src1->ne[2])) {
 
@@ -3391,8 +3393,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 ne02, ne12, n_ids, ne11, nb11, nb12, ids->nb[1], stream);
 
         const int64_t ne11_flat = ne12*n_ids;
-        const bool native = ggml_cuda_can_mul_mat_nvfp4_id(src0_1, src1, cc)
-            && (!src0_2 || ggml_cuda_can_mul_mat_nvfp4_id(src0_2, src1, cc));
         ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool());
         nvfp4_input input(ctx);
         if (native) {

@@ -123,6 +123,14 @@ static __global__ void mmq_ids_helper(
     expert_bounds[gridDim.x] = nex_prev + it_compact;
 }
 
+static size_t mmq_ids_helper_nbytes_shared(int n_tokens) {
+    return n_tokens*sizeof(mmq_ids_helper_store);
+}
+
+bool ggml_cuda_can_compute_row_ids(int device, int n_tokens) {
+    return mmq_ids_helper_nbytes_shared(n_tokens) <= ggml_cuda_info().devices[device].smpbo;
+}
+
 template <int n_expert_used_template>
 static void launch_mmq_ids_helper(
         const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
@@ -137,7 +145,7 @@ static void launch_mmq_ids_helper(
 
     const dim3 num_blocks(n_experts, 1, 1);
     const dim3 block_size(warp_size, 1, 1);
-    const size_t nbytes_shared = n_tokens*sizeof(mmq_ids_helper_store);
+    const size_t nbytes_shared = mmq_ids_helper_nbytes_shared(n_tokens);
     mmq_ids_helper<n_expert_used_template><<<num_blocks, block_size, nbytes_shared, stream>>>
         (ids, ids_src1, ids_dst, expert_bounds, n_tokens, n_expert_used_var, nchannels_y, si1, sis1);
 }
