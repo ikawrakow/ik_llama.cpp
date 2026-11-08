@@ -5611,7 +5611,8 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     auto u_meta = ml.require_tensor_meta(u_name.c_str());
     auto g_meta = ml.require_tensor_meta(g_name.c_str());
 
-    if (u_meta->type != g_meta->type || u_meta->ne[0] != g_meta->ne[0] || u_meta->ne[2] != g_meta->ne[2]) {
+    const bool same_scale = u_meta->type != GGML_TYPE_NVFP4_KS || ggml_get_input_scale(u_meta) == ggml_get_input_scale(g_meta);
+    if (u_meta->type != g_meta->type || u_meta->ne[0] != g_meta->ne[0] || u_meta->ne[2] != g_meta->ne[2] || !same_scale) {
         LLAMA_LOG_INFO("%s: not merging because up/gate meta info is different\n", __func__);
         return false;
     }
@@ -5632,6 +5633,9 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     LLAMA_LOG_INFO("%s: merging up/gate in layer %d\n", __func__, i);
 
     layer.ffn_up_gate_exps = ggml_new_tensor_3d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
+    if (u_meta->type == GGML_TYPE_NVFP4_KS) {
+        ggml_set_input_scale(layer.ffn_up_gate_exps, ggml_get_input_scale(u_meta));
+    }
     snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_gate_up_exps.weight", i);
     if (u_ctx == ctx_split) {
         split_tensors.insert(layer.ffn_up_gate_exps);
@@ -5752,12 +5756,17 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
     auto wv = ml.require_tensor_meta(wv_name.c_str());
     GGML_ASSERT(wq && wk && wv);
 
+    const bool same_qk_scale = wq->type != GGML_TYPE_NVFP4_KS || ggml_get_input_scale(wq) == ggml_get_input_scale(wk);
+    const bool same_qv_scale = wq->type != GGML_TYPE_NVFP4_KS || ggml_get_input_scale(wq) == ggml_get_input_scale(wv);
     bool fused_qkv = false;
-    if (ml.merge_qkv && wq->type == wk->type && wq->type == wv->type && (ignore_attn_scale || hparams.f_attention_scale == 0.0f)) {
+    if (ml.merge_qkv && same_qk_scale && same_qv_scale && wq->type == wk->type && wq->type == wv->type && (ignore_attn_scale || hparams.f_attention_scale == 0.0f)) {
         GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
         GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
         GGML_ASSERT(wv->ne[0] == n_embd && wv->ne[1] == n_embd_gqa);
         layer.wqkv = ggml_new_tensor_2d(ctx_split, wq->type, n_embd, n_embd_head_k * (n_head + n_head_kv + n_head_kv));
+        if (wq->type == GGML_TYPE_NVFP4_KS) {
+            ggml_set_input_scale(layer.wqkv, ggml_get_input_scale(wq));
+        }
         snprintf(layer.wqkv->name, GGML_MAX_NAME, "blk.%d.attn_qkv.weight", i);
         // This does not work. If we are doing this merge manually, it basically means that the arch does not have
         // an LLM_TENSOR_ATTN_QKV entry, so we will get __missing__ as the tensor name.
@@ -5791,15 +5800,18 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
             }
         }
     }
-    if (!fused_qkv && ml.merge_qkv && wq->type == wk->type && (ignore_attn_scale || hparams.f_attention_scale == 0.0f)) {
+    if (!fused_qkv && ml.merge_qkv && same_qk_scale && wq->type == wk->type && (ignore_attn_scale || hparams.f_attention_scale == 0.0f)) {
         GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
         GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
         layer.wqk = ggml_new_tensor_2d(ctx_split, wq->type, n_embd, n_embd_head_k * (n_head + n_head_kv));
+        if (wq->type == GGML_TYPE_NVFP4_KS) {
+            ggml_set_input_scale(layer.wqk, ggml_get_input_scale(wq));
+        }
         snprintf(layer.wqk->name, GGML_MAX_NAME, "blk.%d.attn_qk.weight", i);
         layer.wq = ml.create_tensor_as_view(ctx_split, layer.wqk, wq_name.c_str(), { wq->ne[0], wq->ne[1] }, 0);
         layer.wk = ml.create_tensor_as_view(ctx_split, layer.wqk, wk_name.c_str(), { wk->ne[0], wk->ne[1] }, wq->ne[1]*wq->nb[1]);
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        LLAMA_LOG_INFO("====================== Merged only Q and K in layer %d because V is of different type\n", i);
+        LLAMA_LOG_INFO("====================== Merged only Q and K in layer %d because V has a different type or input scale\n", i);
         fused_qkv = true;
         if (bias) {
             auto bq_name = tn(LLM_TENSOR_ATTN_Q, "bias", i);

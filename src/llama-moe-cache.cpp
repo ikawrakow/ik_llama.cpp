@@ -296,6 +296,9 @@ struct llama_moe_cache::impl {
                     ggml_tensor * bank = g.banks[ip];
                     ggml_tensor * cached = ggml_view_3d(d.ctx.get(), bank, bank->ne[0], bank->ne[1], g.n_slots,
                             bank->nb[1], bank->nb[2], 0);
+                    if (cached->type == GGML_TYPE_NVFP4_KS) {
+                        ggml_set_input_scale(cached, ggml_get_input_scale(l.experts[ip]));
+                    }
                     ggml_format_name(cached, "moe_cache.%s", l.experts[ip]->name);
                     bindings[l.experts[ip]] = { il, (int32_t) ip, cached };
                 }

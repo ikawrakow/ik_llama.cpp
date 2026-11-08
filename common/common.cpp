@@ -2132,6 +2132,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cont_batching = false;
         return true;
     }
+    if (arg == "--nvfp4-precision") {
+        CHECK_ARG
+        const std::string value = argv[i];
+        if (value == "auto") params.nvfp4_precision = LLAMA_NVFP4_PRECISION_AUTO;
+        else if (value == "w4a4") params.nvfp4_precision = LLAMA_NVFP4_PRECISION_W4A4;
+        else if (value == "int8") params.nvfp4_precision = LLAMA_NVFP4_PRECISION_INT8;
+        else invalid_param = true;
+        return true;
+    }
     if (arg == "-no-fa" || arg == "--no-flash-attn") {
         params.flash_attn = false;
         return true;
@@ -3379,6 +3388,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ub,   --ubatch-size N",        "physical maximum batch size (default: %d)", params.n_ubatch });
     options.push_back({ "*",           "       --keep N",               "number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep });
     options.push_back({ "*",           "       --chunks N",             "max number of chunks to process (default: %d, -1 = all)", params.n_chunks });
+    options.push_back({ "*", "--nvfp4-precision (auto|w4a4|int8)", "NVFP4 matmul precision on Blackwell (default: auto). w4a4: 4-bit activations, fastest, lower accuracy. int8: 8-bit activations, more accurate. auto: w4a4 when the model has input scales, unless it is marked W4A16 or has imatrix data; older ggml-org/llama.cpp W4A16 conversions may need int8." });
     options.push_back({ "*",           "-no-fa, --no-flash-attn",       "disable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
     options.push_back({ "*",           "-fa, --flash-attn (auto|on|off|0|1)", "set Flash Attention (default: %s)", params.flash_attn ? "on" : "off" });
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
@@ -4673,6 +4683,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
     mparams.mtp             = params.has_mtp || params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     mparams.dsa             = params.dsa;
+    mparams.nvfp4_precision = params.nvfp4_precision;
     mparams.flash_attn      = params.flash_attn;
     mparams.defer_experts   = params.defer_experts;
     mparams.defer_ple       = params.defer_ple;
