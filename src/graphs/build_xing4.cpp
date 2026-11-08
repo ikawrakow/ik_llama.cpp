@@ -121,7 +121,8 @@ ggml_cgraph * llm_build_context::build_xing4() {
     }
     const int64_t n_out = flat->ne[1];
     auto cur = ggml_multi_add(ctx0, ggml_view_2d(ctx0, flat, n_embd, n_out, flat->nb[1], 0), hc);
-    cur = llm_build_norm(ctx0, cur, hp, model_.output_norm, nullptr, LLM_NORM_RMS, cb, -1, hc*hc);
+    cur = ggml_scale(ctx0, cur, 1.0f/hc);
+    cur = llm_build_norm(ctx0, cur, hp, model_.output_norm, nullptr, LLM_NORM_RMS, cb, -1, 1.0f);
     cb(cur, "result_norm", -1);
     cur = llm_build_lora_mm(lctx, ctx0, model_.output, cur);
     cb(cur, "result_output", -1);
