@@ -1,6 +1,8 @@
 #include "iqk_gemm_legacy_quants.h"
 
 #include <type_traits>
+#include <algorithm>
+#include <numeric>
 
 #ifdef IQK_IMPLEMENT
 
@@ -9,6 +11,37 @@
 
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
+
+namespace {
+struct NVFP4RequantTables {
+    uint8_t q[128*128];
+    uint8_t m[16];
+    NVFP4RequantTables() {
+        for (int i = 0; i < 16; ++i) m[i] = i ? 127/i : 0;
+        for (int bd = 0; bd < 128; ++bd) for (int bo = 0; bo < 128; ++bo) {
+            const int md = (bd & 7) | (bd & 0x78 ? 8 : 0), pd = std::max(bd >> 3, 1);
+            const int mo = (bo & 7) | (bo & 0x78 ? 8 : 0), po = std::max(bo >> 3, 1);
+            const int A = md << std::max(pd - po, 0), B = mo << std::max(po - pd, 0);
+            q[128*bd + bo] = A ? std::min(A/std::gcd(A, B), 128) : 128;
+        }
+    }
+};
+const NVFP4RequantTables k_nvfp4_requant;
+
+inline float nvfp4_requant_scale(const uint8_t * sb, float s1, float s2, int a1, int a2, float * c) {
+    const float max1 = s1*a1, max2 = s2*a2;
+    if (!max1 && !max2) {
+        c[0] = c[1] = 0.f;
+        return 0.f;
+    }
+    const int j = max2 > max1 ? 1 : 0;
+    const int n = std::min(k_nvfp4_requant.q[128*(sb[j] & 0x7f) + (sb[1-j] & 0x7f)], k_nvfp4_requant.m[j ? a2 : a1]);
+    const float sd = j ? s2 : s1;
+    const float id = n/sd;
+    c[0] = s1*id; c[1] = s2*id;
+    return sd/n;
+}
+}
 
 //
 // ============================== Legacy quants
@@ -656,6 +689,55 @@ struct MXFP40_Dequantizer {
     const __m256i values = load_mxfp4_values_256();
     inline __m256i dequant(const block_mxfp4 * x) const {
         return _mm256_shuffle_epi8(values, b4.dequant(x->qs));
+    }
+};
+
+struct NVFP4_Dequantizer {
+    const __m256i values = load_mxfp4_values_256();
+    const __m256i m4     = _mm256_set1_epi8(0xf);
+    const __m256i m7     = _mm256_set1_epi8(0x7);
+    const __m256i amax_shuff = _mm256_setr_epi8(0, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                                                -1, -1, 0, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    const __m128i shuff  = _mm_setr_epi8(0, -1, 2, -1, 4, -1, 6, -1, 1, -1, 3, -1, 5, -1, 7, -1);
+    inline void dequant(const block_nvfp4& x, __m256i * v) const {
+        auto bits = _mm256_loadu_si256((const __m256i *)x.qs);
+        auto lo = _mm256_and_si256(bits, m4);
+        auto hi = _mm256_and_si256(_mm256_srli_epi16(bits, 4), m4);
+        auto a  = _mm256_unpacklo_epi64(lo, hi);
+        auto b  = _mm256_unpackhi_epi64(lo, hi);
+        v[0] = _mm256_shuffle_epi8(values, _mm256_permute2x128_si256(a, b, 0x20));
+        v[1] = _mm256_shuffle_epi8(values, _mm256_permute2x128_si256(a, b, 0x31));
+    }
+    inline __m128 scales(const block_nvfp4& x) const {
+        uint32_t aux32; std::memcpy(&aux32, x.d, 4);
+        return _mm_cvtph_ps(_mm_slli_epi16(_mm_cvtepu8_epi16(_mm_cvtsi32_si128(aux32)), 7));
+    }
+    inline __m256 scales(const block_nvfp4& x1, const block_nvfp4& x2) const {
+        uint32_t aux32[2]; std::memcpy(aux32+0, x1.d, 4); std::memcpy(aux32+1, x2.d, 4);
+        return _mm256_cvtph_ps(_mm_slli_epi16(_mm_shuffle_epi8(_mm_loadl_epi64((const __m128i *)aux32), shuff), 7));
+    }
+    inline uint32_t amax(const block_nvfp4& x) const {
+        auto bits = _mm256_loadu_si256((const __m256i *)x.qs);
+        auto t = _mm256_max_epu8(_mm256_and_si256(bits, m7), _mm256_and_si256(_mm256_srli_epi16(bits, 4), m7));
+        t = _mm256_max_epu8(t, _mm256_srli_epi64(t, 32));
+        t = _mm256_max_epu8(t, _mm256_srli_epi64(t, 16));
+        t = _mm256_max_epu8(t, _mm256_srli_epi64(t,  8));
+        t = _mm256_shuffle_epi8(t, amax_shuff);
+        return _mm_cvtsi128_si32(_mm_or_si128(_mm256_castsi256_si128(t), _mm256_extracti128_si256(t, 1)));
+    }
+    inline __m256i requant(__m256i v, const float * c) const {
+        auto v128 = _mm256_castsi256_si128(v);
+        auto v0 = _mm256_mul_ps(_mm256_set1_ps(c[0]), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(v128)));
+        auto v1 = _mm256_mul_ps(_mm256_set1_ps(c[0]), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(v128, 8))));
+        v128 = _mm256_extracti128_si256(v, 1);
+        auto v2 = _mm256_mul_ps(_mm256_set1_ps(c[1]), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(v128)));
+        auto v3 = _mm256_mul_ps(_mm256_set1_ps(c[1]), _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(v128, 8))));
+        auto i0 = _mm256_cvtps_epi32(v0);
+        auto i1 = _mm256_cvtps_epi32(v1);
+        auto i2 = _mm256_cvtps_epi32(v2);
+        auto i3 = _mm256_cvtps_epi32(v3);
+        i0 = _mm256_packs_epi16(_mm256_packs_epi32(i0, i1), _mm256_packs_epi32(i2, i3));
+        return _mm256_permutevar8x32_epi32(i0, _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7));
     }
 };
 
@@ -3219,6 +3301,64 @@ static void iqk_convert_qX_q80_r16(int n, const void * vx, size_t bx, void * vy,
 }
 #endif
 
+template <int nr>
+void iqk_convert_nvfp4_ks_q80_rX(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    using block_q8_0_r = std::conditional_t<nr == 16, block_q8_0_r16, block_q8_0_r8>;
+
+    const int nb = n/QK_NVFP4;
+
+    block_q8_0_r * y = (block_q8_0_r *)vy;
+
+    const block_nvfp4 * xr[nr];
+    float d[nr];
+
+    NVFP4_Dequantizer deq;
+
+    __m256i  v[2];
+    uint32_t block[8];
+    float    s[4];
+    float    c[nr][4];
+    float    dq[nr][2];
+
+    for (int ix = 0; ix < nrc_x; ix += nr) {
+        for (int k = 0; k < nr; ++k) {
+            const float * dptr = (const float *)((const char *)vx + (ix + k)*bx);
+            d[k]  = 128*dptr[0];
+            xr[k] = (const block_nvfp4 *)(dptr + 1);
+        }
+        for (int ib = 0; ib < nb; ++ib) {
+            for (int k = 0; k < nr; ++k) {
+                _mm_storeu_ps(s, deq.scales(xr[k][ib]));
+                uint32_t amax = deq.amax(xr[k][ib]);
+                for (int j = 0; j < 2; ++j) {
+                    dq[k][j] = d[k]*nvfp4_requant_scale(xr[k][ib].d + 2*j, s[2*j+0], s[2*j+1],
+                            kvalues_mxfp4[(amax >> 16*j) & 0xff], kvalues_mxfp4[(amax >> (16*j+8)) & 0xff], c[k] + 2*j);
+                }
+            }
+            for (int k = 0; k < nr; ++k) {
+                deq.dequant(xr[k][ib], v);
+                for (int j = 0; j < 2; ++j) {
+                    auto q  = deq.requant(v[j], c[k] + 2*j);
+                    auto qs = (uint32_t *)y[2*ib+j].qs;
+                    if constexpr (nr == 16) {
+                        y[2*ib+j].d[k] = dq[k][j];
+                        _mm256_storeu_si256((__m256i *)block, _mm256_xor_si256(q, _mm256_set1_epi8(-128)));
+                        for (int l = 0; l < 8; ++l) qs[16*l + k] = block[l];
+                    } else {
+                        y[2*ib+j].d[k] = GGML_FP32_TO_FP16(dq[k][j]);
+                        _mm256_storeu_si256((__m256i *)block, q);
+                        for (int l = 0; l < 4; ++l) {
+                            qs[8*l + k +  0] = block[l + 0];
+                            qs[8*l + k + 32] = block[l + 4];
+                        }
+                    }
+                }
+            }
+        }
+        y += 2*nb;
+    }
+}
+
 template <typename Block, typename Dequantizer>
 void iqk_convert_qX_1_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK8_0 == 0);
@@ -3639,6 +3779,51 @@ static void mul_mat_q2_0_q8_2_x4(int n, const void * vx, size_t bx, const DataIn
     }
 }
 
+template <int nrc_y>
+static void mul_mat_nvfp4_ks_q8_2_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    Q8<nrc_y, block_q8_2> q8(info);
+    const int nb = n/QK_NVFP4;
+    NVFP4_Dequantizer deq;
+    Sum4TypeQ82S sum4;
+    __m256i qx[4];
+    __m256  acc[nrc_y];
+    float   s[4];
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char *)vx + ix*bx);
+        const block_nvfp4 * x = (const block_nvfp4 *)(dptr + 1);
+        const float d = 128*dptr[0];
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm256_setzero_ps();
+        for (int ib = 0; ib < nb/2; ++ib) {
+            auto scales = _mm256_mul_ps(_mm256_set1_ps(d), deq.scales(x[2*ib+0], x[2*ib+1]));
+            deq.dequant(x[2*ib+0], qx+0);
+            deq.dequant(x[2*ib+1], qx+2);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y  = q8.y[iy] + 4*ib;
+                auto dy = convert_scales_s(((const block_q8_2_x4 *)y)->d);
+                auto sumi = sum4.compute(qx, y);
+                acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(scales, _mm256_set_m128(dy, dy)), _mm256_cvtepi32_ps(sumi), acc[iy]);
+            }
+        }
+        if (nb%2) {
+            const int ib = nb - 1;
+            _mm_storeu_ps(s, _mm_mul_ps(_mm_set1_ps(d), deq.scales(x[ib])));
+            deq.dequant(x[ib], qx);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y = q8.y[iy] + 2*ib;
+                for (int k = 0; k < 2; ++k) {
+                    float dy = GGML_BF16_TO_FP32(ggml_bf16_t{y[k].d});
+                    auto sumi = sum4.compute(qx[k], _mm256_loadu_si256((const __m256i *)y[k].qs));
+                    auto dk = _mm256_set_m128(_mm_set1_ps(dy*s[2*k+1]), _mm_set1_ps(dy*s[2*k+0]));
+                    acc[iy] = _mm256_fmadd_ps(dk, _mm256_cvtepi32_ps(sumi), acc[iy]);
+                }
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, hsum_float_8(acc[iy]));
+        }
+    }
+}
+
 template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
     if constexpr (std::is_same_v<Dequantizer, Q4_0_Unpacker> || std::is_same_v<Dequantizer, Q5_0_Unpacker>) {
         IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_0_q8_0_T, Dequantizer, funcs)
@@ -3730,6 +3915,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r16<block_q6_0, Q6_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r16<block_iq4_nl, IQ4_NL_DequantizerS>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_MXFP4 : iqk_convert_qX_q80_r16<block_mxfp4, MXFP40_Dequantizer>(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_NVFP4_KS: iqk_convert_nvfp4_ks_q80_rX<16>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0  : iqk_convert_q80_q80_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q4_0_R8: iqk_convert_q40_r8_q80_r16(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0_R8: iqk_convert_q80_r8_q80_r16(n, vx, bx, vy, nrc_x); break;
@@ -3743,6 +3929,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r8<block_q6_0, Q6_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, IQ4_NL_DequantizerS>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_MXFP4 : iqk_convert_qX_q80_r8<block_mxfp4, MXFP40_Dequantizer>(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_NVFP4_KS: iqk_convert_nvfp4_ks_q80_rX<8>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0  : iqk_convert_q80_q80_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q4_0_R8: iqk_convert_q40_r8_q80_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_MXFP4_R8: iqk_convert_mxfp4_r8_q80_r8(n, vx, bx, vy, nrc_x); break;
@@ -3802,6 +3989,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             break;
         case GGML_TYPE_MXFP4:
             set_functions<MXFP4_Unpacker>(kernels);
+            break;
+        case GGML_TYPE_NVFP4_KS:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_nvfp4_ks_q8_2_x4, kernels);
             break;
         case GGML_TYPE_IQ3_KS_R16:
 #ifdef HAVE_FANCY_SIMD
@@ -5322,6 +5512,144 @@ static void mul_mat_q2_0_q8_0_x4(int n, const void * vx, size_t bx, const DataIn
     }
 }
 
+struct DeqNVFP4 {
+    static inline int8x16_t load_values() { return vld1q_s8(kvalues_mxfp4); }
+    const int8x16_t  values = load_values();
+    const uint8x16_t m4     = vdupq_n_u8(0xf);
+    inline void dequant(const block_nvfp4& x, int8x16_t * q) const {
+        for (int k = 0; k < 2; ++k) {
+            auto bits = vld1q_u8(x.qs + 16*k);
+            auto lo = vreinterpretq_u64_u8(vandq_u8(bits, m4));
+            auto hi = vreinterpretq_u64_u8(vshrq_n_u8(bits, 4));
+            q[2*k+0] = vqtbl1q_s8(values, vreinterpretq_u8_u64(vzip1q_u64(lo, hi)));
+            q[2*k+1] = vqtbl1q_s8(values, vreinterpretq_u8_u64(vzip2q_u64(lo, hi)));
+        }
+    }
+    inline float32x4_t scales(const block_nvfp4& x) const {
+        uint32_t aux32; std::memcpy(&aux32, x.d, 4);
+        return vcvt_f32_f16(vreinterpret_f16_u16(vshl_n_u16(vget_low_u16(vmovl_u8(vcreate_u8(aux32))), 7)));
+    }
+    inline float scale(const int8x16_t * q, const uint8_t * sb, float s1, float s2, float * c) const {
+        return nvfp4_requant_scale(sb, s1, s2, vmaxvq_u8(vreinterpretq_u8_s8(vabsq_s8(q[0]))), vmaxvq_u8(vreinterpretq_u8_s8(vabsq_s8(q[1]))), c);
+    }
+    inline void requant(const int8x16_t * q, const float * cs, int8_t * out) const {
+        for (int h = 0; h < 2; ++h) {
+            auto c = vdupq_n_f32(cs[h]);
+            auto q16_l = vmovl_s8(vget_low_s8(q[h]));
+            auto q16_h = vmovl_high_s8(q[h]);
+            auto i0 = vcvtnq_s32_f32(vmulq_f32(c, vcvtq_f32_s32(vmovl_s16(vget_low_s16(q16_l)))));
+            auto i1 = vcvtnq_s32_f32(vmulq_f32(c, vcvtq_f32_s32(vmovl_high_s16(q16_l))));
+            auto i2 = vcvtnq_s32_f32(vmulq_f32(c, vcvtq_f32_s32(vmovl_s16(vget_low_s16(q16_h)))));
+            auto i3 = vcvtnq_s32_f32(vmulq_f32(c, vcvtq_f32_s32(vmovl_high_s16(q16_h))));
+            vst1q_s8(out + 16*h, vcombine_s8(vqmovn_s16(vcombine_s16(vqmovn_s32(i0), vqmovn_s32(i1))), vqmovn_s16(vcombine_s16(vqmovn_s32(i2), vqmovn_s32(i3)))));
+        }
+    }
+};
+
+template <int nrc_y>
+static void mul_mat_nvfp4_ks_q8_0_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+    const int nb = n/QK_NVFP4;
+    DeqNVFP4 deq;
+    int8x16_t   qx[8];
+    float32x4_t acc[nrc_y];
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char *)vx + ix*bx);
+        const block_nvfp4 * x = (const block_nvfp4 *)(dptr + 1);
+        const float d = 128*dptr[0];
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = vdupq_n_f32(0.f);
+        for (int ib = 0; ib < nb/2; ++ib) {
+            auto sc1 = vmulq_n_f32(deq.scales(x[2*ib+0]), d);
+            auto sc2 = vmulq_n_f32(deq.scales(x[2*ib+1]), d);
+            deq.dequant(x[2*ib+0], qx+0);
+            deq.dequant(x[2*ib+1], qx+4);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto dy = vcvt_f32_f16(vld1_f16((const float16_t *)q8.y[iy][ib].d));
+                auto y  = vld1q_s8_x4(q8.y[iy][ib].qs);
+                auto p0 = ggml_vdotq_s32(vdupq_n_s32(0), qx[0], y.val[0]);
+                auto p1 = ggml_vdotq_s32(vdupq_n_s32(0), qx[1], y.val[1]);
+                auto p2 = ggml_vdotq_s32(vdupq_n_s32(0), qx[2], y.val[2]);
+                auto p3 = ggml_vdotq_s32(vdupq_n_s32(0), qx[3], y.val[3]);
+                auto s1 = vpaddq_s32(vpaddq_s32(p0, p1), vpaddq_s32(p2, p3));
+                y  = vld1q_s8_x4(q8.y[iy][ib].qs + 64);
+                p0 = ggml_vdotq_s32(vdupq_n_s32(0), qx[4], y.val[0]);
+                p1 = ggml_vdotq_s32(vdupq_n_s32(0), qx[5], y.val[1]);
+                p2 = ggml_vdotq_s32(vdupq_n_s32(0), qx[6], y.val[2]);
+                p3 = ggml_vdotq_s32(vdupq_n_s32(0), qx[7], y.val[3]);
+                auto s2 = vpaddq_s32(vpaddq_s32(p0, p1), vpaddq_s32(p2, p3));
+                acc[iy] = vfmaq_f32(acc[iy], vmulq_f32(sc1, vzip1q_f32(dy, dy)), vcvtq_f32_s32(s1));
+                acc[iy] = vfmaq_f32(acc[iy], vmulq_f32(sc2, vzip2q_f32(dy, dy)), vcvtq_f32_s32(s2));
+            }
+        }
+        if (nb%2) {
+            const int ib = nb - 1;
+            auto sc = vmulq_n_f32(deq.scales(x[ib]), d);
+            deq.dequant(x[ib], qx);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y  = (const block_q8_0 *)q8.y[iy] + 2*ib;
+                auto y0 = vld1q_s8_x2(y[0].qs);
+                auto y1 = vld1q_s8_x2(y[1].qs);
+                auto p0 = ggml_vdotq_s32(vdupq_n_s32(0), qx[0], y0.val[0]);
+                auto p1 = ggml_vdotq_s32(vdupq_n_s32(0), qx[1], y0.val[1]);
+                auto p2 = ggml_vdotq_s32(vdupq_n_s32(0), qx[2], y1.val[0]);
+                auto p3 = ggml_vdotq_s32(vdupq_n_s32(0), qx[3], y1.val[1]);
+                auto s  = vpaddq_s32(vpaddq_s32(p0, p1), vpaddq_s32(p2, p3));
+                float d0 = GGML_FP16_TO_FP32(y[0].d), d1 = GGML_FP16_TO_FP32(y[1].d);
+                acc[iy] = vfmaq_f32(acc[iy], vmulq_f32(sc, float32x4_t{d0, d0, d1, d1}), vcvtq_f32_s32(s));
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, vaddvq_f32(acc[iy]));
+        }
+    }
+}
+
+void iqk_convert_nvfp4_ks_q80_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    const int nb = n/QK_NVFP4;
+
+    block_q8_0_r8 * y = (block_q8_0_r8 *)vy;
+
+    const block_nvfp4 * x8[8];
+    float d[8];
+
+    DeqNVFP4 deq;
+
+    int8x16_t qx[8][4];
+    uint32_t  block[8];
+    float     s[4];
+    float     c[8][4];
+    float     dq[8][2];
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) {
+            const float * dptr = (const float *)((const char *)vx + (ix + k)*bx);
+            d[k]  = 128*dptr[0];
+            x8[k] = (const block_nvfp4 *)(dptr + 1);
+        }
+        for (int ib = 0; ib < nb; ++ib) {
+            for (int k = 0; k < 8; ++k) {
+                vst1q_f32(s, deq.scales(x8[k][ib]));
+                deq.dequant(x8[k][ib], qx[k]);
+                for (int j = 0; j < 2; ++j) {
+                    dq[k][j] = d[k]*deq.scale(qx[k] + 2*j, x8[k][ib].d + 2*j, s[2*j+0], s[2*j+1], c[k] + 2*j);
+                }
+            }
+            for (int k = 0; k < 8; ++k) {
+                for (int j = 0; j < 2; ++j) {
+                    deq.requant(qx[k] + 2*j, c[k] + 2*j, (int8_t *)block);
+                    y[2*ib+j].d[k] = GGML_FP32_TO_FP16(dq[k][j]);
+                    auto qs = (uint32_t *)y[2*ib+j].qs;
+                    for (int l = 0; l < 4; ++l) {
+                        qs[8*l + k +  0] = block[l + 0];
+                        qs[8*l + k + 32] = block[l + 4];
+                    }
+                }
+            }
+        }
+        y += 2*nb;
+    }
+}
+
 }
 
 bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
@@ -5333,6 +5661,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r8<block_q6_0, DeqQ60>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, DeqIQ4NL>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_MXFP4 : iqk_convert_qX_q80_r8<block_mxfp4, DeqMXFP4>(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_NVFP4_KS: iqk_convert_nvfp4_ks_q80_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0  : iqk_convert_qX_q80_r8<block_q8_0, DeqQ80>(n, vx, bx, vy, nrc_x); break;
         default: return false;
     }
@@ -5376,6 +5705,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             break;
         case GGML_TYPE_MXFP4:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_0_q8_0, DequantizerMXFP4, kernels);
+            break;
+        case GGML_TYPE_NVFP4_KS:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_nvfp4_ks_q8_0_x4, kernels);
             break;
         case GGML_TYPE_Q4_0_R8:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qx_r8_q8_0, Q4_0_R8_Dequantizer, kernels);

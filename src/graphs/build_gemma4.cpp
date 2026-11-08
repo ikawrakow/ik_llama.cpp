@@ -471,7 +471,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
 
                 auto down_exps    = split_exps ? ((const ggml_split_tensor_t *)l.ffn_down_exps->extra)->splits[id] : l.ffn_down_exps;
                 auto up_gate_exps = split_exps ? ((const ggml_split_tensor_t *)l.ffn_up_gate_exps->extra)->splits[id] : l.ffn_up_gate_exps;
-                auto down_exps_s  = l.ffn_down_exps_s->extra ? ((const ggml_split_tensor_t *)l.ffn_down_exps_s->extra)->splits[id] : l.ffn_down_exps_s;
+                auto down_exps_s  = l.ffn_down_exps_s && l.ffn_down_exps_s->extra ? ((const ggml_split_tensor_t *)l.ffn_down_exps_s->extra)->splits[id] : l.ffn_down_exps_s;
                 auto moe = llm. llm_build_moe_ffn(ctx0, lctx, cur,
                         nullptr, nullptr, nullptr,
                         down_exps, nullptr,

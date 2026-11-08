@@ -32,6 +32,7 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "Q6_0",     LLAMA_FTYPE_MOSTLY_Q6_0,     " 6.5 bpw quantization",             },
     { "MXFP4",    LLAMA_FTYPE_MOSTLY_MXFP4,    " 4.25 bpw 4-bit float quantization",},
     { "MXFP4_R8", LLAMA_FTYPE_MOSTLY_MXFP4_R8, " MXFP4 repacked",                   },
+    { "NVFP4_KS", LLAMA_FTYPE_MOSTLY_NVFP4_KS, " 4.5 bpw NVFP4 with a row scale",    },
     { "IQ2_XXS",  LLAMA_FTYPE_MOSTLY_IQ2_XXS,  " 2.06 bpw quantization",            },
     { "IQ2_XXS_R4",LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4,"IQ2_XXS repacked",            },
     { "IQ2_XS",   LLAMA_FTYPE_MOSTLY_IQ2_XS,   " 2.31 bpw quantization",            },
