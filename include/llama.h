@@ -470,6 +470,11 @@ extern "C" {
         bool swa_compress;     // must match llama_context_params::swa_compress; the fit also assumes that context's n_ubatch
     };
 
+    enum llama_moe_cache_policy {
+        LLAMA_MOE_CACHE_POLICY_LRU = 0,
+        LLAMA_MOE_CACHE_POLICY_CLASSLRU = 1,
+    };
+
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
     //       https://github.com/ggerganov/llama.cpp/pull/7544
     struct llama_context_params {
@@ -503,6 +508,7 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
         size_t moe_cache_size; // total device-cache budget for host-resident MoE experts, split across GPUs [EXPERIMENTAL]
+        enum llama_moe_cache_policy moe_cache_policy; // replacement policy for the MoE cache
         enum ggml_type idx_type_k; // data type for indexer K cache [EXPERIMENTAL]
         enum ggml_type type_reduce; // data type for reduce operations
         enum ggml_type type_graph_attn; // flash-attn precision under -sm graph

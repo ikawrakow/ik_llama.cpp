@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-moe-cache-share.h"
+#include "llama-moe-cache-policy.h"
 
 #include "ggml-cpp.h"
 
@@ -11,89 +12,6 @@
 #include <unordered_map>
 
 namespace {
-
-struct moe_cache_lru {
-    struct fill { int32_t expert; int32_t slot; };
-
-    int32_t n_expert = 0;
-    int32_t n_slots = 0;
-    std::vector<int32_t *> slot_map;
-    std::vector<int32_t> key_of;
-    std::vector<int32_t> prev;
-    std::vector<int32_t> next;
-    std::vector<uint32_t> seen;
-    std::vector<int32_t> uniq;
-    uint32_t seen_gen = 0;
-    int32_t head = -1;
-    int32_t tail = -1;
-
-    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots) {
-        this->n_expert = n_expert;
-        this->n_slots = n_slots;
-        slot_map.assign(n_layer, nullptr);
-        key_of.assign(n_slots, -1);
-        prev.resize(n_slots);
-        next.resize(n_slots);
-        for (int32_t s = 0; s < n_slots; ++s) {
-            prev[s] = s - 1;
-            next[s] = s + 1 < n_slots ? s + 1 : -1;
-        }
-        head = 0;
-        tail = n_slots - 1;
-        seen.assign(n_expert, 0);
-    }
-
-    void touch(int32_t s) {
-        if (s == tail) return;
-        if (prev[s] >= 0) next[prev[s]] = next[s]; else head = next[s];
-        prev[next[s]] = prev[s];
-        prev[s] = tail;
-        next[s] = -1;
-        next[tail] = s;
-        tail = s;
-    }
-
-    bool plan(int32_t il, const int32_t * ids, size_t n_ids, std::vector<fill> & fills, size_t & n_hit, size_t & n_eviction) {
-        fills.clear();
-        n_hit = 0;
-        n_eviction = 0;
-        if (++seen_gen == 0) {
-            std::fill(seen.begin(), seen.end(), 0);
-            seen_gen = 1;
-        }
-        uniq.clear();
-        for (size_t i = 0; i < n_ids; ++i) {
-            GGML_ASSERT(ids[i] >= 0 && ids[i] < n_expert);
-            if (seen[ids[i]] != seen_gen) {
-                seen[ids[i]] = seen_gen;
-                uniq.push_back(ids[i]);
-            }
-        }
-        if (uniq.size() > (size_t) n_slots) return false;
-        int32_t * slots = slot_map[il];
-        for (int32_t e : uniq) {
-            if (slots[e] >= 0) {
-                touch(slots[e]);
-                ++n_hit;
-            }
-        }
-        std::sort(uniq.begin(), uniq.end());
-        for (int32_t e : uniq) {
-            if (slots[e] >= 0) continue;
-            const int32_t s = head;
-            if (key_of[s] >= 0) {
-                const int32_t old = key_of[s];
-                slot_map[old / n_expert][old % n_expert] = -1;
-                ++n_eviction;
-            }
-            key_of[s] = il*n_expert + e;
-            slots[e] = s;
-            touch(s);
-            fills.push_back({ e, s });
-        }
-        return true;
-    }
-};
 
 static std::vector<ggml_tensor *> layer_experts(const llama_layer & layer) {
     std::vector<ggml_tensor *> res;
@@ -136,7 +54,7 @@ struct llama_moe_cache::impl {
         std::vector<ggml_tensor *> banks;
         size_t host_bytes = 0;
         int32_t n_slots = 0;
-        moe_cache_lru lru;
+        llama_moe_cache_policy_detail::state cache;
     };
     struct layer {
         int32_t group = -1;
@@ -159,7 +77,7 @@ struct llama_moe_cache::impl {
     std::unordered_map<const ggml_tensor *, binding> bindings;
     std::unordered_map<const ggml_tensor *, int32_t> layer_of;
     std::vector<int32_t> ids;
-    std::vector<moe_cache_lru::fill> fills;
+    std::vector<llama_moe_cache_policy_detail::state::fill> fills;
     ggml_context_ptr ctx_host;
     ggml_backend_buffer_ptr buf_host;
     size_t buf_host_size = 0;
@@ -169,7 +87,8 @@ struct llama_moe_cache::impl {
     mutable size_t incompatible_layer_skips = 0;
 
     impl(const llama_model & model, const std::vector<ggml_backend *> & backends,
-            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size)
+            const std::vector<ggml_backend_buffer_type *> & bufts, size_t size,
+            enum llama_moe_cache_policy policy)
             : n_expert_used(model.hparams.n_expert_used), layers(model.layers.size()), requested_size(size) {
         if (model.hparams.n_expert == 0 || n_expert_used <= 0) {
             throw std::runtime_error("MoE cache requires a MoE model");
@@ -262,7 +181,8 @@ struct llama_moe_cache::impl {
                 g.n_slots = 0;
                 continue;
             }
-            g.lru.init((int32_t) layers.size(), n_expert, g.n_slots);
+            g.cache.init((int32_t) layers.size(), n_expert, g.n_slots,
+                    policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU ? llama_moe_cache_policy_detail::kind::classlru : llama_moe_cache_policy_detail::kind::lru);
             device_tensor_counts[g.device] += g.ref.size() * (1 + g.layers.size());
             host_layer_count += g.layers.size();
         }
@@ -318,7 +238,7 @@ struct llama_moe_cache::impl {
         if (!buf_host) throw std::runtime_error("failed to allocate MoE cache slot maps");
         ggml_backend_buffer_clear(buf_host.get(), 0xff);
         buf_host_size = ggml_backend_buffer_get_size(buf_host.get());
-        for (group & g : groups) for (int32_t il : g.layers) g.lru.slot_map[il] = (int32_t *) layers[il].slot_map->data;
+        for (group & g : groups) for (int32_t il : g.layers) g.cache.slot_map[il] = (int32_t *) layers[il].slot_map->data;
         for (device & d : devices) if (d.buffer) ggml_backend_buffer_set_usage(d.buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         if (buf_host) ggml_backend_buffer_set_usage(buf_host.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         for (size_t i = 0; i < devices.size(); ++i) {
@@ -331,6 +251,8 @@ struct llama_moe_cache::impl {
                         g.layers.size(), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]));
             }
         }
+        LLAMA_LOG_INFO("%s: active MoE cache policy: %s\n", __func__,
+                policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU ? "classlru" : "lru");
     }
 
     ~impl() { log_stats(); }
@@ -351,7 +273,8 @@ struct llama_moe_cache::impl {
             ++large_batch_skips;
             return nullptr;
         }
-        if (std::min<int64_t>(n_tokens*n_expert_used, l.slot_map->ne[1]) > g.n_slots) {
+        if (!llama_moe_cache_policy_detail::slot_map_eligible(n_tokens, n_expert_used,
+                l.slot_map->ne[1], g.n_slots, max_batch)) {
             ++incompatible_layer_skips;
             return nullptr;
         }
@@ -387,12 +310,18 @@ struct llama_moe_cache::impl {
             }
         }
         GGML_ASSERT(ggml_is_contiguous(selected));
+        int64_t n_tokens = 1;
+        if (g.cache.policy == llama_moe_cache_policy_detail::kind::classlru &&
+                (!llama_moe_cache_policy_detail::recover_selected_tokens(selected, n_expert_used,
+                    g.cache.n_expert, n_tokens) || n_tokens > max_batch)) {
+            GGML_ABORT("Unable to recover MoE cache token geometry for layer %d", il);
+        }
         ids.resize(ggml_nelements(selected));
         ggml_backend_tensor_get_async(backend, selected, ids.data(), 0, ggml_nbytes(selected));
         ggml_backend_synchronize(backend);
         size_t n_hit = 0;
         size_t n_eviction = 0;
-        if (!g.lru.plan(il, ids.data(), ids.size(), fills, n_hit, n_eviction)) GGML_ABORT("MoE cache slot count is smaller than the routed expert set");
+        if (!g.cache.plan(il, ids.data(), ids.size(), n_tokens, fills, n_hit, n_eviction)) GGML_ABORT("MoE cache slot count is smaller than the routed expert set");
         size_t bytes = 0;
         for (size_t ip = 0; ip < l.experts.size(); ++ip) {
             const ggml_tensor * w = l.experts[ip];
@@ -447,8 +376,9 @@ struct llama_moe_cache::impl {
 
 llama_moe_cache::llama_moe_cache(const llama_model & model,
         const std::vector<ggml_backend *> & backends,
-        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size)
-        : pimpl(new impl(model, backends, bufts, size)) {}
+        const std::vector<ggml_backend_buffer_type *> & bufts, size_t size,
+        enum llama_moe_cache_policy policy)
+        : pimpl(new impl(model, backends, bufts, size, policy)) {}
 
 llama_moe_cache::~llama_moe_cache() = default;
 ggml_backend * llama_moe_cache::backend(int32_t il) const { return pimpl->backend(il); }
