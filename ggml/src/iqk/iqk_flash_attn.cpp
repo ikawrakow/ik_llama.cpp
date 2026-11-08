@@ -724,7 +724,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                         (const float *)((const char *)q + iq2*nbq2 + iq3*nbq3 + iq1*stride_q),
                         (const void  *)((const char *)k + iq2/rk2*nbk2 + iq3/rk3*nbk3),
                         (const void  *)((const char *)v + iq2/rv2*nbv2 + iq3/rv3*nbv3),
-                        mask ? (const void  *)((const char *)mask + iq1*stride_m) : nullptr, sinksf, 0,
+                        mask ? (const void  *)((const char *)mask + size_t(iq1)*stride_m) : nullptr, sinksf, 0,
                         scale, softcap,
                         (float *)((char *)qkv + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1), nullptr, nullptr)) return false;
                 }
