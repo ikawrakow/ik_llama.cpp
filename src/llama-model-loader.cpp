@@ -1419,7 +1419,7 @@ static void load_nvfp4_tensor(ggml_tensor * cur, size_t chunk_size, const llama_
     }
     const bool host  = ggml_backend_buffer_is_host(cur->buffer);
     const int  nrows = ggml_nrows(cur);
-    const int  chunk = host ? nrows : std::max<int>(1, chunk_size/cur->nb[1]);
+    const int  chunk = host || cur->extra ? nrows : std::max<int>(1, chunk_size/cur->nb[1]);
     for (int r0 = 0; r0 < nrows; r0 += chunk) {
         const int    nr   = std::min(chunk, nrows - r0);
         const size_t size = nr*cur->nb[1];
