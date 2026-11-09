@@ -1883,9 +1883,7 @@ llm_expert_gating_func_type   gating_op,
             ggml_backend_t cpu_backend = lctx.backend_cpu;
             if (cpu_backend) {
                 share_gpu_ids = lookup(share_maps.gpu, cache_backend);
-                // The cache-owner copy callback plans all complementary maps before
-                // lookup; keeping these lookups on the cache backend gives CPU work
-                // an explicit scheduler dependency on that planned map copy.
+                // Keep map lookups on the cache backend so CPU work waits for planning.
                 share_cpu_ids = lookup(share_maps.cpu, cache_backend);
                 share_gpu_bias_ids = lookup(share_maps.gpu_bias, cache_backend);
                 share_cpu_bias_ids = lookup(share_maps.cpu_bias, cache_backend);
@@ -2110,8 +2108,7 @@ llm_expert_gating_func_type   gating_op,
             supported &= force_op(gpu_backend, gpu_down, gpu_ops);
             supported &= force_op(cpu_backend, cpu_down, cpu_ops);
         }
-        // Visit the CPU branch first so its map callback plans after selected IDs
-        // are produced, before the GPU branch consumes the complementary map.
+        // Visit CPU first so planning precedes GPU consumption of the paired map.
         ggml_tensor * experts = ggml_add(ctx, cpu_down, gpu_down);
         supported &= force_op(gpu_backend, experts, gpu_ops);
 

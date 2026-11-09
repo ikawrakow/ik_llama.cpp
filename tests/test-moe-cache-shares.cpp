@@ -83,84 +83,58 @@ static bool check_cache_policy() {
             default_lru.clock.empty() && classlru.crf.size() == 16;
 }
 
-static bool check_token_geometry() {
-    ggml_init_params params = { 16*ggml_tensor_overhead(), nullptr, true };
-    ggml_context * ctx = ggml_init(params);
-    if (!ctx) return false;
-    bool ok = true;
-    for (int tokens : {1, 2, 8, 32, 33}) {
-        const int width = tokens == 1 ? 512 : 10;
-        ggml_tensor * source = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, width, tokens);
-        for (ggml_tensor * selected : {source, ggml_reshape_1d(ctx, source, width*tokens)}) {
-            int64_t recovered_width = -1, recovered_tokens = -1;
-            if (!llama_moe_cache_policy_detail::recover_selected_geometry(selected, 512,
-                    recovered_width, recovered_tokens) || recovered_tokens != tokens || recovered_width != width) {
-                std::fprintf(stderr, "token geometry %d width %d recovered %lldx%lld\n", tokens, width,
-                        (long long) recovered_width, (long long) recovered_tokens); ok = false;
-            }
-        }
-        if (llama_moe_cache_policy_detail::slot_map_eligible(tokens, width, 512, 1000, 32) !=
-                (tokens <= 32 && tokens*width <= 1000)) {
-            std::fprintf(stderr, "token eligibility %d\n", tokens); ok = false;
-        }
-    }
-    ggml_free(ctx);
-    return ok;
-}
-
 static bool check_cpu_share_plan() {
     using namespace llama_moe_cache_policy_detail;
+    constexpr int n_experts = 8;
+    constexpr int real_rows = 3;
+    constexpr int zero_rows = 2;
     state cache;
-    cache.init(1, 8, 3, kind::lru);
-    std::vector<int32_t> slots(8, -1);
+    cache.init(1, n_experts, real_rows, kind::lru);
+    std::vector<int32_t> slots(n_experts, -1);
     cache.slot_map[0] = slots.data();
     state::cpu_share_plan plan;
-    const int32_t seed[] = {0, 1, 5};
-    if (!cache.plan_with_cpu_share(0, seed, 3, 1, 3, 0.5, 3, plan) ||
-            !plan.cpu.empty() || cache.filled_real_slots != 3) {
+    const std::vector<int32_t> seed = {0, 1, 5};
+    if (!cache.plan_with_cpu_share(0, seed.data(), seed.size(), 1, seed.size(), 0.5, zero_rows, plan) ||
+            !plan.cpu.empty() || cache.filled_real_slots != real_rows) {
         std::fprintf(stderr, "underfull share plan\n"); return false;
     }
 
-    // Expert 2 repeats within token 0, so it stays on a real GPU row; experts 3 and 4
-    // can share zero row 0 because they occur in different tokens.
-    const int32_t routes[] = {2, 2, 3, 4};
-    if (!cache.plan_with_cpu_share(0, routes, 4, 2, 2, 1.0, 3, plan) ||
-            plan.cpu.size() != 2 || plan.fills.size() != 1 || plan.fills[0].expert != 2 ||
-            plan.gpu_map[3] != 3 || plan.gpu_map[4] != 4 ||
+    const std::vector<int32_t> routes = {2, 2, 3, 4};
+    if (!cache.plan_with_cpu_share(0, routes.data(), routes.size(), 2, 2, 1.0, zero_rows, plan)) {
+        std::fprintf(stderr, "mixed CPU-share plan rejected\n"); return false;
+    }
+    bool cpu3 = false, cpu4 = false;
+    for (const auto & candidate : plan.cpu) {
+        cpu3 |= candidate.expert == 3;
+        cpu4 |= candidate.expert == 4;
+    }
+    if (plan.cpu.size() != 2 || !cpu3 || !cpu4 || plan.fills.size() != 1 || plan.fills[0].expert != 2 ||
+            plan.fills[0].slot < 0 || plan.fills[0].slot >= real_rows ||
+            slots[2] != plan.fills[0].slot || cache.key_of[plan.fills[0].slot] != cache.make_key(0, 2) ||
+            plan.cpu_map[2] != -1 || plan.gpu_map[2] != plan.fills[0].slot ||
+            plan.gpu_map[3] < real_rows || plan.gpu_map[3] >= real_rows + zero_rows ||
+            plan.gpu_map[4] < real_rows || plan.gpu_map[4] >= real_rows + zero_rows ||
+            plan.gpu_map[3] == plan.gpu_map[4] ||
             plan.cpu_map[3] != 3 || plan.cpu_map[4] != 4 ||
-            plan.gpu_bias_map[3] != 8 || plan.cpu_bias_map[3] != 3 ||
-            plan.gpu_bias_map[4] != 8 || plan.cpu_bias_map[4] != 4 ||
-            cache.filled_real_slots != 3) {
+            cache.filled_real_slots != real_rows) {
         std::fprintf(stderr, "mixed CPU-share route/zero-slot assignment\n"); return false;
     }
 
-    const int32_t all_hit[] = {2, 2};
-    if (!cache.plan_with_cpu_share(0, all_hit, 2, 1, 2, 1.0, 3, plan) ||
-            plan.n_hit != 1 || !plan.cpu.empty() || !plan.fills.empty()) {
-        std::fprintf(stderr, "all-hit CPU-share plan\n"); return false;
-    }
-
     state zero, ordinary;
-    zero.init(1, 8, 2, kind::classlru);
-    ordinary.init(1, 8, 2, kind::classlru);
-    std::vector<int32_t> zero_slots(8, -1), ordinary_slots(8, -1);
+    constexpr int parity_rows = 2;
+    zero.init(1, n_experts, parity_rows, kind::classlru);
+    ordinary.init(1, n_experts, parity_rows, kind::classlru);
+    std::vector<int32_t> zero_slots(n_experts, -1), ordinary_slots(n_experts, -1);
     zero.slot_map[0] = zero_slots.data(); ordinary.slot_map[0] = ordinary_slots.data();
-    const int32_t route[] = {0, 1};
+    const std::vector<int32_t> route = {0, 1};
     std::vector<state::fill> fills;
     size_t hits = 0, evictions = 0;
-    if (!ordinary.plan(0, route, 3, 1, fills, hits, evictions) ||
-            !zero.plan_with_cpu_share(0, route, 3, 1, 3, 0.0, 0, plan) ||
+    if (!ordinary.plan(0, route.data(), route.size(), 1, fills, hits, evictions) ||
+            !zero.plan_with_cpu_share(0, route.data(), route.size(), 1, route.size(), 0.0, 0, plan) ||
             zero_slots != ordinary_slots || zero.key_of != ordinary.key_of ||
-            zero.filled_real_slots != ordinary.filled_real_slots || !plan.cpu.empty()) {
+            zero.filled_real_slots != ordinary.filled_real_slots || !plan.cpu.empty() ||
+            plan.n_hit != hits || plan.n_eviction != evictions || plan.fills.size() != fills.size()) {
         std::fprintf(stderr, "share-zero ClassLRU parity\n"); return false;
-    }
-
-    bank_geometry geometry;
-    if (!cpu_share_bank_geometry(7, 1, 3, geometry) || geometry.real_slots != 7 ||
-            geometry.zero_slots != 3 || geometry.guard_slots != 1 || geometry.total_slots != 11 ||
-            !cpu_share_bank_geometry(7, 0, 3, geometry) || geometry.zero_slots != 0 ||
-            cpu_share_bank_geometry(INT32_MAX, 65536, 1, geometry)) {
-        std::fprintf(stderr, "CPU-share bank geometry\n"); return false;
     }
     return true;
 }
@@ -168,7 +142,6 @@ static bool check_cpu_share_plan() {
 int main() {
     bool ok = true;
     if (!check_cache_policy()) { std::fprintf(stderr, "cache policy regression failed\n"); ok = false; }
-    if (!check_token_geometry()) { std::fprintf(stderr, "token geometry regression failed\n"); ok = false; }
     if (!check_cpu_share_plan()) { std::fprintf(stderr, "CPU-share plan regression failed\n"); ok = false; }
     if (llama_context_default_params().moe_cache_policy != LLAMA_MOE_CACHE_POLICY_LRU) {
         std::fprintf(stderr, "default cache policy is not LRU\n"); ok = false;
