@@ -14,6 +14,7 @@ import struct
 import sys
 import shutil
 import os
+import time
 
 try:
     import numpy as np
@@ -350,6 +351,39 @@ def n_elements(dims):
     return n
 
 
+def _fmt_duration(sec):
+    sec = int(sec)
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m{s:02d}s"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+def _fmt_bytes(n):
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return f"{int(n)} B" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+
+
+def _progress(done, total, t0, label):
+    frac = done / total if total else 1.0
+    elapsed = time.time() - t0
+    eta = elapsed * (1.0 - frac) / frac if frac > 0 else 0.0
+    bar_width = 28
+    filled = int(bar_width * frac)
+    bar = '#' * filled + '-' * (bar_width - filled)
+    line = (f"\r[{bar}] {frac * 100:5.1f}%  {_fmt_bytes(done)}/{_fmt_bytes(total)}"
+            f"  elapsed {_fmt_duration(elapsed)}  ETA {_fmt_duration(eta)}  {label}")
+    # pad to terminal width so the '\r' update does not wrap
+    cols = max(shutil.get_terminal_size((100, 20)).columns - 1, 20)
+    sys.stdout.write(line[:cols].ljust(cols))
+    sys.stdout.flush()
+
+
 def main():
     if len(sys.argv) == 2 and sys.argv[1] == '--selftest':
         return selftest()
@@ -429,7 +463,12 @@ def main():
         assert data_start == g.alignment * ((hdr_end + g.alignment - 1) // g.alignment)
 
         # write tensor data
-        for nt in new_tensors:
+        total_bytes = sum(nt['new_size'] for nt in new_tensors)
+        done_bytes = 0
+        t0 = time.time()
+        for i, nt in enumerate(new_tensors):
+            _progress(done_bytes, total_bytes, t0,
+                      f"[{i + 1}/{len(new_tensors)}] {nt['name']}")
             while fo.tell() < data_start + nt['new_off']:
                 fo.write(b'\x00')
             g.f.seek(g.data_start + nt['src_off'])
@@ -442,6 +481,9 @@ def main():
                 out = raw
             assert len(out) == nt['new_size'], (nt['name'], len(out), nt['new_size'])
             fo.write(out)
+            done_bytes += nt['new_size']
+        _progress(total_bytes, total_bytes, t0, "done")
+        sys.stdout.write('\n')
     print(f"output: {outp}  wrote {off} bytes of tensor data "
           f"({total_in} -> {total_out} for ternary parts)")
     return 0
