@@ -2449,6 +2449,50 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
         check_ffn = check_ffn && !check_ugd (name, values, "ffn_up_exps.weight", "ffn_gate_exps.weight", "ffn_down_exps.weight");
         check_ffn = check_ffn && !check_ugd (name, values, "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight");
         check_ffn = check_ffn && !check_down(name, values, "ffn_down_exps.weight", "ffn_up_exps.weight", "ffn_gate_exps.weight");
+
+        check_ffn = check_ffn && !check_up_gate(name, values, "attn_k.weight", "attn_q.weight");
+        check_ffn = check_ffn && !check_up_gate(name, values, "attn_q.weight", "attn_k.weight");
+
+        // This is quite good
+        if (auto pos = name.find(".attn_v.weight"); pos != std::string::npos) {
+            check_ffn = false;
+            auto other_name_k = name.substr(0, pos) + ".attn_k.weight";
+            auto other_name_q = name.substr(0, pos) + ".attn_q.weight";
+            if (auto itk = sum_map.find(other_name_k), itq = sum_map.find(other_name_q); itk != sum_map.end() && itq != sum_map.end()) {
+                LLAMA_LOG_INFO("Combining %s and %s, %s\n", name.c_str(), other_name_k.c_str(), other_name_q.c_str());
+                if (values.size() == itk->second.sum_c.size()) {
+                    for (int j = 0; j < int(values.size()); ++j) values[j] *= itk->second.sum_c[j];
+                }
+                if (values.size() == itq->second.sum_c.size()) {
+                    for (int j = 0; j < int(values.size()); ++j) values[j] *= itq->second.sum_c[j];
+                }
+            }
+        }
+
+        // This is not working
+        //if (auto pos = name.find(".attn_output.weight"); pos != std::string::npos) {
+        //    check_ffn = false;
+        //    auto other_name_v = name.substr(0, pos) + ".attn_v.weight";
+        //    if (auto itv = sum_map.find(other_name_v); itv != sum_map.end()) {
+        //        auto & v = itv->second.sum_r;
+        //        if (values.size() % v.size() == 0) {
+        //            LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name_v.c_str());
+        //            for (int j = 0; j < int(values.size()); ++j) {
+        //                values[j] *= (2.0f + v[j % v.size()]);
+        //            }
+        //        }
+        //    }
+        //}
+        //if (auto pos = name.find(".attn_output.weight"); pos != std::string::npos) {
+        //    check_ffn = false;
+        //    auto other_name_v = name.substr(0, pos) + ".attn_v.weight";
+        //    if (auto itv = sum_map.find(other_name_v); itv != sum_map.end()) {
+        //        LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name_v.c_str());
+        //        if (values.size() == itv->second.sum_c.size()) {
+        //            for (int j = 0; j < int(values.size()); ++j) values[j] *= itv->second.sum_c[j];
+        //        }
+        //    }
+        //}
         if (imatrix) {
             double sum1 = 0, sum2 = 0;
             for (int j = 0; j < int(values.size()); ++j) sum1 += (double)imatrix[j];
