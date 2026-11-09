@@ -5697,7 +5697,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
                 params.defer_experts,
                 params.kv_overrides, params.tensor_buft_overrides,
-                params.ngram_file ? params.ngram_file : "");
+                params.ngram_file ? params.ngram_file : "", params.nvfp4_precision);
 
         model.hparams.vocab_only = params.vocab_only;
 
@@ -8979,6 +8979,7 @@ struct llama_model_params llama_model_default_params() {
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_buft_overrides       =*/ nullptr,
         /*.ngram_file                  =*/ nullptr,
+        /*.nvfp4_precision             =*/ LLAMA_NVFP4_PRECISION_AUTO,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_mlock                   =*/ false,

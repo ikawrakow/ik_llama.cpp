@@ -28,6 +28,7 @@
 #include <atomic>
 #include <mutex>
 #include <cstring>
+#include <cmath>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -305,7 +306,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
-        const std::string & ngram_fname) {
+        const std::string & ngram_fname, llama_nvfp4_precision nvfp4_precision) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -451,7 +452,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     }
 
 
-    if (import_nvfp4()) {
+    if (import_nvfp4(nvfp4_precision)) {
         use_mmap = false;
     }
   
@@ -1163,6 +1164,9 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
             offset);
 
     ggml_set_name(tensor, name.c_str());
+    if (cur->type == GGML_TYPE_NVFP4_KS) {
+        ggml_set_input_scale(tensor, ggml_get_input_scale(cur));
+    }
 
     n_created++;
 
@@ -1237,64 +1241,148 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
     }
 }
 
-bool llama_model_loader::import_nvfp4() {
+bool llama_model_loader::import_nvfp4(llama_nvfp4_precision precision) {
     int n_import = 0;
+    int n_native = 0;
     for (const auto & w : weights) {
         n_import += w.tensor->type == GGML_TYPE_NVFP4;
+        n_native += w.tensor->type == GGML_TYPE_NVFP4_KS;
     }
-    if (n_import == 0) {
+    if (n_import + n_native == 0) {
         return false;
     }
+    ggml_context * ctx = nullptr;
+    if (n_import) {
+        ctx = ggml_init({ n_import*ggml_tensor_overhead(), nullptr, true });
+        contexts.push_back(ctx);
+    }
 
-    ggml_context * ctx = ggml_init({ n_import*ggml_tensor_overhead(), nullptr, true });
-    contexts.push_back(ctx);
+    constexpr char imatrix_prefix[] = "quantize.imatrix.";
+    bool imatrix = false;
+    for (int i = 0; i < gguf_get_n_kv(meta); ++i) {
+        imatrix |= strncmp(gguf_get_key(meta, i), imatrix_prefix, sizeof(imatrix_prefix) - 1) == 0;
+    }
+    std::map<std::string, bool> prec_a4;
+    const int names = gguf_find_key(meta, "general.tensor_extra.name");
+    const int prec = gguf_find_key(meta, "general.tensor_extra.prec_a4");
+    if (prec >= 0) {
+        if (names < 0 || gguf_get_kv_type(meta, names) != GGUF_TYPE_ARRAY ||
+                gguf_get_arr_type(meta, names) != GGUF_TYPE_STRING ||
+                gguf_get_kv_type(meta, prec) != GGUF_TYPE_ARRAY || gguf_get_arr_type(meta, prec) != GGUF_TYPE_BOOL ||
+                gguf_get_arr_n(meta, names) != gguf_get_arr_n(meta, prec)) {
+            throw std::runtime_error("invalid general.tensor_extra.prec_a4 metadata");
+        }
+        std::vector<uint32_t> values;
+        get_arr("general.tensor_extra.prec_a4", values);
+        for (int i = 0; i < gguf_get_arr_n(meta, names); ++i) {
+            prec_a4[gguf_get_arr_str(meta, names, i)] = values[i];
+        }
+    }
+
+    auto read_scale = [&](const llama_tensor_weight & scale, float * dst) {
+        const auto to_float = ggml_internal_get_type_traits(scale.tensor->type).to_float;
+        if (scale.tensor->type != GGML_TYPE_F32 && !to_float) {
+            throw std::runtime_error(format("%s: tensor '%s' has type %s, which cannot be read as a scale", __func__, ggml_get_name(scale.tensor), ggml_type_name(scale.tensor->type)));
+        }
+        std::vector<uint8_t> raw(ggml_nbytes(scale.tensor));
+        files.at(scale.idx)->seek(scale.offs, SEEK_SET);
+        files.at(scale.idx)->read_raw(raw.data(), raw.size());
+        if (to_float) {
+            to_float(raw.data(), dst, ggml_nelements(scale.tensor));
+        } else {
+            memcpy(dst, raw.data(), raw.size());
+        }
+    };
+
+    auto valid_scale_shape = [](const ggml_tensor * scale, const ggml_tensor * weight) {
+        return ggml_nelements(scale) == scale->ne[0] && (scale->ne[0] == 1 || scale->ne[0] == weight->ne[2]);
+    };
 
     std::set<const ggml_tensor *> consumed;
     int n_scale = 0;
     int n_input_scale = 0;
+    int n_kept = 0;
     for (auto & w : weights) {
-        if (w.tensor->type != GGML_TYPE_NVFP4) {
+        if (w.tensor->type != GGML_TYPE_NVFP4 && w.tensor->type != GGML_TYPE_NVFP4_KS) {
             continue;
         }
         const std::string name(w.tensor->name);
         const std::string base = name.substr(0, name.rfind('.'));
-
-        w.nvfp4_scale = { 1.0f };
-        const auto * s = get_weight((base + ".scale").c_str());
-        if (s && ggml_nelements(s->tensor) == s->tensor->ne[0] && (s->tensor->ne[0] == 1 || s->tensor->ne[0] == w.tensor->ne[2])) {
-            const auto to_float = ggml_internal_get_type_traits(s->tensor->type).to_float;
-            if (s->tensor->type != GGML_TYPE_F32 && !to_float) {
-                throw std::runtime_error(format("%s: tensor '%s' has type %s, which cannot be read as a scale", __func__, ggml_get_name(s->tensor), ggml_type_name(s->tensor->type)));
+        float input_scale = 0.0f;
+        const auto * is = get_weight((base + ".input_scale").c_str());
+        const auto pa = prec_a4.find(name);
+        if (precision == LLAMA_NVFP4_PRECISION_W4A4) {
+            input_scale = -1.0f;
+        } else if (precision == LLAMA_NVFP4_PRECISION_AUTO && is && !imatrix &&
+                (pa == prec_a4.end() || pa->second)) {
+            if (!valid_scale_shape(is->tensor, w.tensor)) {
+                throw std::runtime_error(format("invalid input scale tensor for '%s'", name.c_str()));
             }
-            w.nvfp4_scale.resize(s->tensor->ne[0]);
-            std::vector<uint8_t> raw(ggml_nbytes(s->tensor));
-            files.at(s->idx)->seek(s->offs, SEEK_SET);
-            files.at(s->idx)->read_raw(raw.data(), raw.size());
-            if (to_float) {
-                to_float(raw.data(), w.nvfp4_scale.data(), w.nvfp4_scale.size());
-            } else {
-                memcpy(w.nvfp4_scale.data(), raw.data(), raw.size());
+            const int n_scales = ggml_nelements(is->tensor);
+            std::vector<float> scales(n_scales);
+            read_scale(*is, scales.data());
+            for (float scale : scales) {
+                if (!(scale > 0.0f) || !std::isfinite(scale)) {
+                    throw std::runtime_error(format("invalid input scale for '%s'", name.c_str()));
+                }
+                input_scale = std::max(input_scale, scale);
             }
-            consumed.insert(s->tensor);
-            ++n_scale;
+            ++n_kept;
         }
-        if (const auto * is = get_weight((base + ".input_scale").c_str())) {
+        if (is) {
             consumed.insert(is->tensor);
             ++n_input_scale;
         }
 
-        ggml_tensor * t = ggml_new_tensor(ctx, GGML_TYPE_NVFP4_KS, GGML_MAX_DIMS, w.tensor->ne);
-        ggml_set_name(t, w.tensor->name);
-        w.tensor = t;
+        if (w.tensor->type == GGML_TYPE_NVFP4) {
+            w.nvfp4_scale = { 1.0f };
+            const auto * s = get_weight((base + ".scale").c_str());
+            if (s && valid_scale_shape(s->tensor, w.tensor)) {
+                w.nvfp4_scale.resize(s->tensor->ne[0]);
+                read_scale(*s, w.nvfp4_scale.data());
+                consumed.insert(s->tensor);
+                ++n_scale;
+            }
+            ggml_tensor * t = ggml_new_tensor(ctx, GGML_TYPE_NVFP4_KS, GGML_MAX_DIMS, w.tensor->ne);
+            ggml_set_name(t, w.tensor->name);
+            w.tensor = t;
+        }
+        ggml_set_input_scale(w.tensor, input_scale);
+    }
+
+    for (auto & w : weights) {
+        const std::string name(w.tensor->name);
+        const auto pos = name.find(".ffn_up_exps.weight");
+        if (pos == std::string::npos) continue;
+        const auto * gate = get_weight((name.substr(0, pos) + ".ffn_gate_exps.weight").c_str());
+        if (!gate) continue;
+        const float up_scale = ggml_get_input_scale(w.tensor);
+        const float gate_scale = ggml_get_input_scale(gate->tensor);
+        if (up_scale > 0 && gate_scale > 0) {
+            const float scale = std::max(up_scale, gate_scale);
+            ggml_set_input_scale(w.tensor, scale);
+            ggml_set_input_scale(gate->tensor, scale);
+        }
+    }
+
+    for (const auto & w : weights) {
+        const float input_scale = ggml_get_input_scale(w.tensor);
+        if (input_scale != 0.0f) {
+            LLAMA_LOG_INFO("%s: %s: NVFP4 precision %s, %s input scale %.9g\n",
+                    __func__, w.tensor->name, precision == LLAMA_NVFP4_PRECISION_AUTO ? "auto" : "w4a4",
+                    input_scale > 0 ? "static" : "dynamic", input_scale);
+        }
     }
 
     weights.erase(std::remove_if(weights.begin(), weights.end(), [&consumed](const llama_tensor_weight & w) {
         return consumed.count(w.tensor) > 0;
     }), weights.end());
 
-    LLAMA_LOG_INFO("%s: converted %d %s tensors to %s; consumed %d .scale tensors; dropped %d .input_scale tensors; mmap is off\n",
-            __func__, n_import, ggml_type_name(GGML_TYPE_NVFP4), ggml_type_name(GGML_TYPE_NVFP4_KS), n_scale, n_input_scale);
-    return true;
+    if (n_import || n_input_scale) {
+        LLAMA_LOG_INFO("%s: converted %d %s tensors to %s; consumed %d .scale tensors; kept %d of %d .input_scale values%s\n",
+                __func__, n_import, ggml_type_name(GGML_TYPE_NVFP4), ggml_type_name(GGML_TYPE_NVFP4_KS), n_scale, n_kept, n_input_scale, n_import ? "; mmap is off" : "");
+    }
+    return n_import != 0;
 }
 
 static void read_nvfp4_rows(const llama_model_loader::llama_tensor_weight & w, const llama_file & file, const ggml_tensor * cur, uint8_t * dst, int r0, int nrows) {
@@ -1331,7 +1419,7 @@ static void load_nvfp4_tensor(ggml_tensor * cur, size_t chunk_size, const llama_
     }
     const bool host  = ggml_backend_buffer_is_host(cur->buffer);
     const int  nrows = ggml_nrows(cur);
-    const int  chunk = host ? nrows : std::max<int>(1, chunk_size/cur->nb[1]);
+    const int  chunk = host || cur->extra ? nrows : std::max<int>(1, chunk_size/cur->nb[1]);
     for (int r0 = 0; r0 < nrows; r0 += chunk) {
         const int    nr   = std::min(chunk, nrows - r0);
         const size_t size = nr*cur->nb[1];

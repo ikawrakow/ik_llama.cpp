@@ -971,6 +971,9 @@ extern "C" {
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);
 
+    GGML_API void ggml_set_input_scale(struct ggml_tensor * tensor, float scale);
+    GGML_API float ggml_get_input_scale(const struct ggml_tensor * tensor);
+
     GGML_API GGML_CALL int64_t ggml_nelements   (const struct ggml_tensor * tensor);
     GGML_API GGML_CALL int64_t ggml_nrows       (const struct ggml_tensor * tensor);
     GGML_API GGML_CALL size_t  ggml_nbytes      (const struct ggml_tensor * tensor);

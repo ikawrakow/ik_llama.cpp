@@ -104,11 +104,12 @@ struct llama_model_loader {
             bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
             const llama_model_kv_override * param_overrides_p,
             const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
-            const std::string & ngram_fname = std::string());
+            const std::string & ngram_fname = std::string(),
+            llama_nvfp4_precision nvfp4_precision = LLAMA_NVFP4_PRECISION_AUTO);
 
     ~llama_model_loader();
 
-    bool import_nvfp4();
+    bool import_nvfp4(llama_nvfp4_precision precision);
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type

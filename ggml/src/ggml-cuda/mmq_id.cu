@@ -2,6 +2,7 @@
 #include "mmq_id.cuh"
 #include "quantize_id.cuh"
 #include "quantize.cuh"
+#include "nvfp4.cuh"
 
 #include <vector>
 #include <climits>
@@ -492,6 +493,11 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
     }
 
     const int64_t ne11_flat = ne12*n_expert_used;
+    if (ggml_cuda_can_mul_mat_nvfp4_id(src0, src1, cc)) {
+        nvfp4_input input(ctx, src1, ggml_get_input_scale(src0));
+        ggml_cuda_gemm_nvfp4_id(ctx, src0, src1, dst, ids_src1, ids_dst, expert_bounds, input);
+        return;
+    }
     const int64_t ne12_flat = 1;
     const int64_t ne13_flat = 1;
 
