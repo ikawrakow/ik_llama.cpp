@@ -75,7 +75,7 @@ static __device__ void iqk_mul_mat_vec_q_kernel(
             if constexpr (n_interleaved == 1) {
 #pragma unroll
                 for (int i = 0; i < rows_per_cuda_block; ++i) {
-                    vec_dot_q_cuda((const void *)((const char *)vx + (row0 + i)*row_size),
+                    vec_dot_q_cuda((const void *)((const char *)vx + min(row0 + i, nrows_x - 1)*row_size),
                             &y[j*blocks_per_col_y + kby], kbx, kqs, &tmp[j][i]);
                 }
             } else {
@@ -94,7 +94,7 @@ static __device__ void iqk_mul_mat_vec_q_kernel(
                 if constexpr (n_interleaved == 1) {
 #pragma unroll
                     for (int i = 0; i < rows_per_cuda_block; ++i) {
-                        vec_dot_tail((const void *)((const char *)vx + (row0 + i)*row_size),
+                        vec_dot_tail((const void *)((const char *)vx + min(row0 + i, nrows_x - 1)*row_size),
                                 &y[j*blocks_per_col_y + kby], kbx, kqs, nt, &tmp[j][i]);
                     }
                 } else {
