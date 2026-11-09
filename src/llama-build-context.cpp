@@ -3355,7 +3355,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             } break;
         case LLM_ARCH_DEEPSEEK41:
             {
-                static const bool v41_separate = getenv("V41_SEPARATE") != nullptr;
+                static const bool v41_separate = llama_hparams::is_v41_separate();
                 result = v41_separate ? llm.build_deepseek41() : llm.build_deepseek4();
             } break;
         case LLM_ARCH_OPENPANGU:

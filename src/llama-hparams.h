@@ -573,6 +573,8 @@ struct llama_hparams {
         return rope_sections[0] > 0 && rope_sections[1] > 0;
     }
 
+    static bool is_v41_separate();
+
     static const char * rope_scaling_type_name(llama_rope_scaling_type);
 
 };

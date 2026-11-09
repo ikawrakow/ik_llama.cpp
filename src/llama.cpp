@@ -9060,7 +9060,7 @@ struct llama_context_params llama_context_default_params() {
         /*.dsa                         =*/ false,
         /*.fused_idx_topk              =*/ true,
         /*.swa_compress                =*/ false,
-        /*.dsv41_replay_keep           =*/ 0,
+        /*.dsv41_replay_keep           =*/ 256,
         /*.dsv4_legacy_state           =*/ false,
         /*.dsa_top_k                   =*/ -1,
         /*.min_experts                 =*/ -1,
@@ -9589,7 +9589,7 @@ struct llama_context * llama_init_from_model(
     cparams.dsv41_replay_keep = params.dsv41_replay_keep;
     if (cparams.dsv41_replay_keep > 0) {
         if (model->arch != LLM_ARCH_DEEPSEEK41) {
-            LLAMA_LOG_WARN("%s: --dsv41-replay-keep is only implemented for DeepSeek-V4.1; ignoring\n", __func__);
+            //LLAMA_LOG_WARN("%s: --dsv41-replay-keep is only implemented for DeepSeek-V4.1; ignoring\n", __func__);
             cparams.dsv41_replay_keep = 0;
         } else if (!cparams.swa_compress) {
             LLAMA_LOG_WARN("%s: --dsv41-replay-keep requires --swa-compress; ignoring\n", __func__);
