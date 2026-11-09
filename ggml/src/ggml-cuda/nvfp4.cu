@@ -281,13 +281,23 @@ static void dispatch_nvfp4_id(const ggml_tensor * src0, const ggml_tensor * gate
     }
 }
 
-static __global__ void nvfp4_amax(const float * x, float * r, int k, int stride, float scale) {
+static __device__ __forceinline__ float nvfp4_rcp(float a) {
+    float b;
+    asm volatile("rcp.approx.ftz.f32 %0, %1;" : "=f"(b) : "f"(a));
+    return b;
+}
+
+static __global__ void quantize_nvfp4(const float * x, float * r, uint8_t * q, uint8_t * s, int k, int kp, int stride, float scale) {
+#if defined(__CUDA_ARCH_FEAT_SM120_ALL) || defined(__CUDA_ARCH_FEAT_SM121_ALL)
     __shared__ float red[8];
+    __shared__ float G;
     const int n = blockIdx.x, t = threadIdx.x;
+    const unsigned int rows = gridDim.x;
+    const float * xr = x + size_t(n)*stride;
     float rs = scale;
     if (scale < 0) {
         float a = 0;
-        for (int i = t; i < k; i += blockDim.x) a = fmaxf(a, fabsf(x[size_t(n)*stride + i]));
+        for (int i = t; i < k; i += blockDim.x) a = fmaxf(a, fabsf(xr[i]));
         a = warp_reduce_max(a);
         if (t%32 == 0) red[t/32] = a;
         __syncthreads();
@@ -298,34 +308,25 @@ static __global__ void nvfp4_amax(const float * x, float * r, int k, int stride,
         }
     }
     if (t == 0) {
+        G = rs > 0 ? __fdiv_rn(1.0f, rs) : 0.0f;
         r[n] = rs;
-        r[n + gridDim.x] = rs > 0 ? __fdiv_rn(1.0f, rs) : 0.0f;
     }
-}
-
-static __device__ __forceinline__ float nvfp4_rcp(float a) {
-    float b;
-    asm volatile("rcp.approx.ftz.f32 %0, %1;" : "=f"(b) : "f"(a));
-    return b;
-}
-
-template<bool chunked>
-static __global__ void quantize_nvfp4(const float * x, float * r, uint8_t * q, uint8_t * s, int k, int kp, int stride, int nrows = 0, int row_offset = 0) {
-#if defined(__CUDA_ARCH_FEAT_SM120_ALL) || defined(__CUDA_ARCH_FEAT_SM121_ALL)
+    __syncthreads();
     // Byte u holds values i (low nibble) and i + 8 of one 16-value group, as in the NVFP4 block.
-    const int n = blockIdx.y + (chunked ? row_offset : 0), u = blockIdx.x*blockDim.x + threadIdx.x, i = (u/8)*16 + u%8;
-    const unsigned int rows = chunked ? nrows : gridDim.y;
-    if (i >= kp) return;
-    const float2 v = make_float2(i < k ? x[size_t(n)*stride + i] : 0.0f, i < k ? x[size_t(n)*stride + i + 8] : 0.0f);
-    float a = fmaxf(fabsf(v.x), fabsf(v.y));
-    for (int d = 4; d; d /= 2) a = fmaxf(a, __shfl_xor_sync(0xffffffff, a, d, 8));
-    const float G = r[n + rows];
-    const float sf_value = G*(a*0x1.555556p-3f);
-    const uint8_t sb = __nv_cvt_float_to_fp8(sf_value, __NV_SATFINITE, __NV_E4M3);
-    const float sf = ggml_cuda_ue4m3_to_fp32(sb);
-    const float inv = sb != 0 ? nvfp4_rcp(sf*nvfp4_rcp(G)) : 0.0f;
-    q[(size_t(u/128)*rows + n)*128 + u%128] = __nv_cvt_float2_to_fp4x2(make_float2(v.x*inv, v.y*inv), __NV_E2M1, cudaRoundNearest);
-    if (i%16 == 0) s[(size_t(i/256)*rows + n)*16 + (i%256)/16] = sb;
+    for (int u = t; u < kp/2; u += blockDim.x) {
+        const int i = (u/8)*16 + u%8;
+        const float2 v = make_float2(i < k ? xr[i] : 0.0f, i < k ? xr[i + 8] : 0.0f);
+        float a = fmaxf(fabsf(v.x), fabsf(v.y));
+        for (int d = 4; d; d /= 2) a = fmaxf(a, __shfl_xor_sync(0xffffffff, a, d, 8));
+        const float sf_value = G*(a*0x1.555556p-3f);
+        const uint8_t sb = __nv_cvt_float_to_fp8(sf_value, __NV_SATFINITE, __NV_E4M3);
+        const float sf = ggml_cuda_ue4m3_to_fp32(sb);
+        const float inv = sb != 0 ? nvfp4_rcp(sf*nvfp4_rcp(G)) : 0.0f;
+        q[(size_t(u/128)*rows + n)*128 + u%128] = __nv_cvt_float2_to_fp4x2(make_float2(v.x*inv, v.y*inv), __NV_E2M1, cudaRoundNearest);
+        if (i%16 == 0) s[(size_t(i/256)*rows + n)*16 + (i%256)/16] = sb;
+    }
+#else
+    GGML_UNUSED(x); GGML_UNUSED(r); GGML_UNUSED(q); GGML_UNUSED(s); GGML_UNUSED(k); GGML_UNUSED(kp); GGML_UNUSED(stride); GGML_UNUSED(scale);
 #endif
 }
 
@@ -355,14 +356,7 @@ bool ggml_cuda_can_mul_mat_nvfp4(const ggml_tensor * src0, const ggml_tensor * s
 
 static void ggml_cuda_quantize_nvfp4(const float * x, uint8_t * q, uint8_t * s, float * r, int k, int kp, int n, int stride, float scale, cudaStream_t stream) {
 #if defined(GGML_CUDA_NVFP4_120A) || defined(GGML_CUDA_NVFP4_121A)
-    nvfp4_amax<<<n, 256, 0, stream>>>(x, r, k, stride, scale);
-    if (n <= 65535) {
-        quantize_nvfp4<false><<<dim3((kp/2 + 255)/256, n), 256, 0, stream>>>(x, r, q, s, k, kp, stride);
-    } else {
-        for (int row = 0; row < n; row += 65535) {
-            quantize_nvfp4<true><<<dim3((kp/2 + 255)/256, std::min(n - row, 65535)), 256, 0, stream>>>(x, r, q, s, k, kp, stride, n, row);
-        }
-    }
+    quantize_nvfp4<<<n, 256, 0, stream>>>(x, r, q, s, k, kp, stride, scale);
 #else
     GGML_UNUSED(x); GGML_UNUSED(q); GGML_UNUSED(s); GGML_UNUSED(r);
     GGML_UNUSED(k); GGML_UNUSED(kp); GGML_UNUSED(n); GGML_UNUSED(stride); GGML_UNUSED(scale); GGML_UNUSED(stream);
@@ -401,7 +395,7 @@ void nvfp4_input::quantize(ggml_backend_cuda_context & ctx, const ggml_tensor * 
     const int kp = GGML_PAD(k, 256);
     q.alloc(size_t(n)*kp/2);
     s.alloc(size_t(n)*kp/16);
-    r.alloc(2*n);
+    r.alloc(n);
     ggml_cuda_quantize_nvfp4((const float *) src1->data, q.get(), s.get(), r.get(), k, kp, n,
             src1->nb[1]/sizeof(float), scale, ctx.stream());
     CUDA_CHECK(cudaGetLastError());
