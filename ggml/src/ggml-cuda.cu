@@ -3417,9 +3417,12 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             }
         };
 
-        if (native && dst->op_params[0] == GGML_UNARY_OP_SILU && !dst->src[4] && !dst->src[5]) {
+        if (native && dst->op_params[0] == GGML_UNARY_OP_SWIGLU_OAI) {
             ggml_cuda_gemm_nvfp4_id(ctx, src0_1, src1, dst, ids_src1, ids_dst, expert_bounds,
-                    input, true, src0_2, *((const float *)(dst->op_params + 1)));
+                    input, true, src0_2, 1.702f, 7.0f);
+        } else if (native && dst->op_params[0] == GGML_UNARY_OP_SILU) {
+            ggml_cuda_gemm_nvfp4_id(ctx, src0_1, src1, dst, ids_src1, ids_dst, expert_bounds,
+                    input, true, src0_2, 0.0f, *((const float *)(dst->op_params + 1)));
         } else if (src0_2) {
         ggml_cuda_pool_alloc<char> dst_up_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
         ggml_cuda_pool_alloc<char> dst_gate_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));

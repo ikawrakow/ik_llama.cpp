@@ -26,4 +26,4 @@ struct nvfp4_input {
 
 void ggml_cuda_gemm_nvfp4_id(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
         ggml_tensor * dst, const int32_t * ids_src, const int32_t * ids_dst, const int32_t * bounds,
-        const nvfp4_input & input, bool fused = false, const ggml_tensor * gate = nullptr, float limit = 0.0f);
+        const nvfp4_input & input, bool fused = false, const ggml_tensor * gate = nullptr, float alpha = 0.0f, float limit = 0.0f);
