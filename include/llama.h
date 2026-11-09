@@ -595,6 +595,7 @@ extern "C" {
         bool only_repack;                    // Only repack tensors
         bool dry_run;                        //
         bool partial_requant;                // quantize only missing split files in the split quantized .gguf destination directory
+        bool estimate_imatrix;               // If true, use an estimated imatrix, possibly combining with the input imatrix
         size_t slab_size;                    // tensors larger than this many bytes of f32 are processed in slabs of up to this size (at least one slice or row group), 0 = never
         bool cuda_quantize;                  // quantize IQ4_KT, IQ3_KT, IQ2_KT, IQ1_KT, IQ3_KS, IQ4_KS, IQ4_KS_R4, IQ4_KS_R16, IQ5_KS, and IQ5_KS_R4 on a CUDA device
         int  cuda_quantize_device;           // CUDA device index used by --cuda-quantize (default 0)
@@ -1747,6 +1748,11 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
     LLAMA_API bool llama_reload_changed_tensors(struct llama_context * ctx);
+
+    LLAMA_API uint32_t llama_compute_analytical_imatrix(
+            const char * fname_inp,
+            const char * fname_out,
+            const llama_model_quantize_params * params);
 
 #ifdef __cplusplus
 }

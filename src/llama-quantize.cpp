@@ -1279,9 +1279,77 @@ static void do_quantize_slabbed(int nthread, const ggml_tensor * tensor, ggml_ty
     }
 }
 
+static void estimate_imatrix_internal(const std::string & fname_inp,
+        const llama_model_quantize_params * params, std::unordered_map<std::string, std::vector<float>> & new_imatrix);
+
+static const float * find_imatrix_data(const std::string & name, size_t expected_size,
+        const std::unordered_map<std::string, std::vector<float>> * imatrix_data) {
+    const float * imatrix = nullptr;
+    if (imatrix_data) {
+        auto it = imatrix_data->find(name);
+        if (it == imatrix_data->end()) {
+            if (auto pos1 = name.find("ffn_up_exps.weight"), pos2 = name.find("ffn_gate_exps.weight"); pos1 != std::string::npos || pos2 != std::string::npos) {
+                // Merged ffn_up/gate_exps hack
+                auto pos = pos1 != std::string::npos ? pos1 : pos2;
+                auto merged_name = name.substr(0, pos) + "ffn_gate_up_exps.weight";
+                it = imatrix_data->find(merged_name);
+                if (it == imatrix_data->end()) {
+                    auto up_name = name.substr(0, pos) + "ffn_up_exps.weight";
+                    it = imatrix_data->find(up_name);
+                }
+            } else if (auto pos = name.find("ffn_gate_up_exps.weight"); pos != std::string::npos) {
+                auto not_merged_name = name.substr(0, pos) + "ffn_up_exps.weight";
+                it = imatrix_data->find(not_merged_name);
+            } else if (auto pos2 = name.find("ffn_gate.weight"); pos2 != std::string::npos) {
+                auto up_name = name.substr(0, pos2) + "ffn_up.weight";
+                it = imatrix_data->find(up_name);
+            } else if (auto pos3 = name.find("_down_inject.weight"); pos3 != std::string::npos) {
+                it = imatrix_data->find(name.substr(0, pos3) + "_down.weight");
+            } else if (auto pos4 = name.find("attn_qkv_gate.weight"); pos4 != std::string::npos) {
+                it = imatrix_data->find(name.substr(0, pos4) + "attn_qkv.weight");
+            } else if (auto pos5 = name.find("ssm_beta_alpha.weight"); pos5 != std::string::npos) {
+                it = imatrix_data->find(name.substr(0, pos5) + "ssm_beta.weight");
+            } else {
+                // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
+                //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
+                //           required by MLA. But the *.attn_v_b.weight tensors "see" the exact same activations as the
+                //           *.attn_kv_b.weight tensors used in standard attention. Hence, if we find imatrix data for
+                //           *.attn_kv_b.weight we can use it for *.attn_v_b.weight and vice versa.
+                static std::array<std::string, 2> alternatives{".attn_v_b.weight", ".attn_kv_b.weight"};
+                for (int j = 0; j < int(alternatives.size()); ++j) {
+                    if (auto pos = name.find(alternatives[j]); pos != std::string::npos) {
+                        int j1 = (j + 1) % alternatives.size();
+                        auto alternative_name = name.substr(0, pos) + alternatives[j1];
+                        it = imatrix_data->find(alternative_name);
+                        break;
+                    }
+                }
+            }
+        }
+        if (it == imatrix_data->end()) {
+            LLAMA_LOG_INFO("Did not find input imatrix data for %s\n", name.c_str());
+        } else {
+            if (it->second.size() == expected_size) {
+                imatrix = it->second.data();
+            } else {
+                LLAMA_LOG_INFO("imatrix size %d is different from expected size %d for tensor %s -> ignoring\n",
+                        int(it->second.size()), int(expected_size), name.c_str());
+            }
+        }
+    }
+    return imatrix;
+}
+
 static void llama_model_quantize_internal(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
+
+    std::unordered_map<std::string, std::vector<float>> new_imatrix;
+    auto the_imatrix = params->imatrix;
+    if (params->estimate_imatrix) {
+        estimate_imatrix_internal(fname_inp, params, new_imatrix);
+        the_imatrix = &new_imatrix;
+    }
 
     switch (ftype) {
         case LLAMA_FTYPE_MOSTLY_Q4_0: default_type = GGML_TYPE_Q4_0; break;
@@ -1438,8 +1506,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         ftype = model.ftype;
     }
     const std::unordered_map<std::string, std::vector<float>> * imatrix_data = nullptr;
-    if (!params->only_repack && params->imatrix) {
-        imatrix_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
+    if (!params->only_repack && the_imatrix) {
+        imatrix_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(the_imatrix);
         if (imatrix_data) {
             LLAMA_LOG_INFO("================================ Have weights data with %d entries\n",int(imatrix_data->size()));
             qs.has_imatrix = true;
@@ -1585,6 +1653,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     std::vector<no_init<uint8_t>> read_data;
     std::vector<no_init<uint8_t>> work;
     std::vector<no_init<float>> f32_conv_buf;
+    std::vector<float> estimated_imatrix;
 
     uint16_t n_split = 1;
     // Assume split index is continuous
@@ -1700,7 +1769,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         ::zeros(fout, meta_size);
     };
 
-    const auto tn = LLM_TN(model.arch);
     new_ofstream(0);
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
@@ -1917,69 +1985,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         } else {
             const int64_t nelements = ggml_nelements(tensor);
 
-            const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it = imatrix_data->find(tensor->name);
-                if (it == imatrix_data->end()) {
-                    if (auto pos1 = name.find("ffn_up_exps.weight"), pos2 = name.find("ffn_gate_exps.weight"); pos1 != std::string::npos || pos2 != std::string::npos) {
-                        // Merged ffn_up/gate_exps hack
-                        auto pos = pos1 != std::string::npos ? pos1 : pos2;
-                        auto merged_name = name.substr(0, pos) + "ffn_gate_up_exps.weight";
-                        it = imatrix_data->find(merged_name);
-                        if (it == imatrix_data->end()) {
-                            auto up_name = name.substr(0, pos) + "ffn_up_exps.weight";
-                            it = imatrix_data->find(up_name);
-                        }
-                    } else if (auto pos = name.find("ffn_gate_up_exps.weight"); pos != std::string::npos) {
-                        auto not_merged_name = name.substr(0, pos) + "ffn_up_exps.weight";
-                        it = imatrix_data->find(not_merged_name);
-                    } else if (auto pos2 = name.find("ffn_gate.weight"); pos2 != std::string::npos) {
-                        auto up_name = name.substr(0, pos2) + "ffn_up.weight";
-                        it = imatrix_data->find(up_name);
-                    } else if (auto pos3 = name.find("_down_inject.weight"); pos3 != std::string::npos) {
-                        it = imatrix_data->find(name.substr(0, pos3) + "_down.weight");
-                    } else if (auto pos4 = name.find("attn_qkv_gate.weight"); pos4 != std::string::npos) {
-                        it = imatrix_data->find(name.substr(0, pos4) + "attn_qkv.weight");
-                    } else if (auto pos5 = name.find("ssm_beta_alpha.weight"); pos5 != std::string::npos) {
-                        it = imatrix_data->find(name.substr(0, pos5) + "ssm_beta.weight");
-                    } else {
-                        // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
-                        //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
-                        //           required by MLA. But the *.attn_v_b.weight tensors "see" the exact same activations as the
-                        //           *.attn_kv_b.weight tensors used in standard attention. Hence, if we find imatrix data for
-                        //           *.attn_kv_b.weight we can use it for *.attn_v_b.weight and vice versa.
-                        std::string name{tensor->name};
-                        static std::array<std::string, 2> alternatives{".attn_v_b.weight", ".attn_kv_b.weight"};
-                        for (int j = 0; j < int(alternatives.size()); ++j) {
-                            if (auto pos = name.find(alternatives[j]); pos != std::string::npos) {
-                                int j1 = (j + 1) % alternatives.size();
-                                auto alternative_name = name.substr(0, pos) + alternatives[j1];
-                                it = imatrix_data->find(alternative_name);
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (it == imatrix_data->end()) {
-                    LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
-                } else {
-                    if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
-                        imatrix = it->second.data();
-                    } else {
-                        LLAMA_LOG_INFO("\n====== %s: imatrix size %d is different from tensor size %d for %s\n", __func__,
-                                int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
-
-                        // this can happen when quantizing an old mixtral model with split tensors with a new incompatible imatrix
-                        // this is a significant error and it may be a good idea to abort the process if this happens,
-                        // since many people will miss the error and not realize that most of the model is being quantized without an imatrix
-                        // tok_embd should be ignored in this case, since it always causes this warning
-                        if (name != tn(LLM_TENSOR_TOKEN_EMBD, "weight")) {
-                            throw std::runtime_error(format("imatrix size %d is different from tensor size %d for %s",
-                                    int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name));
-                        }
-                    }
-                }
-            }
+            auto imatrix = find_imatrix_data(name, tensor->ne[0]*tensor->ne[2], imatrix_data);
             if (!params->ignore_imatrix_rules && !imatrix) {
                 bool is_very_low_bpw_quant = new_type == GGML_TYPE_IQ2_XXS    ||
                                              new_type == GGML_TYPE_IQ2_XXS_R4 ||
@@ -2139,3 +2145,309 @@ uint32_t llama_model_quantize(
         return 1;
     }
 }
+
+// ==================================================================================
+static void estimate_imatrix_internal(const std::string & fname_inp,
+        const llama_model_quantize_params * params, std::unordered_map<std::string, std::vector<float>> & new_imatrix) {
+
+    int nthread = params->nthread;
+
+    if (nthread <= 0) {
+        nthread = std::thread::hardware_concurrency();
+    }
+
+    // mmap consistently increases speed Linux, and also increases speed on Windows with
+    // hot cache. It may cause a slowdown on macOS, possibly related to free memory.
+#if defined(__linux__) || defined(_WIN32)
+    constexpr bool use_mmap = true;
+#else
+    constexpr bool use_mmap = false;
+#endif
+
+    llama_model_loader ml(fname_inp, 0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
+            /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false,
+            /* defer_experts */ false, nullptr, nullptr);
+    ml.init_mappings(false); // no prefetching
+
+    llama_model model;
+    try {
+        llm_load_arch(ml, model);
+    } catch(const std::exception & e) {
+        LLAMA_LOG_WARN("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX %s\n", e.what());
+    }
+    try {
+        llm_load_hparams(ml, model, true);
+    } catch(const std::exception & e) {
+        LLAMA_LOG_WARN("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX %s\n", e.what());
+    }
+
+    auto imatrix_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
+    if (imatrix_data) {
+        LLAMA_LOG_INFO("================================ Have weights data with %d entries\n",int(imatrix_data->size()));
+        // check imatrix for nans or infs
+        for (const auto & kv : *imatrix_data) {
+            for (float f : kv.second) {
+                if (!std::isfinite(f)) {
+                    throw std::runtime_error(format("imatrix contains non-finite value %f\n", f));
+                }
+            }
+        }
+    }
+
+    std::vector<std::thread> workers;
+    workers.reserve(nthread);
+
+    std::vector<no_init<uint8_t>> read_data;
+    std::vector<no_init<uint8_t>> work;
+    std::vector<no_init<float>> f32_conv_buf;
+
+    uint16_t n_split = 1;
+    // Assume split index is continuous
+    if (params->keep_split) {
+        for (int i = 0; i < ml.n_tensors; ++i) {
+            n_split = std::max(uint16_t(ml.get_weight(i)->idx+1), n_split);
+        }
+    }
+
+    struct tensor_sums {
+        std::vector<float> sum_c;
+        std::vector<float> sum_r;
+    };
+
+    std::unordered_map<std::string, tensor_sums> sum_map;
+
+    for (int i = 0; i < ml.n_tensors; ++i) {
+        auto weight = ml.get_weight(i);
+        struct ggml_tensor * tensor = weight->tensor;
+
+        std::string name = ggml_get_name(tensor);
+
+        if (!ml.use_mmap) {
+            if (read_data.size() < ggml_nbytes(tensor)) {
+                read_data.resize(ggml_nbytes(tensor));
+            }
+            tensor->data = read_data.data();
+        }
+        ml.load_data_for(tensor);
+
+        bool quantize = tensor->type != GGML_TYPE_I32 &&
+                        tensor->type != GGML_TYPE_I64 &&
+                        tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_BF16_R16 &&
+                        tensor->type != GGML_TYPE_I8; // i.e., do not quantize tensors holding int values
+
+        // This used to be a regex, but <regex> has an extreme cost to compile times.
+        quantize &= name.rfind("weight") == name.size() - 6; // ends with 'weight'?
+
+        // quantize only 2D and 3D tensors (experts)
+        quantize &= (ggml_n_dims(tensor) >= 2);
+
+        // do not quantize norm tensors
+        quantize &= name.find("_norm.weight") == std::string::npos;
+
+        // do not quantize expert gating tensors
+        // NOTE: can't use LLM_TN here because the layer number is not known
+        if (name.find("ffn_gate_inp.weight") != std::string::npos) {
+            if (params->ffn_gate_inp_type == GGML_TYPE_COUNT || params->ffn_gate_inp_type == tensor->type) {
+                quantize = false;
+            }
+        }
+
+        // do not quantize positional embeddings and token types (BERT)
+        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");
+        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
+
+        // do not quantize Mamba's small yet 2D weights
+        // NOTE: can't use LLM_TN here because the layer number is not known
+        quantize &= name.find("ssm_conv1d")        == std::string::npos;
+        quantize &= name.find("shortconv.conv")     == std::string::npos;
+        quantize &= name.find("ple_conv1d")        == std::string::npos;
+        quantize &= name.find("ssm_x.weight")      == std::string::npos;
+        quantize &= name.find("ssm_dt.weight")     == std::string::npos;
+
+        // do not quantize relative position bias (T5)
+        quantize &= name.find("attn_rel_b.weight") == std::string::npos;
+
+        // Xing4.0: do not quantize the mHC projection weights
+        if (model.arch == LLM_ARCH_XING4_0) {
+            quantize &= name.find("hc_attn_fn.weight") == std::string::npos;
+            quantize &= name.find("hc_ffn_fn.weight")  == std::string::npos;
+        }
+
+        if (quantize) {
+            LLAMA_LOG_INFO("Working on %s\n", name.c_str());
+
+            const int64_t nelements = ggml_nelements(tensor);
+
+            float * f32_data = nullptr;
+
+            if (tensor->type == GGML_TYPE_F32) {
+                f32_data = (float *) tensor->data;
+            } else if (ggml_is_quantized(tensor->type) && !params->allow_requantize) {
+                throw std::runtime_error(format("requantizing from type %s is disabled", ggml_type_name(tensor->type)));
+            } else {
+                llama_tensor_dequantize_internal(tensor, f32_conv_buf, workers, nelements, nthread);
+                f32_data = (float *) f32_conv_buf.data();
+            }
+
+            std::vector<float> sum_c(tensor->ne[0]*tensor->ne[2], 0), sum_r(tensor->ne[1]*tensor->ne[2]);
+            std::memset(sum_c.data(), 0, tensor->ne[0]*tensor->ne[2]*sizeof(float));
+            auto result_c = sum_c.data();
+            auto result_r = sum_r.data();
+            for (int i02 = 0; i02 < int(tensor->ne[2]); ++i02) {
+                auto values = f32_data + i02*tensor->ne[0]*tensor->ne[1];
+                for (int row = 0; row < int(tensor->ne[1]); ++row) {
+                    float sum = 0;
+                    for (int j = 0; j < int(tensor->ne[0]); ++j) {
+                        float v2 = values[j]*values[j];
+                        result_c[j] += values[j]*values[j];
+                        sum += v2;
+                    }
+                    result_r[row] = sum;
+                    values += tensor->ne[0];
+                }
+                double sum_c = 0, sum_r = 0;
+                for (int j = 0; j < int(tensor->ne[0]); ++j) sum_c += double(result_c[j]);
+                for (int j = 0; j < int(tensor->ne[1]); ++j) sum_r += double(result_r[j]);
+                sum_c /= tensor->ne[0];
+                sum_r /= tensor->ne[1];
+                if (sum_c > 0) {
+                    float norm = float(1./sum_c);
+                    for (int j = 0; j < int(tensor->ne[0]); ++j) result_c[j] = 2.0f + result_c[j]*norm;
+                }
+                if (sum_r > 0) {
+                    float norm = float(1./sum_r);
+                    for (int j = 0; j < int(tensor->ne[1]); ++j) result_r[j] *= norm;
+                }
+                result_c += tensor->ne[0];
+                result_r += tensor->ne[1];
+            }
+            auto & entry = sum_map[std::move(name)];
+            entry.sum_c = std::move(sum_c);
+            entry.sum_r = std::move(sum_r);
+        }
+
+        if (ml.use_mmap) {
+            ml.mappings.at(weight->idx)->unmap_fragment(weight->offs, weight->offs + ggml_nbytes(tensor));
+        }
+    }
+
+    LLAMA_LOG_INFO("============== Have %d entries in sum map\n", int(sum_map.size()));
+
+    auto check_up_gate = [&sum_map] (const std::string & name, std::vector<float> & values,
+            const std::string & name_part, const std::string & other_name_part) {
+        if (auto pos = name.find(name_part); pos != std::string::npos) {
+            auto other_name = name.substr(0, pos) + other_name_part;
+            if (auto it = sum_map.find(other_name); it != sum_map.end()) {
+                LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name.c_str());
+                GGML_ASSERT(values.size() == it->second.sum_c.size());
+                for (int j = 0; j < int(values.size()); ++j) values[j] *= it->second.sum_c[j];
+                return true;
+            }
+        }
+        return false;
+    };
+    auto check_ugd = [&sum_map] (const std::string & name, std::vector<float> & values,
+            const std::string & name_part, const std::string & other_name_part_ug, const std::string & other_name_part_d) {
+        if (auto pos = name.find(name_part); pos != std::string::npos) {
+            auto other_name_ug = name.substr(0, pos) + other_name_part_ug;
+            auto other_name_d  = name.substr(0, pos) + other_name_part_d;
+            if (auto it = sum_map.find(other_name_ug), it_d = sum_map.find(other_name_d); it != sum_map.end() && it_d != sum_map.end()) {
+                LLAMA_LOG_INFO("Combining %s and %s and %s\n", name.c_str(), other_name_ug.c_str(), other_name_d.c_str());
+                GGML_ASSERT(values.size() == it->second.sum_c.size());
+                GGML_ASSERT(values.size() == it_d->second.sum_r.size());
+                for (int j = 0; j < int(values.size()); ++j) values[j] *= it->second.sum_c[j] * (2.0f + it_d->second.sum_r[j]);
+                return true;
+            }
+        }
+        return false;
+    };
+    auto check_down = [&sum_map] (const std::string & name, std::vector<float> & values, const std::string & name_part,
+            const std::string & other_name_part1, const std::string & other_name_part2) {
+        if (auto pos = name.find(name_part); pos != std::string::npos) {
+            auto other_name_u = name.substr(0, pos) + other_name_part1;
+            auto other_name_g = name.substr(0, pos) + other_name_part2;
+            if (auto itu = sum_map.find(other_name_u), itg = sum_map.find(other_name_g); itu != sum_map.end() && itg != sum_map.end()) {
+                GGML_ASSERT(values.size() == itu->second.sum_r.size());
+                GGML_ASSERT(values.size() == itg->second.sum_r.size());
+                LLAMA_LOG_INFO("Combining %s and %s, %s\n", name.c_str(), other_name_u.c_str(), other_name_g.c_str());
+                for (int j = 0; j < int(values.size()); ++j) {
+                    values[j] *= (8.0f * itu->second.sum_r[j] * itg->second.sum_r[j] + 1.0f);
+                }
+                return true;
+            }
+        }
+        return false;
+    };
+    for (auto & [name, sums] : sum_map) {
+        auto & values = new_imatrix[name];
+        values = sums.sum_c;
+        auto imatrix = find_imatrix_data(name, values.size(), imatrix_data);
+        bool check_ffn = true;
+        // It looks like for dense FFN it is better to not fully couple the impartance
+        check_ffn = check_ffn && !check_up_gate(name, values, "ffn_up.weight", "ffn_gate.weight");
+        check_ffn = check_ffn && !check_up_gate(name, values, "ffn_gate.weight", "ffn_up.weight");
+        //check_ffn = check_ffn && !check_ugd (name, values, "ffn_up.weight", "ffn_gate.weight", "ffn_down.weight");
+        //check_ffn = check_ffn && !check_ugd (name, values, "ffn_gate.weight", "ffn_up.weight", "ffn_down.weight");
+        check_ffn = check_ffn && !check_down(name, values, "ffn_down.weight", "ffn_up.weight", "ffn_gate.weight");
+        //check_ffn = check_ffn && !check_up_gate(name, values, "ffn_up_exps.weight", "ffn_gate_exps.weight");
+        //check_ffn = check_ffn && !check_up_gate(name, values, "ffn_gate_exps.weight", "ffn_up_exps.weight");
+        // It looks like for MoE FFN it is better to fully couple the impartance
+        check_ffn = check_ffn && !check_ugd (name, values, "ffn_up_exps.weight", "ffn_gate_exps.weight", "ffn_down_exps.weight");
+        check_ffn = check_ffn && !check_ugd (name, values, "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight");
+        check_ffn = check_ffn && !check_down(name, values, "ffn_down_exps.weight", "ffn_up_exps.weight", "ffn_gate_exps.weight");
+        if (imatrix) {
+            double sum1 = 0, sum2 = 0;
+            for (int j = 0; j < int(values.size()); ++j) sum1 += (double)imatrix[j];
+            for (int j = 0; j < int(values.size()); ++j) sum2 += (double)values[j];
+            if (sum1 > 0 && sum2 > 0) {
+                float norm = float(0.125*sum1/sum2);
+                for (int j = 0; j < int(values.size()); ++j) values[j] = imatrix[j] + norm*values[j];
+            }
+        }
+    }
+}
+
+uint32_t llama_compute_analytical_imatrix(
+            const char * fname_inp,
+            const char * fname_out,
+            const llama_model_quantize_params * params) {
+
+    ensure_output_directory(fname_out);
+
+    std::unordered_map<std::string, std::vector<float>> new_imatrix;
+    try {
+        estimate_imatrix_internal(fname_inp, params, new_imatrix);
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: failed to quantize: %s\n", __func__, err.what());
+        return 1;
+    }
+
+    int ncall = 1;
+    std::ofstream out(fname_out, std::ios::binary);
+    int n_entries = new_imatrix.size();
+    out.write((const char *) &n_entries, sizeof(n_entries));
+    for (const auto & [name, values] : new_imatrix) {
+        printf("Writing data for %s: %d elements\n", name.c_str(), int(values.size()));
+        int len = name.size();
+        out.write((const char *) &len, sizeof(len));
+        out.write(name.c_str(), len);
+        out.write((const char *) &ncall, sizeof(ncall));
+        int nval = values.size();
+        out.write((const char *) &nval, sizeof(nval));
+        if (nval > 0) {
+            out.write((const char*)values.data(), nval*sizeof(float));
+        }
+    }
+
+    out.write((const char *) &ncall, sizeof(ncall));
+    std::string dum{"analytic"};
+    int len = dum.size();
+    out.write((const char *) &len, sizeof(len));
+    out.write(dum.c_str(), len);
+
+    LLAMA_LOG_INFO("\n\nWrote imatrix data with %d entries to %s\n\n", int(new_imatrix.size()), fname_out);
+
+    return 0;
+}
+
