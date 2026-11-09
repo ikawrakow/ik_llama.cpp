@@ -468,11 +468,11 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq(
 }
 
 // exact in fp32: the integer products and sums here are <= 2^24 in magnitude
-#if __CUDA_ARCH__ == 610
+#if defined(GGML_USE_HIP) || __CUDA_ARCH__ == 610
 typedef float mmq_kscale_t;
 #else
 typedef int   mmq_kscale_t;
-#endif // __CUDA_ARCH__ == 610
+#endif // defined(GGML_USE_HIP) || __CUDA_ARCH__ == 610
 
 // contiguous v/x + u/y values
 static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(
