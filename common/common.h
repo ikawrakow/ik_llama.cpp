@@ -333,6 +333,7 @@ struct gpt_params {
     int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
     size_t moe_cache_size         =       0; // total GPU cache budget in bytes for CPU-resident MoE experts
     enum llama_moe_cache_policy moe_cache_policy = LLAMA_MOE_CACHE_POLICY_LRU;
+    double moe_cache_cpu_share   =     0.0; // fixed fraction of unique cache misses assigned to CPU
     int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
     bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
     int32_t worst_graph_tokens    =       0; // number of tokens to use when reserving the worst graph

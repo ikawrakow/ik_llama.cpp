@@ -14,6 +14,34 @@ namespace llama_moe_cache_policy_detail {
 
 enum class kind { lru, classlru };
 
+inline bool cpu_share_q16(double share, uint32_t & share_q) {
+    if (!std::isfinite(share) || share < 0.0 || share > 1.0) return false;
+    // std::lround defines ties away from zero.
+    share_q = (uint32_t) std::lround(share*65536.0);
+    return true;
+}
+
+// Banks contain resident rows, optional CPU-share zero rows, and one backend guard row.
+struct bank_geometry {
+    int32_t real_slots = 0;
+    int32_t zero_slots = 0;
+    int32_t guard_slots = 1;
+    int32_t total_slots = 1;
+};
+
+inline bool cpu_share_bank_geometry(int32_t real_slots, uint32_t share_q,
+        int32_t max_selected, bank_geometry & out) {
+    if (real_slots < 0 || share_q > 65536 || max_selected < 0 || (share_q != 0 && max_selected == 0)) return false;
+    const int64_t zero_slots = share_q == 0 ? 0 : std::min<int64_t>(64, max_selected);
+    const int64_t total_slots = (int64_t) real_slots + zero_slots + 1;
+    if (total_slots > INT32_MAX) return false;
+    out.real_slots = real_slots;
+    out.zero_slots = (int32_t) zero_slots;
+    out.guard_slots = 1;
+    out.total_slots = (int32_t) total_slots;
+    return true;
+}
+
 inline bool valid(enum llama_moe_cache_policy policy) {
     return policy == LLAMA_MOE_CACHE_POLICY_LRU || policy == LLAMA_MOE_CACHE_POLICY_CLASSLRU;
 }
@@ -21,11 +49,25 @@ inline bool valid(enum llama_moe_cache_policy policy) {
 struct state {
     static constexpr int n_class = 8;
     static constexpr float half_life = 128.0f;
+    static constexpr int64_t max_batch = 32;
+    static constexpr int32_t max_zero_slots = 64;
 
     struct fill { int32_t expert; int32_t slot; };
 
+    struct cpu_share_plan {
+        std::vector<fill> fills;
+        std::vector<fill> cpu;
+        std::vector<int32_t> gpu_map;
+        std::vector<int32_t> cpu_map;
+        std::vector<int32_t> gpu_bias_map;
+        std::vector<int32_t> cpu_bias_map;
+        size_t n_hit = 0;
+        size_t n_eviction = 0;
+    };
+
     int32_t n_expert = 0;
     int32_t n_slots = 0;
+    size_t filled_real_slots = 0;
     kind policy = kind::lru;
     std::vector<int32_t *> slot_map;
     std::vector<int32_t> key_of;
@@ -33,6 +75,8 @@ struct state {
     std::vector<int32_t> next;
     std::vector<uint32_t> seen;
     std::vector<int32_t> uniq;
+    std::vector<int32_t> misses;
+    std::vector<uint64_t> token_zero;
     uint32_t seen_gen = 0;
 
     int32_t head = -1;
@@ -43,8 +87,10 @@ struct state {
     std::vector<float> crf;
     std::vector<int64_t> last_use;
     std::vector<int64_t> clock;
+    std::vector<uint32_t> cpu_acc;
 
     void init(int32_t n_layer, int32_t n_expert, int32_t n_slots, kind policy) {
+        *this = state{};
         GGML_ASSERT(n_layer >= 0 && n_expert > 0 && n_slots >= 0);
         this->n_expert = n_expert;
         this->n_slots = n_slots;
@@ -180,7 +226,9 @@ struct state {
                 slot_map[old / n_expert][old % n_expert] = -1;
                 ++n_eviction;
             }
+            const bool was_empty = key_of[s] < 0;
             key_of[s] = il*n_expert + e;
+            filled_real_slots += was_empty;
             slots[e] = s;
             touch_lru(s);
             fills.push_back({ e, s });
@@ -228,8 +276,10 @@ struct state {
                 slot_map[key_layer(old)][key_expert(old)] = -1;
                 ++n_eviction;
             }
+            const bool was_empty = key_of[s] < 0;
             const int32_t key = make_key(il, e);
             key_of[s] = key;
+            filled_real_slots += was_empty;
             slots[e] = s;
             move_class(s, class_of(key));
             fills.push_back({e, s});
@@ -243,18 +293,198 @@ struct state {
         if (policy == kind::lru) return plan_lru(il, ids, n_ids, fills, n_hit, n_eviction);
         return plan_classlru(il, ids, n_ids, n_tokens, fills, n_hit, n_eviction);
     }
+
+    bool plan_with_cpu_share(int32_t il, const int32_t * ids, size_t n_ids,
+            int64_t n_tokens, int64_t selected_per_token, double share,
+            int32_t zero_slots, cpu_share_plan & out) {
+        out.fills.clear();
+        out.cpu.clear();
+        out.gpu_map.clear();
+        out.cpu_map.clear();
+        out.gpu_bias_map.clear();
+        out.cpu_bias_map.clear();
+        out.n_hit = out.n_eviction = 0;
+        uint32_t requested_q = 0;
+        if (!cpu_share_q16(share, requested_q) || il < 0 || (size_t) il >= slot_map.size() ||
+                !slot_map[il] || !ids || n_tokens <= 0 || n_tokens > max_batch ||
+                selected_per_token <= 0 || selected_per_token > n_expert ||
+                n_tokens > INT64_MAX/selected_per_token ||
+                (uint64_t) n_tokens*(uint64_t) selected_per_token != n_ids ||
+                zero_slots < 0 || zero_slots > max_zero_slots ||
+                (uint64_t) n_slots + zero_slots > INT32_MAX || (requested_q == 0 && zero_slots != 0)) {
+            return false;
+        }
+        if (requested_q != 0 && zero_slots == 0) return false;
+        for (size_t i = 0; i < n_ids; ++i) {
+            if (ids[i] < 0 || ids[i] >= n_expert) return false;
+        }
+
+        if (requested_q == 0) {
+            if (!plan(il, ids, n_ids, n_tokens, out.fills, out.n_hit, out.n_eviction)) return false;
+            out.gpu_map.assign(n_expert, -1);
+            out.cpu_map.assign(n_expert, -1);
+            out.gpu_bias_map.assign(n_expert, n_expert);
+            out.cpu_bias_map.assign(n_expert, n_expert);
+            const int32_t * slots = slot_map[il];
+            for (size_t i = 0; i < n_ids; ++i) {
+                out.gpu_map[ids[i]] = slots[ids[i]];
+                out.gpu_bias_map[ids[i]] = ids[i];
+            }
+            return true;
+        }
+
+        if (++seen_gen == 0) {
+            std::fill(seen.begin(), seen.end(), 0);
+            seen_gen = 1;
+        }
+        uniq.clear();
+        for (size_t i = 0; i < n_ids; ++i) {
+            if (seen[ids[i]] != seen_gen) {
+                seen[ids[i]] = seen_gen;
+                uniq.push_back(ids[i]);
+            }
+        }
+        if (uniq.size() > (size_t) n_slots) return false;
+
+        int32_t * slots = slot_map[il];
+        for (int32_t e : uniq) {
+            if (slots[e] >= 0 && (slots[e] >= n_slots || key_of[slots[e]] != make_key(il, e))) return false;
+        }
+        if (crf.empty()) {
+            crf.assign(slot_map.size()*(size_t) n_expert, 0.0f);
+            last_use.assign(slot_map.size()*(size_t) n_expert, -1);
+            clock.assign(slot_map.size(), 0);
+        }
+        if (cpu_acc.empty()) cpu_acc.assign(slot_map.size(), 0);
+        if (cpu_acc.size() != slot_map.size() || clock.size() != slot_map.size() ||
+                n_tokens > INT64_MAX - clock[il]) return false;
+
+        out.gpu_map.assign(n_expert, -1);
+        out.cpu_map.assign(n_expert, -1);
+        out.gpu_bias_map.assign(n_expert, n_expert);
+        out.cpu_bias_map.assign(n_expert, n_expert);
+        out.fills.reserve(uniq.size());
+        out.cpu.reserve(uniq.size());
+        misses.reserve(uniq.size());
+        misses.clear();
+        token_zero.assign((size_t) n_tokens, 0);
+
+        GGML_ASSERT(filled_real_slots <= (size_t) n_slots);
+        const bool full = filled_real_slots == (size_t) n_slots;
+        const uint32_t effective_q = full ? requested_q : 0;
+        uint32_t next_acc = cpu_acc[il];
+        size_t n_cpu = 0;
+
+        for (int32_t e : uniq) {
+            const int32_t key = make_key(il, e);
+            use(il, key);
+            if (slots[e] >= 0) {
+                if (policy == kind::classlru) move_class(slots[e], class_of(key));
+                else touch_lru(slots[e]);
+                out.gpu_map[e] = slots[e];
+                out.gpu_bias_map[e] = e;
+                ++out.n_hit;
+            } else {
+                misses.push_back(e);
+            }
+        }
+
+        if (effective_q != 0) {
+            const uint64_t acc = (uint64_t) misses.size()*effective_q + next_acc;
+            n_cpu = (size_t) (acc >> 16);
+            next_acc = (uint32_t) (acc & 0xffff);
+        }
+
+        if (n_cpu != 0 && zero_slots != 0) {
+            std::sort(misses.begin(), misses.end(), [&](int32_t a, int32_t b) {
+                const float sa = crf[make_key(il, a)];
+                const float sb = crf[make_key(il, b)];
+                return sa != sb ? sa < sb : a < b;
+            });
+            size_t n_keep = std::min(n_cpu, misses.size());
+            for (size_t i = 0; i < n_keep;) {
+                const int32_t e = misses[i];
+                bool duplicate_in_token = false;
+                for (int64_t t = 0; t < n_tokens && !duplicate_in_token; ++t) {
+                    int count = 0;
+                    for (int64_t k = 0; k < selected_per_token; ++k) {
+                        count += ids[(size_t) (t*selected_per_token + k)] == e;
+                    }
+                    duplicate_in_token = count > 1;
+                }
+                if (duplicate_in_token) {
+                    ++i;
+                    continue;
+                }
+                uint64_t used = 0;
+                for (int64_t t = 0; t < n_tokens; ++t) {
+                    for (int64_t k = 0; k < selected_per_token; ++k) {
+                        if (ids[(size_t) (t*selected_per_token + k)] == e) used |= token_zero[(size_t) t];
+                    }
+                }
+                int32_t z = 0;
+                while (z < zero_slots && (used & (UINT64_C(1) << z))) ++z;
+                if (z == zero_slots) {
+                    std::swap(misses[i], misses[--n_keep]);
+                    continue;
+                }
+                for (int64_t t = 0; t < n_tokens; ++t) {
+                    for (int64_t k = 0; k < selected_per_token; ++k) {
+                        if (ids[(size_t) (t*selected_per_token + k)] == e) token_zero[(size_t) t] |= UINT64_C(1) << z;
+                    }
+                }
+                const int32_t slot = n_slots + z;
+                out.cpu.push_back({e, slot});
+                out.cpu_map[e] = e;
+                out.gpu_map[e] = slot;
+                out.cpu_bias_map[e] = e;
+                ++i;
+            }
+        }
+
+        std::sort(uniq.begin(), uniq.end());
+        for (int32_t e : uniq) {
+            if (slots[e] >= 0 || out.cpu_map[e] >= 0) continue;
+            const int32_t s = policy == kind::lru ? head : victim(il);
+            if (key_of[s] >= 0) {
+                const int32_t old = key_of[s];
+                slot_map[key_layer(old)][key_expert(old)] = -1;
+                ++out.n_eviction;
+            }
+            const int32_t key = make_key(il, e);
+            const bool was_empty = key_of[s] < 0;
+            key_of[s] = key;
+            filled_real_slots += was_empty;
+            slots[e] = s;
+            if (policy == kind::classlru) move_class(s, class_of(key));
+            else touch_lru(s);
+            out.gpu_map[e] = s;
+            out.gpu_bias_map[e] = e;
+            out.fills.push_back({e, s});
+        }
+        cpu_acc[il] = next_acc;
+        clock[il] += n_tokens;
+        return true;
+    }
 };
 
-inline bool recover_selected_tokens(const ggml_tensor * flattened, int64_t n_expert_used,
-        int64_t n_expert, int64_t & n_tokens) {
-    if (!flattened || flattened->op != GGML_OP_RESHAPE || !flattened->src[0]) return false;
-    const ggml_tensor * source = flattened->src[0];
-    if (n_expert_used <= 0 || n_expert <= 0 || n_expert_used > n_expert ||
-            source->ne[0] <= 0 || source->ne[0] > n_expert || source->ne[1] <= 0 ||
-            source->ne[2] != 1 || source->ne[3] != 1 || flattened->ne[0] != ggml_nelements(source) ||
-            flattened->ne[1] != 1 || flattened->ne[2] != 1 || flattened->ne[3] != 1 ||
-            ggml_nelements(flattened) != ggml_nelements(source)) return false;
-    n_tokens = source->ne[1];
+inline bool recover_selected_geometry(const ggml_tensor * selected, int64_t n_expert,
+        int64_t & selected_per_token, int64_t & n_tokens) {
+    if (!selected || selected->type != GGML_TYPE_I32 || !ggml_is_contiguous(selected) || n_expert <= 0) return false;
+    if (selected->op == GGML_OP_RESHAPE && selected->src[0]) {
+        const ggml_tensor * source = selected->src[0];
+        if (source->ne[0] <= 0 || source->ne[0] > n_expert || source->ne[1] <= 0 || source->ne[2] != 1 ||
+                source->ne[3] != 1 || selected->ne[0] != ggml_nelements(source) ||
+                selected->ne[1] != 1 || selected->ne[2] != 1 || selected->ne[3] != 1 ||
+                ggml_nelements(selected) != ggml_nelements(source)) return false;
+        selected_per_token = source->ne[0];
+        n_tokens = source->ne[1];
+        return true;
+    }
+    if (selected->ne[0] <= 0 || selected->ne[0] > n_expert || selected->ne[1] <= 0 ||
+            selected->ne[2] != 1 || selected->ne[3] != 1) return false;
+    selected_per_token = selected->ne[0];
+    n_tokens = selected->ne[1];
     return true;
 }
 

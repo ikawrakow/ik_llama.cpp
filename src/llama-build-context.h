@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <tuple>
+#include <vector>
 
 struct llama_model;
 struct llama_context;
@@ -15,6 +16,26 @@ struct llama_kv_cache;
 
 struct ggml_cgraph;
 struct ggml_tensor;
+
+namespace llm_moe_cache_detail {
+inline bool mark_share_lookup_boundary(ggml_tensor * lookup) {
+    if (!lookup || lookup->op != GGML_OP_GET_ROWS) return false;
+    lookup->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+    return true;
+}
+
+inline bool share_ops_eligible(ggml_backend_t gpu_backend, ggml_backend_t cpu_backend,
+        const std::vector<ggml_tensor *> & host_ops, const std::vector<ggml_tensor *> & cached_ops) {
+    if (!gpu_backend || !cpu_backend) return false;
+    for (const ggml_tensor * op : host_ops) {
+        if (!op || !ggml_backend_supports_op(cpu_backend, op) || ggml_backend_offload_op(gpu_backend, op)) return false;
+    }
+    for (const ggml_tensor * op : cached_ops) {
+        if (!op || !ggml_backend_supports_op(gpu_backend, op)) return false;
+    }
+    return !host_ops.empty() && !cached_ops.empty();
+}
+}
 
 using llm_build_cb = std::function<void(struct ggml_tensor * cur, const char * name, int nl)>;
 
