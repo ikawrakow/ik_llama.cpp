@@ -961,7 +961,7 @@ bool llama_context::ensure_dsv4_cache_tensors() {
     const uint32_t hca_ratio = hp.dsv4_hca_ratio;
     const uint32_t csa_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, csa_ratio), 256u);
     const uint32_t hca_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, hca_ratio), 256u);
-    const bool     v41_separate = getenv("V41_SEPARATE") != nullptr;
+    const bool     v41_separate = llama_hparams::is_v41_separate();
     const uint32_t lid_ratio    = std::min(csa_ratio, hca_ratio);
     const uint32_t lid_kv       = v41_separate ? GGML_PAD(dsv4_comp_size(cparams.n_ctx, lid_ratio), 256u) : csa_kv;
 
@@ -1435,7 +1435,7 @@ static bool dsv4_per_step_capture_group(
         }
         // A ring this graph persists into must be captured from the per-token rows: after the persist its slots can
         // hold a later token's row. Only a ring the graph does not write (e.g. the V4.1 LID rings under
-        // V41_SEPARATE) still holds the saved state, so its ring rows are exact.
+        // build_deepseek41()) still holds the saved state, so its ring rows are exact.
         if (rows == nullptr && ctx.dsv4.persisted_rings.count(state) != 0) {
             LLAMA_LOG_ERROR("%s: per-token state rows are missing for a ring this graph persists\n", __func__);
             return false;
@@ -1940,7 +1940,7 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
     const auto & hp = lctx.model.hparams;
     const uint32_t csa_ratio = hp.dsv4_csa_ratio, hca_ratio = hp.dsv4_hca_ratio;
     const bool csa_overlap = hp.dsv4_csa_overlap, hca_overlap = hp.dsv4_hca_overlap;
-    const bool v41_separate = getenv("V41_SEPARATE") != nullptr;
+    const bool v41_separate = llama_hparams::is_v41_separate();
     lctx.dsv4.csa_plan = build_plan(csa_ratio, csa_overlap, csa_state_size, csa_kv_size, cache_n_stream, v41_separate ? lid_kv_size : 0);
     lctx.dsv4.hca_plan = build_plan(hca_ratio, hca_overlap, hca_state_size, hca_kv_size, cache_n_stream, v41_separate ? lid_kv_size : 0);
     lctx.dsv4.lid_plan = (hp.dsv4_shared_streams && !v41_separate) ? lctx.dsv4.csa_plan

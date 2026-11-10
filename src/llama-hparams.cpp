@@ -2583,7 +2583,7 @@ void llm_load_hparams(
                                     __func__, hparams.dsv41_replay_boundary - 1, hparams.dsv41_replay_boundary, hparams.n_layer - 1);
                         }
                     }
-                    if (std::getenv("V41_SEPARATE") != nullptr) {
+                    if (hparams.is_v41_separate()) {
                         {
                             uint32_t src = 0;
                             if (ml.get_key(LLM_KV_CANDIDATE_SOURCE_LAYER, src, false)) {
@@ -2871,4 +2871,14 @@ void llm_load_hparams(
     }
 
     hparams.rope_type = llama_rope_type(&model);
+}
+
+bool llama_hparams::is_v41_separate() {
+    static const bool is_separate = [] () -> bool {
+        if (auto env = std::getenv("V41_SEPARATE"); env != nullptr && env[0] == '0') {
+            return false;
+        }
+        return true;
+    }();
+    return is_separate;
 }
