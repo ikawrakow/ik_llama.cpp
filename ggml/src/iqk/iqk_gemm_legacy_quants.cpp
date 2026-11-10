@@ -4521,7 +4521,7 @@ struct DequantizerQ51 final : public BaseLegacyDequantizer<block_q5_1> {
         q[1] = vreinterpretq_s8_u8(vorrq_u8(vreinterpretq_u8_s8(q[1]), vandq_u8(mh, hbits.to_bytes(qh+2))));
     }
     inline void prepare1(int i) {
-        bits.prepare1(x[i].qs, bits.b);
+        prepare1(i, bits.b);
     }
 
     inline float16x8_t new_block(int i) {
@@ -4640,9 +4640,9 @@ inline void mul_mat_qX_Y_q8_Y_1(int n, Dequantizer& deq1, Dequantizer& deq2, Q8&
             q8.process_scales(i, deq1, sc16, acc);
             sum_4(i, deq1, q8, sc16, acc);
         }
-        //for (int i = 4*(nb/4); i < nb; ++i) {
-        //    q8.process_1_block(i, deq1, acc);
-        //}
+        for (int i = 4*(nb/4); i < nb; ++i) {
+            q8.process_1_block(i, deq1, acc);
+        }
 
         info.store(ix, 0, vaddvq_f32(vaddq_f32(acc[0], acc[1])));
     }
