@@ -2432,30 +2432,31 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
         }
         return false;
     };
+
     for (auto & [name, sums] : sum_map) {
         auto & values = new_imatrix[name];
         values = sums.sum_c;
         auto imatrix = find_imatrix_data(name, values.size(), imatrix_data);
-        bool check_ffn = true;
+        bool check = true;
         // It looks like for dense FFN it is better to not fully couple the impartance
-        check_ffn = check_ffn && !check_up_gate(name, values, "ffn_up.weight", "ffn_gate.weight");
-        check_ffn = check_ffn && !check_up_gate(name, values, "ffn_gate.weight", "ffn_up.weight");
-        //check_ffn = check_ffn && !check_ugd (name, values, "ffn_up.weight", "ffn_gate.weight", "ffn_down.weight");
-        //check_ffn = check_ffn && !check_ugd (name, values, "ffn_gate.weight", "ffn_up.weight", "ffn_down.weight");
-        check_ffn = check_ffn && !check_down(name, values, "ffn_down.weight", "ffn_up.weight", "ffn_gate.weight");
-        //check_ffn = check_ffn && !check_up_gate(name, values, "ffn_up_exps.weight", "ffn_gate_exps.weight");
-        //check_ffn = check_ffn && !check_up_gate(name, values, "ffn_gate_exps.weight", "ffn_up_exps.weight");
+        check = check && !check_up_gate(name, values, "ffn_up.weight", "ffn_gate.weight");
+        check = check && !check_up_gate(name, values, "ffn_gate.weight", "ffn_up.weight");
+        //check = check && !check_ugd (name, values, "ffn_up.weight", "ffn_gate.weight", "ffn_down.weight");
+        //check = check && !check_ugd (name, values, "ffn_gate.weight", "ffn_up.weight", "ffn_down.weight");
+        check = check && !check_down(name, values, "ffn_down.weight", "ffn_up.weight", "ffn_gate.weight");
+
         // It looks like for MoE FFN it is better to fully couple the impartance
-        check_ffn = check_ffn && !check_ugd (name, values, "ffn_up_exps.weight", "ffn_gate_exps.weight", "ffn_down_exps.weight");
-        check_ffn = check_ffn && !check_ugd (name, values, "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight");
-        check_ffn = check_ffn && !check_down(name, values, "ffn_down_exps.weight", "ffn_up_exps.weight", "ffn_gate_exps.weight");
+        //check = check && !check_up_gate(name, values, "ffn_up_exps.weight", "ffn_gate_exps.weight");
+        //check = check && !check_up_gate(name, values, "ffn_gate_exps.weight", "ffn_up_exps.weight");
+        check = check && !check_ugd (name, values, "ffn_up_exps.weight", "ffn_gate_exps.weight", "ffn_down_exps.weight");
+        check = check && !check_ugd (name, values, "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight");
+        check = check && !check_down(name, values, "ffn_down_exps.weight", "ffn_up_exps.weight", "ffn_gate_exps.weight");
 
-        check_ffn = check_ffn && !check_up_gate(name, values, "attn_k.weight", "attn_q.weight");
-        check_ffn = check_ffn && !check_up_gate(name, values, "attn_q.weight", "attn_k.weight");
+        check = check && !check_up_gate(name, values, "attn_k.weight", "attn_q.weight");
+        check = check && !check_up_gate(name, values, "attn_q.weight", "attn_k.weight");
 
-        // This is quite good
         if (auto pos = name.find(".attn_v.weight"); pos != std::string::npos) {
-            check_ffn = false;
+            check = false;
             auto other_name_k = name.substr(0, pos) + ".attn_k.weight";
             auto other_name_q = name.substr(0, pos) + ".attn_q.weight";
             if (auto itk = sum_map.find(other_name_k), itq = sum_map.find(other_name_q); itk != sum_map.end() && itq != sum_map.end()) {
@@ -2469,30 +2470,15 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
             }
         }
 
-        // This is not working
-        //if (auto pos = name.find(".attn_output.weight"); pos != std::string::npos) {
-        //    check_ffn = false;
-        //    auto other_name_v = name.substr(0, pos) + ".attn_v.weight";
-        //    if (auto itv = sum_map.find(other_name_v); itv != sum_map.end()) {
-        //        auto & v = itv->second.sum_r;
-        //        if (values.size() % v.size() == 0) {
-        //            LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name_v.c_str());
-        //            for (int j = 0; j < int(values.size()); ++j) {
-        //                values[j] *= (2.0f + v[j % v.size()]);
-        //            }
-        //        }
-        //    }
-        //}
-        //if (auto pos = name.find(".attn_output.weight"); pos != std::string::npos) {
-        //    check_ffn = false;
-        //    auto other_name_v = name.substr(0, pos) + ".attn_v.weight";
-        //    if (auto itv = sum_map.find(other_name_v); itv != sum_map.end()) {
-        //        LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name_v.c_str());
-        //        if (values.size() == itv->second.sum_c.size()) {
-        //            for (int j = 0; j < int(values.size()); ++j) values[j] *= itv->second.sum_c[j];
-        //        }
-        //    }
-        //}
+        if (auto pos = name.find(".ssm_out.weight"); pos != std::string::npos) {
+            check = false;
+            auto other_name = name.substr(0, pos) + ".attn_qkv.weight";
+            if (auto it = sum_map.find(other_name); it != sum_map.end() && values.size() <= it->second.sum_r.size()) {
+                LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name.c_str());
+                for (int j = 0; j < int(values.size()); ++j) values[j] *= (2.0f + it->second.sum_r[j]);
+            }
+        }
+
         if (imatrix) {
             double sum1 = 0, sum2 = 0;
             for (int j = 0; j < int(values.size()); ++j) sum1 += (double)imatrix[j];
