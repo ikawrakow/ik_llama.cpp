@@ -1436,7 +1436,6 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                 *(float *)(cur->op_params + 2) = lctx.model.hparams.situ_beta;
                 *(float *)(cur->op_params + 3) = lctx.model.hparams.situ_linear_beta;
             } else {
-                // SITU is never split: it takes this path only with n_gpu_layers == 0
                 auto up_cur   = llm_build_lora_mm(lctx, ctx, split_u, cur);
                 auto gate_cur = llm_build_lora_mm(lctx, ctx, split_g, cur);
                 cur = ggml_swiglu_oai(ctx, gate_cur, up_cur, 1.702f, 7.0f);
