@@ -4233,6 +4233,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * restrict s, size_t bs, const void * r
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q4_0, vx, bx, GGML_Q8_0_VEC_DOT_TYPE, vy, by, s, bs, 0, 1)) {
         return;
     }
+    GGML_ABORT("fatal error");
 #endif
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -4720,6 +4721,7 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * restrict s, size_t bs, const void * r
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q4_1, vx, bx, GGML_Q8_1_VEC_DOT_TYPE, vy, by, s, bs, 0, 1)) {
         return;
     }
+    GGML_ABORT("fatal error");
 #endif
     const int qk = QK8_1;
     const int nb = n / qk;
@@ -5012,6 +5014,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * restrict s, size_t bs, const void * r
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q5_0, vx, bx, GGML_Q8_0_VEC_DOT_TYPE, vy, by, s, bs, 0, 1)) {
         return;
     }
+    GGML_ABORT("fatal error");
 #endif
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -5372,6 +5375,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * restrict s, size_t bs, const void * r
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q5_1, vx, bx, GGML_Q8_1_VEC_DOT_TYPE, vy, by, s, bs, 0, 1)) {
         return;
     }
+    GGML_ABORT("fatal error");
 #endif
     const int qk = QK8_1;
     const int nb = n / qk;
@@ -5751,6 +5755,7 @@ void ggml_vec_dot_q6_0_q8_0(int n, float * restrict s, size_t bs, const void * r
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q6_0, vx, bx, GGML_Q8_0_VEC_DOT_TYPE, vy, by, s, bs, 0, 1)) {
         return;
     }
+    GGML_ABORT("fatal error");
 #endif
     // TODO
     *s = 0;
@@ -5761,6 +5766,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * restrict s, size_t bs, const void * r
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q8_0, vx, bx, GGML_Q8_0_VEC_DOT_TYPE, vy, by, s, bs, 0, 1)) {
         return;
     }
+    GGML_ABORT("fatal error");
 #endif
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -12135,6 +12141,7 @@ void ggml_vec_dot_iq4_nl_q8_0(int n, float * restrict s, size_t bs, const void *
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_IQ4_NL, vx, bx, GGML_Q8_0_VEC_DOT_TYPE, vy, by, s, bs, 0, 1)) {
         return;
     }
+    GGML_ABORT("fatal error");
 #endif
     assert(nrc == 1);
     UNUSED(nrc);
