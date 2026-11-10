@@ -71,6 +71,7 @@ struct llama_model_loader {
 
         ggml_tensor * tensor;
         std::vector<float> nvfp4_scale;
+        bool mxfp4_repack = false;
 
         llama_tensor_weight(const llama_file * file, uint16_t idx, const char * name, const struct gguf_context * gguf_ctx, ggml_tensor * tensor) : idx(idx), tensor(tensor) {
             const int tensor_idx = gguf_find_tensor(gguf_ctx, name);

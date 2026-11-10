@@ -5072,6 +5072,56 @@ void dequantize_row_nvfp4_ks(const block_nvfp4 * x, float * y, int64_t k) {
     dequantize_nvfp4_blocks((const block_nvfp4 *)(dptr + 1), y, k/QK_NVFP4, dptr[0]);
 }
 
+bool ggml_mxfp4_to_nvfp4_ks(const void * vx, void * vy, int n_per_row) {
+    const block_mxfp4 * x = (const block_mxfp4 *)vx;
+    const int nblock = n_per_row/QK_MXFP4;
+    auto nonzero = [] (const block_mxfp4 & b) {
+        for (int j = 0; j < QK_MXFP4/2; ++j) if (b.qs[j] & 0x77) return true;
+        return false;
+    };
+    int emax = -1;
+    for (int ib = 0; ib < nblock; ++ib) {
+        if (nonzero(x[ib])) emax = std::max(emax, int(x[ib].e));
+    }
+    float * dptr = (float *)vy;
+    block_nvfp4 * y = (block_nvfp4 *)(dptr + 1);
+    if (emax < 0) {
+        *dptr = 0;
+        memset(y, 0, (nblock/2)*sizeof(block_nvfp4));
+        return true;
+    }
+    const float row_scale = ldexpf(1.0f, emax - 135);
+    *dptr = row_scale;
+    bool exact = true;
+    for (int ib = 0; ib < nblock; ++ib) {
+        auto & yb = y[ib/2];
+        const int is = 2*(ib%2);
+        const int k = x[ib].e - emax + 8;
+        if (k >= -9) {
+            const uint8_t byte = ggml_fp32_to_ue4m3(ldexpf(1.0f, k));
+            for (int h = 0; h < 2; ++h) {
+                yb.d[is + h] = byte;
+                for (int j = 0; j < 8; ++j) {
+                    yb.qs[8*(is + h) + j] = ((x[ib].qs[j] >> 4*h) & 0xf) | (((x[ib].qs[j + 8] >> 4*h) & 0xf) << 4);
+                }
+            }
+        } else {
+            exact &= !nonzero(x[ib]);
+            const float d0 = GGML_E8M0_TO_FP32_HALF(x[ib].e);
+            const float d  = nvfp4_scale(row_scale, 1);
+            for (int h = 0; h < 2; ++h) {
+                yb.d[is + h] = 1;
+                for (int j = 0; j < 8; ++j) {
+                    const int i0 = best_index_mxfp4(d, kvalues_mxfp4, d0*kvalues_mxfp4[(x[ib].qs[j    ] >> 4*h) & 0xf]);
+                    const int i1 = best_index_mxfp4(d, kvalues_mxfp4, d0*kvalues_mxfp4[(x[ib].qs[j + 8] >> 4*h) & 0xf]);
+                    yb.qs[8*(is + h) + j] = i0 | (i1 << 4);
+                }
+            }
+        }
+    }
+    return exact;
+}
+
 void vec_dot_nvfp4_ks_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_NVFP4_KS, vx, 0, ggml_internal_get_type_traits(GGML_TYPE_NVFP4_KS).vec_dot_type, vy, 0, s, 0, 0, 1)) {

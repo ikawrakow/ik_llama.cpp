@@ -973,6 +973,7 @@ extern "C" {
 
     GGML_API void ggml_set_input_scale(struct ggml_tensor * tensor, float scale);
     GGML_API float ggml_get_input_scale(const struct ggml_tensor * tensor);
+    GGML_API bool  ggml_mxfp4_to_nvfp4_ks(const void * src, void * dst, int n_per_row);
 
     GGML_API GGML_CALL int64_t ggml_nelements   (const struct ggml_tensor * tensor);
     GGML_API GGML_CALL int64_t ggml_nrows       (const struct ggml_tensor * tensor);
