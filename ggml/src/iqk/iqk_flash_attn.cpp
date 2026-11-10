@@ -366,7 +366,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
             auto work_m = (ggml_fp16_t *)(work_v + row_size_v*indexer->ne[0]);
             for (int iq = first; iq < first + neq1_this_thread; ++iq) {
                 auto idx = (const int *)((const char *)indexer->data + iq*indexer->nb[1]);
-                auto M = mask ? (const ggml_fp16_t *)((const char *)mask + iq*stride_m) : nullptr;
+                auto M = mask ? (const ggml_fp16_t *)((const char *)mask + iq*size_t(stride_m)) : nullptr;
                 int last_found = -1;
                 for (int j = 0; j < nkv; ++j) {
                     if (idx[j] >= 0) {

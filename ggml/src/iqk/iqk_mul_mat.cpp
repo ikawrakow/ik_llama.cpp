@@ -421,10 +421,9 @@ struct MulMat {
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q8_KV:
             case GGML_TYPE_Q8_KV_R8:
-            case GGML_TYPE_Q8_K_R8: return 8;
-            case GGML_TYPE_Q1_0_G128_R8: return 8;
-            case GGML_TYPE_PQ2_0_R8: return 8;
-            case GGML_TYPE_PTQ1_0_R8: return 8;
+            case GGML_TYPE_Q8_K_R8:
+            case GGML_TYPE_PQ2_0_R8:
+            case GGML_TYPE_PTQ1_0_R8:
             case GGML_TYPE_Q2_0_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
@@ -435,6 +434,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_KS_R16:
             case GGML_TYPE_IQ5_KS_R16:
             case GGML_TYPE_IQ3_KS_R16:
+            case GGML_TYPE_Q1_0_G128_R8:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
         }
@@ -469,10 +469,10 @@ struct MulMat {
             case GGML_TYPE_Q8_KV_R8:
             case GGML_TYPE_Q8_1:
             case GGML_TYPE_MXFP4_R8:
-            case GGML_TYPE_Q8_K_R8: return 8;
-            case GGML_TYPE_Q1_0_G128_R8: return 8;
-            case GGML_TYPE_PQ2_0_R8: return 8;
-            case GGML_TYPE_PTQ1_0_R8: return 8;
+            case GGML_TYPE_Q8_K_R8:
+            case GGML_TYPE_Q1_0_G128_R8:
+            case GGML_TYPE_PQ2_0_R8:
+            case GGML_TYPE_PTQ1_0_R8:
             case GGML_TYPE_Q2_0_R8: return 8;
             case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_IQ4_KS_R16:
