@@ -5002,7 +5002,7 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
                          : etypeA == GGML_TYPE_Q4_K  || etypeA == GGML_TYPE_Q5_K ? GGML_TYPE_Q8_1_X4
                          : GGML_TYPE_Q8_K;
 
-    if (ne00%QK_K != 0 || ggml_type(typeB) != expected_type_B) {
+    if ((ne00%QK_K != 0 && etypeA != GGML_TYPE_Q8_KV) || ggml_type(typeB) != expected_type_B) {
         return false;
     }
 

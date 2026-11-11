@@ -111,6 +111,16 @@ void dequantize_row_iq1_bn (const block_iq1_bn  * GGML_RESTRICT x, float * GGML_
 #define GGML_Q8_0_VEC_DOT_TYPE GGML_TYPE_Q8_0
 #endif
 
+#if GGML_USE_IQK_MULMAT
+#ifdef __AVX2__
+#define GGML_Q8_1_VEC_DOT_TYPE GGML_TYPE_Q8_2_X4
+#else
+#define GGML_Q8_1_VEC_DOT_TYPE GGML_TYPE_Q8_1_X4
+#endif
+#else
+#define GGML_Q8_1_VEC_DOT_TYPE GGML_TYPE_Q8_1
+#endif
+
 // Dot product
 void ggml_vec_dot_q2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);

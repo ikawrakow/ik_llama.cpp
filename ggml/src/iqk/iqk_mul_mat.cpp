@@ -2482,7 +2482,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
 #endif
             if (!done) {
             if (from_float) {
-                from_float((const float *)this_q, work, q->ne[0] * q->ne[1]);
+                for (int ih = 0; ih < q->ne[1]; ++ih) from_float((const float *)(this_q + ih*q->nb[1]), work + ih*row_size_q, q->ne[0]);
                 this_q = work;
             }
             int n_step = (k->ne[1] + k_indexer_chunks - 1)/k_indexer_chunks;
@@ -2587,7 +2587,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
         auto quantized = (char *)work_buffer;
         if (ith < q->ne[2]) {
             auto this_q = q_data + ith*q->nb[2];
-            from_float((const float *)this_q, quantized + quantize_size*ith, q->ne[0] * q->ne[1]);
+            for (int ih = 0; ih < q->ne[1]; ++ih) from_float((const float *)(this_q + ih*q->nb[1]), quantized + quantize_size*ith + ih*row_size_q, q->ne[0]);
         }
         qnb2 = quantize_size;
         q_data = quantized;
