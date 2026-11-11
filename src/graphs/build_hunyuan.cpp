@@ -7,6 +7,8 @@ ggml_cgraph * llm_build_context::build_hunyuan_moe() {
 
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
 
+    const bool is_hy_v3 = model.arch == LLM_ARCH_HY_V3;
+
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
     GGML_ASSERT(n_embd_head == hparams.n_rot);
 
@@ -29,19 +31,33 @@ ggml_cgraph * llm_build_context::build_hunyuan_moe() {
                 inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr, KQ_mask,
                 nullptr, nullptr, kq_scale, 0.0f, 0, il, true, false, true);
 
-        cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
-                model.layers[il].ffn_gate_inp,  nullptr,
-                model.layers[il].ffn_up_exps,   nullptr,
-                model.layers[il].ffn_gate_exps, nullptr,
-                model.layers[il].ffn_down_exps, nullptr,
-                nullptr,
-                model.layers[il].ffn_up_shexp,    nullptr, // we don't have shared expert biases?
-                model.layers[il].ffn_gate_shexp,  nullptr,
-                model.layers[il].ffn_down_shexp,  nullptr,
-                n_expert, n_expert_used,
-                LLM_FFN_SILU, true, false, 0.0f,
-                LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
+        if (model.layers[il].ffn_gate_inp) {
+            cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                    model.layers[il].ffn_gate_inp,  nullptr,
+                    model.layers[il].ffn_up_exps,   nullptr,
+                    model.layers[il].ffn_gate_exps, nullptr,
+                    model.layers[il].ffn_down_exps, nullptr,
+                    is_hy_v3 ? model.layers[il].ffn_exp_probs_b : nullptr,
+                    model.layers[il].ffn_up_shexp,    nullptr, // we don't have shared expert biases?
+                    model.layers[il].ffn_gate_shexp,  nullptr,
+                    model.layers[il].ffn_down_shexp,  nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU,
+                    is_hy_v3 ? hparams.expert_weights_norm : true,
+                    is_hy_v3,
+                    is_hy_v3 ? hparams.expert_weights_scale : 0.0f,
+                    is_hy_v3 ? (llm_expert_gating_func_type) hparams.expert_gating_func
+                             : LLM_EXPERT_GATING_FUNC_SOFTMAX,
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
+        } else {
+            // dense FFN
+            cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                    model.layers[il].ffn_up,   nullptr, nullptr,
+                    model.layers[il].ffn_gate, nullptr, nullptr,
+                    model.layers[il].ffn_down, nullptr, nullptr,
+                    nullptr,
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
+        }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);

@@ -76,6 +76,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_ERNIE4_5,        "ernie4_5"     },
     { LLM_ARCH_ERNIE4_5_MOE,    "ernie4_5-moe" },
     { LLM_ARCH_HUNYUAN_MOE,     "hunyuan-moe"  },
+    { LLM_ARCH_HY_V3,           "hy_v3"        },
     { LLM_ARCH_OPENAI_MOE,      "gpt-oss"      },
     { LLM_ARCH_BAILINGMOE2,     "bailingmoe2"  },
     { LLM_ARCH_BAILINGMOE3,     "bailingmoe3"  },
