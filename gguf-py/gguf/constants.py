@@ -132,6 +132,8 @@ class Keys:
         INDEXER_HEAD_COUNT     = "{arch}.attention.indexer.head_count"
         INDEXER_KEY_LENGTH     = "{arch}.attention.indexer.key_length"
         INDEXER_TOP_K          = "{arch}.attention.indexer.top_k"
+        INDEXER_BLOCK_SIZE     = "{arch}.attention.indexer.block_size"
+        INDEXER_LOCAL_BLOCKS   = "{arch}.attention.indexer.local_blocks"
         VALUE_SCALE                  = "{arch}.attention.value_scale"
         OUTPUT_SCALE                 = "{arch}.attention.output_scale"
         TEMPERATURE_LENGTH           = "{arch}.attention.temperature_length"
@@ -258,6 +260,7 @@ class MODEL_ARCH(IntEnum):
     FLINT        = auto()
     MELLUM       = auto()
     RAON1        = auto()
+    XING4_0      = auto()
     PHI2         = auto()
     PHI3         = auto()
     PLAMO        = auto()
@@ -298,6 +301,7 @@ class MODEL_ARCH(IntEnum):
     ERNIE4_5_MOE = auto()
     BAILINGMOE2  = auto()
     MINIMAXM2    = auto()
+    MINIMAXM3    = auto()
     SMOLLM3      = auto()
     SEED_OSS     = auto()
     LAGUNA       = auto()
@@ -305,7 +309,9 @@ class MODEL_ARCH(IntEnum):
     STEP35       = auto()
     LFM2         = auto()
     LFM2MOE      = auto()
+    LFM3         = auto()
     MAPLE        = auto()
+    SPARK2_5     = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -431,6 +437,10 @@ class MODEL_TENSOR(IntEnum):
     INDEXER_PROJ         = auto()
     INDEXER_ATTN_K       = auto()
     INDEXER_ATTN_Q_B     = auto()
+    INDEXER_Q_PROJ       = auto()
+    INDEXER_Q_NORM       = auto()
+    INDEXER_K_PROJ       = auto()
+    INDEX_K_NORM         = auto()
     ENGRAM_EMBD          = auto()  # DeepSeek-V4.1 engram embedding table
     ENGRAM_K             = auto()  # DeepSeek-V4.1 engram key projection
     ENGRAM_Q             = auto()  # DeepSeek-V4.1 engram query projection
@@ -522,6 +532,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.FLINT:          "flint",
     MODEL_ARCH.MELLUM:         "mellum",
     MODEL_ARCH.RAON1:          "raon1",
+    MODEL_ARCH.XING4_0:        "xing4_0",
     MODEL_ARCH.PHI2:           "phi2",
     MODEL_ARCH.PHI3:           "phi3",
     MODEL_ARCH.PLAMO:          "plamo",
@@ -562,6 +573,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ERNIE4_5_MOE:   "ernie4_5-moe",
     MODEL_ARCH.BAILINGMOE2:    "bailingmoe2",
     MODEL_ARCH.MINIMAXM2:      "minimax-m2",
+    MODEL_ARCH.MINIMAXM3:      "minimax-m3",
     MODEL_ARCH.SMOLLM3:        "smollm3",
     MODEL_ARCH.SEED_OSS:       "seed_oss",
     MODEL_ARCH.LAGUNA:         "laguna",
@@ -569,7 +581,9 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.STEP35:         "step35",
     MODEL_ARCH.LFM2:           "lfm2",
     MODEL_ARCH.LFM2MOE:        "lfm2moe",
+    MODEL_ARCH.LFM3:           "lfm3",
     MODEL_ARCH.MAPLE:          "maple",
+    MODEL_ARCH.SPARK2_5:       "spark2_5",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -706,6 +720,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.INDEXER_PROJ:              "blk.{bid}.indexer.proj",
     MODEL_TENSOR.INDEXER_ATTN_K:            "blk.{bid}.indexer.attn_k",
     MODEL_TENSOR.INDEXER_ATTN_Q_B:          "blk.{bid}.indexer.attn_q_b",
+    MODEL_TENSOR.INDEXER_Q_PROJ:            "blk.{bid}.indexer.q_proj",
+    MODEL_TENSOR.INDEXER_Q_NORM:            "blk.{bid}.indexer.q_norm",
+    MODEL_TENSOR.INDEXER_K_PROJ:            "blk.{bid}.indexer.k_proj",
+    MODEL_TENSOR.INDEX_K_NORM:              "blk.{bid}.indexer.k_norm",
     MODEL_TENSOR.ENGRAM_EMBD:               "blk.{bid}.engram_embd",
     MODEL_TENSOR.ENGRAM_K:                  "blk.{bid}.engram_k",
     MODEL_TENSOR.ENGRAM_Q:                  "blk.{bid}.engram_q",
@@ -1373,6 +1391,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_UP_EXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
+    MODEL_ARCH.LFM3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.SHORTCONV_CONV,
+        MODEL_TENSOR.SHORTCONV_INPROJ,
+        MODEL_TENSOR.SHORTCONV_OUTPROJ,
+    ],
     MODEL_ARCH.MAPLE: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -1389,6 +1430,19 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.SPARK2_5: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
     ],
     MODEL_ARCH.MAMBA: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -1998,6 +2052,34 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
+    MODEL_ARCH.MINIMAXM3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.INDEXER_Q_PROJ,
+        MODEL_TENSOR.INDEXER_Q_NORM,
+        MODEL_TENSOR.INDEXER_K_PROJ,
+        MODEL_TENSOR.INDEX_K_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
     MODEL_ARCH.SMOLLM3: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -2138,6 +2220,38 @@ MODEL_TENSORS[MODEL_ARCH.RAON1] = [
     MODEL_TENSOR.FFN_UP_SHEXP,
 ]
 
+MODEL_TENSORS[MODEL_ARCH.XING4_0] = [
+    MODEL_TENSOR.TOKEN_EMBD,
+    MODEL_TENSOR.OUTPUT_NORM,
+    MODEL_TENSOR.OUTPUT,
+    MODEL_TENSOR.ATTN_NORM,
+    MODEL_TENSOR.ATTN_OUT,
+    MODEL_TENSOR.ATTN_Q_A,
+    MODEL_TENSOR.ATTN_Q_B,
+    MODEL_TENSOR.ATTN_KV_A_MQA,
+    MODEL_TENSOR.ATTN_K_B,
+    MODEL_TENSOR.ATTN_V_B,
+    MODEL_TENSOR.ATTN_Q_A_NORM,
+    MODEL_TENSOR.ATTN_KV_A_NORM,
+    MODEL_TENSOR.HC_ATTN_FN,
+    MODEL_TENSOR.HC_ATTN_BASE,
+    MODEL_TENSOR.HC_ATTN_SCALE,
+    MODEL_TENSOR.HC_FFN_FN,
+    MODEL_TENSOR.HC_FFN_BASE,
+    MODEL_TENSOR.HC_FFN_SCALE,
+    MODEL_TENSOR.FFN_NORM,
+    MODEL_TENSOR.FFN_GATE,
+    MODEL_TENSOR.FFN_DOWN,
+    MODEL_TENSOR.FFN_UP,
+    MODEL_TENSOR.FFN_GATE_INP,
+    MODEL_TENSOR.FFN_EXP_PROBS_B,
+    MODEL_TENSOR.FFN_GATE_EXP,
+    MODEL_TENSOR.FFN_DOWN_EXP,
+    MODEL_TENSOR.FFN_UP_EXP,
+    MODEL_TENSOR.FFN_GATE_SHEXP,
+    MODEL_TENSOR.FFN_DOWN_SHEXP,
+    MODEL_TENSOR.FFN_UP_SHEXP,
+]
 MODEL_TENSORS[MODEL_ARCH.DEEPSEEK41] = MODEL_TENSORS[MODEL_ARCH.DEEPSEEK4]
 
 # tensors that will not be serialized
@@ -2254,6 +2368,7 @@ class GGMLQuantizationType(IntEnum):
     Q4_0_8_8  =  33
     I2_S      =  36
     MXFP4     =  39
+    NVFP4     =  40
     Q8_0_X4   =  97
     Q8_1_X4   =  98
     Q8_2_X4   =  99
@@ -2270,6 +2385,13 @@ class GGMLQuantizationType(IntEnum):
     PTQ1_0    = 143
     PQ2_0_R8  = 160
     PTQ1_0_R8 = 161
+    TQK6      = 162
+    TQK7      = 163
+    TQ2_T     = 164
+    TQP5      = 165
+    TQP6      = 166
+    TQP7      = 167
+    NVFP4_KS  = 168
     IQ4_KS    = 144
     IQ2_KS    = 145
     IQ4_KSS   = 146
@@ -2364,6 +2486,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_Q4_0_4_8      = 34  #except 1d tensors
     MOSTLY_Q4_0_8_8      = 35  #except 1d tensors
     MOSTLY_MXFP4         = 38  #except 1d tensors, 38 to be compatible with mainline
+    MOSTLY_NVFP4         = 39
 
     MOSTLY_Q6_0          = 135 #except 1d tensors
     MOSTLY_IQ1_BN        = 136 #except 1d tensors
@@ -2387,6 +2510,13 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ1_KT        = 156 #except 1d tensors
     MOSTLY_PQ2_0         = 157 #except 1d tensors  (Prism ternary, group-128)
     MOSTLY_PTQ1_0        = 158 #except 1d tensors  (Prism ternary, base-3)
+    MOSTLY_TQK6          = 163 #except 1d tensors  (trellis, group-128)
+    MOSTLY_TQK7          = 164 #except 1d tensors  (trellis, group-128)
+    MOSTLY_TQ2_T         = 165 #except 1d tensors  (trellis, group-128)
+    MOSTLY_TQP5          = 166 #except 1d tensors  (trellis, group-128)
+    MOSTLY_TQP6          = 167 #except 1d tensors  (trellis, group-128)
+    MOSTLY_TQP7          = 168 #except 1d tensors  (trellis, group-128)
+    MOSTLY_NVFP4_KS      = 169
 
     MOSTLY_Q4_0_R8       = 202 #except 1d tensors
     MOSTLY_Q8_0_R8       = 207 #except 1d tensors
@@ -2495,6 +2625,8 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ1_M       : ( 256,   56),
     GGMLQuantizationType.BF16        : (   1,    2),
     GGMLQuantizationType.MXFP4       : (  32,   17),
+    GGMLQuantizationType.NVFP4       : (  64,   36),
+    GGMLQuantizationType.NVFP4_KS    : (  64,   36),
     GGMLQuantizationType.Q4_0_4_4    : (  32,   18),
     GGMLQuantizationType.Q4_0_4_8    : (  32,   18),
     GGMLQuantizationType.Q4_0_8_8    : (  32,   18),
@@ -2515,6 +2647,12 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.PTQ1_0      : ( 128,   28),
     GGMLQuantizationType.PQ2_0_R8    : ( 128,   34),
     GGMLQuantizationType.PTQ1_0_R8   : ( 128,   28),
+    GGMLQuantizationType.TQK6        : ( 128,   26),
+    GGMLQuantizationType.TQK7        : ( 128,   30),
+    GGMLQuantizationType.TQ2_T       : ( 128,   34),
+    GGMLQuantizationType.TQP5        : ( 128,   42),
+    GGMLQuantizationType.TQP6        : ( 128,   50),
+    GGMLQuantizationType.TQP7        : ( 128,   58),
     GGMLQuantizationType.IQ4_KS      : ( 256,  136),
     GGMLQuantizationType.IQ2_KS      : ( 256,   70),
     GGMLQuantizationType.IQ4_KSS     : ( 256,  128),
@@ -2574,6 +2712,7 @@ GGML_ROW_META_SIZES: dict[GGMLQuantizationType, int] = {
     GGMLQuantizationType.IQ2_KL      :  2,
     GGMLQuantizationType.IQ3_KS      :  2,
     GGMLQuantizationType.IQ4_KS      :  4,
+    GGMLQuantizationType.NVFP4_KS    :  4,
     GGMLQuantizationType.IQ4_KS_R4   :  4,
     GGMLQuantizationType.IQ4_KSS     :  4,
     GGMLQuantizationType.IQ5_KS      :  4,

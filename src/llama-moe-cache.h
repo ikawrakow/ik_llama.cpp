@@ -1,9 +1,11 @@
 #pragma once
 
 #include "ggml-backend.h"
+#include "llama.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -15,17 +17,30 @@ struct ggml_backend_buffer_type;
 
 class llama_moe_cache {
 public:
+    struct cpu_share_maps {
+        ggml_tensor * gpu = nullptr;
+        ggml_tensor * cpu = nullptr;
+        ggml_tensor * gpu_bias = nullptr;
+        ggml_tensor * cpu_bias = nullptr;
+    };
+
     llama_moe_cache(const llama_model & model,
             const std::vector<ggml_backend *> & backends,
             const std::vector<ggml_backend_buffer_type *> & bufts,
-            size_t size);
+            size_t size,
+            enum llama_moe_cache_policy policy,
+            float cpu_share);
     ~llama_moe_cache();
 
     ggml_backend * backend(int32_t il) const;
+    bool requires_token_geometry_maps() const;
     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const;
+    cpu_share_maps get_cpu_share_maps(int32_t il, int64_t n_tokens, int64_t n_expert_used) const;
+    void begin_compute();
     ggml_tensor * get_experts(const ggml_tensor * tensor) const;
     bool copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
             ggml_backend_sched_copy_phase phase);
+    std::map<ggml_backend_buffer_type *, size_t> memory_breakdown() const;
 
 private:
     struct impl;

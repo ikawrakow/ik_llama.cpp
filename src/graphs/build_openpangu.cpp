@@ -391,7 +391,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                 ggml_tensor * idx_mask = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens,
                                                       KQ_mask->nb[1], 0);
                 fused_sel_idx = ggml_indexer_topk(ctx0, k_all_idx, q_idx, w_idx, idx_mask, nullptr,
-                                                  GGML_UNARY_OP_RELU, (int) topk);    // [topk, T] i32
+                                                  GGML_UNARY_OP_RELU, (int) topk, 0, false, nullptr);    // [topk, T] i32
             }
             if (fused_sel_idx && supports_op(fused_sel_idx)) {
                 // One op computes sum_g w * relu(q.k) + causal mask -> top-k without
@@ -1161,7 +1161,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         }
         ggml_tensor * mixes = build_mhc_pre_projection(
                 Rin, phi, gamma, n_embd, S, hparams.f_norm_rms_eps, true); // [(S+2)*S, T]
-        ggml_tensor * all = ggml_hc_pre(ctx0, mixes, alpha, beta, (int) S, sink_iters, 0.0f);
+        ggml_tensor * all = ggml_hc_pre(ctx0, mixes, alpha, beta, (int) S, sink_iters, 0.0f, 0.0f);
         ggml_tensor * h_pre  = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), 0);
         ggml_tensor * h_post = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), S*n_tokens*sizeof(float));
         ggml_tensor * h_res  = ggml_view_3d(ctx0, all, S, S, n_tokens,

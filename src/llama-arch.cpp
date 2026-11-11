@@ -100,10 +100,14 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA4_ASSISTANT,"gemma4-assistant"   },
     { LLM_ARCH_OPENPANGU,       "openpangu"    },
     { LLM_ARCH_MUSE_GLIMMER,    "muse-glimmer" },
+    { LLM_ARCH_RICURSIVE,       "ricursive"    },
     { LLM_ARCH_LFM2,            "lfm2"         },
     { LLM_ARCH_LFM2MOE,         "lfm2moe"      },
+    { LLM_ARCH_LFM3,            "lfm3"         },
     { LLM_ARCH_MAPLE,           "maple"        },
+    { LLM_ARCH_SPARK2_5,        "spark2_5"     },
     { LLM_ARCH_RAON1,           "raon1"        },
+    { LLM_ARCH_XING4_0,         "xing4_0"      },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
@@ -183,6 +187,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SWIGLU_LIMITS_SHARED,              "%s.swiglu_limits_shared"              },
     { LLM_KV_SWIGLU_CLAMP_EXP,                  "%s.swiglu_clamp_exp"                  },
     { LLM_KV_SWIGLU_CLAMP_SHEXP,                "%s.swiglu_clamp_shexp"                },
+    { LLM_KV_SWIGLU_CLAMP,                      "%s.swiglu_clamp"                      },
     { LLM_KV_MTP_BACKBONE_EMBEDDING_LENGTH,     "%s.backbone_embedding_length"         },
     { LLM_KV_MTP_USE_ORDERED_EMBEDDINGS,        "%s.use_ordered_embeddings"            },
     { LLM_KV_MTP_CENTROID_COUNT,                "%s.centroid_count"                    },
@@ -225,6 +230,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,     "%s.attention.indexer.key_length"     },
     { LLM_KV_ATTENTION_INDEXER_TOP_K,          "%s.attention.indexer.top_k"          },
     { LLM_KV_ATTENTION_INDEXER_KPOOL,          "%s.attention.indexer.kpool"          },
+    { LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,     "%s.attention.indexer.block_size"     },
     { LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,     "%s.attention.output_group_count"     },
     { LLM_KV_ATTENTION_OUTPUT_LORA_RANK,       "%s.attention.output_lora_rank"       },
     { LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,"%s.attention.compress_rope_freq_base"},
@@ -390,6 +396,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_GLM5NEXT:
     case LLM_ARCH_LFM2:
     case LLM_ARCH_LFM2MOE:
+    case LLM_ARCH_LFM3:
     case LLM_ARCH_RAON1:
         return true;
     default:

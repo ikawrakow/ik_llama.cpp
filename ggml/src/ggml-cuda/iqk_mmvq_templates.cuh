@@ -75,7 +75,7 @@ static __device__ void iqk_mul_mat_vec_q_kernel(
             if constexpr (n_interleaved == 1) {
 #pragma unroll
                 for (int i = 0; i < rows_per_cuda_block; ++i) {
-                    vec_dot_q_cuda((const void *)((const char *)vx + (row0 + i)*row_size),
+                    vec_dot_q_cuda((const void *)((const char *)vx + min(row0 + i, nrows_x - 1)*row_size),
                             &y[j*blocks_per_col_y + kby], kbx, kqs, &tmp[j][i]);
                 }
             } else {
@@ -94,7 +94,7 @@ static __device__ void iqk_mul_mat_vec_q_kernel(
                 if constexpr (n_interleaved == 1) {
 #pragma unroll
                     for (int i = 0; i < rows_per_cuda_block; ++i) {
-                        vec_dot_tail((const void *)((const char *)vx + (row0 + i)*row_size),
+                        vec_dot_tail((const void *)((const char *)vx + min(row0 + i, nrows_x - 1)*row_size),
                                 &y[j*blocks_per_col_y + kby], kbx, kqs, nt, &tmp[j][i]);
                     }
                 } else {
@@ -596,6 +596,8 @@ static __device__ __forceinline__ int int_from_table(const uint8_t * a8, const u
 
 #define VDR_IQ4_KS_Q8_1_MMVQ 4
 
+#define VDR_NVFP4_KS_Q8_1_MMVQ 4
+
 static __device__ __forceinline__ int kt_dot4(uint32_t & val, int q8, int sumi) {
     constexpr uint32_t ka = 0xCBAC1FED;
     constexpr uint32_t km = 0x3f3f3f3f;
@@ -647,6 +649,7 @@ extern void mul_mat_vec_iq2_ks_q8_1_cuda(const mmvq_args & args, cudaStream_t st
 extern void mul_mat_vec_iq2_kl_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_iq3_ks_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_iq4_ks_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
+extern void mul_mat_vec_nvfp4_ks_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_iq5_ks_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_iq1_kt_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_iq2_kt_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);

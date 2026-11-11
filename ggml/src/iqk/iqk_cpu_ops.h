@@ -53,6 +53,8 @@ IQK_API bool iqk_kda(int32_t head_dim, int32_t n_heads, int32_t gqa_ratio, int32
         const float * state_in, float * out_data, float * state_out, float * saved_steps,
         int32_t state_step_stride, int32_t ith, int32_t nth);
 
+bool iqk_op_scale_unary_scale(struct ggml_tensor * dst, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif

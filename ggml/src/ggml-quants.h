@@ -101,6 +101,26 @@ void dequantize_row_iq4_xs (const block_iq4_xs  * GGML_RESTRICT x, float * GGML_
 void dequantize_row_iq3_s  (const block_iq3_s   * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void dequantize_row_iq1_bn (const block_iq1_bn  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 
+#if GGML_USE_IQK_MULMAT
+#ifdef __AVX2__
+#define GGML_Q8_0_VEC_DOT_TYPE GGML_TYPE_Q8_2_X4
+#else
+#define GGML_Q8_0_VEC_DOT_TYPE GGML_TYPE_Q8_0_X4
+#endif
+#else
+#define GGML_Q8_0_VEC_DOT_TYPE GGML_TYPE_Q8_0
+#endif
+
+#if GGML_USE_IQK_MULMAT
+#ifdef __AVX2__
+#define GGML_Q8_1_VEC_DOT_TYPE GGML_TYPE_Q8_2_X4
+#else
+#define GGML_Q8_1_VEC_DOT_TYPE GGML_TYPE_Q8_1_X4
+#endif
+#else
+#define GGML_Q8_1_VEC_DOT_TYPE GGML_TYPE_Q8_1
+#endif
+
 // Dot product
 void ggml_vec_dot_q2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
@@ -170,6 +190,22 @@ void ggml_gemv_ptq1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void
 void ggml_gemm_ptq1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemv_pq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_pq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
+
+// TQK6 / TQK7 (bit-packed trellis, group 128)
+void dequantize_row_tqk6(const block_tqk6 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void dequantize_row_tqk7(const block_tqk7 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void ggml_vec_dot_tqk6_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void ggml_vec_dot_tqk7_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
+// TQ2_T / TQP5-7 (trellis siblings of TQK6/7, group 128)
+void dequantize_row_tq2_t(const block_tq2_t * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void dequantize_row_tqp5(const block_tqp5 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void dequantize_row_tqp6(const block_tqp6 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void dequantize_row_tqp7(const block_tqp7 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void ggml_vec_dot_tq2_t_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void ggml_vec_dot_tqp5_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void ggml_vec_dot_tqp6_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void ggml_vec_dot_tqp7_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
 void iq2xs_init_impl(enum ggml_type type);
 void iq2xs_free_impl(enum ggml_type type);

@@ -5,21 +5,12 @@
 #include <algorithm>
 #include <vector>
 
-// build one LFM2 short-convolution block; the state holds the last l_cache - 1 input vectors
-static ggml_tensor * build_lfm2_shortconv(
-        llm_build_context & bctx,
-        ggml_cgraph *       gf,
-        ggml_tensor *       input,
-        ggml_tensor *       state_seq,
-        uint32_t            state_seq_id,
-        bool                reset_state,
-        int                 il) {
-    const auto & hparams = bctx.hparams;
-    auto &       lctx    = bctx.lctx;
-    auto &       layer   = bctx.model.layers[il];
+ggml_tensor * llm_build_context::build_lfm_shortconv(ggml_cgraph * gf, ggml_tensor * input,
+        ggml_tensor * state_seq, uint32_t state_seq_id, bool reset_state, int il) {
+    auto & layer = model.layers[il];
 
-    const int64_t n_tokens = input->ne[1];
-    const int64_t d_conv   = hparams.n_shortconv_l_cache;
+    const int64_t n_tokens  = input->ne[1];
+    const int64_t d_conv    = hparams.n_shortconv_l_cache;
     const int64_t state_dim = (d_conv - 1) * hparams.n_embd;
 
     GGML_ASSERT(d_conv > 1);
@@ -31,52 +22,46 @@ static ggml_tensor * build_lfm2_shortconv(
     GGML_ASSERT(lctx.kv_self.s_l[il] != nullptr);
     GGML_ASSERT(state_seq_id < (uint32_t) lctx.kv_self.s_l[il]->ne[1]);
 
-    // state row for this sequence; a reset is a graph op so it is ordered before SSM_CONV
-    auto state_all = ggml_reshape_2d(bctx.ctx0, lctx.kv_self.s_l[il], state_dim,
-            lctx.kv_self.s_l[il]->ne[1]);
-    auto state_dst = ggml_view_2d(bctx.ctx0, state_all, state_dim, 1,
+    auto state_all = ggml_reshape_2d(ctx0, lctx.kv_self.s_l[il], state_dim, lctx.kv_self.s_l[il]->ne[1]);
+    auto state_dst = ggml_view_2d(ctx0, state_all, state_dim, 1,
             state_all->nb[1], (size_t) state_seq_id * state_all->nb[1]);
     auto state_src = state_dst;
     if (reset_state) {
-        state_src = ggml_scale(bctx.ctx0, state_src, 0.0f);
-        bctx.cb(state_src, "state_reset", il);
+        state_src = ggml_scale(ctx0, state_src, 0.0f);
+        cb(state_src, "state_reset", il);
     }
 
-    auto conv_state = ggml_reshape_3d(bctx.ctx0, state_src, d_conv - 1, hparams.n_embd, 1);
+    auto conv_state = ggml_reshape_3d(ctx0, state_src, d_conv - 1, hparams.n_embd, 1);
 
-    // {n_embd, n_tokens} -> {3*n_embd, n_tokens}, split into B, C and X
-    auto bcx = llm_build_context::llm_build_lora_mm(lctx, bctx.ctx0, layer.ssm_in, input);
-    bctx.cb(bcx, "model.layers.{}.conv.in_proj", il);
+    auto bcx = llm_build_lora_mm(lctx, ctx0, layer.ssm_in, input);
+    cb(bcx, "model.layers.{}.conv.in_proj", il);
 
     const int64_t chunk = bcx->ne[0] / 3;
     GGML_ASSERT(chunk == hparams.n_embd && bcx->ne[0] % 3 == 0);
-    auto b = ggml_view_2d(bctx.ctx0, bcx, chunk, n_tokens, bcx->nb[1], 0);
-    auto c = ggml_view_2d(bctx.ctx0, bcx, chunk, n_tokens, bcx->nb[1],
+    auto b = ggml_view_2d(ctx0, bcx, chunk, n_tokens, bcx->nb[1], 0);
+    auto c = ggml_view_2d(ctx0, bcx, chunk, n_tokens, bcx->nb[1],
             (size_t) chunk * ggml_element_size(bcx));
-    auto x = ggml_view_2d(bctx.ctx0, bcx, chunk, n_tokens, bcx->nb[1],
+    auto x = ggml_view_2d(ctx0, bcx, chunk, n_tokens, bcx->nb[1],
             (size_t) 2 * chunk * ggml_element_size(bcx));
 
-    // the short-conv gate is elementwise, before the causal convolution
-    auto bx = ggml_mul(bctx.ctx0, b, x);
-    bctx.cb(bx, "model.layers.{}.conv.gated_input", il);
+    auto bx = ggml_mul(ctx0, b, x);
+    cb(bx, "model.layers.{}.conv.gated_input", il);
 
-    // SSM_CONV returns [convolved input | d_conv columns of the new state]
-    auto conv_raw = ggml_ssm_conv(bctx.ctx0, conv_state, bx, layer.ssm_conv1d, state_seq, nullptr);
-    bctx.cb(conv_raw, "model.layers.{}.conv.conv", il);
+    auto conv_raw = ggml_ssm_conv(ctx0, conv_state, bx, layer.ssm_conv1d, state_seq, nullptr);
+    cb(conv_raw, "model.layers.{}.conv.conv", il);
 
-    // persist columns 1..d_conv-1 of the new state (column 0 is the current input)
-    auto new_state = ggml_view_2d(bctx.ctx0, conv_raw, d_conv - 1, hparams.n_embd,
+    auto new_state = ggml_view_2d(ctx0, conv_raw, d_conv - 1, hparams.n_embd,
             d_conv * ggml_element_size(conv_raw),
             (size_t) (hparams.n_embd * n_tokens + 1) * ggml_element_size(conv_raw));
-    auto state_copy = ggml_cpy(bctx.ctx0, new_state, state_dst);
-    bctx.cb(state_copy, "shortconv_state_cpy", il);
+    auto state_copy = ggml_cpy(ctx0, new_state, state_dst);
+    cb(state_copy, "shortconv_state_cpy", il);
     ggml_build_forward_expand(gf, state_copy);
 
-    auto conv_out = ggml_view_2d(bctx.ctx0, conv_raw, hparams.n_embd, n_tokens,
+    auto conv_out = ggml_view_2d(ctx0, conv_raw, hparams.n_embd, n_tokens,
             hparams.n_embd * ggml_element_size(conv_raw), 0);
-    auto y = ggml_mul(bctx.ctx0, c, conv_out);
-    y = llm_build_context::llm_build_lora_mm(lctx, bctx.ctx0, layer.ssm_out, y);
-    bctx.cb(y, "model.layers.{}.conv.out_proj", il);
+    auto y = ggml_mul(ctx0, c, conv_out);
+    y = llm_build_lora_mm(lctx, ctx0, layer.ssm_out, y);
+    cb(y, "model.layers.{}.conv.out_proj", il);
 
     return y;
 }
@@ -115,6 +100,9 @@ ggml_cgraph * llm_build_context::build_lfm2() {
     const float KQ_scale = hparams.f_attention_scale == 0.0f
         ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
+    const bool all_same = std::all_of(seq_ids.begin() + 1, seq_ids.end(),
+            [&](llama_seq_id id) { return id == seq_ids.front(); });
+
     for (int il = 0; il < n_layer; ++il) {
         auto prev = inpL;
         ggml_tensor * op_out;
@@ -124,10 +112,8 @@ ggml_cgraph * llm_build_context::build_lfm2() {
         cb(norm, "operator_norm", il);
 
         if (hparams.is_recurrent(il)) {
-            const bool all_same = std::all_of(seq_ids.begin() + 1, seq_ids.end(),
-                    [&](llama_seq_id id) { return id == seq_ids.front(); });
             if (all_same) {
-                op_out = build_lfm2_shortconv(*this, gf, norm, lctx.inp_s_seq_qnext,
+                op_out = build_lfm_shortconv(gf, norm, lctx.inp_s_seq_qnext,
                         (uint32_t) seq_ids.front(), batch.pos != nullptr && batch.pos[0] == 0, il);
             } else {
                 // mixed sequences: one token at a time
@@ -137,7 +123,7 @@ ggml_cgraph * llm_build_context::build_lfm2() {
                             (size_t) i * norm->nb[1]);
                     auto seq_i = ggml_view_2d(ctx0, lctx.inp_s_seq_qnext, 1, 1,
                             lctx.inp_s_seq_qnext->nb[1], (size_t) i * lctx.inp_s_seq_qnext->nb[1]);
-                    auto out_i = build_lfm2_shortconv(*this, gf, norm_i, seq_i,
+                    auto out_i = build_lfm_shortconv(gf, norm_i, seq_i,
                             (uint32_t) seq_ids[i], batch.pos != nullptr && batch.pos[i] == 0, il);
                     op_out = op_out == nullptr ? out_i : ggml_concat(ctx0, op_out, out_i, 1);
                 }

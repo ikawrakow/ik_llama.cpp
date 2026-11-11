@@ -435,6 +435,25 @@ void mtmd_free(mtmd_context * ctx) {
     delete ctx;
 }
 
+int32_t mtmd_get_memory_usage(const mtmd_context * ctx, struct llama_memory_buft * usage, int32_t n_max) {
+    int32_t n = 0;
+    const clip_ctx * clips[2] = { ctx->ctx_v, ctx->ctx_a };
+    for (int i = 0; i < 2; ++i) {
+        if (!clips[i]) {
+            continue;
+        }
+        const std::vector<std::pair<ggml_backend_buffer_type_t, size_t>> clip_usage = clip_get_mem_usage(clips[i]);
+        for (size_t j = 0; j < clip_usage.size(); ++j) {
+            if (n < n_max) {
+                usage[n].buft = clip_usage[j].first;
+                usage[n].size = clip_usage[j].second;
+            }
+            n++;
+        }
+    }
+    return n;
+}
+
 struct mtmd_tokenizer {
     mtmd_context * ctx;
     std::vector<const mtmd_bitmap *> bitmaps;
@@ -1138,7 +1157,8 @@ const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
 
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
     if (image_tokens->use_mrope_pos) {
-        return 1; // for M-RoPE, the whole image is 1 in temporal dimension
+        // next text pos after an M-RoPE image
+        return std::max(image_tokens->nx, image_tokens->ny);
     }
     return image_tokens->n_tokens();
 }

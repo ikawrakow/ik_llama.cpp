@@ -58,7 +58,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"suffix",        COMMON_SPECULATIVE_TYPE_SUFFIX}
 };
 
-const llama_ckpt_data spec_ckpt = { LLAMA_CHECKPOINT_SPEC, 0 };
+const llama_ckpt_data spec_ckpt = { LLAMA_CHECKPOINT_SPEC, 0, 0 };
 
 bool common_speculative_needs_checkpoint(const llama_model * model) {
     return model != nullptr &&
@@ -1287,6 +1287,15 @@ done:
     return res;
 }
 
+bool common_speculative_needs_all_target_hidden(const common_speculative * spec) {
+    const auto * mtp_state = common_speculative_get_mtp_state(spec);
+    // gemma4-assistant: stateless, only the last target hidden row is needed
+    if (mtp_state != nullptr && mtp_state->constant_draft_positions) {
+        return false;
+    }
+    return true;
+}
+
 // initialization of the speculative decoding system
 //
 common_speculative * common_speculative_init(
@@ -2015,6 +2024,14 @@ static bool common_speculative_parse_params(const std::string & args, gpt_params
     return ok;
 }
 
+void common_speculative_reset_draft_offload_defaults(gpt_params & params) {
+    params.ncmoe = 0;
+    params.tensor_buft_overrides.clear();
+    params.offload_policy.clear();
+    params.moe_cache_size = 0;
+    params.ngram_file.clear();
+}
+
 // apply -td/--threads-draft to a draft params copy
 void common_speculative_apply_draft_threads(const common_params_speculative & spec, gpt_params & out) {
     if (spec.n_threads > 0) {
@@ -2068,6 +2085,7 @@ bool common_speculative_load_draft_model(
     params.cpu_affinity_configured = false;
 
     gpt_params params_dft = params_base;
+    common_speculative_reset_draft_offload_defaults(params_dft);
     params_dft.cpu_affinity.clear();
     params_dft.cpu_affinity_auto = false;
     params_dft.cpu_affinity_configured = false;
@@ -2081,14 +2099,7 @@ bool common_speculative_load_draft_model(
     params_dft.cache_type_v     = params.cache_type_v.empty() ? params_base.cache_type_v : params.cache_type_v;
 
 
-    // We likely don't want to inherit offload policy for MTP
-    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
-        params_dft.ncmoe = 0;
-        params_dft.tensor_buft_overrides.clear();
-        params_dft.offload_policy.clear();
-        LOG_INF("%s: MTP draft ignores target CPU-MoE/tensor placement overrides\n",
-                __func__);
-    }
+    LOG_INF("%s: draft uses isolated CPU-MoE/tensor/offload defaults\n", __func__);
 
     if (!params.params.empty()) {
         while (!params_dft.kv_overrides.empty() && params_dft.kv_overrides.back().key[0] == 0) {
@@ -2248,6 +2259,7 @@ bool common_speculative_prepare_startup(
     params.cpu_affinity_configured = false;
     if (!params.has_dft() && !params.params.empty()) {
         gpt_params params_dft = params_base;
+        common_speculative_reset_draft_offload_defaults(params_dft);
         params_dft.cpu_affinity.clear();
         params_dft.cpu_affinity_auto = false;
         params_dft.cpu_affinity_configured = false;
@@ -3122,6 +3134,28 @@ llama_context * common_speculative_get_companion_ctx(common_speculative * spec) 
     }
 
     return nullptr;
+}
+
+std::vector<const llama_context *> common_speculative_get_draft_contexts(const common_speculative * spec) {
+    std::vector<const llama_context *> result;
+    if (spec == nullptr) {
+        return result;
+    }
+
+    for (const auto & impl : spec->impls) {
+        const llama_context * ctx = nullptr;
+        if (const auto * state = dynamic_cast<const common_speculative_state_draft *>(impl.get())) {
+            ctx = state->ctx_dft;
+        } else if (const auto * state = dynamic_cast<const common_speculative_state_mtp *>(impl.get())) {
+            ctx = state->ctx_mtp;
+        } else if (const auto * state = dynamic_cast<const common_speculative_state_dflash *>(impl.get())) {
+            ctx = state->ctx_dft;
+        }
+        if (ctx != nullptr) {
+            result.push_back(ctx);
+        }
+    }
+    return result;
 }
 
 static int32_t mtp_accept_batch(

@@ -74,6 +74,7 @@ add_library(llama
             # graphs
             graphs/build_llama.cpp
             graphs/build_muse_glimmer.cpp
+            graphs/build_ricursive.cpp
             graphs/build_mistral3.cpp
             graphs/build_deci.cpp
             graphs/build_baichuan.cpp
@@ -99,6 +100,7 @@ add_library(llama
             graphs/build_maple.cpp
             graphs/build_qwen3next.cpp
             graphs/build_lfm2.cpp
+            graphs/build_lfm3.cpp
             graphs/build_qwen4exp.cpp
             graphs/build_qwen35.cpp
             graphs/build_phi2.cpp
@@ -140,9 +142,11 @@ add_library(llama
             graphs/build_bailingmoe3.cpp
             graphs/build_glm5next.cpp
             graphs/build_raon1.cpp
+            graphs/build_xing4.cpp
             graphs/build_minimaxm2.cpp
             graphs/build_minimaxm3.cpp
             graphs/build_smollm3.cpp
+            graphs/build_spark2_5.cpp
             )
 
 target_include_directories(llama PUBLIC . ../include)

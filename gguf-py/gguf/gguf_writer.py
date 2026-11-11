@@ -818,6 +818,12 @@ class GGUFWriter:
     def add_attention_indexer_top_k(self, top_k: int) -> None:
         self.add_uint32(Keys.Attention.INDEXER_TOP_K.format(arch=self.arch), top_k)
 
+    def add_attention_indexer_block_size(self, size: int) -> None:
+        self.add_uint32(Keys.Attention.INDEXER_BLOCK_SIZE.format(arch=self.arch), size)
+
+    def add_attention_indexer_local_blocks(self, blocks: int) -> None:
+        self.add_uint32(Keys.Attention.INDEXER_LOCAL_BLOCKS.format(arch=self.arch), blocks)
+
     def add_swin_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SWIN_NORM.format(arch=self.arch), value)
 
@@ -905,6 +911,9 @@ class GGUFWriter:
     def add_rope_dimension_count(self, count: int) -> None:
         self.add_uint32(Keys.Rope.DIMENSION_COUNT.format(arch=self.arch), count)
 
+    def add_rope_dimension_count_swa(self, count: int) -> None:
+        self.add_uint32(Keys.Rope.DIMENSION_COUNT_SWA.format(arch=self.arch), count)
+
     def add_rope_dimension_sections(self, dims: Sequence[int]) -> None:
         self.add_array(Keys.Rope.DIMENSION_SECTIONS.format(arch=self.arch), dims)
 
@@ -982,6 +991,9 @@ class GGUFWriter:
 
     def add_hyper_connection_epsilon(self, value: float) -> None:
         self.add_float32(f"{self.arch}.hyper_connection.epsilon", value)
+
+    def add_hyper_connection_sinkhorn_iterations(self, value: int) -> None:
+        self.add_uint32(f"{self.arch}.hyper_connection.sinkhorn_iterations", value)
 
     def add_hyper_connection_magnitude(self, value: float) -> None:
         self.add_float32(f"{self.arch}.hyper_connection.magnitude", value)

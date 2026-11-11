@@ -236,6 +236,7 @@ server:
          --log-format {text,json}
                                   log output format: json or text (default: json)
          --metrics                enable prometheus compatible metrics endpoint (default: disabled)
+         --memory                 enable the /memory endpoint reporting per-device memory use (default: disabled)
          --no-slots               disables slots monitoring endpoint (default: enabled)
          --slot-save-path PATH    path to save slot kv cache (default: disabled)
          --chat-template JINJA_TEMPLATE
@@ -278,6 +279,7 @@ Available environment variables (if specified, these variables will override par
 - `LLAMA_ARG_CHAT_TEMPLATE`: equivalent to `--chat-template`
 - `LLAMA_ARG_N_PREDICT`: equivalent to `-n`
 - `LLAMA_ARG_ENDPOINT_METRICS`: if set to `1`, it will enable metrics endpoint (equivalent to `--metrics`)
+- `LLAMA_ARG_ENDPOINT_MEMORY`: if set to `1`, it will enable the memory endpoint (equivalent to `--memory`)
 - `LLAMA_ARG_ENDPOINT_SLOTS`: if set to `0`, it will **disable** slots endpoint (equivalent to `--no-slots`). This feature is enabled by default.
 - `LLAMA_ARG_EMBEDDINGS`: if set to `1`, it will enable embeddings endpoint (equivalent to `--embeddings`)
 - `LLAMA_ARG_FLASH_ATTN`: if set to `1`, it will enable flash attention (equivalent to `-fa`)
@@ -976,6 +978,35 @@ Available metrics:
 - `llamacpp:kv_cache_tokens`: KV-cache tokens.
 - `llamacpp:requests_processing`: Number of requests processing.
 - `llamacpp:requests_deferred`: Number of requests deferred.
+- `llamacpp:memory_model_bytes`, `llamacpp:memory_context_bytes`, `llamacpp:memory_compute_bytes`: Memory the model weights, the KV cache and the compute buffers use, in bytes.
+- `llamacpp:memory_mmproj_bytes`: Memory the multimodal projector uses, in bytes. Present only with `--mmproj`.
+- `llamacpp:memory_total_bytes`, `llamacpp:memory_free_bytes`: Total and free memory of the device, in bytes. Present on devices only.
+
+The `memory_*` metrics carry a `device` label and report the same figures as `GET /memory`. They do not need `--memory`.
+
+### GET `/memory`: Get the memory use of each device as JSON if `--memory` is enabled:
+
+The server sums the size of the buffers that hold the model weights, the KV cache, the compute buffers and the multimodal projector. It groups the sizes by device.
+
+**Response format**
+
+```json
+{
+  "n_layer": 32,
+  "data": [
+    {"name": "CUDA0", "model": 4370000000, "context": 268435456, "compute": 301989888, "total": 25386352640, "free": 20123456512},
+    {"name": "Host", "model": 281018368, "context": 0, "compute": 16777216}
+  ]
+}
+```
+
+- All values are bytes. `model` is the weights, `context` is the KV cache, and `compute` is the compute buffers.
+- The array holds one row for each device the model can use, then a `Host` row, then one row for each other buffer type in use, such as `CUDA_Split`. The `name` of a device row is the name of its buffer type.
+- `total` and `free` describe the whole device, not this process. A row has them only when it is a device.
+- With `--mmproj`, each row also has `mmproj`, the memory of the multimodal projector.
+- With speculative decoding, the rows also count the draft model and the context of each slot's draft, MTP or DFlash stage. A speculative checkpoint counts when it is in a backend buffer. A checkpoint that the CPU checkpoint mode keeps in host memory does not count.
+- On a build without a device backend, the only row is `Host`.
+- Without `--memory`, the endpoint answers with an error and status 501.
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 

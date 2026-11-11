@@ -405,11 +405,16 @@ common_prefix find_common_text_token_prefix(const llama_context* ctx, const llam
     std::vector<size_t> b_list;
 
     if (exact) {
-        size_t lcp = common_part(a_str, b_str);
+        // Piece concatenation keeps the leading space that common_detokenize() strips.
+        std::string a_exact;
+        std::string b_exact;
+        for (auto t : a_sub) a_exact += common_token_to_piece(ctx, t, true);
+        for (auto t : b_sub) b_exact += common_token_to_piece(ctx, t, true);
+        const size_t lcp = common_part(a_exact, b_exact);
         string_prefix.first = lcp;
         string_prefix.second = lcp;
-        token_prefix.first = find_n_tokens_from_string(ctx, a_sub, string_prefix.first, 0, a_list);
-        token_prefix.second = find_n_tokens_from_string(ctx, b_sub, string_prefix.second, 0, b_list);
+        find_n_tokens_from_string(ctx, a_sub, string_prefix.first, 0, a_list);
+        find_n_tokens_from_string(ctx, b_sub, string_prefix.second, 0, b_list);
     }
     else {
         string_prefix = find_common_string_prefix(a_str, b_str, ignore_set);
@@ -767,7 +772,7 @@ json oaicompat_chat_params_parse(
                 }
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = get_media_marker();
                 p.erase("image_url");
 
             }
@@ -787,7 +792,7 @@ json oaicompat_chat_params_parse(
                 out_files.push_back(decoded_data);
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = get_media_marker();
                 p.erase("input_audio");
 
             }

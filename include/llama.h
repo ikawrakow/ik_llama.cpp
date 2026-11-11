@@ -192,6 +192,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q4_0_4_8      = 34, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q4_0_8_8      = 35, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_MXFP4         = 38, // except 1d tensors, 38 to be compatible with mainline
+        LLAMA_FTYPE_MOSTLY_NVFP4         = 39,
         LLAMA_FTYPE_MOSTLY_Q1_0_G128     = 41, // except 1d tensors, 38 to be compatible with mainline
         //
         LLAMA_FTYPE_MOSTLY_Q6_0          = 135, // except 1d tensors
@@ -220,6 +221,13 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q1_0_G128_R8  = 160, // except 1d tensors, 38 to be compatible with mainline
         LLAMA_FTYPE_MOSTLY_PQ2_0_R8      = 161, // except 1d tensors (Prism ternary, group-128)
         LLAMA_FTYPE_MOSTLY_PTQ1_0_R8     = 162, // except 1d tensors (Prism ternary, base-3)
+        LLAMA_FTYPE_MOSTLY_TQK6          = 163, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_TQK7          = 164, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_TQ2_T         = 165, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_TQP5          = 166, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_TQP6          = 167, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_TQP7          = 168, // except 1d tensors (trellis, group-128)
+        LLAMA_FTYPE_MOSTLY_NVFP4_KS      = 169,
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q5_0_R4       = 208, // except 1d tensors
@@ -250,6 +258,8 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ5_KS_R16    = 348, // except 1d tensors (16-row interleaved iq3ks-class codebook 3-bit)
         LLAMA_FTYPE_MOSTLY_IQ5_KS_R4     = 350, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_MXFP4_R8      = 351, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q2_0_R8       = 352, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q8_K_R16      = 397, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_KV_R8      = 398, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_K_R8       = 399, // except 1d tensors
 
@@ -306,7 +316,8 @@ extern "C" {
 
     typedef struct llama_ckpt_data {
         enum llama_ckpt_type type;
-        llama_pos pos;
+        llama_pos pos1;
+        llama_pos pos2;
     } llama_ckpt_data;
 
     typedef struct llama_token_data {
@@ -379,6 +390,12 @@ extern "C" {
         ggml_backend_buffer_type_t buft;
     };
 
+    enum llama_nvfp4_precision {
+        LLAMA_NVFP4_PRECISION_AUTO = 0,
+        LLAMA_NVFP4_PRECISION_W4A4 = 1,
+        LLAMA_NVFP4_PRECISION_INT8 = 2,
+    };
+
     struct llama_model_params {
         // comma separated list of devices to use for offloading
         const char* devices;
@@ -437,6 +454,10 @@ extern "C" {
 
         const struct llama_model_tensor_buft_override * tensor_buft_overrides;
 
+        // separate GGUF with the n-gram tables (per-layer token embedding, Engram), NULL if none
+        const char * ngram_file;
+        enum llama_nvfp4_precision nvfp4_precision;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights
         bool use_mmap;      // use mmap if possible
@@ -448,11 +469,17 @@ extern "C" {
         bool merge_qkv;     // if true, merge separate Q, K, V tensors into a single, contiguous tensor
         bool merge_up_gate_exps;  // if true, merge ffn_up_exps and ffn_gate_exps tensors into a single, contiguous tensor
         bool mtp;           // if true, load MTP layers if present
+        bool dsa;           // if true, load the MiniMax-M3 sparse attention indexer if present
         bool dry_run;       // skip loading tensors
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
         bool defer_ple;        // keep sparse tables (PLE, engram) on the file instead of resident in memory (Linux and Windows only)
         bool swa_compress;     // must match llama_context_params::swa_compress; the fit also assumes that context's n_ubatch
+    };
+
+    enum llama_moe_cache_policy {
+        LLAMA_MOE_CACHE_POLICY_LRU = 0,
+        LLAMA_MOE_CACHE_POLICY_CLASSLRU = 1,
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -488,6 +515,8 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
         size_t moe_cache_size; // total device-cache budget for host-resident MoE experts, split across GPUs [EXPERIMENTAL]
+        enum llama_moe_cache_policy moe_cache_policy; // replacement policy for the MoE cache
+        float moe_cache_cpu_share; // fixed fraction of unique cache misses assigned to CPU [EXPERIMENTAL]
         enum ggml_type idx_type_k; // data type for indexer K cache [EXPERIMENTAL]
         enum ggml_type type_reduce; // data type for reduce operations
         enum ggml_type type_graph_attn; // flash-attn precision under -sm graph
@@ -574,6 +603,7 @@ extern "C" {
         bool only_repack;                    // Only repack tensors
         bool dry_run;                        //
         bool partial_requant;                // quantize only missing split files in the split quantized .gguf destination directory
+        bool estimate_imatrix;               // If true, use an estimated imatrix, possibly combining with the input imatrix
         size_t slab_size;                    // tensors larger than this many bytes of f32 are processed in slabs of up to this size (at least one slice or row group), 0 = never
         bool cuda_quantize;                  // quantize IQ4_KT, IQ3_KT, IQ2_KT, IQ1_KT, IQ3_KS, IQ4_KS, IQ4_KS_R4, IQ4_KS_R16, IQ5_KS, and IQ5_KS_R4 on a CUDA device
         int  cuda_quantize_device;           // CUDA device index used by --cuda-quantize (default 0)
@@ -711,6 +741,34 @@ extern "C" {
 
     // Returns the total size of all the tensors in the model in bytes
     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
+
+    struct llama_memory_buft {
+        ggml_backend_buffer_type_t buft;
+        size_t                     size;
+    };
+
+    struct llama_memory_row {
+        char   name[96];
+        bool   is_device;
+        size_t model;
+        size_t context;
+        size_t compute;
+        size_t mmproj;
+        size_t total;
+        size_t free;
+    };
+
+    // Fills one row per offload device, then the host, then one row per other buffer type in use.
+    // Sums the memory of all contexts in ctxs, such as a target and its draft contexts.
+    // A context listed twice, or weights that several contexts share, are counted once.
+    // Returns the number of rows, which can be larger than n_rows.
+    LLAMA_API int32_t llama_memory_breakdown(
+            const struct llama_context * const * ctxs,
+                                   int32_t   n_ctxs,
+            const struct llama_memory_buft * mmproj,
+                                   int32_t   n_mmproj,
+                  struct llama_memory_row * rows,
+                                   int32_t   n_rows);
 
     // Returns the total number of parameters in the model
     LLAMA_API uint64_t llama_model_n_params(const struct llama_model * model);
@@ -916,6 +974,8 @@ extern "C" {
     LLAMA_API bool llama_rewind_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id);
 
     LLAMA_API bool llama_rewind_ckpt_release(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id);
+
+    LLAMA_API llama_pos llama_rewind_ckpt_pos(struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id);
 
 
     // Restore the recurrent state after speculative decode.
@@ -1704,6 +1764,11 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
     LLAMA_API bool llama_reload_changed_tensors(struct llama_context * ctx);
+
+    LLAMA_API uint32_t llama_compute_analytical_imatrix(
+            const char * fname_inp,
+            const char * fname_out,
+            const llama_model_quantize_params * params);
 
 #ifdef __cplusplus
 }

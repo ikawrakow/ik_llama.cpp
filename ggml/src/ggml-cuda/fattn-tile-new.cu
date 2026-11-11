@@ -10,7 +10,7 @@
 #include "fattn-common.cuh"
 #include "fattn-tile-f32.cuh"
 
-// Only the fp32 path and head size 512 are ported. On sm_60 the fp16 path moved Gemma-4 PPL by 5% at n_ctx 8192.
+// Only the fp32 path and head sizes 128 and 512 are ported. On sm_60 the fp16 path moved Gemma-4 PPL by 5% at n_ctx 8192.
 // K and V pass through shared memory nbatch_K columns at a time and only the Q tile grows with the head size,
 // so 16 columns of head size 512 fit into 48 kiB.
 
@@ -29,6 +29,9 @@
     }                                                                                                 \
 
 static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config(const int DKQ, const int DV, const int ncols) {
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128,  4, 128, 3,  32, 128)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128,  8, 128, 3,  64, 128)
+
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(512, 512,  4, 128, 2,  32,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(512, 512,  8, 256, 2,  32,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(512, 512, 16, 256, 2,  32,  64)
@@ -827,6 +830,14 @@ void ggml_cuda_flash_attn_ext_tile_new(ggml_backend_cuda_context & ctx, ggml_ten
 
     constexpr bool use_logit_softcap = false;
     const int gqa_ratio = Q->ne[2] / K->ne[2];
+    if (K->ne[0] == 128) {
+        if (gqa_ratio % 8 == 0) {
+            launch_fattn_tile_new<128, 128, 1, 8, use_logit_softcap>(ctx, dst);
+        } else {
+            launch_fattn_tile_new<128, 128, 1, 4, use_logit_softcap>(ctx, dst);
+        }
+        return;
+    }
     if (gqa_ratio % 8 == 0) {
         launch_fattn_tile_new_switch_ncols1<512, 512, 8, use_logit_softcap>(ctx, dst);
     } else {
@@ -847,8 +858,8 @@ bool ggml_cuda_fattn_tile_new_is_supported(ggml_backend_cuda_context & ctx, cons
     memcpy(&max_bias,      (const float *) dst->op_params + 1, sizeof(float));
     memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
 
-    // Only the variants that pack 4 or 8 Q heads per K/V head are compiled. Everything else stays on the CPU.
-    if (K->ne[0] != 512 || V->ne[0] != 512 || !mask || sinks || max_bias != 0.0f || logit_softcap != 0.0f) {
+    // Only the variants that pack 4 or 8 Q heads per K/V head are compiled.
+    if ((K->ne[0] != 128 && K->ne[0] != 512) || V->ne[0] != K->ne[0] || !mask || sinks || max_bias != 0.0f || logit_softcap != 0.0f) {
         return false;
     }
     if (K->ne[1] % FATTN_KQ_STRIDE != 0 || Q->ne[3] != 1 || Q->ne[2] % K->ne[2] != 0 || (Q->ne[2] / K->ne[2]) % 4 != 0) {

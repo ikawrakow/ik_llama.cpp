@@ -512,7 +512,8 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
             cb(indexer_score, "dsa_indexer_score_sink", il);
             ggml_build_forward_expand(gf, indexer_score);
         }
-        auto topk = ggml_indexer_topk(ctx0, indexer_k_b, indexer_q, indexer_weights, indexer_score, nullptr, GGML_UNARY_OP_RELU, n_top_k);
+        auto topk = ggml_indexer_topk(ctx0, indexer_k_b, indexer_q, indexer_weights, indexer_score, nullptr,
+                GGML_UNARY_OP_RELU, n_top_k, 0, false, nullptr);
         if (supports_op(topk)) {
             ggml_build_forward_expand(gf, topk);
             return topk;
@@ -745,8 +746,10 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
         bool use_f32_attn_precision,
         bool is_lite,
         bool pp_opt) {
+    const uint32_t n_embd_head_k       = hparams.n_embd_head_k_mla_impl ? hparams.n_embd_head_k_mla() : hparams.n_embd_head_k(0);
+    const uint32_t n_embd_head_v       = hparams.n_embd_head_v_mla_impl ? hparams.n_embd_head_v_mla() : hparams.n_embd_head_v(0);
     const uint32_t n_embd_head_qk_rope = hparams.n_rot;
-    const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k(0) - hparams.n_rot;
+    const uint32_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
     const uint32_t kv_lora_rank = hparams.n_lora_kv;
     const uint32_t q_lora_rank  = hparams.n_lora_q;
     ggml_tensor * cur;
@@ -794,9 +797,9 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                 qnb1 = mqa->nb[1];
             }
             q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-                ggml_row_size(q->type, hparams.n_embd_head_k(il)), qnb1, 0);
+                ggml_row_size(q->type, n_embd_head_k), qnb1, 0);
             q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-                ggml_row_size(q->type, hparams.n_embd_head_k(il)), qnb1, ggml_row_size(q->type, n_embd_head_qk_nope));
+                ggml_row_size(q->type, n_embd_head_k), qnb1, ggml_row_size(q->type, n_embd_head_qk_nope));
             k_rope = ggml_view_3d(ctx0, kv_rope_compressed, n_embd_head_qk_rope, 1, n_tokens,
                     mqa->nb[1], mqa->nb[1], ggml_row_size(kv_rope_compressed->type, kv_lora_rank));
             kv_compressed = ggml_view_2d(ctx0, kv_rope_compressed, kv_lora_rank, n_tokens, mqa->nb[1], 0);
@@ -861,12 +864,12 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
             }
 
             q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il)),
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il) * n_head), 0);
+                    ggml_row_size(q->type, n_embd_head_k),
+                    ggml_row_size(q->type, n_embd_head_k * n_head), 0);
 
             q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il)),
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il) * n_head),
+                    ggml_row_size(q->type, n_embd_head_k),
+                    ggml_row_size(q->type, n_embd_head_k * n_head),
                     ggml_row_size(q->type, n_embd_head_qk_nope));
 
             k_rope = ggml_view_3d(ctx0, kv_rope_compressed, n_embd_head_qk_rope, 1, n_tokens,
@@ -947,107 +950,28 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
             ggml_tensor * kqv;
 
             if (lctx.cparams.mla_attn > 1 && lctx.cparams.flash_attn && pp_opt) { // PP for mla=2,3
-
-                auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank, n_kv, kv_self.k_l[il]->nb[1],
-                        ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
-
-                auto kv_f32_size = model.layers[il].wkv_b->ne[1] * kv_cache_nope->ne[1] * sizeof(float) / (1024*1024);
-                int n_max_head = n_head;
-                if (cparams.attn_max_batch > 0 && kv_f32_size > cparams.attn_max_batch) {
-                    n_max_head = 1;
-                    for (int niter = 2; niter < n_head; ++niter) {
-                        if (n_head % niter == 0 && kv_f32_size/niter <= cparams.attn_max_batch) {
-                            n_max_head = n_head/niter;
-                            break;
-                        }
-                    }
-                }
-                GGML_ASSERT(n_head % n_max_head == 0);
-
-                auto n_per_head = model.layers[il].wkv_b->ne[1] / n_head;
-
-                auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.k_l[il], n_embd_head_qk_rope, n_kv, 1,
-                        kv_self.k_l[il]->nb[1], kv_self.k_l[il]->nb[2], 0); //ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank));
-
-                // There is still an issue with one or more of the ops GGML_OP_REPEAT, GGML_OP_CONCAT, GGML_OP_CPY on CUDA when
-                // the KV cache is quantized. Hence, in that case we will simply use fp16 for now.
-                // The downside of the following line is that fp16 will be used even if attention is computed on the CPU
-                // if the build is with CUDA enabled.
-                auto kv_type = lctx.backends.size() == 1 && lctx.backends.front() == lctx.backend_cpu ? kv_self.k_l[il]->type : GGML_TYPE_F16;
-
-                ggml_tensor repeater;
-                repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_kv; repeater.ne[2] = n_max_head; repeater.ne[3] = 1;
-                ggml_tensor * k_rope;
-                if (kv_cache_rope->type == kv_type) {
-                    k_rope = ggml_repeat(ctx0, kv_cache_rope, &repeater);
-                } else {
-                    auto kv_cache_rope_f16 = ggml_cast(ctx0, kv_cache_rope, GGML_TYPE_F16);
-                    k_rope = ggml_repeat(ctx0, kv_cache_rope_f16, &repeater);
-                }
-                cb(k_rope, "k_rope", il);
-
-                //auto q = ggml_concat(ctx0, q_nope, q_rope, 0);
                 auto q = ggml_concat(ctx0, q_rope, q_nope, 0);
                 q = ggml_permute(ctx0, q, 0, 2, 1, 3);
                 cb(q, "q_concat", il);
-
                 ggml_build_forward_expand(gf, q);
 
-                for (int iter = 0; iter < n_head/n_max_head; ++iter) {
+                mla_pp_params p;
+                p.gf = gf;
+                p.il = il;
+                p.q = q;
+                p.cache = kv_self.k_l[il];
+                p.wkv_b = model.layers[il].wkv_b;
+                p.mask = sparse_mask_fa;
+                p.dsa_last_full_sorted = use_dsa ? dsa_last_full_sorted : nullptr;
+                p.n_head = n_head;
+                p.n_embd_head_k = n_embd_head_qk_nope + n_embd_head_qk_rope;
+                p.n_embd_head_v = n_embd_head_v;
+                p.n_extra = n_embd_head_qk_rope;
+                p.kv_lora_rank = kv_lora_rank;
+                p.kq_scale = kq_scale;
+                p.force_flash_f32 = use_f32_attn_precision;
 
-                    auto wkv_b = ggml_view_2d(ctx0, model.layers[il].wkv_b, model.layers[il].wkv_b->ne[0], n_per_head*n_max_head,
-                            model.layers[il].wkv_b->nb[1], model.layers[il].wkv_b->nb[1]*n_per_head*n_max_head*iter);
-
-                    auto kv_f32 = ggml_mul_mat(ctx0, wkv_b, kv_cache_nope);
-                    cb(kv_f32, "kv_f32", il);
-
-                    auto v_f32 = ggml_view_3d(ctx0, kv_f32, hparams.n_embd_head_v_full, n_kv, n_max_head,
-                            ggml_row_size(kv_f32->type, n_max_head * (n_embd_head_qk_nope + hparams.n_embd_head_v_full)),
-                            ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v_full),
-                            ggml_row_size(kv_f32->type, n_embd_head_qk_nope));
-                    cb(v_f32, "v_f32", il);
-
-                    auto k_nope_f32 = ggml_view_3d(ctx0, kv_f32, n_embd_head_qk_nope, n_kv, n_max_head,
-                            ggml_row_size(kv_f32->type, n_max_head * (n_embd_head_qk_nope + hparams.n_embd_head_v_full)),
-                            ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v_full), 0);
-                    cb(k_nope_f32, "k_nope_f32", il);
-
-                    auto v = ggml_cast(ctx0, v_f32, kv_type);
-                    cb(v, "v", il);
-
-                    auto k_nope = ggml_cast(ctx0, k_nope_f32, kv_type);
-                    cb(k_nope, "k_nope", il);
-
-                    ggml_build_forward_expand(gf, k_nope);
-                    ggml_build_forward_expand(gf, v);
-
-                    //auto k = ggml_concat(ctx0, k_nope, k_rope, 0);
-                    auto k = ggml_concat(ctx0, k_rope, k_nope, 0);
-                    cb(k, "k", il);
-
-                    ggml_build_forward_expand(gf, k);
-
-                    auto q_iter = ggml_view_3d(ctx0, q, q->ne[0], q->ne[1], n_max_head,
-                            q->nb[1], q->nb[2], q->nb[2]*n_max_head*iter);
-
-                    kqv = ggml_flash_attn_ext(ctx0, q_iter, k, v, sparse_mask_fa, kq_scale, hparams.f_max_alibi_bias, 0.f);
-                    if (use_f32_attn_precision || q->ne[1] <= 8) {
-                        ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
-                    }
-                    if (use_dsa && dsa_last_full_sorted) {
-                        kqv->src[5] = dsa_last_full_sorted;
-                    }
-                    cb(kqv, "kqv", il);
-
-                    if (iter == 0) {
-                        cur = ggml_reshape_2d(ctx0, kqv, n_embd_head_v*n_max_head, n_tokens);
-                    } else {
-                        cur = ggml_concat(ctx0, cur, ggml_reshape_2d(ctx0, kqv, n_embd_head_v*n_max_head, n_tokens), 0);
-                    }
-                    ggml_build_forward_expand(gf, cur);
-
-                }
-
+                cur = build_mla_expanded_pp(p);
             }
             else {
 
@@ -1213,23 +1137,23 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 
             // split into {n_head * n_embd_head_qk_nope, n_tokens}
             struct ggml_tensor * k_nope = ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head, n_tokens,
-                    ggml_row_size(kv->type, n_embd_head_qk_nope + hparams.n_embd_head_v_full),
-                    ggml_row_size(kv->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v_full)),
+                    ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
+                    ggml_row_size(kv->type, n_head * (n_embd_head_qk_nope + n_embd_head_v)),
                     0);
             cb(k_nope, "k_nope", il);
 
             // and {n_head * n_embd_head_v, n_tokens}
-            struct ggml_tensor * v_states = ggml_view_3d(ctx0, kv, hparams.n_embd_head_v_full, n_head, n_tokens,
-                    ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v_full)),
-                    ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v_full)*n_head),
+            struct ggml_tensor * v_states = ggml_view_3d(ctx0, kv, n_embd_head_v, n_head, n_tokens,
+                    ggml_row_size(kv->type, (n_embd_head_qk_nope + n_embd_head_v)),
+                    ggml_row_size(kv->type, (n_embd_head_qk_nope + n_embd_head_v)*n_head),
                     ggml_row_size(kv->type, (n_embd_head_qk_nope)));
             cb(v_states, "v_states", il);
 
             v_states = ggml_cont(ctx0, v_states);
             cb(v_states, "v_states", il);
 
-            v_states = ggml_view_2d(ctx0, v_states, hparams.n_embd_head_v_full * n_head, n_tokens,
-                    ggml_row_size(kv->type, hparams.n_embd_head_v_full * n_head),
+            v_states = ggml_view_2d(ctx0, v_states, n_embd_head_v * n_head, n_tokens,
+                    ggml_row_size(kv->type, n_embd_head_v * n_head),
                     0);
             cb(v_states, "v_states", il);
 

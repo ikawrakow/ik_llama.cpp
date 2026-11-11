@@ -22,6 +22,7 @@ static ggml_tensor * qwen4exp_hc_mix(
         llm_build_context & bctx,
         ggml_context      * ctx0,
         llama_context     & lctx,
+        ggml_cgraph       * gf,
         const llama_hparams & hparams,
         ggml_tensor       * x,
         ggml_tensor       * w_norm,
@@ -41,6 +42,12 @@ static ggml_tensor * qwen4exp_hc_mix(
 
     ggml_tensor * lo = llm_build_context::llm_build_lora_mm(lctx, ctx0, w_down, xn);
     cb(lo, "mix_down", il);
+    if (inject) {
+        *inject = llm_build_context::llm_build_lora_mm(lctx, ctx0, w_inject, xn);
+        cb(*inject, "hc_inject", il);
+        ggml_build_forward_expand(gf, lo);
+        ggml_build_forward_expand(gf, *inject);
+    }
     lo = ggml_scale(ctx0, lo, 1.0f / (float) hc);
     cb(lo, "mix_down_scaled", il);
     lo = ggml_silu(ctx0, lo);
@@ -61,11 +68,6 @@ static ggml_tensor * qwen4exp_hc_mix(
     mixed = ggml_scale(ctx0, mixed, 1.0f / (float) hc);
     cb(mixed, "hc_mixed", il);
 
-    if (inject) {
-        *inject = llm_build_context::llm_build_lora_mm(lctx, ctx0, w_inject, xn);
-        cb(*inject, "hc_inject", il);
-    }
-
     GGML_UNUSED(bctx);
     return mixed;
 }
@@ -84,14 +86,16 @@ static ggml_tensor * qwen4exp_hc_combine(
     const int32_t hc = hparams.dsv4_hc_mult;
     const int64_t nt = residual->ne[2];
 
-    ggml_tensor * w = ggml_sigmoid(ctx0, ggml_scale(ctx0, inject, 1.0f / (float) hc));
+    auto inject_scaled = ggml_scale(ctx0, inject, 1.0f / (float) hc);
+    cb(inject_scaled, "inject_s", il);
+    ggml_tensor * w = ggml_sigmoid(ctx0, inject_scaled);
     w = ggml_scale(ctx0, w, 2.0f);
+    cb(w, "hc_w", il);
     w = ggml_reshape_3d(ctx0, w, 1, hc, nt);
 
     ggml_tensor * b = ggml_reshape_3d(ctx0, block_out, n_embd, 1, nt);
-    b = ggml_repeat_4d(ctx0, b, n_embd, hc, nt, 1);
 
-    ggml_tensor * cur = ggml_add(ctx0, residual, ggml_mul(ctx0, b, w));
+    ggml_tensor * cur = ggml_fma(ctx0, residual, b, w);
     cb(cur, "hc_combine", il);
 
     return cur;
@@ -203,11 +207,15 @@ static ggml_tensor * qwen4exp_ple(
     // get_rows lays the head dimension out slowest, which is the flatten order the
     // projections expect
     ggml_tensor * emb = ggml_get_rows(ctx0, model.tok_embd_per_layer, rows);
+    cb(emb, "ple_emb", il);
     emb = ggml_reshape_2d(ctx0, emb, hparams.ple_head_dim * n_heads, n_tokens);
     cb(emb, "ple_embd", il);
 
     ggml_tensor * key   = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ple_key,   emb);
+    cb(key, "ple_k", il);
     ggml_tensor * value = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ple_value, emb);
+    cb(key, "ple_k", il);
+    cb(value, "ple_v", il);
 
     auto grouped_norm = [&](ggml_tensor * x, ggml_tensor * w) {
         ggml_tensor * t = qwen4exp_grouped_rms(ctx0, hparams,
@@ -294,6 +302,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
 
     // the cached indexer keys are raw: pooling precedes both the norm and the rotation
     ggml_tensor * k_raw = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].indexer_k_proj, cur);
+    cb(k_raw, "qsa_k", il);
     k_raw = ggml_reshape_2d(ctx0, k_raw, idx_dim, n_tokens);
     cb(k_raw, "qsa_k_raw", il);
     {
@@ -353,6 +362,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
             ggml_row_size(kr_cache->type, idx_dim), 0);
 
     ggml_tensor * members = ggml_get_rows(ctx0, k_all, inp->win_cells);
+    cb(members, "k_all", il);
     members = ggml_reshape_3d(ctx0, members, idx_dim, r, n_win);
 
     // the gather put each block's members contiguously in one row, which is what multi_add sums
@@ -393,6 +403,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
     }
 
     ggml_tensor * q = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].indexer_q_proj, cur);
+    cb(q, "qsa_q", il);
     q = ggml_reshape_3d(ctx0, q, idx_dim, n_idx_h, n_tokens);
     q = llm_build_context::llm_build_norm(ctx0, q, hparams,
             model.layers[il].indexer_q_norm, nullptr, LLM_NORM_RMS, cb, il);
@@ -409,7 +420,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
     // internally, so the n_kv by n_tokens score matrix is never materialized.
     if (lctx.cparams.fused_idx_topk) {
         ggml_tensor * fused = ggml_indexer_topk(ctx0, pooled, q, inp->head_w, cut_mask, inp->cell_blk,
-                GGML_UNARY_OP_RELU, width);
+                GGML_UNARY_OP_RELU, width, r, false, nullptr);
         cb(fused, "qsa_top_k", il);
         ggml_build_forward_expand(gf, fused);
         ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, fused);
@@ -420,6 +431,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
 
     ggml_tensor * score = ggml_mul_mat(ctx0, pooled,
             ggml_reshape_2d(ctx0, ggml_cont(ctx0, q), idx_dim, n_idx_h*n_tokens));
+    cb(score, "score", il);
     score = ggml_reshape_3d(ctx0, score, n_blocks, n_idx_h, n_tokens);
     score = ggml_relu(ctx0, score);
     score = ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3));
@@ -431,6 +443,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
     // for. get_rows gathers rows, so the scores are transposed first
     ggml_tensor * expanded = ggml_get_rows(ctx0,
             ggml_cont(ctx0, ggml_transpose(ctx0, score)), inp->cell_blk);
+    cb(expanded, "expanded", il);
     expanded = ggml_cont(ctx0, ggml_transpose(ctx0, expanded));
 
     expanded = ggml_add(ctx0, expanded, cut_mask);
@@ -494,12 +507,14 @@ static bool qwen4exp_qsa_gather(
 
     ggml_tensor * k = ggml_reshape_4d_ext(ctx0, k_cache, GGML_TYPE_F32, k_cell/sizeof(float), n_cells, 1, 1);
     k = ggml_get_rows(ctx0, k, idx);
+    cb(k, "gather_k", il);
     k = ggml_reshape_4d_ext(ctx0, k, k_cache->type, n_embd_head_k, n_head_kv, n_pad, 1);
     *k_out = ggml_view_3d(ctx0, k, n_embd_head_k, n_pad, n_head_kv, k->nb[2], k->nb[1], 0);
     cb(*k_out, "qsa_k_sel", il);
 
     ggml_tensor * v = ggml_reshape_4d_ext(ctx0, v_cache, GGML_TYPE_F32, v_cell/sizeof(float), n_cells, 1, 1);
     v = ggml_get_rows(ctx0, v, idx);
+    cb(v, "gather_v", il);
     v = ggml_reshape_4d_ext(ctx0, v, v_cache->type, n_embd_head_v, n_head_kv, n_pad, 1);
     *v_out = ggml_view_3d(ctx0, v, n_embd_head_v, n_pad, n_head_kv, v->nb[2], v->nb[1], 0);
     cb(*v_out, "qsa_v_sel", il);
@@ -507,6 +522,7 @@ static bool qwen4exp_qsa_gather(
     // gather the mask too: a selected cell can belong to another sequence or lie past its end
     ggml_tensor * m = ggml_view_2d(ctx0, KQ_mask, 1, bctx.n_kv, ggml_element_size(KQ_mask), 0);
     m = ggml_get_rows(ctx0, m, ggml_reshape_1d(ctx0, top_k, width));
+    cb(m, "gather_m", il);
     ggml_tensor * tail = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_pad*KQ_mask->ne[1] - width);
     tail = ggml_fill_inplace(ctx0, tail, -INFINITY);
     m = ggml_concat(ctx0, ggml_reshape_1d(ctx0, m, width), tail, 0);
@@ -620,7 +636,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
                     kv_self.s_l[il], ple_reset_state, ple_reset_pos, n_embd, n_tokens, il, cb, per_step_ple);
         }
 
-        ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams, res_hc,
+        ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, gf, hparams, res_hc,
                 model.layers[il].hc_attn_norm, model.layers[il].hc_attn_down,
                 model.layers[il].hc_attn_up,   model.layers[il].hc_attn_inject,
                 &inject, n_embd, il, cb);
@@ -647,9 +663,10 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
             if (top_k && !gathered && flash_attn && !kv_self.k_l[il]->extra && !kv_self.v_l[il]->extra) {
                 int n_kv_min = ggml_backend_buffer_is_host(kv_self.k_l[il]->buffer) ? 3*n_pad : 8*n_pad;
                 if (n_kv_min <= n_kv) {
-                    selected = ggml_mask_to_index(ctx0, mask, n_pad);
+                    selected = ggml_indexer_mask_to_index(ctx0, KQ_mask, top_k, n_pad);
                     cb(selected, "qsa_mask_idx", il);
                     ggml_build_forward_expand(gf, selected);
+                    mask = nullptr;
                 }
             }
 
@@ -670,7 +687,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
 
         res_hc = qwen4exp_hc_combine(ctx0, hparams, res_hc, cur, inject, n_embd, il, cb);
 
-        cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams, res_hc,
+        cur = qwen4exp_hc_mix(*this, ctx0, lctx, gf, hparams, res_hc,
                 model.layers[il].hc_ffn_norm, model.layers[il].hc_ffn_down,
                 model.layers[il].hc_ffn_up,   model.layers[il].hc_ffn_inject,
                 &inject, n_embd, il, cb);
@@ -718,7 +735,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
 
         // exit mixer is hc_head-shaped: per-stream norm + low-rank gate, no inject
         const auto & nextn = model.layers[n_layer_begin].nextn;
-        ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams,
+        ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, gf, hparams,
                 ggml_reshape_3d(ctx0, h_next, n_embd, hc, h_next->ne[1]),
                 nextn.hc_head_norm, nextn.hc_head_down, nextn.hc_head_up,
                 nullptr, nullptr, n_embd, -1, cb);
@@ -741,7 +758,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         }
     }
 
-    ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams, res_hc,
+    ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, gf, hparams, res_hc,
             model.hc_head_norm, model.hc_head_down, model.hc_head_up,
             nullptr, nullptr, n_embd, -1, cb);
 

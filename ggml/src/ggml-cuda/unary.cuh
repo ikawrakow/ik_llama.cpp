@@ -55,7 +55,7 @@ void ggml_cuda_op_exp(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_cuda_op_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
-void ggml_cuda_op_scaled_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+bool ggml_cuda_op_scale_unary_scale(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_cuda_op_sqrt_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 

@@ -336,7 +336,7 @@ ggml_tensor * llm_build_context::build_step5_indexer_score(ggml_cgraph * gf, int
                 ggml_build_forward_expand(gf, lctx.inp_step5_cell_blk);
             }
             ggml_tensor * topk = ggml_indexer_topk(ctx0, block_k, q_cur, w_cur, mseed,
-                    lctx.inp_step5_cell_blk, GGML_UNARY_OP_RELU, (int) kept);
+                    lctx.inp_step5_cell_blk, GGML_UNARY_OP_RELU, (int) kept, 0, false, nullptr);
             if (supports_op(topk)) {
                 cb(topk, "step5_indexer_topk", il);
                 ggml_build_forward_expand(gf, topk);
@@ -375,7 +375,9 @@ ggml_cgraph * llm_build_context::build_step5() {
 
     if (cparams.mtp_op_type != MTP_OP_NONE) {
         GGML_ASSERT(model.mtp && hparams.nextn_predict_layers > 0);
-        GGML_ASSERT(batch.token && "Step5 MTP requires token batches");
+        // Media prompt warmup supplies projected embeddings instead of token IDs.
+        // build_inp_embd_mtp() handles both input forms.
+        GGML_ASSERT((batch.token || batch.embd) && "Step5 MTP requires tokens or embeddings");
 
         const int n_layer_base = hparams.n_layer > hparams.nextn_predict_layers
             ? hparams.n_layer - hparams.nextn_predict_layers : hparams.n_layer;

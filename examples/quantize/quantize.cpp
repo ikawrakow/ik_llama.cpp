@@ -32,6 +32,7 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "Q6_0",     LLAMA_FTYPE_MOSTLY_Q6_0,     " 6.5 bpw quantization",             },
     { "MXFP4",    LLAMA_FTYPE_MOSTLY_MXFP4,    " 4.25 bpw 4-bit float quantization",},
     { "MXFP4_R8", LLAMA_FTYPE_MOSTLY_MXFP4_R8, " MXFP4 repacked",                   },
+    { "NVFP4_KS", LLAMA_FTYPE_MOSTLY_NVFP4_KS, " 4.5 bpw NVFP4 with a row scale",    },
     { "IQ2_XXS",  LLAMA_FTYPE_MOSTLY_IQ2_XXS,  " 2.06 bpw quantization",            },
     { "IQ2_XXS_R4",LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4,"IQ2_XXS repacked",            },
     { "IQ2_XS",   LLAMA_FTYPE_MOSTLY_IQ2_XS,   " 2.31 bpw quantization",            },
@@ -70,6 +71,7 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "IQ4_NL_R4",LLAMA_FTYPE_MOSTLY_IQ4_NL_R4," 4.50 bpw non-linear quantization", },
     { "IQ4_XS_R8",LLAMA_FTYPE_MOSTLY_IQ4_XS_R8," 4.25 bpw non-linear quantization", },
     { "Q4_0_R8",  LLAMA_FTYPE_MOSTLY_Q4_0_R8,  " 4.50 bpw quantization",            },
+    { "Q2_0_R8",  LLAMA_FTYPE_MOSTLY_Q2_0_R8,  " 2.25 bpw 8-row repacked",          },
     { "Q5_0_R4",  LLAMA_FTYPE_MOSTLY_Q5_0_R4,  " 5.50 bpw quantization",            },
     { "Q6_0_R4",  LLAMA_FTYPE_MOSTLY_Q6_0_R4,  " 6.50 bpw quantization",            },
     { "Q8_0_R8",  LLAMA_FTYPE_MOSTLY_Q8_0_R8,  " 8.50 bpw quantization",            },
@@ -109,6 +111,7 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "Q6_K",     LLAMA_FTYPE_MOSTLY_Q6_K,     " 5.15G, +0.0008 ppl @ LLaMA-v1-7B", },
     { "Q6_K_R4",  LLAMA_FTYPE_MOSTLY_Q6_K_R4,  "Q6_K repacked", },
     { "Q8_K_R8",  LLAMA_FTYPE_MOSTLY_Q8_K_R8,  "Q8_K repacked", },
+    { "Q8_K_R16", LLAMA_FTYPE_MOSTLY_Q8_K_R16, "Q8_K repacked", },
     { "Q8_KV_R8", LLAMA_FTYPE_MOSTLY_Q8_KV_R8, "Q8_KV repacked", },
     { "Q8_0",     LLAMA_FTYPE_MOSTLY_Q8_0,     " 6.70G, +0.0004 ppl @ LLaMA-v1-7B", },
     { "Q4_0_4_4", LLAMA_FTYPE_MOSTLY_Q4_0_4_4, " 4.34G, +0.4685 ppl @ Llama-3-8B",  },
@@ -161,7 +164,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device] [-ts/--tensor-split] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--slab-size] [--cuda-quantize] [-dev/--device] [-ts/--tensor-split] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] [--analytical-imatrix output_file] [--estimate-imatrix] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -197,6 +200,8 @@ static void usage(const char * executable) {
     printf("      --ffn-up-type ggml_type: use this ggml_type for the ffn_up tensor.\n\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --partial-requant: quantize only missing split files in the split quantized .gguf destination directory\n");
+    printf("  --analytical-imatrix output_file: Compute an estimate of the imatrix and store it in output_file. If an input imatrix is provided, it will be combined with the estimate. Nothing else happens when this option is specified\n");
+    printf("  --estimate-imatrix: Use an estimated imatrix for quantization, possibly combining with the input imatrix (if specified)\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n\n");
     printf("Note: --include-weights and --exclude-weights cannot be used together\n");
@@ -443,6 +448,8 @@ int main(int argc, char ** argv) {
 
     bool hide_imatrix = false;
 
+    std::string analytical_imatrix;
+
     std::vector<int> cuda_devs;
     std::vector<float> cuda_ts;
     bool have_cuda_ts = false;
@@ -617,6 +624,14 @@ int main(int argc, char ** argv) {
             } else {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--analytical-imatrix") == 0) {
+            if (arg_idx < argc-1) {
+                analytical_imatrix = argv[++arg_idx];
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--estimate-imatrix") == 0) {
+            params.estimate_imatrix = true;
         } else if (strcmp(argv[arg_idx], "--hide-imatrix") == 0) {
             hide_imatrix = true;
         } else if (strcmp(argv[arg_idx], "--include-weights") == 0) {
@@ -678,7 +693,9 @@ int main(int argc, char ** argv) {
         params.repack_pattern = &repack_patterns;
     }
 
-    if (argc - arg_idx < 2) {
+    int min_remaining_args = analytical_imatrix.empty() ? 2 : 1;
+
+    if (argc - arg_idx < min_remaining_args) {
         printf("%s: bad arguments\n", argv[0]);
         usage(argv[0]);
     }
@@ -754,6 +771,17 @@ int main(int argc, char ** argv) {
     // parse command line arguments
     const std::string fname_inp = argv[arg_idx];
     arg_idx++;
+
+    if (!analytical_imatrix.empty()) {
+        //if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params)) {
+        auto status = llama_compute_analytical_imatrix(fname_inp.c_str(), analytical_imatrix.c_str(), &params);
+        if (status != 0) {
+            fprintf(stderr, "\nFailed.\n");
+            return 1;
+        }
+        return 0;
+    }
+
     std::string fname_out;
 
     std::string ftype_str;
@@ -806,7 +834,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (!params.ignore_imatrix_rules && imatrix_data.empty() &&
+    if (!params.estimate_imatrix && !params.ignore_imatrix_rules && imatrix_data.empty() &&
         (params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S  || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4 ||
          params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS_R4 ||

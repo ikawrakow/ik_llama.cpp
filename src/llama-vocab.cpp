@@ -381,6 +381,14 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}+| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_SPARK2_5:
+                regex_exprs = {
+                    // Split(\p{N}{1,3}) + Digits(individual_digits=True)
+                    "\\p{N}",
+                    "[一-龥぀-ゟ゠-ヿ]+",
+                    "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\\r\\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+|[\\r\\n]|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_STABLELM2:
             case LLAMA_VOCAB_PRE_TYPE_FLINT:
                 regex_exprs = {
@@ -1983,6 +1991,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (tokenizer_pre == "minicpm5") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MINICPM5;
                 ignore_merges = true;
+            } else if (
+                    tokenizer_pre == "spark2_5") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_SPARK2_5;
+                clean_spaces = false;
             } else if (tokenizer_pre == "k2-horizon") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_K2_HORIZON;
             } else if (tokenizer_pre == "flint") {

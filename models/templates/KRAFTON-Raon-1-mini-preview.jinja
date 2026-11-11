@@ -85,14 +85,11 @@
         {%- endif %}
     {%- endif %}
 {%- endfor %}
-{%- if ns.multi_step_tool %}
-    {{- raise_exception('No user query found in messages.') }}
-{%- endif %}
 {%- for message in messages %}
     {%- set content = render_content(message.content)|trim %}
     {%- if message.role == 'system' %}
         {%- if not loop.first %}
-            {{- raise_exception('System message must be at the beginning.') }}
+            {{- '<|im_start|>system\n' + content + '<|im_end|>\n' }}
         {%- endif %}
     {%- elif message.role == 'user' %}
         {{- '<|im_start|>user\n' + content + '<|im_end|>\n' }}
@@ -100,9 +97,10 @@
         {%- set reasoning_content = '' %}
         {%- if message.reasoning_content is string %}
             {%- set reasoning_content = message.reasoning_content %}
-        {%- elif '</think>' in content %}
-            {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
-            {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+        {%- elif content.startswith('<think>') and '</think>' in content %}
+            {%- set thinking_parts = content.split('</think>', 1) %}
+            {%- set reasoning_content = thinking_parts[0][7:].strip('\n') %}
+            {%- set content = thinking_parts[1].lstrip('\n') %}
         {%- endif %}
         {{- '<|im_start|>assistant\n' }}
         {%- set preserve_reasoning = (not truncate_history_thinking) or (loop.index0 > ns.last_query_index) %}

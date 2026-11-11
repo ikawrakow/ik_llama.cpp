@@ -10,6 +10,7 @@
 #include "iqk_mmvq.cuh"
 #include "vecdotq.cuh"
 #include "mmvq-args.h"
+#include "tq.cuh"
 
 static constexpr __host__ __device__ int mmvq_rows_per_cuda_block(const ggml_type type, const int ncols_y, const int arch) {
     const bool two_rows_n1 = (arch <= CC_PASCAL || arch == CC_TURING) && type != GGML_TYPE_Q3_K;
@@ -42,6 +43,12 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
         case GGML_TYPE_MXFP4  : return vec_dot_mxfp4_q8_1;
         case GGML_TYPE_IQ4_XS : return vec_dot_iq4_xs_q8_1;
         case GGML_TYPE_IQ3_S  : return vec_dot_iq3_s_q8_1;
+        case GGML_TYPE_TQ2_T  : return vec_dot_tq_q8_1<GGML_TYPE_TQ2_T>;
+        case GGML_TYPE_TQK6   : return vec_dot_tq_q8_1<GGML_TYPE_TQK6>;
+        case GGML_TYPE_TQK7   : return vec_dot_tq_q8_1<GGML_TYPE_TQK7>;
+        case GGML_TYPE_TQP5   : return vec_dot_tq_q8_1<GGML_TYPE_TQP5>;
+        case GGML_TYPE_TQP6   : return vec_dot_tq_q8_1<GGML_TYPE_TQP6>;
+        case GGML_TYPE_TQP7   : return vec_dot_tq_q8_1<GGML_TYPE_TQP7>;
         default               : return nullptr;
     }
 }
@@ -68,6 +75,12 @@ static constexpr __device__ int get_vdr_mmvq(ggml_type type) {
         case GGML_TYPE_IQ4_NL  : return VDR_IQ4_NL_Q8_1_MMVQ;
         case GGML_TYPE_MXFP4   : return VDR_MXFP4_Q8_1_MMVQ;
         case GGML_TYPE_IQ4_XS  : return VDR_IQ4_XS_Q8_1_MMVQ;
+        case GGML_TYPE_TQ2_T   : return VDR_TQ_Q8_1_MMVQ;
+        case GGML_TYPE_TQK6    : return VDR_TQ_Q8_1_MMVQ;
+        case GGML_TYPE_TQK7    : return VDR_TQ_Q8_1_MMVQ;
+        case GGML_TYPE_TQP5    : return VDR_TQ_Q8_1_MMVQ;
+        case GGML_TYPE_TQP6    : return VDR_TQ_Q8_1_MMVQ;
+        case GGML_TYPE_TQP7    : return VDR_TQ_Q8_1_MMVQ;
         default                : return 1;
     }
 }
@@ -116,7 +129,7 @@ static __device__ void k_mul_mat_vec_q(
         for (int j = 0; j < ncols_y; ++j) {
 #pragma unroll
             for (int i = 0; i < rows_per_cuda_block; ++i) {
-                tmp[j][i] += vec_dot_q_cuda(vx, &y[j*blocks_per_col_y + kby], (row0 + i)*blocks_per_row_x + kbx, kqs);
+                tmp[j][i] += vec_dot_q_cuda(vx, &y[j*blocks_per_col_y + kby], min(row0 + i, nrows_x - 1)*blocks_per_row_x + kbx, kqs);
             }
         }
     }
@@ -212,8 +225,8 @@ static __device__ void k_fused_mul_mat_vec_q(
         for (int j = 0; j < ncols_y; ++j) {
 #pragma unroll
             for (int i = 0; i < rows_per_cuda_block; ++i) {
-                tmp_u[j][i] += vec_dot_q_cuda(vup  , &y[j*blocks_per_col_y + kby], (row0 + i)*blocks_per_row_x + kbx, kqs);
-                tmp_g[j][i] += vec_dot_q_cuda(vgate, &y[j*blocks_per_col_y + kby], (row0 + i)*blocks_per_row_x + kbx, kqs);
+                tmp_u[j][i] += vec_dot_q_cuda(vup  , &y[j*blocks_per_col_y + kby], min(row0 + i, nrows_x - 1)*blocks_per_row_x + kbx, kqs);
+                tmp_g[j][i] += vec_dot_q_cuda(vgate, &y[j*blocks_per_col_y + kby], min(row0 + i, nrows_x - 1)*blocks_per_row_x + kbx, kqs);
             }
         }
     }
@@ -541,4 +554,9 @@ extern void mul_mat_vec_iq4_nl_q8_1_cuda(const mmvq_args & args, cudaStream_t st
 extern void mul_mat_vec_mxfp4_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_iq4_xs_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
 extern void mul_mat_vec_iq3_s_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
-
+extern void mul_mat_vec_tq2_t_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
+extern void mul_mat_vec_tqk6_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
+extern void mul_mat_vec_tqk7_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
+extern void mul_mat_vec_tqp5_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
+extern void mul_mat_vec_tqp6_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);
+extern void mul_mat_vec_tqp7_q8_1_cuda(const mmvq_args & args, cudaStream_t stream);

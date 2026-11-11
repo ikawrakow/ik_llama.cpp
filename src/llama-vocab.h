@@ -64,6 +64,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_MINICPM5        = 53,
     LLAMA_VOCAB_PRE_TYPE_FLINT           = 54,
     LLAMA_VOCAB_PRE_TYPE_RAON            = 55,
+    LLAMA_VOCAB_PRE_TYPE_SPARK2_5        = 56,
 };
 
 struct LLM_KV;

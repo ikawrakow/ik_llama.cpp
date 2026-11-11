@@ -225,5 +225,9 @@ add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 add_executable(test-moe-cache-shares test-moe-cache-shares.cpp)
-target_include_directories(test-moe-cache-shares PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(test-moe-cache-shares PRIVATE llama)
+target_include_directories(test-moe-cache-shares PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/ggml/include)
 add_test(NAME test-moe-cache-shares COMMAND $<TARGET_FILE:test-moe-cache-shares>)

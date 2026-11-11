@@ -330,7 +330,7 @@ bool ggml_cuda_latent_attn_is_supported(const ggml_tensor * op) {
 static void sgemm(ggml_backend_cuda_context & ctx, cublasOperation_t ta, cublasOperation_t tb,
         int m, int n, int k, float alpha, const float * A, int lda,
         const float * B, int ldb, float beta, float * C, int ldc) {
-    CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+    ctx.cublas_handle(ctx.device, ctx.stream());
     CUBLAS_CHECK(cublasSgemm(ctx.cublas_handle(ctx.device), ta, tb, m, n, k,
             &alpha, A, lda, B, ldb, &beta, C, ldc));
 }
@@ -339,7 +339,7 @@ static void sgemm(ggml_backend_cuda_context & ctx, cublasOperation_t ta, cublasO
 static void hgemm_f32acc(ggml_backend_cuda_context & ctx, cublasOperation_t ta, cublasOperation_t tb,
         int m, int n, int k, float alpha, const half * A, int lda,
         const half * B, int ldb, float beta, float * C, int ldc) {
-    CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+    ctx.cublas_handle(ctx.device, ctx.stream());
     CUBLAS_CHECK(cublasGemmEx(ctx.cublas_handle(ctx.device), ta, tb, m, n, k,
             &alpha, A, CUDA_R_16F, lda, B, CUDA_R_16F, ldb,
             &beta,  C, CUDA_R_32F, ldc, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
@@ -349,7 +349,7 @@ static void sgemm_strided_batched(ggml_backend_cuda_context & ctx, cublasOperati
         int m, int n, int k, float alpha, const float * A, int lda, int64_t stride_a,
         const float * B, int ldb, int64_t stride_b, float beta, float * C, int ldc,
         int64_t stride_c, int batch_count) {
-    CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+    ctx.cublas_handle(ctx.device, ctx.stream());
     CUBLAS_CHECK(cublasSgemmStridedBatched(ctx.cublas_handle(ctx.device), ta, tb, m, n, k,
             &alpha, A, lda, stride_a, B, ldb, stride_b, &beta, C, ldc, stride_c, batch_count));
 }
@@ -359,7 +359,7 @@ static void hgemm_f32acc_strided_batched(
         int m, int n, int k, float alpha, const half * A, int lda, int64_t stride_a,
         const half * B, int ldb, int64_t stride_b, float beta, float * C, int ldc,
         int64_t stride_c, int batch_count) {
-    CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+    ctx.cublas_handle(ctx.device, ctx.stream());
     CUBLAS_CHECK(cublasGemmStridedBatchedEx(ctx.cublas_handle(ctx.device), ta, tb, m, n, k,
             &alpha, A, CUDA_R_16F, lda, stride_a, B, CUDA_R_16F, ldb, stride_b,
             &beta, C, CUDA_R_32F, ldc, stride_c, batch_count,

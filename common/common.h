@@ -332,6 +332,8 @@ struct gpt_params {
     int32_t max_gpu               =       0; // max number of GPUs to use at a time for split mode "graph"
     int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
     size_t moe_cache_size         =       0; // total GPU cache budget in bytes for CPU-resident MoE experts
+    enum llama_moe_cache_policy moe_cache_policy = LLAMA_MOE_CACHE_POLICY_LRU;
+    double moe_cache_cpu_share   =     0.0; // fixed fraction of unique cache misses assigned to CPU
     int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
     bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
     int32_t worst_graph_tokens    =       0; // number of tokens to use when reserving the worst graph
@@ -447,6 +449,7 @@ struct gpt_params {
     bool multiline_input   = false; // reverse the usage of `\`
     bool simple_io         = false; // improves compatibility with subprocesses and limited consoles
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
+    llama_nvfp4_precision nvfp4_precision = LLAMA_NVFP4_PRECISION_AUTO;
     bool flash_attn        = true;  // flash attention
     int  mla_attn          = 3;     // MLA 0: standard, 1: MLA with K and V^T cache, 2: MLA with just K cache, 3: the best of both worlds
     int  attn_max_batch    = 256;   // Max batch size to use when computing attention (only applicable if flash_attn = false)
@@ -459,7 +462,7 @@ struct gpt_params {
     bool dsa               = false; // enable GLM DSA sparse attention (off by default; opt-in via --dsa)
     bool fused_idx_topk    = true;  // enable the fused indexer topk op (on by default; -no-fidx or --no-fused-indexer-topk turns it off)
     bool swa_compress      = false;
-    int  dsv41_replay_keep = 0;     // DeepSeek-V4.1 prefill: run the decoder layers on the last N prompt tokens only (0 = off; requires --swa-compress)
+    int  dsv41_replay_keep = 256;   // DeepSeek-V4.1 prefill: run the decoder layers on the last N prompt tokens only (0 = off; requires --swa-compress)
     bool dsv4_legacy_state = false; // if true, write DeepSeek-V4 state in the legacy full-slice layout (no MAGIC), byte-identical to main
     int  dsa_top_k         = -1;    // DSA top-k override (<0 => use the model's configured indexer_top_k)
     int  min_experts       = -1;
@@ -486,6 +489,7 @@ struct gpt_params {
     bool merge_up_gate_exps= false; // if true, merge ffn_up_exps and ffn_gate_exps into a single, contiguous tensor
     bool defer_experts     = false; // if true, defer expert mmap residency to speed up model loading (Linux only)
     bool defer_ple         = false; // if true, keep the per-layer token embedding on the file (Linux and Windows only)
+    std::string ngram_file = "";    // separate GGUF with the n-gram tables (per-layer token embedding, Engram)
     bool prefetch_experts  = false; // if true, stream mmap'd MoE expert weights into the page cache (Linux only)
     int  prefetch_experts_threads = 0; // number of expert prefetch workers (<=0 = auto)
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
@@ -572,6 +576,7 @@ struct gpt_params {
     bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
+    bool endpoint_memory  = false;
 
     bool log_json = false;
 
@@ -649,6 +654,7 @@ void gpt_params_handle_model_default(gpt_params & params);
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);
 bool gpt_params_parse      (int argc, char ** argv, gpt_params & params);
 bool gpt_params_find_arg   (int argc, char ** argv, const std::string & arg, gpt_params & params, int & i, bool & invalid_param);
+void gpt_params_terminate_lists(gpt_params & params);
 void gpt_params_print_usage(int argc, char ** argv, const gpt_params & params);
 
 std::string gpt_params_get_system_info(const gpt_params & params);
@@ -751,6 +757,7 @@ struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
 
 struct llama_model_params   common_model_params_to_llama  (const gpt_params & params);
 struct llama_context_params common_context_params_to_llama(const gpt_params & params);
+void common_check_v_cache_types(const llama_context_params & cparams);
 
 struct llama_model * llama_load_model_from_url(const char * model_url, const char * path_model, const char * hf_token, const struct llama_model_params & params);
 struct llama_model * llama_load_model_from_hf(const char * repo, const char * file, const char * path_model, const char * hf_token, const struct llama_model_params & params);
@@ -882,6 +889,19 @@ llama_control_vector_data llama_control_vector_load(const std::vector<llama_cont
 static const char * const LLM_KV_SPLIT_NO            = "split.no";
 static const char * const LLM_KV_SPLIT_COUNT         = "split.count";
 static const char * const LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count";
+
+//
+// Memory utils
+//
+
+double common_rss_hwm_mib();
+
+struct common_vram_tracker {
+    std::vector<size_t> baseline;
+
+    void start();
+    double sample() const;
+};
 
 //
 // YAML utils

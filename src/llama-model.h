@@ -172,6 +172,7 @@ struct llama_layer {
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc = nullptr;
     struct ggml_tensor * wqkv_gate = nullptr;
+    struct ggml_tensor * attn_vres_lambda = nullptr;
     struct ggml_tensor * ffn_post_norm_1 = nullptr; // gemma4
     struct ggml_tensor * ffn_post_norm_2 = nullptr; // gemma4
     struct ggml_tensor * ffn_pre_norm_2  = nullptr; // gemma4
@@ -530,6 +531,10 @@ struct llama_hadamard_transform {
     int64_t perm_hd  = 1;                 // GDN v-grouped reshape (head dim)
     int64_t perm_nk  = 1;                 // GDN v-grouped reshape (n groups)
     int64_t perm_rep = 1;                 // GDN v-grouped reshape (repeat count)
+    bool operator==(const llama_hadamard_transform & other) const {
+        return block_size == other.block_size && perm_hd == other.perm_hd && perm_nk == other.perm_nk && perm_rep == other.perm_rep
+            && signs == other.signs;
+    }
 };
 
 struct llama_model {
@@ -621,6 +626,7 @@ struct llama_model {
     int n_gpu_layers;
 
     bool mtp; // use mtp if is supported by the Model
+    bool dsa = false; // load the MiniMax-M3 indexer
     bool swa_compress = false; // value the cache-size fit was computed with
     bool fit = false;
 
@@ -681,6 +687,9 @@ struct llama_model {
         if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5NEXT) {
             return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
         }
+        if (arch == LLM_ARCH_XING4_0) {
+            return std::max<size_t>(n_tokens * 160, 64u * n_tensors);
+        }
         //return std::max<size_t>(1024, 8*n_tensors);
         return 65536;
     }
@@ -690,11 +699,11 @@ struct llama_model {
     }
 
     bool is_mla_model() const {
-        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_GLM5NEXT || arch == LLM_ARCH_RAON1;
+        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_GLM5NEXT || arch == LLM_ARCH_RAON1 || arch == LLM_ARCH_XING4_0;
     }
 
     float swiglu_limit(uint32_t il, bool shared) const {
-        if (!llm_arch_is_step5(arch) && arch != LLM_ARCH_BAILINGMOE3 && !llm_arch_is_dsv4(arch) && arch != LLM_ARCH_GLM5NEXT && arch != LLM_ARCH_MAPLE && !hparams.dflash_dsv4) {
+        if (!llm_arch_is_step5(arch) && arch != LLM_ARCH_BAILINGMOE3 && !llm_arch_is_dsv4(arch) && arch != LLM_ARCH_GLM5NEXT && arch != LLM_ARCH_MAPLE && arch != LLM_ARCH_RICURSIVE && !hparams.dflash_dsv4) {
             return 0.0f;
         }
         return shared ? hparams.swiglu_limits_shared[il] : hparams.swiglu_limits[il];
@@ -724,8 +733,12 @@ struct llama_model {
     bool supports_swa_compress() const {
         return arch == LLM_ARCH_OPENPANGU || llm_arch_is_dsv4(arch)
             || arch == LLM_ARCH_LAGUNA    || arch == LLM_ARCH_GEMMA4
+            || arch == LLM_ARCH_MAPLE
+            || arch == LLM_ARCH_SPARK2_5
+            || arch == LLM_ARCH_LFM3
             || arch == LLM_ARCH_MAPLE     || arch == LLM_ARCH_FLINT
             || llm_arch_is_step5(arch)
+            || arch == LLM_ARCH_RICURSIVE
             || supports_dflash_swa_compress() ;
     }
 

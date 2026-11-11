@@ -28,6 +28,7 @@ struct llama_hparams {
     uint32_t n_embd;
     uint32_t n_embd_out = 0;
     uint32_t n_layer;                   // layers executed by the graph / addressed by the KV cache
+    uint32_t n_layer_main = 0;          // main layers excluding NextN/MTP; 0 => n_layer
     uint32_t n_layer_all = 0;           // unrolled layer count; 0 => no loops
     uint32_t n_layer_phys = 0;          // physical layer count for looped models; 0 => not looped
     uint32_t n_loops = 1;               // number of times the physical layers are repeated
@@ -574,6 +575,8 @@ struct llama_hparams {
     bool use_mrope() const {
         return rope_sections[0] > 0 && rope_sections[1] > 0;
     }
+
+    static bool is_v41_separate();
 
     static const char * rope_scaling_type_name(llama_rope_scaling_type);
 

@@ -70,6 +70,8 @@ struct llama_model_loader {
         size_t   offs; // tensor data offset in the original file
 
         ggml_tensor * tensor;
+        std::vector<float> nvfp4_scale;
+        bool mxfp4_repack = false;
 
         llama_tensor_weight(const llama_file * file, uint16_t idx, const char * name, const struct gguf_context * gguf_ctx, ggml_tensor * tensor) : idx(idx), tensor(tensor) {
             const int tensor_idx = gguf_find_tensor(gguf_ctx, name);
@@ -85,6 +87,7 @@ struct llama_model_loader {
         }
     };
     std::vector<llama_tensor_weight> weights;
+    std::vector<llama_tensor_weight> scale_weights; // the .scale and .input_scale tensors consumed by import_nvfp4
 
     std::unordered_map<std::string, struct llama_model_kv_override> kv_overrides;
     const llama_model_tensor_buft_override * tensor_buft_overrides;
@@ -102,9 +105,13 @@ struct llama_model_loader {
     llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
             bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
             const llama_model_kv_override * param_overrides_p,
-            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+            const std::string & ngram_fname = std::string(),
+            llama_nvfp4_precision nvfp4_precision = LLAMA_NVFP4_PRECISION_AUTO);
 
     ~llama_model_loader();
+
+    bool import_nvfp4(llama_nvfp4_precision precision);
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
