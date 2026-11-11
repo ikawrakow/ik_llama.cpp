@@ -5492,7 +5492,13 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
         return should_offload;
     }
 
-    return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
+    int64_t batch_size = op->ne[1];
+    if (op->op == GGML_OP_SSM_CONV) {
+        batch_size = op->src[1]->ne[1];
+    } else if (op->op != GGML_OP_MUL_MAT) {
+        batch_size = op->ne[3] > 1 ? op->ne[3] : op->ne[2] > 1 ? op->ne[2] : op->ne[1];
+    }
+    return batch_size >= min_batch_size && op->op != GGML_OP_GET_ROWS;
 
     // Original:
     //return (op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS) ||
