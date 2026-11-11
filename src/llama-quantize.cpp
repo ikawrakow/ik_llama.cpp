@@ -242,7 +242,7 @@ static void llama_tensor_dequantize_internal(
     workers.clear();
 }
 
-static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
+static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny, bool repack_is_forbidden) {
     bool convert_incompatible_tensor = false;
     if (new_type == GGML_TYPE_Q2_K    || new_type == GGML_TYPE_Q3_K    || new_type == GGML_TYPE_Q4_K   ||
         new_type == GGML_TYPE_Q5_K    || new_type == GGML_TYPE_Q6_K    || new_type == GGML_TYPE_IQ4_XS ||
@@ -315,7 +315,7 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ4_XS_R8:
             case GGML_TYPE_IQ3_KT:
             case GGML_TYPE_IQ4_KT:
-            case GGML_TYPE_IQ4_XS: new_type = ny % 16 == 0 ? GGML_TYPE_IQ4_KS_R16 : GGML_TYPE_IQ4_NL; break;
+            case GGML_TYPE_IQ4_XS: new_type = ny % 16 == 0 && !repack_is_forbidden ? GGML_TYPE_IQ4_KS_R16 : GGML_TYPE_IQ4_NL; break;
             case GGML_TYPE_IQ4_K:
             case GGML_TYPE_IQ4_K_R4:
             case GGML_TYPE_Q4_K_R4:
@@ -908,7 +908,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
 
     auto tentative_new_type = new_type;
 
-    auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
+    auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1], false);
     if (working_type != new_type) {
         new_type = working_type;
     }
@@ -916,7 +916,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
     if (is_repack_forbidden(name)) {
         auto working_type = interleaved_properties(new_type).first;
         if (working_type != new_type) {
-            auto next_new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
+            auto next_new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1], true);
             printf("\n============ %s tensors cannot be quantized with row-interleaved quants\n", name.c_str());
             printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(next_new_type));
             new_type = next_new_type;
@@ -1763,7 +1763,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
             // get more optimal quantization type based on the tensor shape, layer, etc.
             if (params->pure) {
-                auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
+                auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1], false);
                 if (working_type != new_type) {
                     ++qs.n_fallback;
                     new_type = working_type;
@@ -1817,7 +1817,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 auto working_type = interleaved_properties(new_type).first;
                 if (working_type != new_type) {
                     printf("\n============ %s tensors cannot be quantized with row-interleaved quants\n", tensor->name);
-                    auto next_new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
+                    auto next_new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1], true);
                     printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(next_new_type));
                     if (next_new_type != working_type) ++qs.n_fallback;
                     new_type = next_new_type;
@@ -2056,9 +2056,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
 
             int chunk_size_multiplier = 1;
+            bool irf = is_repack_forbidden(name);
             auto [working_type, num_rows] = interleaved_properties(new_type);
-            if (tensor->ne[1] % num_rows != 0 || splits_merged_pair(model, name, new_type)) {
-                new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
+            if (tensor->ne[1] % num_rows != 0 || splits_merged_pair(model, name, new_type) || (num_rows > 1 && irf)) {
+                new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1], irf);
                 if (new_type != working_type) ++qs.n_fallback;
             } else {
                 chunk_size_multiplier = num_rows;
