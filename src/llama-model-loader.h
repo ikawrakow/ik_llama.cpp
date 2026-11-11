@@ -87,6 +87,7 @@ struct llama_model_loader {
         }
     };
     std::vector<llama_tensor_weight> weights;
+    std::vector<llama_tensor_weight> scale_weights; // the .scale and .input_scale tensors consumed by import_nvfp4
 
     std::unordered_map<std::string, struct llama_model_kv_override> kv_overrides;
     const llama_model_tensor_buft_override * tensor_buft_overrides;

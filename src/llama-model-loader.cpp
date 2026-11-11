@@ -1394,9 +1394,11 @@ bool llama_model_loader::import_nvfp4(llama_nvfp4_precision precision) {
         }
     }
 
-    weights.erase(std::remove_if(weights.begin(), weights.end(), [&consumed](const llama_tensor_weight & w) {
-        return consumed.count(w.tensor) > 0;
-    }), weights.end());
+    auto it = std::stable_partition(weights.begin(), weights.end(), [&consumed](const llama_tensor_weight & w) {
+        return consumed.count(w.tensor) == 0;
+    });
+    scale_weights.assign(it, weights.end());
+    weights.erase(it, weights.end());
 
     if (n_import || n_input_scale) {
         LLAMA_LOG_INFO("%s: converted %d %s tensors to %s; consumed %d .scale tensors; kept %d of %d .input_scale values%s\n",

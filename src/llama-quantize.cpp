@@ -1702,6 +1702,154 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         }
     }
 
+    auto get_new_type = [&](quantize_state_internal & qs, ggml_tensor * tensor) {
+        const std::string name = ggml_get_name(tensor);
+
+        bool quantize = tensor->type != GGML_TYPE_I32 &&
+                        tensor->type != GGML_TYPE_I64 &&
+                        tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_BF16_R16 &&
+                        tensor->type != GGML_TYPE_I8; // i.e., do not quantize tensors holding int values
+
+        // This used to be a regex, but <regex> has an extreme cost to compile times.
+        quantize &= name.rfind("weight") == name.size() - 6; // ends with 'weight'?
+
+        // quantize only 2D and 3D tensors (experts)
+        quantize &= (ggml_n_dims(tensor) >= 2);
+
+        // do not quantize norm tensors
+        quantize &= name.find("_norm.weight") == std::string::npos;
+
+        quantize &= params->quantize_output_tensor || name != "output.weight";
+        quantize &= !params->only_copy;
+
+        // do not quantize expert gating tensors
+        // NOTE: can't use LLM_TN here because the layer number is not known
+        if (name.find("ffn_gate_inp.weight") != std::string::npos) {
+            if (params->ffn_gate_inp_type == GGML_TYPE_COUNT || params->ffn_gate_inp_type == tensor->type) {
+                quantize = false;
+            }
+        }
+        //quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
+
+        // do not quantize positional embeddings and token types (BERT)
+        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");
+        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
+
+        // do not quantize Mamba's small yet 2D weights
+        // NOTE: can't use LLM_TN here because the layer number is not known
+        quantize &= name.find("ssm_conv1d")        == std::string::npos;
+        quantize &= name.find("shortconv.conv")     == std::string::npos;
+        quantize &= name.find("ple_conv1d")        == std::string::npos;
+        quantize &= name.find("ssm_x.weight")      == std::string::npos;
+        quantize &= name.find("ssm_dt.weight")     == std::string::npos;
+
+        // do not quantize relative position bias (T5)
+        quantize &= name.find("attn_rel_b.weight") == std::string::npos;
+
+        // Xing4.0: do not quantize the mHC projection weights
+        if (model.arch == LLM_ARCH_XING4_0) {
+            quantize &= name.find("hc_attn_fn.weight") == std::string::npos;
+            quantize &= name.find("hc_ffn_fn.weight")  == std::string::npos;
+        }
+
+        // quantize the extra output tensor
+        quantize = tensor == output_tensor || quantize;
+
+        enum ggml_type new_type = tensor->type;
+        if (quantize) {
+
+            new_type = default_type;
+
+            // get more optimal quantization type based on the tensor shape, layer, etc.
+            if (params->pure) {
+                auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
+                if (working_type != new_type) {
+                    ++qs.n_fallback;
+                    new_type = working_type;
+                }
+            }
+            else if (ggml_is_quantized(default_type)) {
+                new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
+            }
+            if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
+                new_type = params->token_embedding_type;
+            }
+            if (params->per_layer_token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "per_layer_token_embd.weight") == 0) {
+                new_type = params->per_layer_token_embedding_type;
+            }
+            if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
+                new_type = params->output_tensor_type;
+            }
+            else if (params->only_copy && tensor == output_tensor) {
+                new_type = tensor->type;
+            }
+            if (params->ffn_gate_inp_type < GGML_TYPE_COUNT && name.find("ffn_gate_inp.weight") != std::string::npos) {
+                new_type = params->ffn_gate_inp_type;
+            }
+            if (params->attn_q_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_q.weight") == 0) {
+                new_type = params->attn_q_type;
+            }
+            if (params->attn_k_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_k.weight") == 0) {
+                new_type = params->attn_k_type;
+            }
+            if (params->attn_v_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_v.weight") == 0) {
+                new_type = params->attn_v_type;
+            }
+            if (params->attn_qkv_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_qkv.weight") == 0) {
+                new_type = params->attn_qkv_type;
+            }
+            if (params->attn_output_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_output.weight") == 0) {
+                new_type = params->attn_output_type;
+            }
+            if (params->ffn_gate_type < GGML_TYPE_COUNT && strcmp(tensor->name, "ffn_gate") == 0) {
+                new_type = params->ffn_gate_type;
+            }
+            if (params->ffn_down_type < GGML_TYPE_COUNT && strcmp(tensor->name, "ffn_down") == 0) {
+                new_type = params->ffn_down_type;
+            }
+            if (params->ffn_up_type < GGML_TYPE_COUNT && strcmp(tensor->name, "ffn_up") == 0) {
+                new_type = params->ffn_up_type;
+            }
+
+            if (is_repack_forbidden(tensor->name)) {
+                // token embeddings and engram tensors cannot be quantized with row-interleaved quants
+                auto working_type = interleaved_properties(new_type).first;
+                if (working_type != new_type) {
+                    printf("\n============ %s tensors cannot be quantized with row-interleaved quants\n", tensor->name);
+                    auto next_new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
+                    printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(next_new_type));
+                    if (next_new_type != working_type) ++qs.n_fallback;
+                    new_type = next_new_type;
+                }
+            }
+
+            // If we've decided to quantize to the same type the tensor is already
+            // in then there's nothing to do.
+            if (tensor != output_tensor) {
+                quantize &= tensor->type != new_type;
+            }
+        }
+
+        return std::make_pair(quantize, new_type);
+    };
+
+    // decide every tensor before the header is written; an NVFP4_KS weight written unchanged keeps its input scale
+    struct tensor_plan {
+        bool quantize = false;
+        ggml_type new_type = GGML_TYPE_COUNT;
+        const llama_model_loader::llama_tensor_weight * input_scale = nullptr;
+    };
+    std::vector<tensor_plan> plan(ml.n_tensors);
+    for (int i = 0; !params->only_repack && i < ml.n_tensors; ++i) {
+        ggml_tensor * tensor = ml.get_weight(i)->tensor;
+        std::tie(plan[i].quantize, plan[i].new_type) = get_new_type(qs, tensor);
+        if (plan[i].quantize || tensor->type != GGML_TYPE_NVFP4_KS || params->partial_requant) continue;
+        const std::string name = ggml_get_name(tensor);
+        const std::string is_name = name.substr(0, name.rfind('.')) + ".input_scale";
+        for (const auto & w : ml.scale_weights) if (is_name == ggml_get_name(w.tensor)) plan[i].input_scale = &w;
+    }
+
     // populate the original tensors so we get an initial meta data
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
@@ -1711,6 +1859,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             ctx_outs[i_split] = gguf_init_empty();
         }
         gguf_add_tensor(ctx_outs[i_split], tensor);
+        if (plan[i].input_scale) {
+            gguf_add_tensor(ctx_outs[i_split], plan[i].input_scale->tensor);
+        }
         if (tensor == output_tensor) {
             gguf_add_tensor(ctx_outs[i_split], &extra);
         }
@@ -1718,10 +1869,26 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     // Set split info if needed
     if (n_split > 1) {
+        int n_tensors_out = 0;
+        for (auto * ctx : ctx_outs) n_tensors_out += gguf_get_n_tensors(ctx);
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
             gguf_set_val_u16(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), n_split);
-            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), ml.n_tensors);
+            gguf_set_val_i32(ctx_outs[i], ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), n_tensors_out);
+        }
+        // splits written by a run that kept input scales cannot be completed by --partial-requant, which keeps none
+        for (int i = 0; params->partial_requant && i < n_split; ++i) {
+            char split_path[PATH_MAX] = {0};
+            llama_split_path(split_path, sizeof(split_path), fname_out.c_str(), i, n_split);
+            if (!std::ifstream(split_path)) continue;
+            gguf_context * ctx = gguf_init_from_file(split_path, { /*.no_alloc = */ true, /*.ctx = */ nullptr });
+            const int kid = ctx ? gguf_find_key(ctx, ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str()) : -1;
+            const int n_existing = kid >= 0 ? gguf_get_val_i32(ctx, kid) : -1;
+            if (ctx) gguf_free(ctx);
+            if (n_existing != n_tensors_out) {
+                throw std::runtime_error(format("%s has %d tensors in its split set, but this run writes %d; "
+                        "remove the existing splits or run without --partial-requant", split_path, n_existing, n_tensors_out));
+            }
         }
     }
 
@@ -1801,57 +1968,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                llama_format_tensor_shape(tensor).c_str(),
                ggml_type_name(tensor->type));
 
-        bool quantize = tensor->type != GGML_TYPE_I32 &&
-                        tensor->type != GGML_TYPE_I64 &&
-                        tensor->type != GGML_TYPE_I16 &&
-                        tensor->type != GGML_TYPE_BF16_R16 &&
-                        tensor->type != GGML_TYPE_I8; // i.e., do not quantize tensors holding int values
-
-        // This used to be a regex, but <regex> has an extreme cost to compile times.
-        quantize &= name.rfind("weight") == name.size() - 6; // ends with 'weight'?
-
-        // quantize only 2D and 3D tensors (experts)
-        quantize &= (ggml_n_dims(tensor) >= 2);
-
-        // do not quantize norm tensors
-        quantize &= name.find("_norm.weight") == std::string::npos;
-
-        quantize &= params->quantize_output_tensor || name != "output.weight";
-        quantize &= !params->only_copy;
-
-        // do not quantize expert gating tensors
-        // NOTE: can't use LLM_TN here because the layer number is not known
-        if (name.find("ffn_gate_inp.weight") != std::string::npos) {
-            if (params->ffn_gate_inp_type == GGML_TYPE_COUNT || params->ffn_gate_inp_type == tensor->type) {
-                quantize = false;
-            }
-        }
-        //quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
-
-        // do not quantize positional embeddings and token types (BERT)
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
-
-        // do not quantize Mamba's small yet 2D weights
-        // NOTE: can't use LLM_TN here because the layer number is not known
-        quantize &= name.find("ssm_conv1d")        == std::string::npos;
-        quantize &= name.find("shortconv.conv")     == std::string::npos;
-        quantize &= name.find("ple_conv1d")        == std::string::npos;
-        quantize &= name.find("ssm_x.weight")      == std::string::npos;
-        quantize &= name.find("ssm_dt.weight")     == std::string::npos;
-
-        // do not quantize relative position bias (T5)
-        quantize &= name.find("attn_rel_b.weight") == std::string::npos;
-
-        // Xing4.0: do not quantize the mHC projection weights
-        if (model.arch == LLM_ARCH_XING4_0) {
-            quantize &= name.find("hc_attn_fn.weight") == std::string::npos;
-            quantize &= name.find("hc_ffn_fn.weight")  == std::string::npos;
-        }
-
-        // quantize the extra output tensor
-        quantize = tensor == output_tensor || quantize;
-
         enum ggml_type new_type;
         void * new_data = nullptr;
         size_t new_size = 0;
@@ -1903,79 +2019,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             goto QuantizationDone;
         }
 
-        if (quantize) {
-
-            new_type = default_type;
-
-            // get more optimal quantization type based on the tensor shape, layer, etc.
-            if (params->pure) {
-                auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
-                if (working_type != new_type) {
-                    ++qs.n_fallback;
-                    new_type = working_type;
-                }
-            }
-            else if (ggml_is_quantized(default_type)) {
-                new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
-            }
-            if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
-                new_type = params->token_embedding_type;
-            }
-            if (params->per_layer_token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "per_layer_token_embd.weight") == 0) {
-                new_type = params->per_layer_token_embedding_type;
-            }
-            if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
-                new_type = params->output_tensor_type;
-            }
-            else if (params->only_copy && tensor == output_tensor) {
-                new_type = tensor->type;
-            }
-            if (params->ffn_gate_inp_type < GGML_TYPE_COUNT && name.find("ffn_gate_inp.weight") != std::string::npos) {
-                new_type = params->ffn_gate_inp_type;
-            }
-            if (params->attn_q_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_q.weight") == 0) {
-                new_type = params->attn_q_type;
-            }
-            if (params->attn_k_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_k.weight") == 0) {
-                new_type = params->attn_k_type;
-            }
-            if (params->attn_v_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_v.weight") == 0) {
-                new_type = params->attn_v_type;
-            }
-            if (params->attn_qkv_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_qkv.weight") == 0) {
-                new_type = params->attn_qkv_type;
-            }
-            if (params->attn_output_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_output.weight") == 0) {
-                new_type = params->attn_output_type;
-            }
-            if (params->ffn_gate_type < GGML_TYPE_COUNT && strcmp(tensor->name, "ffn_gate") == 0) {
-                new_type = params->ffn_gate_type;
-            }
-            if (params->ffn_down_type < GGML_TYPE_COUNT && strcmp(tensor->name, "ffn_down") == 0) {
-                new_type = params->ffn_down_type;
-            }
-            if (params->ffn_up_type < GGML_TYPE_COUNT && strcmp(tensor->name, "ffn_up") == 0) {
-                new_type = params->ffn_up_type;
-            }
-
-            if (is_repack_forbidden(tensor->name)) {
-                // token embeddings and engram tensors cannot be quantized with row-interleaved quants
-                auto working_type = interleaved_properties(new_type).first;
-                if (working_type != new_type) {
-                    printf("\n============ %s tensors cannot be quantized with row-interleaved quants\n", tensor->name);
-                    auto next_new_type = change_type_if_necessary(working_type, tensor->ne[0], tensor->ne[1]);
-                    printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(next_new_type));
-                    if (next_new_type != working_type) ++qs.n_fallback;
-                    new_type = next_new_type;
-                }
-            }
-
-            // If we've decided to quantize to the same type the tensor is already
-            // in then there's nothing to do.
-            if (tensor != output_tensor) {
-                quantize &= tensor->type != new_type;
-            }
-        }
+        bool quantize;
+        quantize = plan[i].quantize;
+        new_type = plan[i].new_type;
 
         if (!quantize) {
             new_type = tensor->type;
@@ -2114,6 +2160,13 @@ QuantizationDone:;
             // write tensor data + padding
             if (!written) fout.write((const char *) new_data, new_size);
             zeros(fout, GGML_PAD(new_size, align) - new_size);
+            if (const auto * is = plan[i].input_scale) {
+                std::vector<uint8_t> data(ggml_nbytes(is->tensor));
+                ml.files.at(is->idx)->seek(is->offs, SEEK_SET);
+                ml.files.at(is->idx)->read_raw(data.data(), data.size());
+                fout.write((const char *) data.data(), data.size());
+                zeros(fout, GGML_PAD(data.size(), align) - data.size());
+            }
             if (ml.use_mmap) {
                 ml.mappings.at(weight->idx)->unmap_fragment(weight->offs, weight->offs + ggml_nbytes(tensor));
             }
