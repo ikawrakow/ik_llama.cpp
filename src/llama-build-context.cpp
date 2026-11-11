@@ -652,6 +652,11 @@ ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool 
         return nullptr;
     }
 
+    // non-causal image decode: full mask, not the causal-only windowed view
+    if (!cparams.causal_attn) {
+        return build_inp_KQ_mask_swa();
+    }
+
     const llama_kv_cache & cache = kv ? *kv : kv_self;
     const int32_t cache_n_kv = kv ? (int32_t) kv->n : n_kv;
 

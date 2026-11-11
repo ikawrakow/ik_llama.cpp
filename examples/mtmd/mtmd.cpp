@@ -306,7 +306,7 @@ struct mtmd_context {
             img_end = "<|im_end|>";
 
         }
-        else if (proj == PROJECTOR_TYPE_GEMMA4V) {
+        else if (proj == PROJECTOR_TYPE_GEMMA4V || proj == PROJECTOR_TYPE_GEMMA4UV) {
             // <|image> ... (image embeddings) ... <image|>
             img_beg = "<|image>";
             img_end = "<image|>";
@@ -344,7 +344,12 @@ struct mtmd_context {
         LOG_WRN("%s: audio input is in experimental stage and may have reduced quality:\n"
                 "    https://github.com/ggml-org/llama.cpp/discussions/13759\n", __func__);
 
-        if (proj == PROJECTOR_TYPE_QWEN2A) {
+        if (proj == PROJECTOR_TYPE_GEMMA4UA) {
+            // <|audio> ... (embeddings) ... <audio|>
+            aud_beg = "<|audio>";
+            aud_end = "<audio|>";
+
+        } else if (proj == PROJECTOR_TYPE_QWEN2A) {
             // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
             aud_beg = "<|audio_bos|>";
             aud_end = "<|audio_eos|>";
@@ -713,14 +718,20 @@ struct mtmd_tokenizer {
             }
 
             // preprocess audio
-            GGML_ASSERT(ctx->w_filters.n_mel); // make sure we have filter preloaded
             std::vector<whisper_preprocessor::whisper_mel> mel_spec_chunks;
             const float * samples = (const float *)bitmap->data.data();
             size_t n_samples = bitmap->data.size() / sizeof(float);
-            bool ok = whisper_preprocessor::preprocess_audio(samples, n_samples, ctx->w_filters, mel_spec_chunks);
-            if (!ok) {
-                LOG_ERR("Unable to preprocess audio\n");
-                return 2;
+            if (clip_get_projector_type(ctx->ctx_a) == PROJECTOR_TYPE_GEMMA4UA) {
+                // raw frames, no mel
+                const int frame_size = clip_get_audio_n_mel(ctx->ctx_a);
+                mel_spec_chunks.push_back(whisper_preprocessor::preprocess_audio_raw_frames(samples, n_samples, frame_size));
+            } else {
+                GGML_ASSERT(ctx->w_filters.n_mel); // make sure we have filter preloaded
+                bool ok = whisper_preprocessor::preprocess_audio(samples, n_samples, ctx->w_filters, mel_spec_chunks);
+                if (!ok) {
+                    LOG_ERR("Unable to preprocess audio\n");
+                    return 2;
+                }
             }
 
             // consider each mel_spec as a separate audio chunk
@@ -908,13 +919,27 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
     return ctx->image_embd_v.data();
 }
 
-bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
+int mtmd_get_image_max_tokens(const mtmd_context * ctx) {
+    return ctx->ctx_v ? clip_get_image_max_tokens(ctx->ctx_v) : 0;
+}
+
+void mtmd_set_image_max_tokens(mtmd_context * ctx, int n_tokens) {
     if (ctx->ctx_v) {
-        if (auto type = clip_get_projector_type(ctx->ctx_v); type == PROJECTOR_TYPE_GEMMA3 || type == PROJECTOR_TYPE_GEMMA4V || type == PROJECTOR_TYPE_DEEPSEEK4V) {
-            return true;
-        }
+        clip_set_image_max_tokens(ctx->ctx_v, n_tokens);
     }
-    return false;
+}
+
+bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
+    if (!ctx->ctx_v) {
+        return false;
+    }
+    const auto type = clip_get_projector_type(ctx->ctx_v);
+    if (type == PROJECTOR_TYPE_GEMMA4V) {
+        // E2B (1536) and E4B (2560) use causal attention
+        const int n_embd = clip_n_mmproj_embd(ctx->ctx_v);
+        return n_embd != 1536 && n_embd != 2560;
+    }
+    return type == PROJECTOR_TYPE_GEMMA3 || type == PROJECTOR_TYPE_GEMMA4UV || type == PROJECTOR_TYPE_DEEPSEEK4V;
 }
 
 bool mtmd_decode_use_mrope(mtmd_context * ctx) {

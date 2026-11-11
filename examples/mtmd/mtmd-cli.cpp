@@ -195,6 +195,12 @@ struct mtmd_cli_context {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
             exit(1);
         }
+
+        // non-causal: whole image must fit in one ubatch
+        if (mtmd_decode_use_non_causal(ctx_vision.get()) && mtmd_get_image_max_tokens(ctx_vision.get()) > params.n_ubatch) {
+            LOG_WRN("%s: capping image tokens to n_ubatch (%d)\n", __func__, params.n_ubatch);
+            mtmd_set_image_max_tokens(ctx_vision.get(), params.n_ubatch);
+        }
     }
 
     bool check_antiprompt(const llama_tokens & generated_tokens) {

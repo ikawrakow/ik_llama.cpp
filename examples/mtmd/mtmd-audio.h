@@ -38,6 +38,12 @@ bool preprocess_audio(
         const whisper_filters & filters,
         std::vector<whisper_mel> & output);
 
+// raw-waveform framing (e.g. gemma4ua), stored mel-major
+whisper_mel preprocess_audio_raw_frames(
+        const float * samples,
+        size_t n_samples,
+        int frame_size);
+
 } // namespace whisper_preprocessor
 
 namespace whisper_precalc_filters {
