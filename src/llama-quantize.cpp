@@ -2472,10 +2472,12 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
 
         if (auto pos = name.find(".ssm_out.weight"); pos != std::string::npos) {
             check = false;
-            auto other_name = name.substr(0, pos) + ".attn_qkv.weight";
-            if (auto it = sum_map.find(other_name); it != sum_map.end() && values.size() <= it->second.sum_r.size()) {
-                LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name.c_str());
-                for (int j = 0; j < int(values.size()); ++j) values[j] *= (2.0f + it->second.sum_r[j]);
+            if (!imatrix) {
+                auto other_name = name.substr(0, pos) + ".attn_qkv.weight";
+                if (auto it = sum_map.find(other_name); it != sum_map.end() && values.size() <= it->second.sum_r.size()) {
+                    LLAMA_LOG_INFO("Combining %s and %s\n", name.c_str(), other_name.c_str());
+                    for (int j = 0; j < int(values.size()); ++j) values[j] *= (2.0f + it->second.sum_r[j]);
+                }
             }
         }
 
