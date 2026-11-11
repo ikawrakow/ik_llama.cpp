@@ -17,7 +17,7 @@ static ggml_tensor * step5_bf16_roundtrip(ggml_context * ctx, ggml_tensor * t) {
 }
 
 static bool ik_sparse_enabled() {
-    static const bool on = getenv("IK_SPARSE") != nullptr && atoi(getenv("IK_SPARSE")) != 0;
+    static const bool on = getenv("IK_SPARSE") == nullptr || atoi(getenv("IK_SPARSE")) != 0;
     return on;
 }
 

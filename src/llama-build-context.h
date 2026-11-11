@@ -511,6 +511,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_laguna();
 
+    ggml_cgraph * build_step35();
+
     ggml_cgraph * build_step5();
 
     ggml_cgraph * build_k2horizon();
@@ -523,6 +525,15 @@ struct llm_build_context {
     ggml_tensor * build_step5_indexer_score(ggml_cgraph * gf, int il, ggml_tensor * inpL,
             ggml_tensor * inp_pos, ggml_tensor * KQ_mask, ggml_tensor * band01,
             ggml_tensor * band_neg, ggml_tensor ** fused_mask_out = nullptr);
+
+    ggml_tensor * build_step35_mtp(
+            const llama_layer & mtp_layer,
+            ggml_tensor * hidden_states_from_main_model,
+            ggml_cgraph * gf,
+            ggml_tensor * inp_pos,
+            bool reduce_output = true,
+            bool emit_logits = true,
+            ggml_tensor ** hidden_out = nullptr);
 
     ggml_tensor * build_step5_mtp(
             const llama_layer & mtp_layer,
