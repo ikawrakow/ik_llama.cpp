@@ -436,6 +436,13 @@ struct llama_layer {
     struct ggml_tensor * indexer_k_proj   = nullptr;
     struct ggml_tensor * indexer_q_norm   = nullptr;
 
+    // step5 sparse-GQA indexer (full-attn layers only).
+    struct ggml_tensor * indexer_q        = nullptr; // blk.{i}.indexer.q.weight {n_embd, proxy*n_head}
+    struct ggml_tensor * indexer_k        = nullptr; // blk.{i}.indexer.k.weight {n_embd, proxy}
+    struct ggml_tensor * indexer_z        = nullptr; // blk.{i}.indexer.z.weight {n_embd, proxy}
+    struct ggml_tensor * indexer_w        = nullptr; // blk.{i}.indexer.w.weight {n_embd, n_head}
+    struct ggml_tensor * indexer_ssmax_s  = nullptr; // blk.{i}.indexer.ssmax_s  {n_head_q}
+
     // qwen4exp per-layer n-gram embedding (PLE); present on ple layers only
     struct ggml_tensor * ple_key          = nullptr;
     struct ggml_tensor * ple_value        = nullptr;
@@ -696,7 +703,7 @@ struct llama_model {
     }
 
     float swiglu_limit(uint32_t il, bool shared) const {
-        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && !llm_arch_is_dsv4(arch) && arch != LLM_ARCH_GLM5NEXT && arch != LLM_ARCH_MAPLE && arch != LLM_ARCH_RICURSIVE && !hparams.dflash_dsv4) {
+        if (!llm_arch_is_step5(arch) && arch != LLM_ARCH_BAILINGMOE3 && !llm_arch_is_dsv4(arch) && arch != LLM_ARCH_GLM5NEXT && arch != LLM_ARCH_MAPLE && arch != LLM_ARCH_RICURSIVE && !hparams.dflash_dsv4) {
             return 0.0f;
         }
         return shared ? hparams.swiglu_limits_shared[il] : hparams.swiglu_limits[il];
@@ -730,6 +737,7 @@ struct llama_model {
             || arch == LLM_ARCH_SPARK2_5
             || arch == LLM_ARCH_LFM3
             || arch == LLM_ARCH_MAPLE     || arch == LLM_ARCH_FLINT
+            || arch == LLM_ARCH_STEP5
             || arch == LLM_ARCH_RICURSIVE
             || supports_dflash_swa_compress() ;
     }

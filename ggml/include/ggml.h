@@ -747,6 +747,7 @@ extern "C" {
         GGML_OP_MASK_TO_IDX,
         GGML_OP_LATENT_ATTN,
         GGML_OP_DS4_COMP,
+        GGML_OP_CSA_COMPRESS,
 
         GGML_OP_FMA,
 
@@ -773,6 +774,7 @@ extern "C" {
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_SOFTPLUS,
         GGML_UNARY_OP_SQRT_SOFTPLUS,
+        GGML_UNARY_OP_ROUND_E4M3,
         GGML_UNARY_OP_SITU_GLU,
 
         GGML_UNARY_OP_COUNT,
@@ -1290,6 +1292,12 @@ extern "C" {
             struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_sqrt_softplus(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    // Round F32 through E4M3FN (via BF16 RNE), matching the Step-5 reference indexer
+    // activation quantization. F32 in/out so it composes with the F32 graph.
+    GGML_API struct ggml_tensor * ggml_round_e4m3(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
@@ -2436,7 +2444,8 @@ extern "C" {
     };
 
     enum ggml_scale_flag {
-        GGML_SCALE_FLAG_ALIGN_CORNERS = (1 << 8)
+        GGML_SCALE_FLAG_ALIGN_CORNERS = (1 << 8),
+        GGML_SCALE_FLAG_ANTIALIAS     = (1 << 9),
     };
 
     // nearest interpolate
@@ -2519,6 +2528,14 @@ extern "C" {
             struct ggml_tensor  * mask,
             struct ggml_tensor  * topk);
 
+    // Same as ggml_indexer_mask, plus cells where force > 0.5 are unmasked in addition to
+    // the topk indices. force: F32 tensor with the mask's {n_kv, n_tok} layout;
+    // NULL = plain ggml_indexer_mask behavior.
+    GGML_API struct ggml_tensor * ggml_indexer_mask_own(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk,
+            struct ggml_tensor  * force);
     // n_visible is I32 [1, n_rows]; row i of the result is 0 in its first n_visible[i] columns, -INFINITY after
     GGML_API struct ggml_tensor * ggml_visible_mask(
             struct ggml_context * ctx,
@@ -2757,6 +2774,26 @@ extern "C" {
             int                   group_size,
             bool                  select_groups,
             struct ggml_tensor  * top_k_out);
+
+    // Step-5 CSA region compress: softmax(z)-weighted mean of the proxy keys over each
+    // region's tokens (the softmax/sum axis is the region's tokens only; never across
+    // heads/regions/dims).
+    //
+    //   z        [head_size, n_kv]    (F16 or F32) per-dim softmax logits
+    //   k        [head_size, n_kv]    F32 proxy keys
+    //   vis      [n_kv]               F32 0/1 slot validity (0-weight slots drop out;
+    //                                 partial blocks still summarize)
+    //   B        region size; requires n_kv % B == 0
+    //   round_e4m3   0 = plain F32 summary, 1 = F32 -> BF16 -> E4M3 (satfinite) -> F32
+    //
+    // Output: [head_size, n_kv/B] F32; out[d, b] = summary of block b at dim d.
+    GGML_API struct ggml_tensor * ggml_csa_compress(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * z,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * vis,
+            int                   B,
+            int                   round_e4m3);
 
     // Sinkhorn normalization of a flat [S*S, T] batch of S x S matrices into
     // doubly-stochastic form: softmax over columns, then column normalization,
