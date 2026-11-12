@@ -682,8 +682,6 @@ static ggml_tensor * dsv4_build_attn(
         // DSV4 uses the generic CPU FA path here for numerical correctness.
         if (selected) {
             cur->src[5] = selected;
-        } else {
-            cur->op_params[4] = GGML_FLASH_ATTN_EXT_IQK_DISABLED;
         }
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
