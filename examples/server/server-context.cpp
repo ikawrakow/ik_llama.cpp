@@ -292,6 +292,12 @@ bool server_context::load_model(const gpt_params& params_) {
             LOG_ERROR("failed to load multimodal model, %s\n", mmproj_path.c_str());
             return false;
         }
+
+        // non-causal: whole image must fit in one ubatch
+        if (mtmd_decode_use_non_causal(mctx) && mtmd_get_image_max_tokens(mctx) > params_base.n_ubatch) {
+            SRV_WRN("%s\n", "capping image tokens to n_ubatch for non-causal projector");
+            mtmd_set_image_max_tokens(mctx, params_base.n_ubatch);
+        }
         LOG_INFO("loaded multimodal model, %s\n", mmproj_path.c_str());
 
         //if (params.n_cache_reuse) {

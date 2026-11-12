@@ -107,6 +107,8 @@ MTMD_API void mtmd_free(mtmd_context * ctx);
 
 // whether we need to set non-causal mask before llama_decode
 MTMD_API bool mtmd_decode_use_non_causal(mtmd_context * ctx);
+MTMD_API int  mtmd_get_image_max_tokens(const mtmd_context * ctx);
+MTMD_API void mtmd_set_image_max_tokens(mtmd_context * ctx, int n_tokens);
 
 // whether the current model use M-RoPE for llama_decode
 MTMD_API bool mtmd_decode_use_mrope(mtmd_context * ctx);

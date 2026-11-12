@@ -442,6 +442,12 @@ struct clip_model {
     ggml_tensor * mm_eoi = nullptr;
 
     // gemma4
+    ggml_tensor * patch_norm_1_w = nullptr;
+    ggml_tensor * patch_norm_1_b = nullptr;
+    ggml_tensor * patch_norm_2_w = nullptr;
+    ggml_tensor * patch_norm_2_b = nullptr;
+    ggml_tensor * patch_norm_3_w = nullptr;
+    ggml_tensor * patch_norm_3_b = nullptr;
     ggml_tensor * std_bias = nullptr;
     ggml_tensor * std_scale = nullptr;
     // Gemma4ClippableLinear
@@ -1700,32 +1706,10 @@ struct clip_graph {
         ggml_set_name(inp, "inp");
         // note: no patch bias
 
-        ggml_tensor * pos_x = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
-        ggml_set_name(pos_x, "pos_x");
-        ggml_set_input(pos_x);
-
-        ggml_tensor * pos_y = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
-        ggml_set_name(pos_y, "pos_y");
-        ggml_set_input(pos_y);
-
-        {
-            const int64_t pos_size = model.position_embeddings->ne[1];
-            const size_t  nb1      = ggml_row_size(model.position_embeddings->type, n_embd);
-
-            // positional embeddings are stored as lookup tables (one for x, one for y)
-            ggml_tensor * tbl_x = ggml_view_2d(ctx0, model.position_embeddings,
-                    n_embd, pos_size, nb1, 0);
-            ggml_tensor * tbl_y = ggml_view_2d(ctx0, model.position_embeddings,
-                    n_embd, pos_size, nb1, pos_size * nb1);
-
-            // ggml_get_rows: [n_embd, n_patches]
-            ggml_tensor * emb_x = ggml_get_rows(ctx0, tbl_x, pos_x);
-            ggml_tensor * emb_y = ggml_get_rows(ctx0, tbl_y, pos_y);
-
-            inp = ggml_add(ctx0, inp, emb_x);
-            inp = ggml_add(ctx0, inp, emb_y);
-            cb(inp, "pos_embd", -1);
-        }
+        ggml_tensor * pos_x = nullptr;
+        ggml_tensor * pos_y = nullptr;
+        build_2d_pos_inputs(&pos_x, &pos_y);
+        inp = build_2d_pos_emb(inp, pos_x, pos_y);
 
         // similar to build_rope_2d, but use neox ordering
         auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
@@ -1814,6 +1798,63 @@ struct clip_graph {
 
         // Gemma4MultimodalEmbedder
         cur = build_mm_gemma4(model.mm_input_proj_w, cur);
+        cb(cur, "projected", -1);
+
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
+
+    // Gemma4 unified vision (encoder-free)
+    ggml_cgraph * build_gemma4uv() {
+        ggml_tensor * inp_raw = build_inp_raw();
+
+        // pytorch LayerNorm eps
+        const float eps = 1e-5f;
+
+        ggml_tensor * inp = nullptr;
+        {
+            // conv_2d can't be used: norm goes after im2col
+            inp = build_unfold_patches(inp_raw, patch_size);
+            // [patch*patch*c, n_w, n_h]
+
+            inp = ggml_reshape_2d(ctx0, inp, inp->ne[0], inp->ne[1] * inp->ne[2] * inp->ne[3]);
+            inp = build_norm(inp, model.patch_norm_1_w, model.patch_norm_1_b, NORM_TYPE_NORMAL, eps, -1);
+            // [patch*patch*c, n_patches]
+
+            inp = ggml_mul_mat(ctx0, model.patch_embeddings_0, inp);
+            ggml_mul_mat_set_prec(inp, GGML_PREC_F32); // avoid F16 overflow on GPU (#24146)
+            inp = ggml_add(ctx0, inp, model.patch_bias);
+            // [n_embd, n_patches]
+
+            inp = build_norm(inp, model.patch_norm_2_w, model.patch_norm_2_b, NORM_TYPE_NORMAL, eps, -1);
+        }
+
+        ggml_tensor * pos_x = nullptr;
+        ggml_tensor * pos_y = nullptr;
+        build_2d_pos_inputs(&pos_x, &pos_y);
+        inp = build_2d_pos_emb(inp, pos_x, pos_y);
+
+        // pos norm
+        inp = build_norm(inp, model.patch_norm_3_w, model.patch_norm_3_b, NORM_TYPE_NORMAL, eps, -1);
+
+        // multimodal embedder: pre-projection RMSNorm
+        ggml_tensor * cur = ggml_rms_norm(ctx0, inp, hparams.eps);
+        cur = ggml_mul_mat(ctx0, model.mm_input_proj_w, cur);
+        ggml_mul_mat_set_prec(cur, GGML_PREC_F32); // avoid F16 overflow on GPU (#24146)
+        cb(cur, "projected", -1);
+
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
+
+    // Gemma4 unified audio (encoder-free)
+    ggml_cgraph * build_gemma4ua() {
+        ggml_tensor * inp = build_inp_raw(1);
+
+        auto cur = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
+        // pre-projection RMSNorm
+        cur = ggml_rms_norm(ctx0, cur, hparams.eps);
+        cur = ggml_mul_mat(ctx0, model.mm_input_proj_w, cur);
         cb(cur, "projected", -1);
 
         ggml_build_forward_expand(gf, cur);
@@ -1988,9 +2029,7 @@ struct clip_graph {
 
         // Llama4UnfoldConvolution
         {
-            ggml_tensor * kernel = ggml_reshape_4d(ctx0, model.patch_embeddings_0,
-                                                    patch_size, patch_size, 3, n_embd);
-            inp = ggml_im2col(ctx0, kernel, inp, patch_size, patch_size, 0, 0, 1, 1, true, inp->type);
+            inp = build_unfold_patches(inp, patch_size);
             inp = ggml_mul_mat(ctx0, model.patch_embeddings_0, inp);
             inp = ggml_reshape_2d(ctx0, inp, n_embd, n_patches);
             cb(inp, "patch_conv", -1);
@@ -3028,6 +3067,39 @@ private:
         return inp_raw;
     }
 
+    // unfold image into patch columns
+    ggml_tensor * build_unfold_patches(ggml_tensor * inp, int patch_sz) {
+        ggml_tensor * kernel = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, patch_sz, patch_sz, inp->ne[2]);
+        return ggml_im2col(ctx0, kernel, inp, patch_sz, patch_sz, 0, 0, 1, 1, true, inp->type);
+    }
+
+    // 2D position inputs
+    void build_2d_pos_inputs(ggml_tensor ** pos_x, ggml_tensor ** pos_y) {
+        *pos_x = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(*pos_x, "pos_x");
+        ggml_set_input(*pos_x);
+
+        *pos_y = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(*pos_y, "pos_y");
+        ggml_set_input(*pos_y);
+    }
+
+    // learned 2D position embeddings
+    ggml_tensor * build_2d_pos_emb(ggml_tensor * cur, ggml_tensor * pos_x, ggml_tensor * pos_y) {
+        const int64_t pos_size = model.position_embeddings->ne[1];
+        const size_t  nb1      = ggml_row_size(model.position_embeddings->type, n_embd);
+
+        // x/y lookup tables
+        ggml_tensor * tbl_x = ggml_view_2d(ctx0, model.position_embeddings, n_embd, pos_size, nb1, 0);
+        ggml_tensor * tbl_y = ggml_view_2d(ctx0, model.position_embeddings, n_embd, pos_size, nb1, pos_size * nb1);
+
+        // [n_embd, n_patches]
+        cur = ggml_add(ctx0, cur, ggml_get_rows(ctx0, tbl_x, pos_x));
+        cur = ggml_add(ctx0, cur, ggml_get_rows(ctx0, tbl_y, pos_y));
+        cb(cur, "pos_embd", -1);
+        return cur;
+    }
+
     ggml_tensor * build_norm(
             ggml_tensor * cur,
             ggml_tensor * mw,
@@ -3444,6 +3516,14 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_GEMMA4V:
             {
                 res = graph.build_gemma4();
+            } break;
+        case PROJECTOR_TYPE_GEMMA4UV:
+            {
+                res = graph.build_gemma4uv();
+            } break;
+        case PROJECTOR_TYPE_GEMMA4UA:
+            {
+                res = graph.build_gemma4ua();
             } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
@@ -3943,6 +4023,25 @@ struct clip_model_loader {
                         hparams.set_limit_image_tokens(252, 280);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
+                case PROJECTOR_TYPE_GEMMA4UV:
+                    {
+                        hparams.rope_theta = 100.0f;
+                        hparams.ffn_op = FFN_GELU;
+                        log_ffn_op = "gelu";
+                        hparams.n_merge = 3; // pooling kernel
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        // patch = patch_size * n_merge
+                        hparams.patch_size *= hparams.n_merge;
+                        hparams.n_merge = 1;
+                        hparams.set_limit_image_tokens(70, 1120);
+                        hparams.set_warmup_n_tokens(256);
+                    } break;
+                case PROJECTOR_TYPE_GEMMA4UA:
+                    {
+                        // 640 raw samples per token (40 ms @ 16 kHz); GGUF value is a hint
+                        hparams.n_mel_bins = 640;
+                        hparams.eps = 1e-6f;
+                    } break;
                 case PROJECTOR_TYPE_LLAMA4:
                     {
                         hparams.rope_theta = 10000.0f;
@@ -4344,6 +4443,22 @@ struct clip_model_loader {
                             };
                         }
                     }
+                } break;
+            case PROJECTOR_TYPE_GEMMA4UV:
+                {
+                    // encoder-free: patches + norms + linear
+                    model.patch_norm_1_w = get_tensor(string_format(TN_PATCH_NORM, 1, "weight"));
+                    model.patch_norm_1_b = get_tensor(string_format(TN_PATCH_NORM, 1, "bias"));
+                    model.patch_norm_2_w = get_tensor(string_format(TN_PATCH_NORM, 2, "weight"));
+                    model.patch_norm_2_b = get_tensor(string_format(TN_PATCH_NORM, 2, "bias"));
+                    model.patch_norm_3_w = get_tensor(string_format(TN_PATCH_NORM, 3, "weight")); // pos norm
+                    model.patch_norm_3_b = get_tensor(string_format(TN_PATCH_NORM, 3, "bias"));
+                    model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
+                } break;
+            case PROJECTOR_TYPE_GEMMA4UA:
+                {
+                    // encoder-free: linear projection
+                    model.mm_input_proj_w = get_tensor(string_format(TN_A_MM_INP_PROJ, "weight"));
                 } break;
             case PROJECTOR_TYPE_IDEFICS3:
                 {
@@ -5387,6 +5502,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
         case PROJECTOR_TYPE_MINIMAX_M3_VL:
         case PROJECTOR_TYPE_GLM4V:
             {
@@ -5913,6 +6029,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_LLAMA4:
         case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
             {
                 // both X and Y are downscaled by the scale factor
                 int scale_factor = ctx->model.hparams.n_merge;
@@ -5940,6 +6057,11 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 } else {
                     n_patches = n_patches_y * n_patches_x;
                 }
+            } break;
+        case PROJECTOR_TYPE_GEMMA4UA:
+            {
+                // one raw frame per token
+                n_patches = img->nx;
             } break;
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_ULTRAVOX:
@@ -6254,6 +6376,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("positions", positions);
             } break;
         case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
             {
                 // set (col, row) patch positions for learned positional embedding
                 // what about image_size_height?
@@ -6522,6 +6645,10 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_i32("positions", positions);
             } break;
+        case PROJECTOR_TYPE_GEMMA4UA:
+            {
+                // no extra inputs
+            } break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -6594,6 +6721,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GEMMA3:
             return ctx->model.mm_input_proj_w->ne[0];
         case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
+        case PROJECTOR_TYPE_GEMMA4UA:
             return ctx->model.mm_input_proj_w->ne[1];
         case PROJECTOR_TYPE_IDEFICS3:
             return ctx->model.projection->ne[1];
@@ -6705,4 +6834,30 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
     batch->entries.push_back(clip_image_f32_ptr(audio));
     batch->is_audio = true;
+}
+
+int clip_get_audio_n_mel(const struct clip_ctx * ctx) {
+    return ctx->model.hparams.n_mel_bins;
+}
+
+int clip_get_image_max_tokens(const struct clip_ctx * ctx) {
+    const auto & hparams = ctx->model.hparams;
+    const int merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
+    const int patch_area = hparams.patch_size * hparams.patch_size * merge * merge;
+    return patch_area > 0 ? hparams.image_max_pixels / patch_area : 0;
+}
+
+void clip_set_image_max_tokens(struct clip_ctx * ctx, int n_tokens) {
+    auto & hparams = ctx->model.hparams;
+    const int merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
+    const int patch_area = hparams.patch_size * hparams.patch_size * merge * merge;
+    if (n_tokens <= 0 || patch_area <= 0) {
+        return;
+    }
+    hparams.custom_image_max_tokens = n_tokens;
+    hparams.image_max_pixels = n_tokens * patch_area;
+    if (hparams.image_min_pixels > hparams.image_max_pixels) {
+        hparams.image_min_pixels = hparams.image_max_pixels;
+    }
+    hparams.warmup_image_size = static_cast<int>(std::sqrt(hparams.image_max_pixels));
 }
