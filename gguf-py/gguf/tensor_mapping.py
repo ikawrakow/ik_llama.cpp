@@ -316,6 +316,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate.e_score_correction",           # deepseek-v3 dots1
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",    # ernie4.5-moe
             "model.layers.{bid}.mlp.gate.expert_bias",                  # bailingmoe2
+            "model.layers.{bid}.mlp.expert_bias",                       # hy_v3
             "model.layers.{bid}.block_sparse_moe.e_score_correction",   # minimax-m2
             "model.layers.{bid}.mlp.experts.e_score_correction_bias",   # laguna
             "model.layers.{bid}.mlp.experts.e_score_correction",        # laguna
@@ -371,6 +372,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_expert.up_proj",  # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.up_proj", # deepseek2
             "model.layers.{bid}.share_expert.up_proj",       # step5
+            "model.layers.{bid}.mlp.shared_mlp.up_proj",     # hy_v3
         ),
 
         # AWQ-activation gate
@@ -406,6 +408,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_expert.gate_proj",  # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.gate_proj", # deepseek2
             "model.layers.{bid}.share_expert.gate_proj",       # step5
+            "model.layers.{bid}.mlp.shared_mlp.gate_proj",     # hy_v3
         ),
 
         # Feed-forward down
@@ -450,6 +453,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_expert.down_proj",  # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.down_proj", # deepseek2
             "model.layers.{bid}.share_expert.down_proj",       # step5
+            "model.layers.{bid}.mlp.shared_mlp.down_proj",     # hy_v3
         ),
 
         MODEL_TENSOR.ATTN_Q_NORM: (

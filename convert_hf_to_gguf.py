@@ -7163,6 +7163,24 @@ class BailingMoeV2Model(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@Model.register("HYV3ForCausalLM")
+class HyV3Model(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.HY_V3
+
+    def get_vocab_base_pre(self, tokenizer) -> str:
+        # Hunyuan BPE pre-tokenizer
+        return "hunyuan-dense"
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        n_shared = int(hparams.get("num_shared_experts", 1))
+        self.gguf_writer.add_expert_shared_feed_forward_length(
+            int(hparams["moe_intermediate_size"]) * n_shared)
+        self.gguf_writer.add_expert_weights_norm(bool(hparams.get("route_norm", True)))
+        self.gguf_writer.add_expert_weights_scale(float(hparams.get("router_scaling_factor", 1.0)))
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
 @Model.register("LagunaForCausalLM")
 class LagunaModel(Model):
     model_arch = gguf.MODEL_ARCH.LAGUNA

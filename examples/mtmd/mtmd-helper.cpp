@@ -213,7 +213,7 @@ static int32_t mtmd_helper_decode_image_chunk_impl(
         batch_embd.set_position_normal(n_past, seq_id);
     }
 
-    if (mtmd_decode_use_non_causal(ctx)) {
+    if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE && mtmd_decode_use_non_causal(ctx)) {
         llama_set_causal_attn(lctx, false);
         // TODO @ngxson : need to make sure only one image is processed at a time, and n_ubatch must be enough to hold the image
     }
@@ -250,7 +250,7 @@ static int32_t mtmd_helper_decode_image_chunk_impl(
     n_past += mtmd_input_chunk_get_n_pos(chunk);
     *new_n_past = n_past;
 
-    if (mtmd_decode_use_non_causal(ctx)) {
+    if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE && mtmd_decode_use_non_causal(ctx)) {
         llama_set_causal_attn(lctx, true);
     }
     return 0;
