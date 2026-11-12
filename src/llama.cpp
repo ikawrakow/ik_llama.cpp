@@ -9474,6 +9474,11 @@ struct llama_context * llama_init_from_model(
         params.flash_attn = false;
     }
 
+    if (params.flash_attn && model->hparams.f_max_alibi_bias > 0) {
+        LLAMA_LOG_WARN("%s: flash_attn is not supported with Alibi bias - forcing off\n", __func__);
+        params.flash_attn = false;
+    }
+
     if (params.n_seq_max > 1 && model->arch == LLM_ARCH_OPENPANGU) {
         // The MoME conv slot and the DSA indexer cache are single-sequence (one position
         // stream); parallel sequences would silently share and corrupt them.
