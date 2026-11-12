@@ -3701,6 +3701,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             result = llm.build_ernie4_5_moe();
         } break;
         case LLM_ARCH_HUNYUAN_MOE:
+        case LLM_ARCH_HY_V3:
             {
                 result = llm.build_hunyuan_moe();
             } break;
