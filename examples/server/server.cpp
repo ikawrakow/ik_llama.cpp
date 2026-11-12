@@ -1315,6 +1315,16 @@ int main(int argc, char ** argv) {
                             return false; // sending failed, go to on_complete()
                         }
                         first_result_json.clear(); // mark as sent
+                        // the first result can already be the final one, e.g. when the whole
+                        // generation is an incomplete UTF-8 character that was never sent
+                        if (!rd->has_next()) {
+                            if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE && oaicompat != OAICOMPAT_TYPE_RESP) {
+                                static const std::string ev_done = "data: [DONE]\n\n";
+                                sink.write(ev_done.data(), ev_done.size());
+                            }
+                            sink.done();
+                            return false; // no more data, go to on_complete()
+                        }
                     }
 
                     // receive subsequent results
