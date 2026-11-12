@@ -1551,7 +1551,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         // do not overwrite user assignments
         if (*node_backend_id == -1) {
             *node_backend_id = ggml_backend_sched_backend_id_from_cur(sched, node);
-            if (*node_backend_id == -1 && node->op == GGML_OP_MUL_MULTI_ADD) {
+            if (*node_backend_id == -1 && node->op == GGML_OP_MUL_MULTI_ADD && ggml_nrows(node) > 32) {
                 const int cpu_id = sched->n_backends - 1;
                 if (tensor_backend_id(node->src[0]) == cpu_id && ggml_backend_supports_op(sched->backends[cpu_id], node)) {
                     *node_backend_id = cpu_id;
