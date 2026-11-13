@@ -509,6 +509,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_laguna();
 
+    ggml_cgraph * build_step5();
+
     ggml_cgraph * build_step35();
 
     ggml_cgraph * build_k2horizon();

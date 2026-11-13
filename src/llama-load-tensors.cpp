@@ -191,6 +191,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_seedoss_tensors(const LLM_TN & tn);
 
+    bool create_step5_tensors(const LLM_TN & tn);
     bool create_step35_tensors(const LLM_TN & tn);
 
     llama_model_loader & ml;
@@ -1384,6 +1385,59 @@ bool create_tensors_helper::create_seedoss_tensors(const LLM_TN & tn) {
         layer.ffn_norm = layer.attn_post_norm;
 
         create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+    }
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_step5_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+    model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab});
+    const int n_trunk = n_layer - hparams.nextn_predict_layers;
+    uint32_t max_rot = 0;
+    for (int i = 0; i < n_trunk; ++i) {
+        max_rot = std::max(max_rot, hparams.rope_n_rot(i));
+    }
+    auto rope_factors = create_tensor(ctx_input, tn(LLM_TENSOR_ROPE_FREQS, "weight"), {max_rot/2},
+            llama_model_loader::TENSOR_NOT_REQUIRED);
+    for (int i = 0; i < n_trunk; ++i) {
+        auto ctx = ctx_for_layer(i);
+        auto & layer = model.layers[i];
+        layer.attn_norm = create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+        layer.attn_q_norm = create_tensor(ctx, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k});
+        layer.attn_k_norm = create_tensor(ctx, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
+        layer.rope_freqs = ((hparams.swa_layers[i] ? 2u : 1u) & hparams.rope_scaling_apply_mask)
+            ? rope_factors : nullptr;
+        use_mmap_buffer &= !merge_qkv(tn, i, 0);
+        layer.wo = create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * hparams.n_head(i), n_embd});
+        layer.wqkv_gate = create_tensor(ctx, tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, hparams.n_head(i)});
+        layer.ffn_norm = create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+        layer.ffn_gate = create_tensor(ctx, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        if (layer.ffn_gate) {
+            layer.ffn_up = create_tensor(ctx, tn(LLM_TENSOR_FFN_UP, "weight", i), {n_embd, n_ff});
+            layer.ffn_down = create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd});
+        } else {
+            layer.ffn_gate_inp = create_tensor(ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
+            layer.ffn_exp_probs_b = create_tensor(ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert});
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
+            layer.ffn_gate_shexp = create_tensor(ctx, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp});
+            layer.ffn_up_shexp = create_tensor(ctx, tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp});
+            layer.ffn_down_shexp = create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd});
+        }
+    }
+    // Existing releases include sparse-indexer tensors and appended MTP blocks.
+    // Account for them explicitly without allocating or executing those features.
+    for (int it = 0; it < ml.n_tensors; ++it) {
+        const auto * meta = ml.get_weight(it)->tensor;
+        const std::string name = meta->name;
+        int il = -1;
+        if (sscanf(name.c_str(), "blk.%d.", &il) == 1 &&
+                (il >= n_trunk || name.find(".indexer.") != std::string::npos)) {
+            ml.create_tensor(ctx_input, name, std::vector<int64_t>(meta->ne, meta->ne + GGML_MAX_DIMS),
+                    llama_model_loader::TENSOR_SKIP);
+        }
     }
     return use_mmap_buffer;
 }
@@ -6600,6 +6654,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_mimo2_tensors(tn); break;
         case LLM_ARCH_SEED_OSS:
             use_mmap_buffer = create_seedoss_tensors(tn); break;
+        case LLM_ARCH_STEP5:
+            use_mmap_buffer = create_step5_tensors(tn); break;
         case LLM_ARCH_STEP35:
             use_mmap_buffer = create_step35_tensors(tn); break;
         case LLM_ARCH_LAGUNA:

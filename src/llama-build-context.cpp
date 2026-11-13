@@ -3757,6 +3757,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_seedoss();
             } break;
+        case LLM_ARCH_STEP5:
+            {
+                result = llm.build_step5();
+            } break;
         case LLM_ARCH_STEP35:
             {
                 result = llm.build_step35();
