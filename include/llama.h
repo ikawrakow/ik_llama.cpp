@@ -471,6 +471,7 @@ extern "C" {
         bool mtp;           // if true, load MTP layers if present
         bool dsa;           // if true, load the MiniMax-M3 sparse attention indexer if present
         bool dry_run;       // skip loading tensors
+        bool split_output_tensor; // if true, force split the output tensor in split mode graph
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
         bool defer_ple;        // keep sparse tables (PLE, engram) on the file instead of resident in memory (Linux and Windows only)
