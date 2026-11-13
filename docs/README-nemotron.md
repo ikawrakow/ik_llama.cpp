@@ -88,6 +88,26 @@ The rolling conv window is part of the sequence state: `llama_state_seq_get/set`
 (state format version 5, session format 11). The speculative checkpoint modes that assume a packed
 `s_l` are declined for Mamba-2 models instead of silently producing a wrong state.
 
+### Performance
+
+Mamba-2 layers are copy-heavy in ways a dense transformer is not — every layer has a state block
+the scan has to hand back, a conv window to assemble and a gate to apply — and on a 4B these were
+the whole difference to mainline. Three fixes, all in this branch and all measured on an RTX 3060
+(4B Q4_K_M; "prefill" is a 2.8k-token prompt, kernel time from `nsys`):
+
+| | before | after | mainline |
+|---|---|---|---|
+| `ggml_ssm_scan_m2` writes the final state into the cache instead of `cpy`-ing it back | 1.42 ms/token | — | — |
+| `ggml_cont(z)` before the gated norm: 2-D block copy instead of the scalar kernel | 28.8 ms | 11.8 ms | (kernel) |
+| conv input concat (transposed source): shared-memory tile transpose | 49.4 ms | 19.0 ms | 24.5 ms |
+| FFN `relu^2`: one fused kernel instead of `relu` + `sqr` | 27.2 ms | 13.5 ms | 13.5 ms |
+
+Decode 87.7 -> 104.6 t/s, prefill 2 810 -> 3 205 t/s at 2k; total kernel time on the 2.8k prompt
+904.5 ms against 899.8 ms for mainline `e0949d09b` on the same box. The first row is the Mamba-2 op and the builder,
+the last is the FFN activation; rows two and three touch `ggml-cuda/cpy.cu` and
+`ggml-cuda/concat.cu` and help any model that copies a strided view or concatenates a transposed
+tensor.
+
 ## Tests
 
 - `tests/test-mamba2.cpp` — chunked prefill against token-by-token decode for `d_conv` 3/4/5 and
