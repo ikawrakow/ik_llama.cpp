@@ -6,6 +6,9 @@
 #include "llama-moe-cache-policy.h"
 
 #include "ggml-cpp.h"
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -370,6 +373,100 @@ struct llama_moe_cache::impl {
         return it == bindings.end() ? nullptr : it->second.cached;
     }
 
+    size_t copy_expert_range(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst,
+            int32_t first_expert, size_t max_experts, int64_t n_tokens) {
+#ifdef GGML_USE_CUDA
+        if (!backend || !src || !dst || !src->buffer || !dst->buffer ||
+                !ggml_backend_is_cuda(backend) || n_tokens <= max_batch) return 0;
+        auto it_binding = bindings.find(src);
+        if (it_binding == bindings.end()) return 0;
+        const binding & b = it_binding->second;
+        if (b.layer < 0 || (size_t) b.layer >= layers.size()) return 0;
+        const layer & l = layers[b.layer];
+        if (l.group < 0 || (size_t) l.group >= groups.size() || b.part < 0 ||
+                (size_t) b.part >= l.experts.size() || l.experts[b.part] != src) return 0;
+        const group & g = groups[l.group];
+        if (g.device < 0 || (size_t) g.device >= devices.size() || (size_t) b.part >= g.banks.size()) return 0;
+        const device & d = devices[g.device];
+        if (backend != d.backend || d.model_device < 0 ||
+                d.buft != ggml_backend_cuda_buffer_type(d.model_device) ||
+                ggml_backend_get_default_buffer_type(backend) != d.buft ||
+                ggml_backend_buffer_get_type(dst->buffer) != d.buft) return 0;
+        ggml_tensor * bank = g.banks[b.part];
+        if (!bank || !bank->buffer || ggml_backend_buffer_get_type(bank->buffer) != d.buft ||
+                !ggml_backend_buffer_is_host(src->buffer) ||
+                ggml_backend_buffer_get_usage(src->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) return 0;
+        if (src->ne[2] != g.cache.n_expert || src->ne[3] != 1 ||
+                first_expert < 0 || first_expert >= g.cache.n_expert || max_experts == 0) return 0;
+        const size_t available = (size_t) (g.cache.n_expert - first_expert);
+        max_experts = std::min(max_experts, available);
+
+        if (src->type != dst->type || src->ne[0] != dst->ne[0] || src->ne[1] != dst->ne[1] ||
+                src->ne[2] != dst->ne[2] || src->ne[3] != dst->ne[3]) return 0;
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (src->nb[i] != dst->nb[i]) return 0;
+        }
+        const size_t row_bytes = ggml_row_size(src->type, src->ne[0]);
+        const size_t type_bytes = ggml_type_size(src->type);
+        const int64_t block = ggml_blck_size(src->type);
+        if (row_bytes == 0 || type_bytes == 0 || block <= 0 || src->ne[0] % block != 0 ||
+                src->ne[1] <= 0 || src->ne[2] <= 0 || bank->ne[2] <= 0 ||
+                src->nb[0] != type_bytes || src->nb[1] != row_bytes ||
+                (size_t) src->ne[1] > SIZE_MAX / row_bytes) return 0;
+        const size_t expert_size = row_bytes * (size_t) src->ne[1];
+        if ((size_t) src->ne[2] > SIZE_MAX / expert_size ||
+                (size_t) bank->ne[2] > SIZE_MAX / expert_size) return 0;
+        if (src->nb[2] != expert_size || dst->nb[2] != expert_size ||
+                bank->type != src->type || bank->ne[0] != src->ne[0] || bank->ne[1] != src->ne[1] ||
+                bank->ne[2] < (int64_t) ((size_t) g.cache.n_slots + (size_t) g.zero_slots + 1) || bank->ne[3] != 1 ||
+                bank->nb[0] != src->nb[0] || bank->nb[1] != src->nb[1] || bank->nb[2] != expert_size ||
+                ggml_nbytes(src) != (size_t) src->ne[2] * expert_size ||
+                ggml_nbytes(dst) != (size_t) dst->ne[2] * expert_size) return 0;
+        if (!src->data || !dst->data || !bank->data || !g.cache.slot_map[b.layer]) return 0;
+
+        const int32_t * slots = g.cache.slot_map[b.layer];
+        const int32_t first_slot = slots[first_expert];
+        if (first_slot < 0 || first_slot >= g.cache.n_slots) return 0;
+        size_t n = 1;
+        while (n < max_experts && (int64_t) slots[first_expert + (int32_t) n] == (int64_t) first_slot + n) ++n;
+        if ((size_t) first_slot + n > (size_t) g.cache.n_slots || n > SIZE_MAX / expert_size) return 0;
+        const size_t src_offset = (size_t) first_slot * expert_size;
+        const size_t dst_offset = (size_t) first_expert * expert_size;
+        const size_t copy_size = n * expert_size;
+        const size_t bank_extent = (size_t) bank->ne[2] * expert_size;
+        const size_t dst_extent = ggml_nbytes(dst);
+        if (src_offset > bank_extent || copy_size > bank_extent - src_offset ||
+                dst_offset > dst_extent || copy_size > dst_extent - dst_offset ||
+                copy_size > (size_t) INT64_MAX) return 0;
+
+        ggml_tensor src_bytes = *bank;
+        ggml_tensor dst_bytes = *dst;
+        auto set_byte_view = [](ggml_tensor & view, const ggml_tensor & parent, size_t offset, size_t bytes) {
+            view = parent;
+            view.type = GGML_TYPE_I8;
+            view.ne[0] = (int64_t) bytes;
+            view.ne[1] = view.ne[2] = view.ne[3] = 1;
+            view.nb[0] = 1;
+            view.nb[1] = view.nb[2] = view.nb[3] = bytes;
+            view.data = (uint8_t *) parent.data + offset;
+            view.view_src = nullptr;
+        };
+        set_byte_view(src_bytes, *bank, src_offset, copy_size);
+        set_byte_view(dst_bytes, *dst, dst_offset, copy_size);
+        ggml_backend_tensor_copy_async(backend, backend, &src_bytes, &dst_bytes);
+        return n;
+#else
+        GGML_UNUSED(backend);
+        GGML_UNUSED(src);
+        GGML_UNUSED(dst);
+        GGML_UNUSED(first_expert);
+        GGML_UNUSED(max_experts);
+        GGML_UNUSED(n_tokens);
+        return 0;
+#endif
+    }
+
+
     bool copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
             ggml_backend_sched_copy_phase phase) {
         auto it_share = share_map_of.find(src);
@@ -577,4 +674,11 @@ void llama_moe_cache::begin_compute() { pimpl->begin_compute(); }
 ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * t) const { return pimpl->get_experts(t); }
 bool llama_moe_cache::copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
         ggml_backend_sched_copy_phase phase) { return pimpl->copy(backend, src, dst, graph, phase); }
+size_t llama_moe_cache::copy_expert_range(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst,
+        int32_t first_expert, size_t max_experts, int64_t n_tokens) {
+    return pimpl->copy_expert_range(backend, src, dst, first_expert, max_experts, n_tokens);
+}
+int64_t llama_moe_cache::copy_expert_range_min_tokens() const {
+    return llama_moe_cache_policy_detail::state::max_batch + 1;
+}
 std::map<ggml_backend_buffer_type *, size_t> llama_moe_cache::memory_breakdown() const { return pimpl->memory_breakdown(); }

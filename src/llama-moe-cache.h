@@ -40,6 +40,9 @@ public:
     ggml_tensor * get_experts(const ggml_tensor * tensor) const;
     bool copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
             ggml_backend_sched_copy_phase phase);
+    size_t copy_expert_range(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst,
+            int32_t first_expert, size_t max_experts, int64_t n_tokens);
+    int64_t copy_expert_range_min_tokens() const;
     std::map<ggml_backend_buffer_type *, size_t> memory_breakdown() const;
 
 private:
