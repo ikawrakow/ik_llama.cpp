@@ -195,6 +195,55 @@ static __global__ void concat_f32_non_cont(
 }
 
 
+// dim-0 concat whose second source is transposed (one element per row, a whole row per column).
+// The generic kernel walks the threads along dim 0, so with such a source every 4-byte read pulls a
+// full 32-byte sector - 8x the traffic. The mamba-2 conv input (xBC is {channels, tokens}, the conv
+// wants {tokens, channels}) hits exactly this and pays ~3x the time. Transposing through a
+// shared-memory tile keeps both the reads and the writes coalesced.
+static __global__ void concat_f32_dim0_transposed(
+        const char * src0,
+        const char * src1,
+              char * dst,
+        const int64_t ne00,   // rows taken from src0
+        const int64_t n_t,    // rows taken from src1 (dst->ne[0] - ne00)
+        const int64_t ne1,
+        const int64_t nb00, const int64_t nb01,
+        const int64_t nb10, const int64_t nb11,
+        const int64_t dn0,  const int64_t dn1) {
+    __shared__ float tile[32][33];
+
+    const int64_t c0 = (int64_t) blockIdx.x * 32;
+    const int64_t j0 = (int64_t) blockIdx.y * 32;
+
+    // the leading rows come straight out of src0 (the rolling conv state): few elements, so whatever
+    // this access pattern costs is noise next to the transposed block below
+    if (blockIdx.y == 0 && threadIdx.y == 0) {
+        const int64_t c = c0 + threadIdx.x;
+        if (c < ne1) {
+            for (int64_t i0 = 0; i0 < ne00; ++i0) {
+                *(float *) (dst + c*dn1 + i0*dn0) = *(const float *) (src0 + c*nb01 + i0*nb00);
+            }
+        }
+    }
+
+    for (int k = 0; k < 32; k += blockDim.y) {
+        const int64_t j = j0 + k + threadIdx.y;
+        const int64_t c = c0 + threadIdx.x;
+        if (j < n_t && c < ne1) {
+            tile[k + threadIdx.y][threadIdx.x] = *(const float *) (src1 + j*nb10 + c*nb11);
+        }
+    }
+    __syncthreads();
+
+    for (int k = 0; k < 32; k += blockDim.y) {
+        const int64_t c = c0 + k + threadIdx.y;
+        const int64_t j = j0 + threadIdx.x;
+        if (j < n_t && c < ne1) {
+            *(float *) (dst + (ne00 + j)*dn0 + c*dn1) = tile[threadIdx.x][k + threadIdx.y];
+        }
+    }
+}
+
 void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -215,6 +264,21 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         const size_t size1 = ggml_nbytes(src1);
         CUDA_CHECK(cudaMemcpyAsync((char *)dst->data,         src0->data, size0, cudaMemcpyDeviceToDevice, stream));
         CUDA_CHECK(cudaMemcpyAsync((char *)dst->data + size0, src1->data, size1, cudaMemcpyDeviceToDevice, stream));
+        return;
+    }
+
+    if (dim == 0 && dst->type == GGML_TYPE_F32 && dst->ne[2] == 1 && dst->ne[3] == 1 &&
+        ggml_is_contiguous(dst) &&
+        src0->nb[0] == sizeof(float) && src0->ne[2] == 1 && src0->ne[3] == 1 &&
+        src1->nb[1] == sizeof(float) && src1->ne[2] == 1 && src1->ne[3] == 1 &&
+        src1->nb[0] >= 32 * sizeof(float)) {
+        const int64_t n_t = dst->ne[0] - src0->ne[0];
+        const dim3 block(32, 8);
+        const dim3 grid((unsigned) ((dst->ne[1] + 31) / 32), (unsigned) ((n_t + 31) / 32));
+        concat_f32_dim0_transposed<<<grid, block, 0, stream>>>(
+                (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
+                src0->ne[0], n_t, dst->ne[1],
+                src0->nb[0], src0->nb[1], src1->nb[0], src1->nb[1], dst->nb[0], dst->nb[1]);
         return;
     }
 

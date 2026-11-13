@@ -312,6 +312,8 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 * DFlash initial support [PR 1970](https://github.com/ikawrakow/ik_llama.cpp/pull/1970)
 * DFlash 2 support for models like GLM-5.3-Flash and Qwen3.8-Flash-Next [PR 2761](https://github.com/ikawrakow/ik_llama.cpp/pull/2761), Raon-1 mini preview
 * DSpark initial support [PR 2280](https://github.com/ikawrakow/ik_llama.cpp/pull/2280)
+* Nemotron-H / Nemotron-H-MoE (Mamba-2 + NoPE attention + relu^2 MoE) [PR 2850](https://github.com/ikawrakow/ik_llama.cpp/pull/2850),
+  incl. Nemotron 3.5 Bolt 74B-A9B; one sequence per context for the Mamba-2 path
 * GLM-DSA architecture indexer cache
 * GLM-5.2 vision hack [PR 2283](https://github.com/ikawrakow/ik_llama.cpp/pull/2283)
 * String ban function for all completions [PR 1185](https://github.com/ikawrakow/ik_llama.cpp/pull/1185) [PR 1243](https://github.com/ikawrakow/ik_llama.cpp/pull/1243)

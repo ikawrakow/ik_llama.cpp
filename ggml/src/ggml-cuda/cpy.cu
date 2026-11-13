@@ -519,6 +519,46 @@ static void transpose_q8_0(ggml_backend_cuda_context & ctx, const ggml_tensor * 
 }
 
 
+// A strided copy whose contiguous prefix covers whole rows is just a 2-D block copy, which the
+// copy engine does far cheaper than the scalar kernel (per element index arithmetic). The same
+// cont() of a strided view therefore costs ~4x less. Ported from mainline.
+static bool ggml_cuda_cpy_as_memcpy_2d(const ggml_tensor * src0, const ggml_tensor * src1,
+        size_t & width, size_t & height, size_t & spitch, size_t & dpitch) {
+    // a reshaped copy maps elements by flat order, which the prefix walk below does not handle
+    if (src0->type != src1->type || !ggml_are_same_shape(src0, src1)) {
+        return false;
+    }
+
+    // grow the contiguous prefix block shared by both tensors
+    size_t block_nb = ggml_element_size(src0);
+    int d = 0;
+    for (; d < GGML_MAX_DIMS; ++d) {
+        if (src0->nb[d] != block_nb || src1->nb[d] != block_nb) {
+            break;
+        }
+        block_nb *= src0->ne[d];
+    }
+
+    // d == 0: nothing contiguous; d == GGML_MAX_DIMS: fully contiguous (handled by memcpy)
+    if (d == 0 || d == GGML_MAX_DIMS) {
+        return false;
+    }
+
+    // dim d carries the rows; everything above it must be a single element
+    for (int i = d + 1; i < GGML_MAX_DIMS; ++i) {
+        if (src0->ne[i] != 1) {
+            return false;
+        }
+    }
+
+    width  = block_nb;
+    height = src0->ne[d];
+    spitch = src0->nb[d];
+    dpitch = src1->nb[d];
+
+    return spitch >= width && dpitch >= width;
+}
+
 void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1, bool disable_indirection_for_this_node) {
     const int64_t ne = ggml_nelements(src0);
     GGML_ASSERT(ne == ggml_nelements(src1));
@@ -552,6 +592,9 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     bool fast_cpy = ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_are_same_shape(src0, src1);
 
+    // 2-D memcpy candidate (see ggml_cuda_cpy_as_memcpy_2d)
+    size_t mc_width = 0, mc_height = 0, mc_spitch = 0, mc_dpitch = 0;
+
     char ** dest_ptrs_d = nullptr;
     int graph_cpynode_index = -1;
 #if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
@@ -576,6 +619,12 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
                 CUDA_CHECK(cudaMemcpyAsync(src1_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
             }
         }
+    } else if (dest_ptrs_d == nullptr &&
+               ggml_cuda_cpy_as_memcpy_2d(src0, src1, mc_width, mc_height, mc_spitch, mc_dpitch)) {
+        // The graph indirection writes the destination through a device-side pointer table, which
+        // a memcpy cannot do - only take this path when the plain destination is valid.
+        CUDA_CHECK(cudaMemcpy2DAsync(src1_ddc, mc_dpitch, src0_ddc, mc_spitch, mc_width, mc_height,
+                                     cudaMemcpyDeviceToDevice, main_stream));
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
         if (fast_cpy) {
             ggml_cpy_flt_contiguous_cuda<float, float>(src0_ddc, src1_ddc, ne, main_stream, dest_ptrs_d, graph_cpynode_index);
