@@ -1641,11 +1641,10 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             } break;
         case LLM_FFN_RELU_SQR:
             {
-                cur = ggml_relu(ctx, cur);
-                cb(cur, "ffn_relu", il);
-
-                cur = ggml_sqr(ctx, cur);
-                cb(cur, "ffn_sqr(relu)", il);
+                // relu(x)*x == relu(x)^2, in one pass: upstream has a dedicated fused kernel for
+                // exactly this, and two passes cost 2x the bandwidth on prefill
+                cur = ggml_fused_mul_unary(ctx, cur, cur, GGML_UNARY_OP_RELU);
+                cb(cur, "ffn_relu_sqr", il);
             } break;
         case LLM_FFN_SWIGLU:
             {
