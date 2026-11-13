@@ -45,6 +45,15 @@ ggml_tensor * llm_build_context::build_nemotron_mamba2(ggml_cgraph * gf, ggml_te
     // conv state -> {d_conv - 1, ch, n_seqs}
     ggml_tensor * conv = ggml_reshape_3d(ctx0, conv_states_all, d_conv - 1, ch, n_seqs);
 
+    // A sequence that starts at position 0 must not inherit the previous one's recurrent state:
+    // llama_kv_cache_seq_rm() only frees the cell, it does not zero the buffers. This is the same
+    // reset LFM2/LFM3 do for their shortconv state.
+    const bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
+    if (reset_state) {
+        conv = ggml_scale(ctx0, conv, 0.0f);
+        cb(conv, "conv_state_reset", il);
+    }
+
     // d_in_proj = 2 * d_inner + 2 * n_group * d_state + n_head
     // {n_embd, d_in_proj} @ {n_embd, n_tokens} => {d_in_proj, n_tokens}
     ggml_tensor * zxBCdt = llm_build_lora_mm(lctx, ctx0, layer.ssm_in, cur);
@@ -95,6 +104,10 @@ ggml_tensor * llm_build_context::build_nemotron_mamba2(ggml_cgraph * gf, ggml_te
 
         // states: {embd_s, slots} -> {d_state, head_dim, n_head, slots}
         ggml_tensor * ssm = ggml_reshape_4d(ctx0, ssm_states_all, d_state, head_dim, n_head, state_slots);
+        if (reset_state) {
+            ssm = ggml_scale(ctx0, ssm, 0.0f);
+            cb(ssm, "ssm_state_reset", il);
+        }
 
         struct ggml_tensor * y_ssm = ggml_ssm_scan_m2(ctx0, ssm, x, dt, layer.ssm_a, B, C, ssm_ids, 1);
         cb(y_ssm, "ssm_scan", il);
