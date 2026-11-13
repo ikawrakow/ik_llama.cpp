@@ -23379,6 +23379,13 @@ static inline float ggml_bicubic_interp(float p0, float p1, float p2, float p3, 
     return p0 * w0 + p1 * w1 + p2 * w2 + p3 * w3;
 }
 
+// bilinear coefficient for one output index: {lower, upper} source index + weight
+typedef struct {
+    int64_t i0;
+    int64_t i1;
+    float   d;
+} ggml_upscale_bilinear_coeff;
+
 static void ggml_compute_forward_upscale_f32(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
@@ -23407,20 +23414,83 @@ static void ggml_compute_forward_upscale_f32(
         sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
     }
 
-    if (mode == GGML_SCALE_MODE_NEAREST || mode == GGML_SCALE_MODE_BILINEAR) {
+    const float isf0 = 1.0f/sf0;
+    const float isf1 = 1.0f/sf1;
+    const float isf2 = 1.0f/sf2;
+    const float isf3 = 1.0f/sf3;
+
+    if (mode == GGML_SCALE_MODE_NEAREST) {
         for (int64_t i3 = 0; i3 < ne3; i3++) {
-            const int64_t i03 = i3 / sf3;
+            const int64_t i03 = (int64_t)(i3*isf3);
             for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
-                const int64_t i02 = i2 / sf2;
+                const int64_t i02 = (int64_t)(i2*isf2);
                 for (int64_t i1 = 0; i1 < ne1; i1++) {
-                    const int64_t i01 = i1 / sf1;
+                    const int64_t i01 = (int64_t)(i1*isf1);
                     for (int64_t i0 = 0; i0 < ne0; i0++) {
-                        const int64_t i00 = i0 / sf0;
+                        const int64_t i00 = (int64_t)(i0*isf0);
 
                         const float * x = (float *)((char *) src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
                               float * y = (float *)((char *)  dst->data +  i0*nb0  +  i1*nb1  +  i2*nb2  +  i3*nb3);
 
                         *y = *x;
+                    }
+                }
+            }
+        }
+    } else if (mode == GGML_SCALE_MODE_BILINEAR) {
+        GGML_ASSERT(params->wdata != NULL);
+        ggml_upscale_bilinear_coeff * xcoeff = (ggml_upscale_bilinear_coeff *)params->wdata;
+        ggml_upscale_bilinear_coeff * ycoeff = xcoeff + ne0;
+
+        // coefficients only depend on the output row/column: precompute them once
+        if (ith == 0) {
+            for (int64_t i0 = 0; i0 < ne0; i0++) {
+                const float x = ((float)i0 + pixel_offset)*isf0 - pixel_offset;
+                int64_t x0 = (int64_t)floorf(x);
+                int64_t x1 = x0 + 1;
+                x0 = GGML_CLAMP(x0, 0, ne00 - 1);
+                x1 = GGML_CLAMP(x1, 0, ne00 - 1);
+                const float dx = GGML_CLAMP(x - (float)x0, 0.0f, 1.0f);
+                xcoeff[i0].i0 = x0;
+                xcoeff[i0].i1 = x1;
+                xcoeff[i0].d  = dx;
+            }
+            for (int64_t i1 = 0; i1 < ne1; i1++) {
+                const float y = ((float)i1 + pixel_offset)*isf1 - pixel_offset;
+                int64_t y0 = (int64_t)floorf(y);
+                int64_t y1 = y0 + 1;
+                y0 = GGML_CLAMP(y0, 0, ne01 - 1);
+                y1 = GGML_CLAMP(y1, 0, ne01 - 1);
+                const float dy = GGML_CLAMP(y - (float)y0, 0.0f, 1.0f);
+                ycoeff[i1].i0 = y0;
+                ycoeff[i1].i1 = y1;
+                ycoeff[i1].d  = dy;
+            }
+        }
+        ggml_barrier(params->shared);
+
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            const int64_t i03 = (int64_t)(i3*isf3);
+            for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+                const int64_t i02 = (int64_t)(i2*isf2);
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    const int64_t y0 = ycoeff[i1].i0;
+                    const int64_t y1 = ycoeff[i1].i1;
+                    const float   dy = ycoeff[i1].d;
+                    const char * row0 = (const char *)src0->data + y0*nb01 + i02*nb02 + i03*nb03;
+                    const char * row1 = (const char *)src0->data + y1*nb01 + i02*nb02 + i03*nb03;
+                    for (int64_t i0 = 0; i0 < ne0; i0++) {
+                        const int64_t x0 = xcoeff[i0].i0;
+                        const int64_t x1 = xcoeff[i0].i1;
+                        const float   dx = xcoeff[i0].d;
+
+                        const float a = *(const float *)(row0 + x0*nb00);
+                        const float b = *(const float *)(row0 + x1*nb00);
+                        const float c = *(const float *)(row1 + x0*nb00);
+                        const float d = *(const float *)(row1 + x1*nb00);
+
+                        float * y_dst = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+                        *y_dst = a*(1 - dx)*(1 - dy) + b*dx*(1 - dy) + c*(1 - dx)*dy + d*dx*dy;
                     }
                 }
             }
@@ -30135,6 +30205,13 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
             case GGML_OP_CROSS_ENTROPY_LOSS:
                 {
                     cur = ggml_type_size(node->type)*(n_tasks + node->src[0]->ne[0]*n_tasks);
+                } break;
+            case GGML_OP_UPSCALE:
+                {
+                    const int32_t mode_flags = ((const int32_t *)node->op_params)[0];
+                    if ((mode_flags & 0xFF) == GGML_SCALE_MODE_BILINEAR) {
+                        cur = sizeof(ggml_upscale_bilinear_coeff)*(node->ne[0] + node->ne[1]);
+                    }
                 } break;
             case GGML_OP_COUNT:
                 {
