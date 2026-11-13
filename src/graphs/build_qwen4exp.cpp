@@ -325,6 +325,8 @@ static ggml_tensor * qwen4exp_qsa_mask(
     // again: n_tokens consecutive cells span n_tokens/r, plus one when the run straddles
     const int32_t n_win = lctx.qsa_pooled_stale ? n_blocks : std::min(n_blocks, (n_tokens + r - 1)/r + 1);
 
+    const bool pad_bias = n_tokens > GGML_KQ_MASK_PAD;
+
     llama_context::qsa_input * inp = nullptr;
     for (auto & q : lctx.inp_qsa) {
         if (q.ratio == (int32_t) r) {
@@ -337,7 +339,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
         inp = &lctx.inp_qsa.back();
         inp->ratio      = (int32_t) r;
         inp->cell_blk   = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_kv);
-        inp->bias       = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_tokens);
+        inp->bias       = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_kv, pad_bias ? KQ_mask->ne[1] : n_tokens);
         inp->win_blocks = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_win);
         inp->win_cells  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, r*n_win);
         inp->win_pos    = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, GGML_MROPE_SECTIONS*n_win);
@@ -352,9 +354,18 @@ static ggml_tensor * qwen4exp_qsa_mask(
             ggml_set_input(t);
             ggml_build_forward_expand(gf, t);
         }
-        auto causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
-        auto cut_mask = ggml_add(ctx0, causal, inp->bias);
-        cb(cut_mask, "qsa_cut_mask", il);
+        ggml_tensor * cut_mask;
+        if (pad_bias) {
+            cut_mask = ggml_add(ctx0, KQ_mask, inp->bias);
+            cb(cut_mask, "qsa_cut_mask", il);
+            if (cut_mask->ne[1] != n_tokens) {
+                cut_mask = ggml_view_2d(ctx0, cut_mask, n_kv, n_tokens, cut_mask->nb[1], 0);
+            }
+        } else {
+            auto causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
+            cut_mask = ggml_add(ctx0, causal, inp->bias);
+            cb(cut_mask, "qsa_cut_mask", il);
+        }
         inp->cut_mask = cut_mask;
     }
 

@@ -6157,7 +6157,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         int32_t * dst_win_blk   = (int32_t *) qsa.win_blocks->data;
         int32_t * dst_win_cells = (int32_t *) qsa.win_cells->data;
         int32_t * dst_win_pos   = (int32_t *) qsa.win_pos->data;
-        float   * dst_bias      = (float   *) qsa.bias->data;
+        ggml_half * dst_bias    = (ggml_half *) qsa.bias->data;
 
         // the fused indexer op takes a per-head weight; this architecture sums the heads plain
         if (qsa.head_w) {
@@ -6244,13 +6244,16 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
         // KQ_mask already carries causality, so this holds only the per-block part: -inf for an
         // unpoolable block, a boost for the incomplete block the query sits in
+        const ggml_half h_boost = ggml_fp32_to_fp16(65504.f);
+        const ggml_half h_inf   = ggml_fp32_to_fp16(-INFINITY);
+        const ggml_half h_zero  = ggml_fp32_to_fp16(0.0f);
         auto fill_bias = [&](int32_t i0, int32_t i1) {
             for (int32_t i = i0; i < i1; ++i) {
                 // n_kv times n_tokens reaches 2^31 at the model's full context, so index wide
-                float * cur_bias = dst_bias + (size_t) i*n_kv;
+                ggml_half * cur_bias = dst_bias + (size_t) i*n_kv;
 
                 if (i >= batch.n_tokens) {
-                    std::fill(cur_bias, cur_bias + n_kv, 0.0f);
+                    std::fill(cur_bias, cur_bias + n_kv, h_zero);
                     continue;
                 }
 
@@ -6261,8 +6264,8 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     const llama_pos p = cell_pos[j];
 
                     // finite, so it can never meet a -inf and produce a nan
-                    cur_bias[j] = (p >= tail_start && p <= q) ? 65504.f // max. fp16 value in case math is done with fp16 precision
-                                : (blk_of[j] < 0 ? -INFINITY : 0.0f);
+                    cur_bias[j] = (p >= tail_start && p <= q) ? h_boost // max. fp16 value in case math is done with fp16 precision
+                                : (blk_of[j] < 0 ? h_inf : h_zero);
                 }
             }
         };
