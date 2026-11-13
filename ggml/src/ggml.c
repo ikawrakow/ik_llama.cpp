@@ -11694,7 +11694,8 @@ static struct ggml_tensor * ggml_ssm_scan_impl(
         struct ggml_tensor  * B,
         struct ggml_tensor  * C,
         struct ggml_tensor  * sq,
-        int64_t               K) {
+        int64_t               K,
+        struct ggml_tensor  * state_out) {
     if (K >= 1) {
         // Mamba-2 layout (Nemotron-H etc.). sq is the {n_seqs} int32 ids tensor and K is
         // the number of state snapshots kept in the result. Mirrors upstream llama.cpp.
@@ -11754,6 +11755,16 @@ static struct ggml_tensor * ggml_ssm_scan_impl(
         result->src[4] = B;
         result->src[5] = C;
         result->src[6] = sq;
+
+        if (state_out) {
+            // The kernel writes the final state straight into the cache instead of a private
+            // block that the caller then copies back (one 3 MB copy per layer per token).
+            GGML_ASSERT(K == 1);
+            GGML_ASSERT(ggml_is_contiguous(state_out));
+            GGML_ASSERT(state_out->type == GGML_TYPE_F32);
+            GGML_ASSERT(ggml_are_same_shape(state_out, s));
+            result->src[7] = state_out;
+        }
 
         ggml_set_op_params_i32(result, 0, (int32_t) K);
 
@@ -11818,7 +11829,7 @@ struct ggml_tensor * ggml_ssm_scan(
         struct ggml_tensor  * B,
         struct ggml_tensor  * C,
         struct ggml_tensor  * sq) {
-    return ggml_ssm_scan_impl(ctx, s, x, dt, A, B, C, sq, -1);
+    return ggml_ssm_scan_impl(ctx, s, x, dt, A, B, C, sq, -1, NULL);
 }
 
 struct ggml_tensor * ggml_ssm_scan_m2(
@@ -11830,9 +11841,10 @@ struct ggml_tensor * ggml_ssm_scan_m2(
         struct ggml_tensor  * B,
         struct ggml_tensor  * C,
         struct ggml_tensor  * sq,
-        int64_t               K) {
+        int64_t               K,
+        struct ggml_tensor  * state_out) {
     GGML_ASSERT(K >= 1);
-    return ggml_ssm_scan_impl(ctx, s, x, dt, A, B, C, sq, K);
+    return ggml_ssm_scan_impl(ctx, s, x, dt, A, B, C, sq, K, state_out);
 }
 
 struct ggml_tensor * ggml_ssm_conv_m2(
@@ -24955,6 +24967,7 @@ static void ggml_compute_forward_ssm_scan_m2_f32(
     const struct ggml_tensor * src4 = dst->src[4]; // B
     const struct ggml_tensor * src5 = dst->src[5]; // C
     const struct ggml_tensor * src6 = dst->src[6]; // ids
+    const struct ggml_tensor * src7 = dst->src[7]; // optional state destination
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -24993,7 +25006,9 @@ static void ggml_compute_forward_ssm_scan_m2_f32(
 
     for (int i3 = 0; i3 < ns; ++i3) {
         const float * s0 = (const float *) ((const char *) src0->data + ids[i3]*(src0->nb[3])); // {d_state, dim, nh, n_slots}
-              float * s  = (      float *) ((      char *) dst->data  + i3*(src0->nb[3]) + s_off); // {d_state, dim, nh, ns}
+              float * s  = src7
+                ? (float *) ((char *) src7->data + i3*(src0->nb[3]))                                 // write straight into the cache
+                : (float *) ((char *) dst->data  + i3*(src0->nb[3]) + s_off);                        // {d_state, dim, nh, ns}
 
         for (int i2 = 0; i2 < nt; ++i2) {
             const float * x  = (const float *) ((const char *) src1->data + i2*(src1->nb[2]) + i3*(src1->nb[3])); // {dim, nh, nt, ns}

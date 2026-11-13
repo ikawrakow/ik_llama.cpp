@@ -2687,7 +2687,8 @@ extern "C" {
             struct ggml_tensor  * B,
             struct ggml_tensor  * C,
             struct ggml_tensor  * sq,
-            int64_t               K);
+            int64_t               K,
+            struct ggml_tensor  * state_out); // optional: write the final state there (K must be 1)
 
     // Mamba-2 layout of the 1-D convolution: s is conv_x {d_conv - 1 + n_t, ch, n_s} and c is
     // the conv weight {d_conv, ch}; returns the convolution of the sliding window. This builds
