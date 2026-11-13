@@ -585,7 +585,6 @@ void server_slot::reset() {
 
     generated_token_probs.clear();
     checkpoint_pos = -1;
-    checkpoint_n_tokens = -1;
     image_just_processed = false;
     do_checkpoint = false;
     do_rewind_chekpoint = false;
@@ -2206,7 +2205,6 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
         slot.n_prompt_tokens_cache = 0;
         clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
         slot.checkpoint_pos = -1;
-        slot.checkpoint_n_tokens = -1;
         slot.do_checkpoint = false;
         slot.do_rewind_chekpoint = false;
         if (slot.ctx_sampling != nullptr) {
@@ -3873,11 +3871,11 @@ void server_context::create_checkpoint_at_interval(server_slot & slot) {
     if (this->params_base.ctx_checkpoints_interval <= 0) {
         return;
     }
-    // a position advances by at most one per cached token, so while fewer tokens than the interval
-    // were cached since the last checkpoint it cannot be due, and the scan of the cache is skipped
-    const int64_t n_tokens = slot.cache_tokens.n_tokens();
-    if (slot.checkpoint_n_tokens >= 0 && n_tokens >= slot.checkpoint_n_tokens &&
-        n_tokens - slot.checkpoint_n_tokens < this->params_base.ctx_checkpoints_interval) {
+    // a token is given the next position of cache_tokens when it is cached (after the system prompt's,
+    // if there is one), so the cache holds no position past pos_last: while pos_last is short of the
+    // next checkpoint none can be due, and the scan of the cache is skipped
+    const llama_pos pos_last = (llama_pos)system_tokens.size() + slot.cache_tokens.pos_next() - 1;
+    if (pos_last < slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval) {
         return;
     }
     auto pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
@@ -3971,12 +3969,10 @@ void server_context::apply_checkpoint(server_slot & slot) {
                                 slot.n_past, (int) prefix.first);
                             slot.n_past = (int32_t) prefix.first;
                             slot.checkpoint_pos = slot.n_past;
-                            slot.checkpoint_n_tokens = -1;
                             pos_next = slot.cache_tokens.pos_next(slot.n_past);
                         }
                     } else {
                         slot.checkpoint_pos = it->pos_max;
-                        slot.checkpoint_n_tokens = -1;
                         pos_next = slot.cache_tokens.pos_next(slot.n_past);
 
                         SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
@@ -3990,7 +3986,6 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 }
                 clear_checkpoints_and_spill(slot.server_cached_prompt.checkpoints);
                 slot.checkpoint_pos = -1;
-                slot.checkpoint_n_tokens = -1;
                 SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data.%s\n","");
                 slot.n_past = 0;
                 slot.n_past_prompt = 0;
@@ -4157,7 +4152,6 @@ bool server_context::create_checkpoint(server_slot & slot, bool prompt_end) {
         server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), pos_min, pos_max);
         cur.prompt_end = prompt_end;
         slot.checkpoint_pos = pos_max;
-        slot.checkpoint_n_tokens = slot.cache_tokens.n_tokens();
 
         SLT_WRN(slot, "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
             (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,
