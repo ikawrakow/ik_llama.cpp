@@ -2276,6 +2276,12 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
 
         std::string name = ggml_get_name(tensor);
 
+        if (is_repack_forbidden(name)) {
+            // We do not want to spend time estimating an imatrix for token embeddings,
+            // per layer embeddings, engrams, etc.
+            continue;
+        }
+
         if (!ml.use_mmap) {
             if (read_data.size() < ggml_nbytes(tensor)) {
                 read_data.resize(ggml_nbytes(tensor));
