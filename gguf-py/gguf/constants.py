@@ -507,7 +507,7 @@ class MODEL_TENSOR(IntEnum):
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
-    MODEL_ARCH.STEP5: "step5",
+    MODEL_ARCH.STEP5:          "step5",
     MODEL_ARCH.LLAMA:          "llama",
     MODEL_ARCH.NANBEIGE:       "nanbeige",
     MODEL_ARCH.DECI:           "deci",
