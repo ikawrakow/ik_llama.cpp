@@ -1189,7 +1189,7 @@ void llama_reset_dsv4_state(llama_context * ctx, int32_t seq_id) {
         return;
     }
 
-    if (seq_id < 0) {
+    if (seq_id < 0 || n_stream == 1) {
         for (ggml_backend_buffer_t buf : ctx->dsv4.cache.cache_bufs) {
             ggml_backend_buffer_clear(buf, 0);
         }
