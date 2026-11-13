@@ -182,6 +182,234 @@ __global__ void delta_net_recurrent_f32(
     }
 }
 
+template <int HEAD_DIM, int block_size, int tile>
+__global__ void __launch_bounds__(block_size, 3) delta_net_tiled_f32(
+    const float * __restrict__ q,
+    const float * __restrict__ k,
+    const float * __restrict__ v,
+    const float * __restrict__ g,
+    const float * __restrict__ beta_in,
+    const float * state_in,
+    float * __restrict__ dst,
+    float * state_out,
+    float * __restrict__ saved_states,
+    const int64_t n_heads,
+    const int64_t gqa_ratio,
+    const int repeat_type,
+    const int64_t n_tokens,
+    const int64_t n_seqs,
+    size_t vnb1, size_t vnb2, size_t vnb3) {
+    constexpr int warps_per_head = HEAD_DIM/WARP_SIZE;
+    constexpr int num_warps = block_size/WARP_SIZE;
+    constexpr int ncol = HEAD_DIM/num_warps;
+    static_assert(ncol % 4 == 0, "columns per thread must be a multiple of 4");
+    const int batch_idx = blockIdx.x / (warps_per_head*n_heads);
+    const int sub_head_idx  = blockIdx.x % (warps_per_head*n_heads);
+    const int head_idx = sub_head_idx / warps_per_head;
+    const int sub_idx  = sub_head_idx % warps_per_head;
+    const int head_idx_kq = repeat_type == 0 ? head_idx / gqa_ratio : head_idx % (n_heads/gqa_ratio);
+    const int tid = threadIdx.x;
+
+    const int64_t qkv_stride_token = HEAD_DIM;
+    const int64_t qkv_stride_head = HEAD_DIM * n_tokens;
+    const int64_t qkv_stride_batch = HEAD_DIM * n_tokens * n_heads;
+    const int64_t qkv_stride_batch_kq = qkv_stride_batch / gqa_ratio;
+    const int64_t g_stride_batch = n_tokens * n_heads;
+    const int64_t state_head_offset = head_idx * HEAD_DIM * HEAD_DIM;
+    const int64_t state_batch_stride = HEAD_DIM * HEAD_DIM * n_heads;
+    const int64_t state_step_stride = HEAD_DIM * HEAD_DIM * n_heads * n_seqs;
+
+    const float * q_ptr = q + batch_idx * qkv_stride_batch_kq + head_idx_kq * qkv_stride_head;
+    const float * k_ptr = k + batch_idx * qkv_stride_batch_kq + head_idx_kq * qkv_stride_head;
+    const float * v_ptr = v + batch_idx * vnb3 + head_idx * vnb2;
+    const float * g_ptr = g + batch_idx * g_stride_batch + head_idx;
+    const float * beta_ptr = beta_in + batch_idx * g_stride_batch + head_idx;
+    const float * state_src = state_in + batch_idx * state_batch_stride + state_head_offset;
+
+    float * out_base = dst + batch_idx * (HEAD_DIM * n_heads * n_tokens) + head_idx * HEAD_DIM;
+    const int64_t out_token_stride = HEAD_DIM * n_heads;
+    float * state_dst = state_out + batch_idx * state_batch_stride + state_head_offset;
+
+    const float scale = rsqrtf((float)HEAD_DIM);
+
+    __shared__ float4 sQ4[tile][HEAD_DIM/4];
+    __shared__ float4 sK4[tile][HEAD_DIM/4];
+    __shared__ float sV[tile][WARP_SIZE];
+    __shared__ float s_attn[tile], s_beta[tile], s_decay[tile];
+    __shared__ float s_part[tile][num_warps];
+
+    const int row = tid % WARP_SIZE;
+    const int col_idx_0 = tid / WARP_SIZE;
+    const int row_out = row + sub_idx * WARP_SIZE;
+
+    float state_local[ncol];
+    for (int i = 0; i < ncol; ++i) {
+        int col = num_warps*i + col_idx_0;
+        state_local[i] = state_src[col*HEAD_DIM + row_out];
+    }
+
+    constexpr int WARP_SIZE_S = WARP_SIZE + 1;
+    __shared__ float2 all_sum[2][WARP_SIZE_S*num_warps];
+
+    constexpr int n_ld  = tile*HEAD_DIM/block_size;
+    constexpr int n_ldv = (tile*WARP_SIZE + block_size - 1)/block_size;
+    static_assert(tile*HEAD_DIM % block_size == 0, "tile*HEAD_DIM must be a multiple of the block size");
+    static_assert(tile % num_warps == 0 && tile <= block_size, "bad tile");
+    float rq[n_ld], rk[n_ld], rv[n_ldv], rg = 0.0f, rb = 0.0f;
+    auto load_tile = [&](int64_t tt0) {
+#pragma unroll
+        for (int it = 0; it < n_ld; ++it) {
+            const int i = it*block_size + tid;
+            const int64_t t = tt0 + i / HEAD_DIM;
+            const int d = i % HEAD_DIM;
+            rq[it] = t < n_tokens ? q_ptr[t * qkv_stride_token + d] : 0.0f;
+            rk[it] = t < n_tokens ? k_ptr[t * qkv_stride_token + d] : 0.0f;
+        }
+#pragma unroll
+        for (int it = 0; it < n_ldv; ++it) {
+            const int i = it*block_size + tid;
+            const int64_t t = tt0 + i / WARP_SIZE;
+            rv[it] = i < tile*WARP_SIZE && t < n_tokens ? v_ptr[t * vnb1 + sub_idx * WARP_SIZE + i % WARP_SIZE] : 0.0f;
+        }
+        if (tid < tile && tt0 + tid < n_tokens) {
+            rg = g_ptr[(tt0 + tid)*n_heads];
+            rb = beta_ptr[(tt0 + tid)*n_heads];
+        }
+    };
+    load_tile(0);
+
+    for (int64_t t0 = 0; t0 < n_tokens; t0 += tile) {
+        const int nt = min((int64_t)tile, n_tokens - t0);
+        __syncthreads();
+#pragma unroll
+        for (int it = 0; it < n_ld; ++it) {
+            const int i = it*block_size + tid;
+            const int j = i / HEAD_DIM, d = i % HEAD_DIM;
+            const int p = (d % num_warps)*ncol + d / num_warps;
+            ((float *)sQ4[j])[p] = rq[it] * scale;
+            ((float *)sK4[j])[p] = rk[it];
+        }
+#pragma unroll
+        for (int it = 0; it < n_ldv; ++it) {
+            const int i = it*block_size + tid;
+            if (i < tile*WARP_SIZE) {
+                sV[i / WARP_SIZE][i % WARP_SIZE] = rv[it];
+            }
+        }
+        if (tid < nt) {
+            s_beta[tid]  = sigmoid_f(rb);
+            s_decay[tid] = expf(fminf(rg, 50.0f));
+        }
+        __syncthreads();
+        if (t0 + tile < n_tokens) {
+            load_tile(t0 + tile);
+        }
+        {
+            float x[tile];
+#pragma unroll
+            for (int j = 0; j < tile; ++j) {
+                x[j] = 0.0f;
+                for (int i = tid; i < HEAD_DIM; i += block_size) {
+                    const int p = (i % num_warps)*ncol + i / num_warps;
+                    x[j] += ((const float *)sK4[j])[p] * ((const float *)sQ4[j])[p];
+                }
+            }
+#pragma unroll
+            for (int mask = 16; mask > 0; mask >>= 1) {
+#pragma unroll
+                for (int j = 0; j < tile; ++j) {
+                    x[j] += __shfl_xor_sync(0xffffffff, x[j], mask, 32);
+                }
+            }
+            if (row == 0) {
+#pragma unroll
+                for (int j = 0; j < tile; ++j) {
+                    s_part[j][col_idx_0] = x[j];
+                }
+            }
+        }
+        __syncthreads();
+        {
+            constexpr int nj = tile/num_warps;
+            float y[nj];
+#pragma unroll
+            for (int m = 0; m < nj; ++m) {
+                y[m] = row < num_warps ? s_part[col_idx_0 + m*num_warps][row] : 0.0f;
+            }
+#pragma unroll
+            for (int mask = 16; mask > 0; mask >>= 1) {
+#pragma unroll
+                for (int m = 0; m < nj; ++m) {
+                    y[m] += __shfl_xor_sync(0xffffffff, y[m], mask, 32);
+                }
+            }
+            if (row == 0) {
+#pragma unroll
+                for (int m = 0; m < nj; ++m) {
+                    s_attn[col_idx_0 + m*num_warps] = y[m];
+                }
+            }
+        }
+        __syncthreads();
+
+        for (int j = 0; j < nt; ++j) {
+            const int64_t t = t0 + j;
+            float2 * sums = all_sum[j & 1];
+
+            const float4 * k4 = sK4[j] + col_idx_0*(ncol/4);
+            const float4 * q4 = sQ4[j] + col_idx_0*(ncol/4);
+            float kr[ncol];
+            float sum1 = 0, sum2 = 0;
+#pragma unroll
+            for (int m = 0; m < ncol/4; ++m) {
+                const float4 kk = k4[m];
+                const float4 qq = q4[m];
+                kr[4*m+0] = kk.x; kr[4*m+1] = kk.y; kr[4*m+2] = kk.z; kr[4*m+3] = kk.w;
+                sum1 += state_local[4*m+0] * kk.x; sum2 += state_local[4*m+0] * qq.x;
+                sum1 += state_local[4*m+1] * kk.y; sum2 += state_local[4*m+1] * qq.y;
+                sum1 += state_local[4*m+2] * kk.z; sum2 += state_local[4*m+2] * qq.z;
+                sum1 += state_local[4*m+3] * kk.w; sum2 += state_local[4*m+3] * qq.w;
+            }
+            sums[col_idx_0*WARP_SIZE_S + row] = make_float2(sum1, sum2);
+
+            __syncthreads();
+
+            sum1 = sum2 = 0;
+#pragma unroll
+            for (int i = 0; i < num_warps; ++i) {
+                const float2 s2 = sums[i*WARP_SIZE_S + row];
+                sum1 += s2.x;
+                sum2 += s2.y;
+            }
+
+            const float decay = s_decay[j];
+            float sv_new = s_beta[j] * (sV[j][row] - sum1 * decay);
+            if (col_idx_0 == 0) {
+                out_base[t * out_token_stride + row_out] = sum2 * decay + sv_new * s_attn[j];
+            }
+
+#pragma unroll
+            for (int i = 0; i < ncol; ++i) {
+                float new_state_val = decay * state_local[i] + sv_new * kr[i];
+                new_state_val = fminf(fmaxf(new_state_val, -1e6f), 1e6f);
+                state_local[i] = new_state_val;
+            }
+
+            if (saved_states && t < n_tokens - 1) {
+                float * state_step_dst = saved_states + batch_idx * state_batch_stride + state_head_offset + t * state_step_stride;
+                for (int i = 0; i < ncol; ++i) {
+                    int col = num_warps*i + col_idx_0;
+                    state_step_dst[col*HEAD_DIM + row_out] = state_local[i];
+                }
+            }
+        }
+    }
+    for (int i = 0; i < ncol; ++i) {
+        int col = num_warps*i + col_idx_0;
+        state_dst[col*HEAD_DIM + row_out] = state_local[i];
+    }
+}
+
 static void delta_net_f32_cuda(
     const float * q,
     const float * k,
@@ -224,11 +452,12 @@ static void delta_net_f32_cuda(
         }
     } else {
         constexpr int threads_per_block = 128;
+        constexpr int tile = 8;
         if (head_dim == 64) {
-            delta_net_recurrent_f32<64, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
+            delta_net_tiled_f32<64, threads_per_block, tile><<<num_blocks, threads_per_block, 0, stream>>>(
                     q, k, v, g, beta, state_in, dst, state_out, saved_states, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, vnb1, vnb2, vnb3);
         } else {
-            delta_net_recurrent_f32<128, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
+            delta_net_tiled_f32<128, threads_per_block, tile><<<num_blocks, threads_per_block, 0, stream>>>(
                     q, k, v, g, beta, state_in, dst, state_out, saved_states, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, vnb1, vnb2, vnb3);
         }
     }
