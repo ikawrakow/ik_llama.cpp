@@ -49,7 +49,7 @@ __global__ void __launch_bounds__(d_state, 1)
         const int src0_nb2, const int src0_nb3, const int src1_nb2, const int src1_nb3,
         const int src2_nb1, const int src2_nb2, const int src3_nb1,
         const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
-        const int64_t s_off, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok, const int64_t K) {
+        const int64_t s_off, float * s_dst, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok, const int64_t K) {
     const float   * GGML_CUDA_RESTRICT src0 = src0_ptr;
     const float   * GGML_CUDA_RESTRICT src1 = src1_ptr;
     const float   * GGML_CUDA_RESTRICT src2 = src2_ptr;
@@ -83,7 +83,8 @@ __global__ void __launch_bounds__(d_state, 1)
     const float * B_warp  = (const float *) ((const char *) src4 + (seq_idx * src4_nb3) + (group_off));
     const float * C_warp  = (const float *) ((const char *) src5 + (seq_idx * src5_nb3) + (group_off));
     float *       y_warp  = dst + (seq_idx * n_tok * n_head * d_head) + warp_idx;
-    float *       s_warp  = (float *) ((char *) dst + s_off + seq_idx * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);
+    char  *       s_base  = s_dst ? (char *) s_dst : ((char *) dst + s_off);
+    float *       s_warp  = (float *) (s_base + seq_idx * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);
 
     // strides across n_seq_tokens
     const int stride_x  = src1_nb2 / sizeof(float);
@@ -145,7 +146,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
                               const float * src4, const float * src5, const int32_t * src6, float * dst,
                               const int src0_nb2, const int src0_nb3, const int src1_nb2, const int src1_nb3, const int src2_nb1,
                               const int src2_nb2, const int src3_nb1, const int src4_nb2, const int src4_nb3, const int src5_nb2,
-                              const int src5_nb3, const int64_t s_off, const int64_t d_state, const int64_t head_dim,
+                              const int src5_nb3, const int64_t s_off, float * s_dst, const int64_t d_state, const int64_t head_dim,
                               const int64_t n_head, const int64_t n_group, const int64_t n_tok, const int64_t n_seq,
                               const int64_t K, cudaStream_t stream) {
     // Mamba-2 only: the legacy layout sets K = -1 and is declined by supports_op, so a Mamba-1
@@ -159,7 +160,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
                 const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
                 ssm_scan_f32_group<96/WARP_SIZE, 96><<<blocks, threads, 0, stream>>>(src0, src1, src2, src3, src4, src5, src6, dst,
                         src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                        src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, K);
+                        src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, s_dst, n_head, head_dim, n_group, n_tok, K);
             } break;
         case 128:
             {
@@ -168,7 +169,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
                 const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
                 ssm_scan_f32_group<128/WARP_SIZE, 128><<<blocks, threads, 0, stream>>>(src0, src1, src2, src3, src4, src5, src6, dst,
                         src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                        src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, K);
+                        src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, s_dst, n_head, head_dim, n_group, n_tok, K);
             } break;
         case 256:
             {
@@ -177,7 +178,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
                 const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
                 ssm_scan_f32_group<256/WARP_SIZE, 256><<<blocks, threads, 0, stream>>>(src0, src1, src2, src3, src4, src5, src6, dst,
                         src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                        src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, K);
+                        src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, s_dst, n_head, head_dim, n_group, n_tok, K);
             } break;
         default:
             GGML_ABORT("doesn't support d_state!=(96, 128 or 256).");
@@ -425,7 +426,7 @@ static void ssm_scan_ssd_f32_cuda(
         const int A_stride,                                            // A (src3) stride between heads
         const int B_stride_tok,  const int B_stride_seq,               // B (src4) strides
         const int C_stride_tok,  const int C_stride_seq,               // C (src5) strides
-        const int64_t s_off, const int64_t d_state, const int64_t head_dim,
+        const int64_t s_off, float * s_dst, const int64_t d_state, const int64_t head_dim,
         const int64_t n_head, const int64_t n_group, const int64_t n_tok, const int64_t n_seq) {
 
     cudaStream_t stream = ctx.stream();
@@ -451,7 +452,7 @@ static void ssm_scan_ssd_f32_cuda(
     matmul_t * X_dt       = X_dt_buf.get();
     matmul_t * B_weighted = B_w_buf.get();
     float    * C_scaled   = C_s_buf.get();
-    float    * s_cur      = (float *)((char *)dst_d + s_off); // write state directly to dst
+    float    * s_cur      = s_dst ? s_dst : (float *)((char *)dst_d + s_off); // state destination
 
     // Step 1: softplus(dt) and parallel prefix sum over full sequence
     {
@@ -614,6 +615,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const struct ggml_tensor * src4 = dst->src[4];  // B
     const struct ggml_tensor * src5 = dst->src[5];  // C
     const struct ggml_tensor * src6 = dst->src[6];  // ids
+    const struct ggml_tensor * src7 = dst->src[7];  // optional state destination
 
     const int64_t nc  = src0->ne[0];  // d_state
     const int64_t nr  = src0->ne[1];  // head_dim or 1
@@ -644,6 +646,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const float * src5_d = (const float *) src5->data;
     const int32_t * src6_d = (const int32_t *) src6->data;
     float *       dst_d  = (float *) dst->data;
+    float *       s_dst  = src7 ? (float *) src7->data : nullptr;
     cudaStream_t  stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
@@ -688,12 +691,12 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             (int)(src3->nb[1] / sizeof(float)),
             (int)(src4->nb[2] / sizeof(float)), (int)(src4->nb[3] / sizeof(float)),
             (int)(src5->nb[2] / sizeof(float)), (int)(src5->nb[3] / sizeof(float)),
-            s_off, nc, nr, nh, ng, n_t, n_s);
+            s_off, s_dst, nc, nr, nh, ng, n_t, n_s);
         return;
     }
 #endif
     ssm_scan_f32_cuda(src0_d, src1_d, src2_d, src3_d, src4_d, src5_d, src6_d, dst_d,
                       src0->nb[2], src0->nb[3], src1->nb[2], src1->nb[3], src2->nb[1], src2->nb[2],
                       src3->nb[1], src4->nb[2], src4->nb[3], src5->nb[2], src5->nb[3],
-                      s_off, nc, nr, nh, ng, n_t, n_s, K, stream);
+                      s_off, s_dst, nc, nr, nh, ng, n_t, n_s, K, stream);
 }

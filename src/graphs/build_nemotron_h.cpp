@@ -103,20 +103,17 @@ ggml_tensor * llm_build_context::build_nemotron_mamba2(ggml_cgraph * gf, ggml_te
         dt = ggml_add(ctx0, dt, layer.ssm_dt_b);
 
         // states: {embd_s, slots} -> {d_state, head_dim, n_head, slots}
-        ggml_tensor * ssm = ggml_reshape_4d(ctx0, ssm_states_all, d_state, head_dim, n_head, state_slots);
+        ggml_tensor * ssm_cache = ggml_reshape_4d(ctx0, ssm_states_all, d_state, head_dim, n_head, state_slots);
+        ggml_tensor * ssm = ssm_cache;
         if (reset_state) {
             ssm = ggml_scale(ctx0, ssm, 0.0f);
             cb(ssm, "ssm_state_reset", il);
         }
 
-        struct ggml_tensor * y_ssm = ggml_ssm_scan_m2(ctx0, ssm, x, dt, layer.ssm_a, B, C, ssm_ids, 1);
+        // The scan writes the new state straight into the cache (state_out): copying a 3 MB block
+        // back per layer per token cost more than the scan itself.
+        struct ggml_tensor * y_ssm = ggml_ssm_scan_m2(ctx0, ssm, x, dt, layer.ssm_a, B, C, ssm_ids, 1, ssm_cache);
         cb(y_ssm, "ssm_scan", il);
-
-        // write the new SSM state back into the cache slot
-        const int64_t d_ssm = d_state * d_inner;
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0,
-                ggml_view_1d(ctx0, y_ssm, d_ssm, ggml_nelements(x) * ggml_element_size(x)),
-                ggml_view_1d(ctx0, ssm_states_all, d_ssm, 0)));
 
         // y = first nelements(x) values of y_ssm
         ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_head, n_seq_tokens, n_seqs,

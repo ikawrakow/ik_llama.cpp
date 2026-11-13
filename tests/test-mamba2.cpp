@@ -190,7 +190,7 @@ struct scan_case {
             ((int32_t *) t_id->data)[i] = 0;
         }
 
-        struct ggml_tensor * y = ggml_ssm_scan_m2(ctx, t_s, t_x, t_dt, t_A, t_B, t_C, t_id, /*K=*/1);
+        struct ggml_tensor * y = ggml_ssm_scan_m2(ctx, t_s, t_x, t_dt, t_A, t_B, t_C, t_id, /*K=*/1, nullptr);
 
         ggml_cgraph * g = ggml_new_graph(ctx);
         ggml_build_forward_expand(g, y);
@@ -316,7 +316,7 @@ struct scan_snap {
         memcpy(t_C->data,  C.data()  + (size_t) k0 * nb, (size_t) n_run * nb * sizeof(float));
         for (int64_t i = 0; i < n_seq; ++i) ((int32_t *) t_id->data)[i] = 0;
 
-        ggml_tensor * y = ggml_ssm_scan_m2(ctx, t_s, t_x, t_dt, t_A, t_B, t_C, t_id, K);
+        ggml_tensor * y = ggml_ssm_scan_m2(ctx, t_s, t_x, t_dt, t_A, t_B, t_C, t_id, K, nullptr);
         ggml_cgraph * g = ggml_new_graph(ctx);
         ggml_build_forward_expand(g, y);
         ggml_graph_compute_with_ctx(ctx, g, 2);
