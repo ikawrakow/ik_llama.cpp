@@ -59,8 +59,6 @@ bool ggml_cuda_op_scale_unary_scale(ggml_backend_cuda_context & ctx, ggml_tensor
 
 void ggml_cuda_op_sqrt_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
-void ggml_cuda_op_round_e4m3(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
-
 void ggml_cuda_op_hardswish(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_cuda_op_leaky_relu(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
