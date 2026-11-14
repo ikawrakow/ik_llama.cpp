@@ -1209,6 +1209,9 @@ struct ggml_backend_sched {
     void * callback_eval_user_data;
     ggml_backend_sched_copy_callback callback_copy;
     void * callback_copy_user_data;
+    ggml_backend_sched_expert_range_copy_callback callback_expert_range_copy;
+    int64_t callback_expert_range_copy_min_tokens = 0;
+    void * callback_expert_range_copy_user_data;
 
     char * context_buffer;
     size_t context_buffer_size;
@@ -2161,11 +2164,61 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                         const size_t padding = 512;
                         const size_t padding_end = last_id < n_expert - 1 ? std::min<size_t>(expert_size, padding) : 0;
 
-                        ggml_backend_tensor_set_async(split_backend,
-                                input_cpy,
-                                (const uint8_t *)input->data + expert_offset, expert_offset,
-                                // copy a bit extra to ensure there are no NaNs in the padding
-                                expert_size_copy + padding_end);
+                        const ggml_tensor * token_input = node->op == GGML_OP_MUL_MAT_ID ? node->src[1] : node->src[2];
+                        const int64_t n_tokens = token_input ? token_input->ne[2] : 0;
+                        const bool valid_token_geometry = token_input && ids_tensor &&
+                                token_input->ne[3] == 1 && ids_tensor->ne[1] == n_tokens &&
+                                ids_tensor->ne[2] == 1 && ids_tensor->ne[3] == 1;
+                        if (!sched->callback_expert_range_copy || !valid_token_geometry || n_tokens <= 0 ||
+                                n_tokens < sched->callback_expert_range_copy_min_tokens) {
+                            ggml_backend_tensor_set_async(split_backend,
+                                    input_cpy,
+                                    (const uint8_t *)input->data + expert_offset, expert_offset,
+                                    // copy a bit extra to ensure there are no NaNs in the padding
+                                    expert_size_copy + padding_end);
+                            return;
+                        }
+
+                        auto copy_host_range = [&](int32_t host_first, int32_t host_last) {
+                            const size_t offset = (size_t) host_first * expert_size;
+                            const size_t size = (size_t) (host_last - host_first + 1) * expert_size;
+                            ggml_backend_tensor_set_async(split_backend, input_cpy,
+                                    (const uint8_t *) input->data + offset, offset, size);
+                        };
+
+                        int32_t id = first_id;
+                        int32_t host_first = -1;
+                        bool reused = false;
+                        while (id <= last_id) {
+                            const size_t copied = sched->callback_expert_range_copy(split_backend,
+                                    input, input_cpy, id, (size_t) (last_id - id + 1),
+                                    n_tokens, sched->callback_expert_range_copy_user_data);
+                            GGML_ASSERT(copied <= (size_t) (last_id - id + 1));
+                            if (copied == 0) {
+                                if (host_first < 0) host_first = id;
+                                ++id;
+                                continue;
+                            }
+                            if (host_first >= 0) copy_host_range(host_first, id - 1);
+                            host_first = -1;
+                            reused = true;
+                            id += (int32_t) copied;
+                        }
+
+                        if (!reused) {
+                            ggml_backend_tensor_set_async(split_backend,
+                                    input_cpy,
+                                    (const uint8_t *) input->data + expert_offset, expert_offset,
+                                    expert_size_copy + padding_end);
+                            return;
+                        }
+                        if (host_first >= 0) copy_host_range(host_first, last_id);
+                        if (padding_end > 0) {
+                            const size_t padding_offset = (size_t) (last_id + 1) * expert_size;
+                            ggml_backend_tensor_set_async(split_backend, input_cpy,
+                                    (const uint8_t *) input->data + padding_offset,
+                                    padding_offset, padding_end);
+                        }
 
                     };
 
@@ -2887,6 +2940,13 @@ void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched,
         ggml_backend_sched_copy_callback callback, void * user_data) {
     sched->callback_copy = callback;
     sched->callback_copy_user_data = user_data;
+}
+
+void ggml_backend_sched_set_expert_range_copy_callback(ggml_backend_sched_t sched,
+        ggml_backend_sched_expert_range_copy_callback callback, int64_t min_tokens, void * user_data) {
+    sched->callback_expert_range_copy = callback;
+    sched->callback_expert_range_copy_min_tokens = min_tokens;
+    sched->callback_expert_range_copy_user_data = user_data;
 }
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {

@@ -434,6 +434,8 @@ struct llama_context {
 
     static bool sched_copy_moe_cache(ggml_backend_t backend, const ggml_tensor * src,
             ggml_tensor * dst, ggml_cgraph * graph, ggml_backend_sched_copy_phase phase, void * user_data);
+    static size_t sched_copy_moe_cache_expert_range(ggml_backend_t backend, const ggml_tensor * src,
+            ggml_tensor * dst, int32_t first_expert, size_t max_experts, int64_t n_tokens, void * user_data);
 
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
