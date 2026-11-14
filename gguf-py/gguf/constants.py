@@ -79,6 +79,7 @@ class Keys:
         CONTEXT_LENGTH                    = "{arch}.context_length"
         EMBEDDING_LENGTH                  = "{arch}.embedding_length"
         EMBEDDING_LENGTH_OUT              = "{arch}.embedding_length_out"
+        EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
         BLOCK_COUNT                       = "{arch}.block_count"
         LEADING_DENSE_BLOCK_COUNT         = "{arch}.leading_dense_block_count"
         FEED_FORWARD_LENGTH               = "{arch}.feed_forward_length"
@@ -114,6 +115,8 @@ class Keys:
         CLAMP_KQV         = "{arch}.attention.clamp_kqv"
         KEY_LENGTH        = "{arch}.attention.key_length"
         VALUE_LENGTH      = "{arch}.attention.value_length"
+        KEY_LENGTH_MLA    = "{arch}.attention.key_length_mla"
+        VALUE_LENGTH_MLA  = "{arch}.attention.value_length_mla"
         LAYERNORM_EPS     = "{arch}.attention.layer_norm_epsilon"
         LAYERNORM_RMS_EPS = "{arch}.attention.layer_norm_rms_epsilon"
         CAUSAL            = "{arch}.attention.causal"
@@ -260,6 +263,7 @@ class MODEL_ARCH(IntEnum):
     FLINT        = auto()
     MELLUM       = auto()
     RAON1        = auto()
+    RAON1_NANO   = auto()
     XING4_0      = auto()
     PHI2         = auto()
     PHI3         = auto()
@@ -478,9 +482,11 @@ class MODEL_TENSOR(IntEnum):
     HC_ATTN_FN           = auto()
     HC_ATTN_BASE         = auto()
     HC_ATTN_SCALE        = auto()
+    HC_ATTN_CHART        = auto()
     HC_FFN_FN            = auto()
     HC_FFN_BASE          = auto()
     HC_FFN_SCALE         = auto()
+    HC_FFN_CHART         = auto()
     # openPangu-2.0 (MoME causal-conv on MLA latents)
     ATTN_QA_CONV         = auto()
     ATTN_KV_CONV         = auto()   # compresskv_conv
@@ -531,6 +537,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.FLINT:          "flint",
     MODEL_ARCH.MELLUM:         "mellum",
     MODEL_ARCH.RAON1:          "raon1",
+    MODEL_ARCH.RAON1_NANO:     "raon1nano",
     MODEL_ARCH.XING4_0:        "xing4_0",
     MODEL_ARCH.PHI2:           "phi2",
     MODEL_ARCH.PHI3:           "phi3",
@@ -674,9 +681,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.HC_ATTN_FN:           "blk.{bid}.hc_attn_fn",
     MODEL_TENSOR.HC_ATTN_BASE:         "blk.{bid}.hc_attn_base",
     MODEL_TENSOR.HC_ATTN_SCALE:        "blk.{bid}.hc_attn_scale",
+    MODEL_TENSOR.HC_ATTN_CHART:        "blk.{bid}.hc_attn_chart",
     MODEL_TENSOR.HC_FFN_FN:            "blk.{bid}.hc_ffn_fn",
     MODEL_TENSOR.HC_FFN_BASE:          "blk.{bid}.hc_ffn_base",
     MODEL_TENSOR.HC_FFN_SCALE:         "blk.{bid}.hc_ffn_scale",
+    MODEL_TENSOR.HC_FFN_CHART:         "blk.{bid}.hc_ffn_chart",
     MODEL_TENSOR.ATTN_SUB_NORM:        "blk.{bid}.attn_sub_norm",
     MODEL_TENSOR.FFN_SUB_NORM:         "blk.{bid}.ffn_sub_norm",
     MODEL_TENSOR.DEC_ATTN_NORM:        "dec.blk.{bid}.attn_norm",
@@ -2207,6 +2216,48 @@ MODEL_TENSORS[MODEL_ARCH.RAON1] = [
     MODEL_TENSOR.FFN_GATE_SHEXP,
     MODEL_TENSOR.FFN_DOWN_SHEXP,
     MODEL_TENSOR.FFN_UP_SHEXP,
+]
+
+MODEL_TENSORS[MODEL_ARCH.RAON1_NANO] = [
+    MODEL_TENSOR.TOKEN_EMBD,
+    MODEL_TENSOR.OUTPUT_NORM,
+    MODEL_TENSOR.OUTPUT,
+    MODEL_TENSOR.ATTN_NORM,
+    MODEL_TENSOR.FFN_NORM,
+    MODEL_TENSOR.ATTN_QKV,
+    MODEL_TENSOR.ATTN_OUT,
+    MODEL_TENSOR.ATTN_Q_A,
+    MODEL_TENSOR.ATTN_Q_A_NORM,
+    MODEL_TENSOR.ATTN_Q_B,
+    MODEL_TENSOR.ATTN_KV_A_MQA,
+    MODEL_TENSOR.ATTN_KV_A_NORM,
+    MODEL_TENSOR.ATTN_K_B,
+    MODEL_TENSOR.ATTN_V_B,
+    MODEL_TENSOR.ATTN_GATE,
+    MODEL_TENSOR.SSM_CONV1D,
+    MODEL_TENSOR.SSM_F_A,
+    MODEL_TENSOR.SSM_F_B,
+    MODEL_TENSOR.SSM_DT,
+    MODEL_TENSOR.SSM_NORM,
+    MODEL_TENSOR.FFN_UP,
+    MODEL_TENSOR.FFN_DOWN,
+    MODEL_TENSOR.HC_ATTN_FN,
+    MODEL_TENSOR.HC_ATTN_BASE,
+    MODEL_TENSOR.HC_ATTN_CHART,
+    MODEL_TENSOR.HC_FFN_FN,
+    MODEL_TENSOR.HC_FFN_BASE,
+    MODEL_TENSOR.HC_FFN_CHART,
+    MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
+    MODEL_TENSOR.PER_LAYER_MODEL_PROJ,
+    MODEL_TENSOR.PER_LAYER_PROJ_NORM,
+    MODEL_TENSOR.PER_LAYER_INP_GATE,
+    MODEL_TENSOR.PER_LAYER_PROJ,
+    MODEL_TENSOR.PER_LAYER_POST_NORM,
+    MODEL_TENSOR.NEXTN_EH_PROJ,
+    MODEL_TENSOR.NEXTN_ENORM,
+    MODEL_TENSOR.NEXTN_HNORM,
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
 ]
 
 MODEL_TENSORS[MODEL_ARCH.XING4_0] = [

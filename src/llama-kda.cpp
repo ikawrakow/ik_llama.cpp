@@ -281,3 +281,100 @@ ggml_tensor * delta_net::build_layer_attn_kda(ggml_context * ctx0, ggml_cgraph *
     }
     return out;
 }
+
+ggml_tensor * delta_net::build_layer_attn_kda_nano(ggml_context * ctx0, ggml_cgraph * gf,
+        ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb,
+        bool add_residual) const {
+    GGML_ASSERT(lctx.inp_s_seq_qnext != nullptr);
+
+    if (all_same_seq) {
+        const bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
+        return build_layer_attn_kda_nano_core(ctx0, gf, cur, lctx.inp_s_seq_qnext, inp_out_ids,
+                token_seq_ids.front(), reset_state, il, cb, add_residual);
+    }
+
+    GGML_ASSERT(has_unique_seq_ids && "raon1nano mixed-sequence batches require unique sequence IDs per token");
+
+    ggml_tensor * out = nullptr;
+    for (int64_t i = 0; i < batch.n_tokens; ++i) {
+        auto cur_i = ggml_view_2d(ctx0, cur, cur->ne[0], 1, cur->nb[1], (size_t) i * cur->nb[1]);
+        auto qnext_i = ggml_view_2d(ctx0, lctx.inp_s_seq_qnext, 1, 1,
+                lctx.inp_s_seq_qnext->nb[1], (size_t) i * lctx.inp_s_seq_qnext->nb[1]);
+        auto out_i = build_layer_attn_kda_nano_core(ctx0, gf, cur_i, qnext_i, inp_out_ids,
+                (uint32_t) token_seq_ids[i], batch.pos != nullptr && batch.pos[i] == 0, il, cb, add_residual);
+        out = out == nullptr ? out_i : ggml_concat(ctx0, out, out_i, 1);
+    }
+    return out;
+}
+
+ggml_tensor * delta_net::build_layer_attn_kda_nano_core(ggml_context * ctx0, ggml_cgraph * gf,
+        ggml_tensor * cur, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
+        uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb,
+        bool add_residual) const {
+    auto & model   = lctx.model;
+    auto & hparams = model.hparams;
+    auto & layer   = model.layers[il];
+    auto & kv_self = lctx.kv_self;
+
+    const int64_t n_tok    = cur->ne[1];
+    const int64_t head_dim = hparams.ssm_d_state;
+    const int64_t n_head   = hparams.ssm_dt_rank;      // number of RDA heads
+    const int64_t d_inner  = n_head * head_dim;
+    const int64_t rank     = hparams.ssm_dt_rank_f;    // low-rank gate width
+
+    cur = llm_build_context::llm_build_norm(ctx0, cur, hparams, layer.attn_norm, nullptr, LLM_NORM_RMS, cb, il);
+
+    // single projection laid out as [q | k | v | z]
+    ggml_tensor * qkvg = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.wqkv, cur);
+    cb(qkvg, "rda_qkvg", il);
+    ggml_tensor * qkv_mixed = ggml_view_2d(ctx0, qkvg, 3*d_inner, n_tok, qkvg->nb[1], 0);
+    ggml_tensor * z         = ggml_cont(ctx0, ggml_view_2d(ctx0, qkvg, d_inner, n_tok, qkvg->nb[1], 3*d_inner*qkvg->nb[0]));
+    cb(qkv_mixed, "rda_qkv", il);
+    cb(z, "rda_z", il);
+
+    // ssm_f_a rows: [f_a (decay rank) | beta | beta + rda_delta]
+    ggml_tensor * fab = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.ssm_f_a, cur);
+    ggml_tensor * f_a = ggml_view_2d(ctx0, fab, rank,   n_tok, fab->nb[1], 0);
+    ggml_tensor * beta  = ggml_view_2d(ctx0, fab, n_head, n_tok, fab->nb[1], rank*fab->nb[0]);
+    ggml_tensor * write = ggml_view_2d(ctx0, fab, n_head, n_tok, fab->nb[1], (rank + n_head)*fab->nb[0]);
+    cb(f_a, "rda_f_a", il);
+
+    // raw beta logits; delta = write - beta
+    ggml_tensor * rda_delta = ggml_sub(ctx0, write, beta);
+    beta      = ggml_reshape_4d(ctx0, ggml_cont(ctx0, beta),      n_head, 1, n_tok, 1);
+    rda_delta = ggml_reshape_4d(ctx0, ggml_cont(ctx0, rda_delta), n_head, 1, n_tok, 1);
+
+    ggml_tensor * log_decay = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.ssm_f_b, f_a);
+    log_decay = ggml_add(ctx0, log_decay, layer.ssm_dt_b);
+    log_decay = ggml_scale(ctx0, ggml_sigmoid(ctx0, log_decay), hparams.kda_gate_lower_bound);
+    log_decay = ggml_reshape_4d(ctx0, log_decay, head_dim, n_head, n_tok, 1);
+    cb(log_decay, "rda_log_decay", il);
+
+    const uint32_t qnext_state_slots = llm_build_context::llama_kv_qnext_state_slots(kv_self);
+    ggml_tensor * per_step_ckpt = nullptr;
+    if (save_per_step_states && il < (int) kv_self.ckpt.per_step_ssm.size()) {
+        per_step_ckpt = kv_self.ckpt.per_step_ssm[il].front();
+    }
+    ggml_tensor * per_step_conv = save_per_step_states && il < (int) kv_self.ckpt.per_step_conv.size() &&
+            !kv_self.ckpt.per_step_conv[il].empty()
+        ? kv_self.ckpt.per_step_conv[il].front() : nullptr;
+
+    auto output = build_qkv(ctx0, kv_self.s_l[il], layer.ssm_conv1d, qkv_mixed, inp_s_seq_qnext,
+            beta, log_decay,
+            head_dim, n_head, head_dim, n_head, hparams.ssm_d_conv,
+            state_seq_id_local, qnext_state_slots, reset_state_local,
+            hparams.f_norm_rms_eps, 1, il, cb, gf, per_step_ckpt, per_step_conv, rda_delta);
+    cb(output, "rda_output", il);
+
+    // Raon-1 nano output gate is sigmoid
+    ggml_tensor * gated_output = build_gated_output(lctx, ctx0, layer.ssm_norm, layer.wo,
+            ggml_cont(ctx0, output), z, head_dim, n_head, n_tok, il, cb, GGML_UNARY_OP_SIGMOID);
+
+    if (inp_out_ids) {
+        gated_output = ggml_get_rows(ctx0, gated_output, inp_out_ids);
+        cur          = ggml_get_rows(ctx0, cur,          inp_out_ids);
+    }
+    ggml_tensor * out = add_residual ? ggml_add(ctx0, gated_output, cur) : gated_output;
+    cb(out, "ssm_output", il);
+    return out;
+}

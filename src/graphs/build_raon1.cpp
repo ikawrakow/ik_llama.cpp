@@ -7,6 +7,30 @@
 
 // Raon-1 mini: 18x RDA + 7x NoPE gated MLA, 4-stream Helmert mHC, MoE/SiTU-GLU.
 
+// Mean of the hc streams; inp_out_ids selects output rows (nullptr = all).
+static ggml_tensor * raon1_collapse_streams(
+        llm_build_context & llm, ggml_tensor * inpL, ggml_tensor * inp_out_ids) {
+    auto & ctx0    = llm.ctx0;
+    auto & hparams = llm.hparams;
+
+    const int64_t n_embd = hparams.n_embd;
+    const int64_t hc     = hparams.dsv4_hc_mult;
+
+    ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd*hc, inpL->ne[2]);
+    if (inp_out_ids) {
+        flat = ggml_get_rows(ctx0, flat, inp_out_ids);
+    }
+    const int64_t n_out = flat->ne[1];
+
+    ggml_tensor * summed = nullptr;
+    for (int64_t s = 0; s < hc; ++s) {
+        ggml_tensor * stream = ggml_view_2d(ctx0, flat, n_embd, n_out,
+                flat->nb[1], s*n_embd*ggml_element_size(flat));
+        summed = summed ? ggml_add(ctx0, summed, stream) : stream;
+    }
+    return ggml_scale(ctx0, summed, 1.0f/hc);
+}
+
 static ggml_tensor * raon1_build_hc_pre(
         llm_build_context & llm,
         ggml_tensor * x, ggml_tensor * fn, ggml_tensor * scale, ggml_tensor * base,
@@ -21,10 +45,11 @@ static ggml_tensor * raon1_build_hc_pre(
     const int64_t nm     = hc - 1;
     const int64_t nt     = x->ne[2];
 
-    ggml_tensor * flat = ggml_reshape_2d(ctx0, x, n_embd * hc, nt);
-    ggml_tensor * rms  = ggml_sqrt(ctx0, ggml_scale_bias(ctx0,
-            ggml_mean(ctx0, ggml_sqr(ctx0, flat)), 1.0f, hparams.dsv4_hc_eps));
-    ggml_tensor * mixes = ggml_div(ctx0, llm_build_context::llm_build_lora_mm(llm.lctx, ctx0, fn, flat), rms);
+    if (!ggml_is_contiguous(x)) {
+        x = ggml_cont(ctx0, x);
+    }
+    ggml_tensor * mixes = llm.build_mhc_pre_projection(x, fn, nullptr, n_embd, hc,
+            hparams.dsv4_hc_eps, /*force_contiguous = */ false);
     cb(mixes, "hc_mixes", il);
 
     auto affine = [&](int64_t offset, int64_t width, int64_t si) {
@@ -53,9 +78,7 @@ static ggml_tensor * raon1_build_hc_pre(
     cb(post, "hc_post", il);
 
     // result[e,t] = sum_s pre[s,t] * x[e,s,t]
-    ggml_tensor * pre3d = ggml_reshape_3d(ctx0, pre, hc, 1, nt);
-    ggml_tensor * xh    = ggml_cont(ctx0, ggml_permute(ctx0, x, 1, 0, 2, 3)); // [hc, n_embd, nt]
-    ggml_tensor * result = ggml_cont_2d(ctx0, ggml_mul_mat(ctx0, pre3d, xh), n_embd, nt);
+    ggml_tensor * result = llm.build_mhc_weighted_sum(x, pre, n_embd, hc);
 
     *pre_out  = pre;
     *post_out = post;
@@ -66,33 +89,15 @@ static ggml_tensor * raon1_build_hc_pre(
 static ggml_tensor * raon1_build_hc_post(
         llm_build_context & llm,
         ggml_tensor * x, ggml_tensor * branch, ggml_tensor * post, ggml_tensor * comb, int il) {
-    auto & ctx0    = llm.ctx0;
-    auto & hparams = llm.hparams;
-    auto & cb      = llm.cb;
-
-    const int64_t n_embd = hparams.n_embd;
-    const int64_t hc     = hparams.dsv4_hc_mult;
-    const int64_t nt     = x->ne[2];
-
-    // Batched hc x hc GEMM plus the post/branch rank-1 update.
-    ggml_tensor * comb_t = ggml_cont(ctx0, ggml_permute(ctx0, comb, 1, 0, 2, 3)); // [src, dst, nt]
-    ggml_tensor * xh     = ggml_cont(ctx0, ggml_permute(ctx0, x,    1, 0, 2, 3)); // [src, n_embd, nt]
-    ggml_tensor * result = ggml_mul_mat(ctx0, comb_t, xh);                        // [dst, n_embd, nt]
-
-    // post[dst,t] * branch[e,t] is a K=1 GEMM.
-    ggml_tensor * post1   = ggml_reshape_3d(ctx0, post,   1, hc,     nt);
-    ggml_tensor * branch1 = ggml_reshape_3d(ctx0, branch, 1, n_embd, nt);
-    ggml_tensor * post_term = ggml_mul_mat(ctx0, post1, branch1);                 // [hc, n_embd, nt]
-    result = ggml_add(ctx0, result, post_term);
-    result = ggml_cont(ctx0, ggml_permute(ctx0, result, 1, 0, 2, 3));             // [n_embd, hc, nt]
-
-    cb(result, "hc_post_out", il);
+    ggml_tensor * result = llm.build_mhc_post(branch, post, x,
+            comb, llm.hparams.n_embd, llm.hparams.dsv4_hc_mult, /*comb_output_dim0 = */ true);
+    llm.cb(result, "hc_post_out", il);
     return result;
 }
 
 static ggml_tensor * raon1_mla_attention(
         llm_build_context & llm, ggml_cgraph * gf, int il,
-        ggml_tensor * inp, ggml_tensor * KQ_mask, float kq_scale) {
+        ggml_tensor * inp, ggml_tensor * KQ_mask, float kq_scale, int64_t n_head) {
     auto & lctx    = llm.lctx;
     auto & ctx0    = llm.ctx0;
     auto & hparams = llm.hparams;
@@ -101,16 +106,12 @@ static ggml_tensor * raon1_mla_attention(
     auto & cb      = llm.cb;
     auto & layer   = model.layers[il];
 
-    const int64_t n_head      = llm.n_head;
-    const int64_t n_head_kda  = hparams.ssm_dt_rank;
     const int64_t head_k      = hparams.n_embd_head_k_mla();
     const int64_t head_v      = hparams.n_embd_head_v_mla();
     const int64_t n_nope      = head_k - hparams.n_rot;
     const int64_t kv_lora     = hparams.n_lora_kv;
     const int64_t n_extra     = hparams.n_rot;
     const int64_t n_tokens    = llm.n_tokens;
-
-    GGML_ASSERT(n_head == n_head_kda);
 
     auto cur = llm_build_context::llm_build_norm(ctx0, inp, hparams, layer.attn_norm, nullptr, LLM_NORM_RMS, cb, il);
     cb(cur, "attn_norm", il);
@@ -176,7 +177,7 @@ static ggml_tensor * raon1_mla_attention(
         auto kqv = llm.build_mla_expanded_pp(p);
         auto gate = ggml_mul_mat(ctx0, layer.attn_v_gate, cur);
         gate = ggml_reshape_2d(ctx0, gate, head_v * n_head, n_tokens);
-        kqv = ggml_mul(ctx0, kqv, ggml_sigmoid(ctx0, gate));
+        kqv = ggml_fused_mul_unary(ctx0, gate, kqv, GGML_UNARY_OP_SIGMOID);
         cur = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.wo, kqv);
         cb(cur, "kqv_out", il);
         return cur;
@@ -214,7 +215,7 @@ static ggml_tensor * raon1_mla_attention(
     kqv = ggml_reshape_2d(ctx0, kqv, head_v * n_head, n_tokens);
     auto gate = ggml_mul_mat(ctx0, layer.attn_v_gate, cur);
     gate = ggml_reshape_2d(ctx0, gate, head_v * n_head, n_tokens);
-    kqv = ggml_mul(ctx0, kqv, ggml_sigmoid(ctx0, gate));
+    kqv = ggml_fused_mul_unary(ctx0, gate, kqv, GGML_UNARY_OP_SIGMOID);
     cb(kqv, "kqv_gated", il);
 
     cur = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.wo, kqv);
@@ -275,7 +276,7 @@ ggml_cgraph * llm_build_context::build_raon1() {
             cur = delta.build_layer_attn_kda(ctx0, gf, cur, nullptr, il, cb, /*add_residual = */ false);
         } else {
             cur = raon1_mla_attention(*this, gf, il, cur, KQ_mask,
-                    1.0f/sqrtf(float(hparams.n_embd_head_k_mla())));
+                    1.0f/sqrtf(float(hparams.n_embd_head_k_mla())), this->n_head);
         }
         inpL = raon1_build_hc_post(*this, inpL, cur, post, comb, il);
         inpL = lctx.cvec.apply_to(ctx0, inpL, il);
@@ -326,20 +327,252 @@ ggml_cgraph * llm_build_context::build_raon1() {
     ggml_build_forward_expand(gf, l_out);
 
     // collapse the 4 mHC streams
-    auto flat = ggml_reshape_2d(ctx0, inpL, n_embd * hc, n_tokens);
-    if (inp_out_ids) {
-        flat = ggml_get_rows(ctx0, flat, inp_out_ids);
-    }
-    const int64_t n_out = flat->ne[1];
-    ggml_tensor * summed = nullptr;
-    for (int64_t s = 0; s < hc; ++s) {
-        auto stream = ggml_view_2d(ctx0, flat, n_embd, n_out,
-                flat->nb[1], s * n_embd * ggml_element_size(flat));
-        summed = summed ? ggml_add(ctx0, summed, stream) : stream;
-    }
-    inpL = ggml_scale(ctx0, summed, 1.0f / hc);
+    inpL = raon1_collapse_streams(*this, inpL, inp_out_ids);
 
     auto cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+    cb(cur, "result_output", -1);
+    ggml_build_forward_expand(gf, cur);
+    return gf;
+}
+
+// Raon-1 nano: 18x RDA + 6x NoPE gated MLA + 1 MTP, mHC base+chart, dense SwiGLU, PLE.
+
+static ggml_tensor * raon1nano_build_hc_pre(
+        llm_build_context & llm,
+        ggml_tensor * x, ggml_tensor * fn, ggml_tensor * base, ggml_tensor * chart,
+        ggml_tensor ** post_out, ggml_tensor ** comb_out, int il) {
+    auto & ctx0    = llm.ctx0;
+    auto & hparams = llm.hparams;
+    auto & cb      = llm.cb;
+
+    const int64_t n_embd = hparams.n_embd;
+    const int64_t hc     = hparams.dsv4_hc_mult;
+    const int64_t hc2    = hc*hc;
+    const int64_t nt     = x->ne[2];
+    const int64_t nmix   = fn->ne[1];
+
+    if (!ggml_is_contiguous(x)) {
+        x = ggml_cont(ctx0, x);
+    }
+    ggml_tensor * mixes = llm.build_mhc_pre_projection(x, fn, nullptr, n_embd, hc,
+            hparams.dsv4_hc_eps, /*force_contiguous = */ false);
+    mixes = ggml_add(ctx0, mixes, base);
+    cb(mixes, "hc_mixes", il);
+
+    ggml_tensor * sg   = ggml_sigmoid(ctx0, ggml_view_2d(ctx0, mixes, 2*hc, nt, mixes->nb[1], 0));
+    ggml_tensor * pre  = ggml_cont(ctx0, ggml_view_2d(ctx0, sg, hc, nt, sg->nb[1], 0));
+    *post_out          = ggml_view_2d(ctx0, sg, hc, nt, sg->nb[1], hc*sg->nb[0]);
+
+    // chart = [K | r | c0]
+    ggml_tensor * K  = ggml_view_2d(ctx0, chart, nmix, hc2, nmix*chart->nb[0], 0);
+    ggml_tensor * r  = ggml_view_1d(ctx0, chart, hc2, nmix*hc2*chart->nb[0]);
+    ggml_tensor * c0 = ggml_view_2d(ctx0, chart, hc, hc, hc*chart->nb[0],
+            (nmix*hc2 + hc2)*chart->nb[0]);
+
+    ggml_tensor * e   = ggml_mul_mat(ctx0, K, mixes);          // [hc*hc, nt]
+    ggml_tensor * rho = ggml_pool_1d(ctx0, ggml_mul(ctx0, e, r), GGML_OP_POOL_MAX, hc2, hc2, 0);
+    rho = ggml_reshape_3d(ctx0, ggml_scale_bias(ctx0, rho, 1.0f, 1.0f), 1, 1, nt);
+    *comb_out = ggml_add(ctx0, ggml_div(ctx0, ggml_reshape_3d(ctx0, e, hc, hc, nt), rho), c0);
+    cb(*comb_out, "hc_comb", il);
+
+    ggml_tensor * result = llm.build_mhc_weighted_sum(x, pre, n_embd, hc);
+    cb(result, "hc_pre", il);
+    return result;
+}
+
+ggml_cgraph * llm_build_context::build_raon1nano() {
+    if (lctx.cparams.mtp_op_type != MTP_OP_NONE) {
+        return build_raon1nano_mtp();
+    }
+
+    ggml_cgraph * gf = new_graph_custom();
+
+    const int64_t n_embd        = hparams.n_embd;
+    const int64_t n_tokens      = this->n_tokens;
+    const int64_t n_outputs     = this->n_outputs;
+    const int64_t hc            = hparams.dsv4_hc_mult;
+    const int64_t n_ple         = hparams.n_embd_per_layer;
+    const int64_t n_layer_trunk = hparams.n_layer - hparams.nextn_predict_layers;
+
+    delta_net delta(lctx, batch);
+
+    auto * inp_out_ids = (n_outputs != n_tokens) ? build_inp_out_ids() : nullptr;
+    auto * KQ_mask     = build_inp_KQ_mask();
+
+    lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
+    cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
+    ggml_set_input(lctx.inp_s_seq_qnext);
+
+    ggml_tensor * inp = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+
+    // per-layer inputs (PLE)
+    ggml_tensor * inp_ple = nullptr;
+    if (n_ple > 0) {
+        ggml_tensor * rows;
+        if (lctx.inp_tokens) {
+            rows = ggml_get_rows(ctx0, model.tok_embd_per_layer, lctx.inp_tokens);
+            rows = ggml_reshape_3d(ctx0, rows, n_ple, n_layer_trunk, n_tokens);
+        } else {
+            rows = ggml_cast(ctx0, ggml_view_1d(ctx0, model.tok_embd_per_layer,
+                    n_ple*n_layer_trunk, 0), GGML_TYPE_F32);
+            rows = ggml_reshape_3d(ctx0, rows, n_ple, n_layer_trunk, 1);
+        }
+        rows = ggml_scale(ctx0, rows, sqrtf((float) n_ple));
+
+        // PLE shared with Gemma4
+        inp_ple = ggml_cont(ctx0, build_per_layer_inputs(inp, rows, n_ple, n_layer_trunk, 1.0f));
+        cb(inp_ple, "inp_ple", -1);
+    }
+
+    ggml_tensor * inpL = ggml_repeat_4d(ctx0,
+            ggml_reshape_3d(ctx0, inp, n_embd, 1, n_tokens), n_embd, hc, n_tokens, 1);
+
+    auto stream_sum = [&](ggml_tensor * x) {
+        ggml_tensor * sum = nullptr;
+        for (int64_t i = 0; i < hc; ++i) {
+            ggml_tensor * xi = ggml_view_2d(ctx0, x, n_embd, x->ne[2], x->nb[2], i*x->nb[1]);
+            sum = sum ? ggml_add(ctx0, sum, xi) : xi;
+        }
+        return sum;
+    };
+
+    for (int64_t il = 0; il < n_layer_trunk; ++il) {
+        const auto & layer = model.layers[il];
+
+        ggml_tensor * post;
+        ggml_tensor * comb;
+
+        ggml_tensor * cur = raon1nano_build_hc_pre(*this, inpL,
+                layer.hc_attn_fn, layer.hc_attn_base, layer.hc_attn_chart, &post, &comb, il);
+
+        if (hparams.is_recurrent(il)) {
+            cur = delta.build_layer_attn_kda_nano(ctx0, gf, cur, nullptr, il, cb, /*add_residual = */ false);
+        } else {
+            cur = raon1_mla_attention(*this, gf, il, cur, KQ_mask,
+                    1.0f/sqrtf(float(hparams.n_embd_head_k_mla())), hparams.n_head(il));
+        }
+        inpL = raon1_build_hc_post(*this, inpL, cur, post, comb, il);
+        inpL = lctx.cvec.apply_to(ctx0, inpL, il);
+
+        cur = raon1nano_build_hc_pre(*this, inpL,
+                layer.hc_ffn_fn, layer.hc_ffn_base, layer.hc_ffn_chart, &post, &comb, il);
+        cur = llm_build_context::llm_build_norm(ctx0, cur, hparams, layer.ffn_norm,
+                nullptr, LLM_NORM_RMS, cb, il);
+        cur = llm_build_context::llm_build_ffn(ctx0, lctx, nullptr, cur,
+                layer.ffn_up,   nullptr, nullptr,
+                nullptr,        nullptr, nullptr,
+                layer.ffn_down, nullptr, nullptr,
+                nullptr,
+                LLM_FFN_SWIGLU, LLM_FFN_SEQ, cb, il);
+        inpL = raon1_build_hc_post(*this, inpL, cur, post, comb, il);
+        inpL = lctx.cvec.apply_to(ctx0, inpL, il);
+
+        if (inp_ple && il < n_layer_trunk) {
+            ggml_tensor * ple_il = ggml_view_2d(ctx0, inp_ple, n_ple, n_tokens,
+                    inp_ple->nb[1], il*inp_ple->nb[2]);
+            ple_il = ggml_cont(ctx0, ple_il);
+
+            ggml_tensor * gate = llm_build_context::llm_build_lora_mm(lctx, ctx0,
+                    layer.per_layer_inp_gate, stream_sum(inpL));
+            ggml_tensor * g = ggml_geglu_split(ctx0, gate, ple_il);
+            g = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.per_layer_proj, g);
+            g = llm_build_context::llm_build_norm(ctx0, g, hparams, layer.per_layer_post_norm,
+                    nullptr, LLM_NORM_RMS, cb, il);
+            inpL = ggml_add(ctx0, inpL, ggml_reshape_3d(ctx0, g, n_embd, 1, n_tokens));
+        }
+    }
+
+    // collapse + output norm
+    ggml_tensor * cur = raon1_collapse_streams(*this, inpL,
+            lctx.cparams.mtp ? nullptr : inp_out_ids);
+    cb(cur, "hc_collapse", -1);
+
+    if (lctx.cparams.mtp) {
+        // MTP head reads the full target state
+        cur = llm_build_context::llm_build_norm(ctx0, cur, hparams, model.output_norm,
+                nullptr, LLM_NORM_RMS, cb, -1);
+        cb(cur, "result_mtp_embd", -1);
+        ggml_set_output(cur);
+        ggml_build_forward_expand(gf, cur);
+        if (n_outputs == 0) {
+            return gf;
+        }
+    }
+
+    if (lctx.cparams.mtp && n_outputs != n_tokens) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
+    cur = build_output(lctx, ctx0, cur, model.output,
+            lctx.cparams.mtp ? nullptr : model.output_norm, cb);
+    cb(cur, "result_output", -1);
+    ggml_build_forward_expand(gf, cur);
+    return gf;
+}
+
+ggml_cgraph * llm_build_context::build_raon1nano_mtp() {
+    ggml_cgraph * gf = new_graph_custom();
+
+    const int64_t n_embd        = hparams.n_embd;
+    const int64_t n_tokens      = this->n_tokens;
+    const int64_t n_outputs     = this->n_outputs;
+    const int64_t hc            = hparams.dsv4_hc_mult;
+    const int64_t il            = hparams.n_layer - hparams.nextn_predict_layers;
+
+    const bool emit_logits = cparams.mtp_op_type == MTP_OP_DRAFT_GEN ||
+            cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
+
+    const auto & layer = model.layers[il];
+    GGML_ASSERT(!hparams.is_recurrent(il));
+    GGML_ASSERT(layer.nextn.eh_proj && layer.nextn.enorm && layer.nextn.hnorm && layer.nextn.shared_head_norm &&
+            "MTP block missing, load the model with MTP enabled");
+
+    auto * KQ_mask     = build_inp_KQ_mask();
+    auto * inp_out_ids = (n_outputs != n_tokens) ? build_inp_out_ids() : nullptr;
+
+    ggml_tensor * hidden_state = build_inp_mtp_states(n_embd);
+    ggml_tensor * token_emb    = build_inp_embd_mtp(model.tok_embd);
+    ggml_tensor * x            = build_mtp_input(layer, hidden_state, token_emb, il);
+    cb(x, "mtp_input", il);
+
+    ggml_tensor * inpL = ggml_repeat_4d(ctx0,
+            ggml_reshape_3d(ctx0, x, n_embd, 1, n_tokens), n_embd, hc, n_tokens, 1);
+
+    ggml_tensor * post;
+    ggml_tensor * comb;
+
+    // raon1_mla_attention applies attn_norm
+    ggml_tensor * cur = raon1nano_build_hc_pre(*this, inpL,
+            layer.hc_attn_fn, layer.hc_attn_base, layer.hc_attn_chart, &post, &comb, il);
+    cur = raon1_mla_attention(*this, gf, il, cur, KQ_mask,
+            1.0f/sqrtf(float(hparams.n_embd_head_k_mla())), hparams.n_head(il));
+    inpL = raon1_build_hc_post(*this, inpL, cur, post, comb, il);
+
+    cur = raon1nano_build_hc_pre(*this, inpL,
+            layer.hc_ffn_fn, layer.hc_ffn_base, layer.hc_ffn_chart, &post, &comb, il);
+    cur = llm_build_context::llm_build_norm(ctx0, cur, hparams, layer.ffn_norm,
+            nullptr, LLM_NORM_RMS, cb, il);
+    cur = llm_build_context::llm_build_ffn(ctx0, lctx, nullptr, cur,
+            layer.ffn_up,   nullptr, nullptr,
+            nullptr,        nullptr, nullptr,
+            layer.ffn_down, nullptr, nullptr,
+            nullptr,
+            LLM_FFN_SWIGLU, LLM_FFN_SEQ, cb, il);
+    inpL = raon1_build_hc_post(*this, inpL, cur, post, comb, il);
+
+    cur = raon1_collapse_streams(*this, inpL, emit_logits ? nullptr : inp_out_ids);
+    cb(cur, "hc_collapse", -1);
+
+    if (!emit_logits) {
+        // warm cache only
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
+
+    cur = llm_build_context::llm_build_norm(ctx0, cur, hparams, layer.nextn.shared_head_norm,
+            nullptr, LLM_NORM_RMS, cb, il);
+
+    cur = build_output(lctx, ctx0, cur, model.output, nullptr, cb);
     cb(cur, "result_output", -1);
     ggml_build_forward_expand(gf, cur);
     return gf;

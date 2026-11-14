@@ -32,6 +32,11 @@ struct delta_net {
             ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb,
             bool add_residual = true) const;
 
+    // Raon-1 nano RDA (fused qkv layout)
+    ggml_tensor * build_layer_attn_kda_nano(ggml_context * ctx0, ggml_cgraph * gf,
+            ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb,
+            bool add_residual = false) const;
+
     // which recurrent state slot a token owns. Other per-sequence state in the same row shares
     // the slot, so callers read it here rather than resolving the batch again
     bool     batch_shares_one_seq()  const { return all_same_seq; }
@@ -75,6 +80,11 @@ private:
     static ggml_tensor * build_gated_output(llama_context & lctx, ggml_context * ctx0, ggml_tensor * ssm_norm, ggml_tensor * ssm_out,
             ggml_tensor * output, ggml_tensor * z, int64_t head_v_dim, int64_t num_v_heads, int64_t n_tok, int il, const llm_build_cb & cb,
             ggml_unary_op gate_op = GGML_UNARY_OP_SILU);
+
+    ggml_tensor * build_layer_attn_kda_nano_core(ggml_context * ctx0, ggml_cgraph * gf,
+            ggml_tensor * delta_input, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
+            uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb,
+            bool add_residual) const;
 
     ggml_tensor * build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgraph * gf,
             ggml_tensor * cur, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
