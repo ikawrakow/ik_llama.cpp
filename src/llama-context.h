@@ -397,6 +397,7 @@ struct llama_context {
 
     int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
     int32_t n_eval   = 0; // number of eval calls
+    uint64_t n_single_token_fallbacks = 0; // decode steps forced to a single token by the hybrid sequence check
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_t buf_output = nullptr;

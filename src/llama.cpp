@@ -7597,7 +7597,83 @@ static int llama_decode_internal(
         }
     }
 
-    bool warned_qnext_mixed_repeat = false;
+    // Hybrid (delta-net) archs need each sequence's tokens contiguous within a ubatch,
+    // otherwise the per-ubatch check below has to fall back to single-token chunking.
+    // Callers such as batched-bench and the server interleave sequences token by token,
+    // so regroup by seq_id here, before the batch is sliced into ubatches.
+    // The buffers live until the end of decode: batch_all points into them.
+    std::vector<llama_token>    rg_token;
+    std::vector<llama_pos>      rg_pos;
+    std::vector<int32_t>        rg_nseq;
+    std::vector<llama_seq_id *> rg_seq;
+    std::vector<int8_t>         rg_logits;
+    std::vector<int32_t>        rg_out;
+    std::vector<int32_t>        rg_perm;
+
+    if (llm_arch_is_hybrid(model.arch) && n_tokens_all > 1 &&
+            batch_all.token && batch_all.pos && batch_all.n_seq_id && batch_all.seq_id) {
+        bool already_grouped = true;
+        for (uint32_t i = 1; i < n_tokens_all; ++i) {
+            if (batch_all.n_seq_id[i] <= 0 || batch_all.n_seq_id[i-1] <= 0 ||
+                    !batch_all.seq_id[i] || !batch_all.seq_id[i-1] ||
+                    batch_all.seq_id[i][0] < batch_all.seq_id[i-1][0]) {
+                already_grouped = false;
+                break;
+            }
+        }
+
+        if (!already_grouped) {
+            std::vector<int32_t> perm(n_tokens_all);
+            for (uint32_t i = 0; i < n_tokens_all; ++i) {
+                perm[i] = (int32_t) i;
+            }
+            std::stable_sort(perm.begin(), perm.end(), [&batch_all](int32_t a, int32_t b) {
+                return batch_all.seq_id[a][0] < batch_all.seq_id[b][0];
+            });
+
+            const size_t n_planes = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
+                    hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
+
+            rg_token .resize(n_tokens_all);
+            rg_pos   .resize(n_tokens_all * n_planes);
+            rg_nseq  .resize(n_tokens_all);
+            rg_seq   .resize(n_tokens_all);
+            rg_logits.resize(n_tokens_all);
+            rg_out   .resize(n_tokens_all);
+            rg_perm  .assign(perm.begin(), perm.end());
+
+            // Output rows are numbered in the order the tokens are processed, so
+            // recompute the mapping here. It is flipped back to the caller's order
+            // once the loop finishes, which keeps llama_get_logits_ith(i) addressing
+            // the token the caller passed at index i.
+            int32_t j = 0;
+            for (uint32_t i = 0; i < n_tokens_all; ++i) {
+                const int32_t s = perm[i];
+                rg_token [i] = batch_all.token[s];
+                rg_nseq  [i] = batch_all.n_seq_id[s];
+                rg_seq   [i] = batch_all.seq_id[s];
+                rg_logits[i] = batch_all.logits ? batch_all.logits[s] : 0;
+                rg_out   [i] = rg_logits[i] ? j++ : -1;
+                for (size_t p = 0; p < n_planes; ++p) {
+                    rg_pos[p*n_tokens_all + i] = batch_all.pos[p*n_tokens_all + s];
+                }
+            }
+
+            batch_all.token    = rg_token.data();
+            batch_all.pos      = rg_pos.data();
+            batch_all.n_seq_id = rg_nseq.data();
+            batch_all.seq_id   = rg_seq.data();
+            batch_all.logits   = batch_all.logits ? rg_logits.data() : nullptr;
+            for (uint32_t i = 0; i < n_tokens_all; ++i) {
+                lctx.output_ids[i] = rg_out[i];
+            }
+
+            LLAMA_LOG_INFO("%s: regrouped %u tokens by seq_id for hybrid attention\n",
+                    __func__, n_tokens_all);
+        }
+    }
+
+    bool warned_hybrid_mixed_repeat = false;
     for (uint32_t cur_token = 0; cur_token < n_tokens_all; ) {
 #if IK_PRINT_TIMING
         auto tim1 = ggml_time_us();
@@ -7607,37 +7683,60 @@ static int llama_decode_internal(
                 n_tokens > 1 &&
                 batch_all.n_seq_id != nullptr &&
                 batch_all.seq_id != nullptr) {
+            // The delta-net builder takes its fast path only when every token in
+            // the chunk shares one sequence; a chunk mixing sequences is handled
+            // token by token and asserts unless each token carries a unique seq id.
+            // After regrouping, sequence runs are contiguous, so a window that
+            // straddles two sequences is the normal case. Clamp the chunk to the
+            // current run so the fast path still applies, instead of collapsing
+            // the whole ubatch to one token per graph.
             bool can_check = true;
-            bool any_diff = false;
-            bool has_dup = false;
-            llama_seq_id first_seq_id = 0;
-            std::unordered_set<llama_seq_id> seen_seq_ids;
-            seen_seq_ids.reserve(n_tokens);
-
             for (uint32_t i = 0; i < n_tokens; ++i) {
                 const uint32_t idx = cur_token + i;
                 if (batch_all.n_seq_id[idx] <= 0 || batch_all.seq_id[idx] == nullptr) {
                     can_check = false;
                     break;
                 }
-
-                const llama_seq_id seq_id_i = batch_all.seq_id[idx][0];
-                if (i == 0) {
-                    first_seq_id = seq_id_i;
-                } else if (seq_id_i != first_seq_id) {
-                    any_diff = true;
-                }
-
-                if (!seen_seq_ids.insert(seq_id_i).second) {
-                    has_dup = true;
-                }
             }
 
-            if (can_check && any_diff && has_dup) {
-                n_tokens = 1;
-                if (!warned_qnext_mixed_repeat) {
-                    LLAMA_LOG_WARN("%s: qwen3next mixed-sequence batch contains repeated seq_id values; falling back to single-token chunking\n", __func__);
-                    warned_qnext_mixed_repeat = true;
+            if (can_check) {
+                const llama_seq_id run_seq_id = batch_all.seq_id[cur_token][0];
+                uint32_t run_len = 1;
+                bool all_same   = true;
+                bool all_unique = true;
+                std::unordered_set<llama_seq_id> seen_ids;
+                seen_ids.reserve(n_tokens);
+                seen_ids.insert(run_seq_id);
+
+                while (run_len < n_tokens && batch_all.seq_id[cur_token + run_len][0] == run_seq_id) {
+                    ++run_len;
+                }
+
+                // The builder accepts a chunk when every token shares one sequence,
+                // or when every token carries a distinct one. Token generation with
+                // several slots is the second shape: one token per sequence, ids all
+                // unique, so it must be left alone. Only a chunk with repeated ids
+                // that is not a single run needs cutting.
+                for (uint32_t i = 1; i < n_tokens; ++i) {
+                    const llama_seq_id s = batch_all.seq_id[cur_token + i][0];
+                    if (s != run_seq_id) {
+                        all_same = false;
+                    }
+                    if (!seen_ids.insert(s).second) {
+                        all_unique = false;
+                    }
+                }
+
+                if (!all_same && !all_unique && run_len < n_tokens) {
+                    n_tokens = run_len;
+                    if (run_len == 1) {
+                        // alternating singleton sequences, nothing to group
+                        lctx.n_single_token_fallbacks++;
+                        if (!warned_hybrid_mixed_repeat) {
+                            LLAMA_LOG_WARN("%s: hybrid model batch interleaves sequence ids; falling back to single-token chunking\n", __func__);
+                            warned_hybrid_mixed_repeat = true;
+                        }
+                    }
                 }
             }
         }
@@ -8165,6 +8264,13 @@ static int llama_decode_internal(
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     lctx.n_outputs = n_outputs;
     lctx.n_outputs_embd = n_outputs_embd;
+
+    // put the output rows back into the caller's token order after a regroup
+    if (!rg_perm.empty()) {
+        for (uint32_t i = 0; i < (uint32_t) rg_perm.size(); ++i) {
+            lctx.output_ids[rg_perm[i]] = rg_out[i];
+        }
+    }
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //llama_synchronize(&lctx);
