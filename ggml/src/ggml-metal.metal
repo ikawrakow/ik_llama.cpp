@@ -2533,6 +2533,75 @@ kernel void kernel_upscale_f32(
     }
 }
 
+kernel void kernel_upscale_bilinear_f32(
+    device  const char * src0,
+    device        char * dst,
+    constant   int64_t & ne00,
+    constant   int64_t & ne01,
+    constant   int64_t & ne02,
+    constant   int64_t & ne03,
+    constant  uint64_t & nb00,
+    constant  uint64_t & nb01,
+    constant  uint64_t & nb02,
+    constant  uint64_t & nb03,
+    constant   int64_t & ne0,
+    constant   int64_t & ne1,
+    constant   int64_t & ne2,
+    constant   int64_t & ne3,
+    constant  uint64_t & nb0,
+    constant  uint64_t & nb1,
+    constant  uint64_t & nb2,
+    constant  uint64_t & nb3,
+    constant     float & sf0,
+    constant     float & sf1,
+    constant     float & sf2,
+    constant     float & sf3,
+    constant     float & poffs,
+    uint3 tgpig[[threadgroup_position_in_grid]],
+    uint3 tpitg[[thread_position_in_threadgroup]],
+    uint3   ntg[[threads_per_threadgroup]]) {
+
+    const int64_t i3 = tgpig.z;
+    const int64_t i2 = tgpig.y;
+    const int64_t i1 = tgpig.x;
+
+    const int64_t i03 = min(ne03 - 1, (int64_t)(i3/sf3));
+    const int64_t i02 = min(ne02 - 1, (int64_t)(i2/sf2));
+
+    // reciprocals once per thread: the per-pixel coordinates multiply instead of divide
+    const float sf0i = 1.0f/sf0;
+    const float sf1i = 1.0f/sf1;
+
+    const float f01  = ((float)i1 + poffs)*sf1i - poffs;
+    const int   i01  = max(0, min((int)ne01 - 1, (int)floor(f01)));
+    const int   i01p = max(0, min((int)ne01 - 1, i01 + 1));
+    const float fd1  = max(0.0f, min(1.0f, f01 - (float)i01));
+
+    device const char * r0 = src0 + i03*nb03 + i02*nb02 + i01 *nb01;
+    device const char * r1 = src0 + i03*nb03 + i02*nb02 + i01p*nb01;
+
+    dst += i3*nb3 + i2*nb2 + i1*nb1;
+
+    for (int i0 = tpitg.x; i0 < ne0; i0 += ntg.x) {
+        const float f00  = ((float)i0 + poffs)*sf0i - poffs;
+        const int   i00  = max(0, min((int)ne00 - 1, (int)floor(f00)));
+        const int   i00p = max(0, min((int)ne00 - 1, i00 + 1));
+        const float fd0  = max(0.0f, min(1.0f, f00 - (float)i00));
+
+        const int o0 = i00 *(int)nb00;
+        const int o1 = i00p*(int)nb00;
+
+        const float v00 = *(device const float *) (r0 + o0);
+        const float v10 = *(device const float *) (r0 + o1);
+        const float v01 = *(device const float *) (r1 + o0);
+        const float v11 = *(device const float *) (r1 + o1);
+
+        const float top = v00 + fd0*(v10 - v00);
+        const float bot = v01 + fd0*(v11 - v01);
+        *(device float *) (dst + i0*nb0) = top + fd1*(bot - top);
+    }
+}
+
 kernel void kernel_pad_f32(
     device  const char * src0,
     device        char * dst,
