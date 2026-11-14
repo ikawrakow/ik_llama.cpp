@@ -26,7 +26,7 @@ static __global__ void upscale_f32_bilinear(const float * x, float * dst,
         const int nb00, const int nb01, const int nb02, const int nb03,
         const int ne00_src, const int ne01_src,
         const int ne10_dst, const int ne11_dst, const int ne12_dst, const int ne13_dst,
-        const float sf0, const float sf1, const float sf2, const float sf3,
+        const float sf0i, const float sf1i, const float sf2, const float sf3,
         const float pixel_offset) {
     const int64_t index              = threadIdx.x + blockIdx.x * blockDim.x;
     const int64_t dst_total_elements = ne10_dst * ne11_dst * ne12_dst * ne13_dst;
@@ -43,7 +43,7 @@ static __global__ void upscale_f32_bilinear(const float * x, float * dst,
     const int i02_src = (int)(i12_dst / sf2);
     const int i03_src = (int)(i13_dst / sf3);
 
-    const float y_src_f = ((float)i11_dst + pixel_offset) / sf1 - pixel_offset;
+    const float y_src_f = ((float)i11_dst + pixel_offset) * sf1i - pixel_offset;
     int y0_src = (int)floorf(y_src_f);
     int y1_src = y0_src + 1;
 
@@ -53,7 +53,7 @@ static __global__ void upscale_f32_bilinear(const float * x, float * dst,
     float dy = y_src_f - (float)y0_src;
     dy = max(0.0f, min(dy, 1.0f));
 
-    const float x_src_f = ((float)i10_dst + pixel_offset) / sf0 - pixel_offset;
+    const float x_src_f = ((float)i10_dst + pixel_offset) * sf0i - pixel_offset;
     int x0_src = (int)floorf(x_src_f);
     int x1_src = x0_src + 1;
 
@@ -65,10 +65,10 @@ static __global__ void upscale_f32_bilinear(const float * x, float * dst,
 
     const char * x_base = (const char *)x + (int64_t)i02_src * nb02 + (int64_t)i03_src * nb03;
 
-    const float val_a = *(const float *)(x_base + (int64_t)x0_src * nb00 + (int64_t)y0_src * nb01);
-    const float val_b = *(const float *)(x_base + (int64_t)x1_src * nb00 + (int64_t)y0_src * nb01);
-    const float val_c = *(const float *)(x_base + (int64_t)x0_src * nb00 + (int64_t)y1_src * nb01);
-    const float val_d = *(const float *)(x_base + (int64_t)x1_src * nb00 + (int64_t)y1_src * nb01);
+    const float val_a = *(const float *)(x_base + x0_src * nb00 + (int64_t)y0_src * nb01);
+    const float val_b = *(const float *)(x_base + x1_src * nb00 + (int64_t)y0_src * nb01);
+    const float val_c = *(const float *)(x_base + x0_src * nb00 + (int64_t)y1_src * nb01);
+    const float val_d = *(const float *)(x_base + x1_src * nb00 + (int64_t)y1_src * nb01);
 
     dst[index] = val_a * (1.0f - dx) * (1.0f - dy) +
                  val_b * dx          * (1.0f - dy) +
@@ -160,7 +160,8 @@ static void upscale_f32_bilinear_cuda(const float * x, float * dst,
     const int64_t dst_size   = ne10_dst * ne11_dst * ne12_dst * ne13_dst;
     const int64_t num_blocks = (dst_size + CUDA_UPSCALE_BLOCK_SIZE - 1) / CUDA_UPSCALE_BLOCK_SIZE;
 
-    upscale_f32_bilinear<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne00_src, ne01_src, ne10_dst, ne11_dst, ne12_dst, ne13_dst, sf0, sf1, sf2, sf3, pixel_offset);
+    // reciprocals: the per-pixel x / y coordinates multiply instead of divide
+    upscale_f32_bilinear<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne00_src, ne01_src, ne10_dst, ne11_dst, ne12_dst, ne13_dst, 1.0f/sf0, 1.0f/sf1, sf2, sf3, pixel_offset);
 }
 
 static void upscale_f32_bicubic_cuda(const float * x, float * dst,

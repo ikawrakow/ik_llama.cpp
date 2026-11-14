@@ -2568,31 +2568,37 @@ kernel void kernel_upscale_bilinear_f32(
     const int64_t i03 = i3/sf3;
     const int64_t i02 = i2/sf2;
 
-    const float   f01  = ((float)i1 + poffs)/sf1 - poffs;
-    const int64_t i01  = MAX(0, MIN(ne01 - 1, (int64_t)floor(f01)));
-    const int64_t i01p = MAX(0, MIN(ne01 - 1, i01 + 1));
-    const float   fd1  = MAX(0.0f, MIN(1.0f, f01 - (float)i01));
+    // reciprocals once per thread: the per-pixel coordinates multiply instead of divide
+    const float sf0i = 1.0f/sf0;
+    const float sf1i = 1.0f/sf1;
 
-    src0 += i03*nb03 + i02*nb02;
+    const float f01  = ((float)i1 + poffs)*sf1i - poffs;
+    const int   i01  = max(0, min((int)ne01 - 1, (int)floor(f01)));
+    const int   i01p = max(0, min((int)ne01 - 1, i01 + 1));
+    const float fd1  = max(0.0f, min(1.0f, f01 - (float)i01));
+
+    device const char * r0 = src0 + i03*nb03 + i02*nb02 + i01 *nb01;
+    device const char * r1 = src0 + i03*nb03 + i02*nb02 + i01p*nb01;
 
     dst += i3*nb3 + i2*nb2 + i1*nb1;
 
     for (int i0 = tpitg.x; i0 < ne0; i0 += ntg.x) {
-        const float   f00  = ((float)i0 + poffs)/sf0 - poffs;
-        const int64_t i00  = MAX(0, MIN(ne00 - 1, (int64_t)floor(f00)));
-        const int64_t i00p = MAX(0, MIN(ne00 - 1, i00 + 1));
-        const float   fd0  = MAX(0.0f, MIN(1.0f, f00 - (float)i00));
+        const float f00  = ((float)i0 + poffs)*sf0i - poffs;
+        const int   i00  = max(0, min((int)ne00 - 1, (int)floor(f00)));
+        const int   i00p = max(0, min((int)ne00 - 1, i00 + 1));
+        const float fd0  = max(0.0f, min(1.0f, f00 - (float)i00));
 
-        const float v00 = *(device const float *) (src0 + i01 *nb01 + i00 *nb00);
-        const float v10 = *(device const float *) (src0 + i01 *nb01 + i00p*nb00);
-        const float v01 = *(device const float *) (src0 + i01p*nb01 + i00 *nb00);
-        const float v11 = *(device const float *) (src0 + i01p*nb01 + i00p*nb00);
+        const int o0 = i00 *(int)nb00;
+        const int o1 = i00p*(int)nb00;
 
-        *(device float *) (dst + i0*nb0) =
-            v00*(1.0f - fd0)*(1.0f - fd1) +
-            v10*fd0         *(1.0f - fd1) +
-            v01*(1.0f - fd0)*fd1 +
-            v11*fd0         *fd1;
+        const float v00 = *(device const float *) (r0 + o0);
+        const float v10 = *(device const float *) (r0 + o1);
+        const float v01 = *(device const float *) (r1 + o0);
+        const float v11 = *(device const float *) (r1 + o1);
+
+        const float top = v00 + fd0*(v10 - v00);
+        const float bot = v01 + fd0*(v11 - v01);
+        *(device float *) (dst + i0*nb0) = top + fd1*(bot - top);
     }
 }
 

@@ -23426,35 +23426,47 @@ static void ggml_compute_forward_upscale_f32(
             }
         }
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
+        GGML_ASSERT(nb0 == sizeof(float));
+        const float sf0i = 1.0f/sf0;
+        const float sf1i = 1.0f/sf1;
+        // the x interpolation is the same for every output row: each thread computes it once into its own slice of
+        // the work buffer (reserved in ggml_graph_plan), so no barrier and the coefficients stay in this core's cache
+        int32_t * xo0 = (int32_t *)((char *)params->wdata + ith*(3*sizeof(int32_t)*ne0 + CACHE_LINE_SIZE));
+        int32_t * xo1 = xo0 + ne0;
+        float   * xw  = (float *)(xo1 + ne0);
+        for (int i0 = 0; i0 < ne0; i0++) {
+            const float x = ((float)i0 + pixel_offset)*sf0i - pixel_offset;
+            int x0 = (int)floorf(x);
+            int x1 = x0 + 1;
+            x0 = MAX(0, MIN(x0, (int)ne00 - 1));
+            x1 = MAX(0, MIN(x1, (int)ne00 - 1));
+            xo0[i0] = x0*(int32_t)nb00;
+            xo1[i0] = x1*(int32_t)nb00;
+            xw[i0]  = MAX(0.0f, MIN(x - (float)x0, 1.0f));
+        }
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             const int64_t i03 = i3 / sf3;
             for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
                 const int64_t i02 = i2 / sf2;
-                for (int64_t i1 = 0; i1 < ne1; i1++) {
-                    const float y = ((float)i1 + pixel_offset) / sf1 - pixel_offset;
-                    int64_t y0 = (int64_t)floorf(y);
-                    int64_t y1 = y0 + 1;
-                    y0 = MAX(0, MIN(y0, ne01 - 1));
-                    y1 = MAX(0, MIN(y1, ne01 - 1));
-                    float dy = y - (float)y0;
-                    dy = MAX(0.0f, MIN(dy, 1.0f));
-
-                    for (int64_t i0 = 0; i0 < ne0; i0++) {
-                        const float x = ((float)i0 + pixel_offset) / sf0 - pixel_offset;
-                        int64_t x0 = (int64_t)floorf(x);
-                        int64_t x1 = x0 + 1;
-                        x0 = MAX(0, MIN(x0, ne00 - 1));
-                        x1 = MAX(0, MIN(x1, ne00 - 1));
-                        float dx = x - (float)x0;
-                        dx = MAX(0.0f, MIN(dx, 1.0f));
-
-                        const float a = *(const float *)((const char *)src0->data + x0*nb00 + y0*nb01 + i02*nb02 + i03*nb03);
-                        const float b = *(const float *)((const char *)src0->data + x1*nb00 + y0*nb01 + i02*nb02 + i03*nb03);
-                        const float c = *(const float *)((const char *)src0->data + x0*nb00 + y1*nb01 + i02*nb02 + i03*nb03);
-                        const float d = *(const float *)((const char *)src0->data + x1*nb00 + y1*nb01 + i02*nb02 + i03*nb03);
-
-                        float * y_dst = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
-                        *y_dst = a*(1 - dx)*(1 - dy) + b*dx*(1 - dy) + c*(1 - dx)*dy + d*dx*dy;
+                const char * plane = (const char *)src0->data + i02*nb02 + i03*nb03;
+                for (int i1 = 0; i1 < ne1; i1++) {
+                    const float y = ((float)i1 + pixel_offset)*sf1i - pixel_offset;
+                    int y0 = (int)floorf(y);
+                    int y1 = y0 + 1;
+                    y0 = MAX(0, MIN(y0, (int)ne01 - 1));
+                    y1 = MAX(0, MIN(y1, (int)ne01 - 1));
+                    const float dy = MAX(0.0f, MIN(y - (float)y0, 1.0f));
+                    const char * r0 = plane + y0*nb01;
+                    const char * r1 = plane + y1*nb01;
+                    float * out = (float *)((char *)dst->data + i1*nb1 + i2*nb2 + i3*nb3);
+                    for (int i0 = 0; i0 < ne0; i0++) {
+                        const float a = *(const float *)(r0 + xo0[i0]);
+                        const float b = *(const float *)(r0 + xo1[i0]);
+                        const float c = *(const float *)(r1 + xo0[i0]);
+                        const float d = *(const float *)(r1 + xo1[i0]);
+                        const float top = a + xw[i0]*(b - a);
+                        const float bot = c + xw[i0]*(d - c);
+                        out[i0] = top + dy*(bot - top);
                     }
                 }
             }
@@ -30108,6 +30120,11 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
             case GGML_OP_CONV_2D:
                 {
                     cur = 16 * 1024 * 1024; //GGML_IM2COL_WORK_SIZE;
+                } break;
+            case GGML_OP_UPSCALE:
+                {
+                    // bilinear: per-thread x interpolation (two int32 offsets and a weight per output column)
+                    cur = (3*sizeof(int32_t)*node->ne[0] + CACHE_LINE_SIZE)*n_tasks;
                 } break;
             case GGML_OP_FLASH_ATTN_EXT:
                 {
