@@ -4768,8 +4768,14 @@ static bool llama_numa_bandsplit_place(ggml_context * ctx) {
         if (t->ne[2] < 2 || t->ne[1] < 2*n_band) continue;
         if (t->nb[1] != ggml_row_size(t->type, t->ne[0])) continue;
         if (t->nb[2] != t->ne[1]*t->nb[1]) continue;
-        // bands smaller than ~1 MiB are not worth the page-rounding waste
-        if ((size_t)(t->ne[1]/n_band)*t->nb[1] < (size_t)1*1024*1024) continue;
+        // band worth is set by what a node actually streams: the whole slab
+        // set of band k across all ne[2] experts, not one expert's slice
+        // (512-expert models have tiny slabs but multi-hundred-MiB bands).
+        // Keep a small per-slab floor so degenerate shapes stay out; the
+        // mbind page-rounding waste is <=2 pages per slab per band (<1%).
+        const size_t band_slab = (size_t)(t->ne[1]/n_band)*t->nb[1];
+        if (band_slab*(size_t)t->ne[2] < (size_t)1*1024*1024 ||
+            band_slab < (size_t)64*1024) continue;
 
         bool ok = true;
         const char * base = (const char *)t->data;
@@ -4914,7 +4920,11 @@ static void llama_numa_bandsplit_verify(const llama_model & model) {
         if (t->ne[2] < 2 || t->ne[1] < 2*n_band) continue;
         if (t->nb[1] != ggml_row_size(t->type, t->ne[0])) continue;
         if (t->nb[2] != t->ne[1]*t->nb[1]) continue;
-        if ((size_t)(t->ne[1]/n_band)*t->nb[1] < (size_t)1*1024*1024) continue;
+        // same total-band eligibility as llama_numa_bandsplit_place(): judge
+        // band k by slab x ne[2], not by one expert's slice
+        const size_t band_slab = (size_t)(t->ne[1]/n_band)*t->nb[1];
+        if (band_slab*(size_t)t->ne[2] < (size_t)1*1024*1024 ||
+            band_slab < (size_t)64*1024) continue;
 
         // Stage 2a round 3: sample host-resident stacks only. Device-resident
         // stacks (expert layers whose weights fit in VRAM) cannot be
