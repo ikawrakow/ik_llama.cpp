@@ -107,6 +107,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MAPLE,           "maple"        },
     { LLM_ARCH_SPARK2_5,        "spark2_5"     },
     { LLM_ARCH_RAON1,           "raon1"        },
+    { LLM_ARCH_RAON1_NANO,      "raon1nano"    },
     { LLM_ARCH_XING4_0,         "xing4_0"      },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
@@ -398,6 +399,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_LFM2MOE:
     case LLM_ARCH_LFM3:
     case LLM_ARCH_RAON1:
+    case LLM_ARCH_RAON1_NANO:
         return true;
     default:
         return false;

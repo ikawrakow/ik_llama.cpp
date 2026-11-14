@@ -909,27 +909,6 @@ static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, 
     return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], x->nb[1], (size_t) idx * x->nb[2]);
 }
 
-static ggml_tensor * gemma4_project_per_layer_inputs(ggml_context * ctx0, const llama_model & model, const llm_build_cb & cb,
-        int n_embd, int n_embd_per_layer, int n_layer, int n_tokens,
-        ggml_tensor * inputs_embeds, ggml_tensor * inp_per_layer) {
-    const float per_layer_input_scale      = 1.0f / sqrtf(2.0f);
-
-    ggml_tensor * per_layer_proj = ggml_mul_mat(ctx0, model.per_layer_model_proj, inputs_embeds);
-    cb(per_layer_proj, "per_layer_proj", -1);
-    per_layer_proj               = ggml_reshape_3d(ctx0, per_layer_proj, n_embd_per_layer, n_layer, n_tokens);
-    per_layer_proj               = llm_build_context::llm_build_norm(ctx0, per_layer_proj, model.hparams,
-            model.per_layer_proj_norm, nullptr, LLM_NORM_RMS, cb, -1, 1.0f*n_embd);  // [n_embd_per_layer, n_layer, n_tokens]
-    cb(per_layer_proj, "per_layer_proj_normed", -1);
-
-    inp_per_layer = ggml_add(ctx0, per_layer_proj, inp_per_layer);
-    inp_per_layer = ggml_scale(ctx0, inp_per_layer, per_layer_input_scale);
-    cb(inp_per_layer, "inp_per_layer", -1);
-
-    // permute to [n_embd_per_layer, n_tokens, n_layer], kept as a strided view
-    inp_per_layer = ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3);
-    return inp_per_layer;
-}
-
 ggml_cgraph * llm_build_context::build_gemma4() {
 
     struct ggml_tensor * cur;
@@ -987,8 +966,8 @@ ggml_cgraph * llm_build_context::build_gemma4() {
             inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, hparams.n_embd_per_layer, n_layer, 1);
             cb(inp_per_layer, "inp_per_layer_vision", -1);
         }
-        inp_per_layer = gemma4_project_per_layer_inputs(ctx0, model, cb, n_embd,
-                model.hparams.n_embd_per_layer, n_layer, n_tokens, inpL, inp_per_layer);
+        inp_per_layer = build_per_layer_inputs(inpL, inp_per_layer,
+                model.hparams.n_embd_per_layer, n_layer, 1.0f*n_embd);
 
     }
 

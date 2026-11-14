@@ -415,6 +415,14 @@ struct llm_build_context {
         float norm_rms_eps,
         bool force_contiguous);
 
+    // Per-layer (PLE) input projection, shared with Gemma4. eps_scale scales the RMS eps.
+    ggml_tensor * build_per_layer_inputs(
+        ggml_tensor * inputs_embeds,
+        ggml_tensor * inp_per_layer,
+        int64_t n_embd_per_layer,
+        int64_t n_layer,
+        float eps_scale);
+
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,
             ggml_tensor * inpL,
@@ -490,6 +498,8 @@ struct llm_build_context {
     ggml_cgraph * build_bailingmoe3();
     ggml_cgraph * build_glm5next();
     ggml_cgraph * build_raon1();
+    ggml_cgraph * build_raon1nano();
+    ggml_cgraph * build_raon1nano_mtp();
     ggml_cgraph * build_xing4();
 
     ggml_cgraph * build_glm5next_mtp();
