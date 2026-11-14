@@ -602,7 +602,7 @@ int main(int argc, char ** argv) {
         }
 
         json formatted_error = format_error_response(message, ERROR_TYPE_SERVER);
-        LOG_VERBOSE("Got exception", formatted_error);
+        LOG_ERROR("Got exception", formatted_error);
         res_err(res, formatted_error);
     });
 
