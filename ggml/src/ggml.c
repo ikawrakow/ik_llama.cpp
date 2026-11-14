@@ -23445,9 +23445,9 @@ static void ggml_compute_forward_upscale_f32(
             xw[i0]  = MAX(0.0f, MIN(x - (float)x0, 1.0f));
         }
         for (int64_t i3 = 0; i3 < ne3; i3++) {
-            const int64_t i03 = i3 / sf3;
+            const int64_t i03 = MIN((int64_t)(i3 / sf3), ne03 - 1);
             for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
-                const int64_t i02 = i2 / sf2;
+                const int64_t i02 = MIN((int64_t)(i2 / sf2), ne02 - 1);
                 const char * plane = (const char *)src0->data + i02*nb02 + i03*nb03;
                 for (int i1 = 0; i1 < ne1; i1++) {
                     const float y = ((float)i1 + pixel_offset)*sf1i - pixel_offset;

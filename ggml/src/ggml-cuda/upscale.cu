@@ -24,7 +24,7 @@ static __global__ void upscale_f32(const float * x, float * dst,
 
 static __global__ void upscale_f32_bilinear(const float * x, float * dst,
         const int nb00, const int nb01, const int nb02, const int nb03,
-        const int ne00_src, const int ne01_src,
+        const int ne00_src, const int ne01_src, const int ne02_src, const int ne03_src,
         const int ne10_dst, const int ne11_dst, const int ne12_dst, const int ne13_dst,
         const float sf0i, const float sf1i, const float sf2, const float sf3,
         const float pixel_offset) {
@@ -40,8 +40,8 @@ static __global__ void upscale_f32_bilinear(const float * x, float * dst,
     const int i12_dst = (index / (ne10_dst * ne11_dst)) % ne12_dst;
     const int i13_dst = index / (ne10_dst * ne11_dst * ne12_dst);
 
-    const int i02_src = (int)(i12_dst / sf2);
-    const int i03_src = (int)(i13_dst / sf3);
+    const int i02_src = min((int)(i12_dst / sf2), ne02_src - 1);
+    const int i03_src = min((int)(i13_dst / sf3), ne03_src - 1);
 
     const float y_src_f = ((float)i11_dst + pixel_offset) * sf1i - pixel_offset;
     int y0_src = (int)floorf(y_src_f);
@@ -153,7 +153,7 @@ static void upscale_f32_cuda(const float * x, float * dst,
 
 static void upscale_f32_bilinear_cuda(const float * x, float * dst,
         const int nb00, const int nb01, const int nb02, const int nb03,
-        const int ne00_src, const int ne01_src,
+        const int ne00_src, const int ne01_src, const int ne02_src, const int ne03_src,
         const int ne10_dst, const int ne11_dst, const int ne12_dst, const int ne13_dst,
         const float sf0, const float sf1, const float sf2, const float sf3,
         const float pixel_offset, cudaStream_t stream) {
@@ -161,7 +161,7 @@ static void upscale_f32_bilinear_cuda(const float * x, float * dst,
     const int64_t num_blocks = (dst_size + CUDA_UPSCALE_BLOCK_SIZE - 1) / CUDA_UPSCALE_BLOCK_SIZE;
 
     // reciprocals: the per-pixel x / y coordinates multiply instead of divide
-    upscale_f32_bilinear<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne00_src, ne01_src, ne10_dst, ne11_dst, ne12_dst, ne13_dst, 1.0f/sf0, 1.0f/sf1, sf2, sf3, pixel_offset);
+    upscale_f32_bilinear<<<num_blocks, CUDA_UPSCALE_BLOCK_SIZE,0,stream>>>(x, dst, nb00, nb01, nb02, nb03, ne00_src, ne01_src, ne02_src, ne03_src, ne10_dst, ne11_dst, ne12_dst, ne13_dst, 1.0f/sf0, 1.0f/sf1, sf2, sf3, pixel_offset);
 }
 
 static void upscale_f32_bicubic_cuda(const float * x, float * dst,
@@ -204,7 +204,7 @@ void ggml_cuda_op_upscale(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         upscale_f32_cuda(src0_d, dst_d, src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], sf0, sf1, sf2, sf3, stream);
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
         upscale_f32_bilinear_cuda(src0_d, dst_d, src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
-                                  src0->ne[0], src0->ne[1], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+                                  src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
                                   sf0, sf1, sf2, sf3, pixel_offset, stream);
     } else if (mode == GGML_SCALE_MODE_BICUBIC) {
         upscale_f32_bicubic_cuda(src0_d, dst_d, src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],

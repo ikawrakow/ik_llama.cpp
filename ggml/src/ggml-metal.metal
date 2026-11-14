@@ -2565,8 +2565,8 @@ kernel void kernel_upscale_bilinear_f32(
     const int64_t i2 = tgpig.y;
     const int64_t i1 = tgpig.x;
 
-    const int64_t i03 = i3/sf3;
-    const int64_t i02 = i2/sf2;
+    const int64_t i03 = min(ne03 - 1, (int64_t)(i3/sf3));
+    const int64_t i02 = min(ne02 - 1, (int64_t)(i2/sf2));
 
     // reciprocals once per thread: the per-pixel coordinates multiply instead of divide
     const float sf0i = 1.0f/sf0;
