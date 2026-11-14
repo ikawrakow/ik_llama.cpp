@@ -2135,6 +2135,44 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_STEP5:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (hparams.nextn_predict_layers >= hparams.n_layer) {
+                    throw std::runtime_error("step5: expected at least one text decoder layer");
+                }
+                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
+                hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE, hparams.expert_weights_scale);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM, hparams.expert_weights_norm);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
+                if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER,
+                        hparams.rope_dim_per_layer, hparams.n_layer, false)) {
+                    uint32_t n_rot_swa = hparams.n_embd_head_k(0);
+                    ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT_SWA, n_rot_swa, false);
+                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                        hparams.rope_dim_per_layer[i] = hparams.swa_layers[i] ? n_rot_swa : hparams.n_rot;
+                    }
+                }
+                if (!ml.get_key_or_arr(LLM_KV_SWIGLU_LIMITS, hparams.swiglu_limits, hparams.n_layer, false)) {
+                    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP, hparams.swiglu_limits, hparams.n_layer);
+                }
+                if (!ml.get_key_or_arr(LLM_KV_SWIGLU_LIMITS_SHARED, hparams.swiglu_limits_shared, hparams.n_layer, false)) {
+                    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_limits_shared, hparams.n_layer);
+                }
+                ml.get_key(format("%s.rope.scaling.apply_mask", ml.get_arch_name().c_str()),
+                        hparams.rope_scaling_apply_mask, false);
+                hparams.has_rope_freq_base_per_layer = ml.get_key_or_arr(LLM_KV_ROPE_FREQ_BASE_PER_LAYER,
+                        hparams.rope_freq_base_per_layer, hparams.n_layer, false);
+                const bool have_swa_base = ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+                if (!hparams.has_rope_freq_base_per_layer && !have_swa_base) {
+                    throw std::runtime_error("step5: missing per-layer or sliding-window RoPE frequency base");
+                }
+            } break;
         case LLM_ARCH_STEP35:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
