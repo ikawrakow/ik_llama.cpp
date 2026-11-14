@@ -411,17 +411,14 @@ struct llama_moe_cache::impl {
         const int64_t block = ggml_blck_size(src->type);
         if (row_bytes == 0 || type_bytes == 0 || block <= 0 || src->ne[0] % block != 0 ||
                 src->ne[1] <= 0 || src->ne[2] <= 0 || bank->ne[2] <= 0 ||
-                src->nb[0] != type_bytes || src->nb[1] != row_bytes ||
-                (size_t) src->ne[1] > SIZE_MAX / row_bytes) return 0;
-        const size_t expert_size = row_bytes * (size_t) src->ne[1];
-        if ((size_t) src->ne[2] > SIZE_MAX / expert_size ||
-                (size_t) bank->ne[2] > SIZE_MAX / expert_size) return 0;
-        if (src->nb[2] != expert_size || dst->nb[2] != expert_size ||
-                bank->type != src->type || bank->ne[0] != src->ne[0] || bank->ne[1] != src->ne[1] ||
+                src->nb[0] != type_bytes || src->nb[1] != row_bytes) return 0;
+        const size_t expert_size = src->nb[2];
+        const size_t bank_extent = ggml_nbytes(bank);
+        const size_t dst_extent = ggml_nbytes(dst);
+        if (expert_size == 0 || bank->type != src->type ||
+                bank->ne[0] != src->ne[0] || bank->ne[1] != src->ne[1] ||
                 bank->ne[2] < (int64_t) ((size_t) g.cache.n_slots + (size_t) g.zero_slots + 1) || bank->ne[3] != 1 ||
-                bank->nb[0] != src->nb[0] || bank->nb[1] != src->nb[1] || bank->nb[2] != expert_size ||
-                ggml_nbytes(src) != (size_t) src->ne[2] * expert_size ||
-                ggml_nbytes(dst) != (size_t) dst->ne[2] * expert_size) return 0;
+                bank->nb[0] != src->nb[0] || bank->nb[1] != src->nb[1] || bank->nb[2] != expert_size) return 0;
         if (!src->data || !dst->data || !bank->data || !g.cache.slot_map[b.layer]) return 0;
 
         const int32_t * slots = g.cache.slot_map[b.layer];
@@ -429,12 +426,10 @@ struct llama_moe_cache::impl {
         if (first_slot < 0 || first_slot >= g.cache.n_slots) return 0;
         size_t n = 1;
         while (n < max_experts && (int64_t) slots[first_expert + (int32_t) n] == (int64_t) first_slot + n) ++n;
-        if ((size_t) first_slot + n > (size_t) g.cache.n_slots || n > SIZE_MAX / expert_size) return 0;
+        if ((size_t) first_slot + n > (size_t) g.cache.n_slots) return 0;
         const size_t src_offset = (size_t) first_slot * expert_size;
         const size_t dst_offset = (size_t) first_expert * expert_size;
         const size_t copy_size = n * expert_size;
-        const size_t bank_extent = (size_t) bank->ne[2] * expert_size;
-        const size_t dst_extent = ggml_nbytes(dst);
         if (src_offset > bank_extent || copy_size > bank_extent - src_offset ||
                 dst_offset > dst_extent || copy_size > dst_extent - dst_offset ||
                 copy_size > (size_t) INT64_MAX) return 0;
