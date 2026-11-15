@@ -798,6 +798,33 @@ template <int nrc> struct QBF16 final : public QBF16Base {
     const uint16_t * y[nrc_y];
 };
 
+#if defined(__ARM_FEATURE_BF16)
+struct QBF16DotBase {
+    constexpr static int k_step = 8;
+    using Data = bfloat16x8_t;
+    using Acc = float32x4_t;
+    static inline Data load(const uint16_t * x) { return vreinterpretq_bf16_u16(vld1q_u16(x)); }
+    static inline Acc acc(Acc prev, const Data& y, const Data& x) { return vbfdotq_f32(prev, y, x); }
+    static inline Acc acc_first(const Data& y, const Data& x) { return acc(vdupq_n_f32(0), y, x); }
+    static inline float hsum(Acc acc) { return vaddvq_f32(acc); }
+};
+template <int nrc> struct QBF16Dot final : public QBF16DotBase {
+    using Base = QBF16DotBase;
+    constexpr static int nrc_y = nrc;
+    QBF16Dot(const DataInfo& info) {
+        for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const uint16_t *)info.src1_row(iy);
+    }
+    QBF16Dot(const char * cx, size_t bx) {
+        for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const uint16_t *)(cx + iy*bx);
+    }
+    IQK_ALWAYS_INLINE Data load1(int iy, int i) const { return load(y[iy] + k_step*i); }
+    IQK_ALWAYS_INLINE Data load_tail(int iy, int i) const {
+        return vreinterpretq_bf16_u16(vcombine_u16(vld1_u16(y[iy] + 4*i), vdup_n_u16(0)));
+    }
+    const uint16_t * y[nrc_y];
+};
+#endif
+
 struct QF32Base {
     constexpr static int k_step = 4;
     using Data = float32x4_t;
@@ -1089,6 +1116,17 @@ bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t,
             kernels[4] = mul_mat_f16_f16_T<5>;
             return true;
         }
+#if defined(__ARM_FEATURE_BF16)
+        else if (typeA == GGML_TYPE_BF16 && typeB == GGML_TYPE_BF16 && ne00 >= QBF16DotBase::k_step) {
+            for (auto& f : kernels) f = nullptr;
+            kernels[0] = mul_mat_Qx_Qy_T<QBF16Dot<1>, QBF16Dot>;
+            kernels[1] = mul_mat_Qx_Qy_T<QBF16Dot<2>, QBF16Dot>;
+            kernels[2] = mul_mat_Qx_Qy_T<QBF16Dot<3>, QBF16Dot>;
+            kernels[3] = mul_mat_Qx_Qy_T<QBF16Dot<4>, QBF16Dot>;
+            kernels[4] = mul_mat_Qx_Qy_T<QBF16Dot<5>, QBF16Dot>;
+            return true;
+        }
+#endif
         else if (typeA == GGML_TYPE_BF16 && typeB == GGML_TYPE_F32) {
             for (auto& f : kernels) f = nullptr;
             kernels[0] = mul_mat_Qx_Qy_T<QF32<1>, QBF16>;
