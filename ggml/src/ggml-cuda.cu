@@ -792,7 +792,7 @@ static bool is_cuda_registered_host_ptr(const void * ptr) {
 }
 
 GGML_CALL static bool ggml_backend_cuda_copy_all_inputs(ggml_backend_t backend, int n_inputs,
-        const ggml_tensor ** inputs, ggml_tensor ** input_copies, const ggml_tensor * node0) {
+        ggml_tensor ** inputs, ggml_tensor ** input_copies, const ggml_tensor * node0) {
     if (n_inputs < 1) return true;
     if (!backend || !ggml_backend_is_cuda(backend)) return false;
     if (!node0) return false;
