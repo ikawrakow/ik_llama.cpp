@@ -430,6 +430,7 @@ extern "C" {
         GGML_TYPE_NVFP4     = 40,
         GGML_TYPE_Q1_0_G128 = 41,  // Bonsai 1-bit quants
         GGML_TYPE_Q2_0      = 42,  // same type id as mainline GGML_TYPE_Q2_0
+        GGML_TYPE_F8_E4M3   = 43,
         //
         //
         GGML_TYPE_Q8_0_X4 = 97,

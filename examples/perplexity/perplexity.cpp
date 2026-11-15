@@ -2132,6 +2132,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s: error: unable to load model\n", __func__);
         return 1;
     }
+    fp8_auto_warning(model, params.fp8_precision);
 
     const int n_ctx_train = llama_n_ctx_train(model);
 

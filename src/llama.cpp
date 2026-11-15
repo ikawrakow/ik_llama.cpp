@@ -5697,7 +5697,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
                 params.defer_experts,
                 params.kv_overrides, params.tensor_buft_overrides,
-                params.ngram_file ? params.ngram_file : "", params.nvfp4_precision);
+                params.ngram_file ? params.ngram_file : "", params.nvfp4_precision, params.fp8_precision);
 
         model.hparams.vocab_only = params.vocab_only;
 
@@ -5785,6 +5785,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             throw std::runtime_error("MTP companion GGUF cannot be used as the target model, pass it with -md/--draft");
         }
 
+        model.fp8_w8a8 = ml.fp8_w8a8;
         // ---- populate reload registry ONLY when hot-swap is requested ----
         if (std::getenv("LLAMA_HOTSWAP_ENABLED") != nullptr) {
             model.reload = std::make_unique<reload_info>(ml);
@@ -9036,6 +9037,7 @@ struct llama_model_params llama_model_default_params() {
         /*.tensor_buft_overrides       =*/ nullptr,
         /*.ngram_file                  =*/ nullptr,
         /*.nvfp4_precision             =*/ LLAMA_NVFP4_PRECISION_AUTO,
+        /*.fp8_precision               =*/ LLAMA_FP8_PRECISION_AUTO,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_mlock                   =*/ false,
@@ -10756,6 +10758,10 @@ int32_t llama_n_layer(const struct llama_model * model) {
 
 float llama_rope_freq_scale_train(const struct llama_model * model) {
     return model->hparams.rope_freq_scale_train;
+}
+
+bool llama_model_fp8_w8a8(const struct llama_model * model) {
+    return model->fp8_w8a8;
 }
 
 int32_t llama_model_meta_val_str(const struct llama_model * model, const char * key, char * buf, size_t buf_size) {

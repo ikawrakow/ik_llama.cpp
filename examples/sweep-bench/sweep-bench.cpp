@@ -120,6 +120,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr , "%s: error: unable to load model\n" , __func__);
         return 1;
     }
+    fp8_auto_warning(model, model_params.fp8_precision);
 
     llama_context_params ctx_params = common_context_params_to_llama(params);
 
