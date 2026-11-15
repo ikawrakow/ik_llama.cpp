@@ -5201,7 +5201,7 @@ GGML_CALL static bool ggml_backend_sycl_supports_op(ggml_backend_t backend, cons
                     }
                 }
                 ggml_type src0_type = op->src[0]->type;
-                if (src0_type == GGML_TYPE_BF16) {
+                if (src0_type == GGML_TYPE_BF16 || src0_type == GGML_TYPE_F8_E4M3_KS || src0_type == GGML_TYPE_F8_E4M3_B128) {
                     return false;
                 }
                 return true;
