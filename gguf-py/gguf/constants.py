@@ -24,6 +24,7 @@ class Keys:
         QUANTIZATION_VERSION       = "general.quantization_version"
         ALIGNMENT                  = "general.alignment"
         FILE_TYPE                  = "general.file_type"
+        FP8_ACTIVATIONS            = "general.fp8.activations"
 
         # Authorship Metadata
         NAME                       = "general.name"

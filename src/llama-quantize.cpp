@@ -1510,7 +1510,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     struct quantize_state_internal qs(model, params);
 
     if (params->only_copy) {
-        ftype = model.ftype;
+        ftype = model.ftype == LLAMA_FTYPE_MOSTLY_F8_E4M3 ? LLAMA_FTYPE_MOSTLY_F8_E4M3_KS : model.ftype;
     }
     const std::unordered_map<std::string, std::vector<float>> * imatrix_data = nullptr;
     if (!params->only_repack && the_imatrix) {
@@ -1677,6 +1677,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     if (!output_meta) {
         output_meta = ml.get_tensor_meta("token_embd.weight");
     }
+    if (params->extra_output_type == GGML_TYPE_F8_E4M3 || params->extra_output_type == GGML_TYPE_F8_E4M3_KS || params->extra_output_type == GGML_TYPE_F8_E4M3_B128) {
+        throw std::runtime_error("F8 types are not quantization targets; use COPY to repack type 43");
+    }
     ggml_tensor * output_tensor = nullptr;
     if (params->extra_output_type != GGML_TYPE_COUNT) {
         auto meta = ml.get_tensor_meta("output.weight");
@@ -1841,7 +1844,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         return std::make_pair(quantize, new_type);
     };
 
-    // decide every tensor before the header is written; an NVFP4_KS weight written unchanged keeps its input scale
+    // decide every tensor before the header is written; an NVFP4_KS or FP8 weight written unchanged keeps its input scale
     struct tensor_plan {
         bool quantize = false;
         ggml_type new_type = GGML_TYPE_COUNT;
@@ -1851,7 +1854,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     for (int i = 0; !params->only_repack && i < ml.n_tensors; ++i) {
         ggml_tensor * tensor = ml.get_weight(i)->tensor;
         std::tie(plan[i].quantize, plan[i].new_type) = get_new_type(qs, tensor);
-        if (plan[i].quantize || tensor->type != GGML_TYPE_NVFP4_KS || params->partial_requant) continue;
+        const bool keeps = tensor->type == GGML_TYPE_NVFP4_KS || tensor->type == GGML_TYPE_F8_E4M3_KS || tensor->type == GGML_TYPE_F8_E4M3_B128;
+        if (plan[i].quantize || !keeps || params->partial_requant) continue;
         const std::string name = ggml_get_name(tensor);
         const std::string is_name = name.substr(0, name.rfind('.')) + ".input_scale";
         for (const auto & w : ml.scale_weights) if (is_name == ggml_get_name(w.tensor)) plan[i].input_scale = &w;
@@ -2070,6 +2074,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 if (new_type != working_type) ++qs.n_fallback;
             } else {
                 chunk_size_multiplier = num_rows;
+            }
+
+            if (new_type == GGML_TYPE_F8_E4M3 || new_type == GGML_TYPE_F8_E4M3_KS || new_type == GGML_TYPE_F8_E4M3_B128) {
+                throw std::runtime_error("F8 types are not quantization targets; use COPY to repack type 43");
             }
 
             LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
