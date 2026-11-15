@@ -630,6 +630,297 @@ static __global__ void f8_moe_sum(int used, int m, int n, const nv_bfloat16 * __
     dst[i] = residual ? sum + residual[i] : sum;
 }
 
+#if !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA) && !defined(GGML_CUDA_NO_VMM) && CUDART_VERSION >= 12000 && !defined(_WIN32)
+#define F8_TMA_AVAILABLE
+#include <cuda.h>
+
+static bool f8_tma_available(int cc) {
+    return cc >= 1200 && ggml_cuda_highest_compiled_arch(cc) >= 900;
+}
+
+static bool f8_tma_map(CUtensorMap & map, CUtensorMapDataType type, const void * data, uint64_t d0, uint64_t d1, uint64_t stride,
+        uint32_t b0, uint32_t b1) {
+    const cuuint64_t dim[2] = {d0, d1}, strides[1] = {stride};
+    const cuuint32_t box[2] = {b0, b1}, step[2] = {1, 1};
+    return cuTensorMapEncodeTiled(&map, type, 2, const_cast<void *>(data), dim, strides, box, step, CU_TENSOR_MAP_INTERLEAVE_NONE,
+            CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE) == CUDA_SUCCESS;
+}
+
+template <int RN, bool UG, bool BLK = false>
+static constexpr int f8_tma_shared(int groups) {
+    return std::max(2*((UG ? 2 : 1)*(BLK ? 144 : 128)+16*RN)*128 + 16*RN*groups*4 + 24, UG ? 16*RN*128*4 : 0);
+}
+
+template <int RN, bool UG, bool BLK = false, bool ADD = false>
+static __global__ void __launch_bounds__(256, 1) mul_mat_f8_tma(int K, int M, int expert_rows,
+        const char * __restrict__ x, const char * __restrict__ xg, float * __restrict__ z, nv_bfloat16 * __restrict__ zb,
+        uint8_t * __restrict__ codes, float * __restrict__ out_scales, int out_stride, f8_moe_routing routing, const char * bias_gate,
+        const __grid_constant__ CUtensorMap ma, const __grid_constant__ CUtensorMap mg, const __grid_constant__ CUtensorMap mb,
+        const __grid_constant__ CUtensorMap ms, int SG, int CG, int cols, const float * other) {
+#if __CUDA_ARCH__ >= 900
+    constexpr int RM = 2, WMB = 4, WNB = 2, BM = WMB*16*RM, BN = WNB*8*RN, BK = 128, NA = UG ? 2 : 1, NW = WMB*WNB, PA = BLK ? 144 : BK;
+    const int J = BLK ? (routing.row_stride%16 == 0 ? 1 : routing.row_stride%8 == 0 ? 2 : 4) : 1, JR = BM/J;
+    GGML_UNUSED(J);
+    GGML_UNUSED(JR);
+    int bx = blockIdx.x, by = blockIdx.y;
+    if constexpr (BLK) {
+        if (CG > 0) {
+            bx = blockIdx.y%(M/BM);
+            by = blockIdx.y/(M/BM)*CG + blockIdx.x;
+        }
+    } else {
+        GGML_UNUSED(CG);
+    }
+    int expert = 0, first_col = by*BN, ncols = cols-first_col;
+    if (routing.tiles) {
+        if (by >= routing.tiles[routing.experts]) return;
+        int hi = routing.experts;
+        while (expert + 1 < hi) {
+            const int mid = (expert + hi)/2;
+            if (routing.tiles[mid] <= by) expert = mid;
+            else hi = mid;
+        }
+        first_col = routing.bounds[expert] + (by-routing.tiles[expert])*BN;
+        ncols = routing.bounds[expert+1]-first_col;
+    } else if (ncols <= 0) return;
+    extern __shared__ __align__(128) uint8_t smem[];
+    uint8_t * sA = smem, * sB = smem + 2*NA*BM*PA;
+    float * sS = (float *)(sB + 2*BN*BK);
+    const unsigned bar0 = (unsigned)__cvta_generic_to_shared(sS + BN*SG);
+    const int row0 = bx*BM, tid = threadIdx.x, warp = tid/32, lane = tid%32;
+    const int wm = warp%WMB, wn = warp/WMB, g = lane>>2, t4 = lane&3;
+    if (tid == 0) {
+#pragma unroll
+        for (int i = 0; i < 3; ++i) asm volatile("mbarrier.init.shared::cta.b64 [%0], 1;" :: "r"(bar0+8*i));
+        asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+    }
+    __syncthreads();
+    auto tile = [&](const CUtensorMap * map, void * dst, unsigned bar, int c0, int c1) {
+        asm volatile("cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [%0], [%1, {%3, %4}], [%2];"
+            :: "r"((unsigned)__cvta_generic_to_shared(dst)), "l"(map), "r"(bar), "r"(c0), "r"(c1) : "memory");
+    };
+    auto load = [&](int k0, int s) {
+        if (k0 < K && tid == 0) {
+            asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;" :: "r"(bar0+8*s), "r"(NA*BM*PA+BN*BK));
+            if constexpr (BLK) {
+                for (int j = 0; j < J; ++j) {
+                    const int origin = j*int(routing.row_stride) + k0/BK*132;
+                    tile(&ma, sA + (s*NA*BM + j*JR)*PA, bar0+8*s, origin - origin%16, (expert*expert_rows+row0)/J);
+                    if constexpr (UG) tile(&mg, sA + ((s*NA+1)*BM + j*JR)*PA, bar0+8*s, origin - origin%16, (expert*expert_rows+row0)/J);
+                }
+            } else {
+                tile(&ma, sA + s*NA*BM*PA, bar0+8*s, k0, expert*expert_rows+row0);
+                if constexpr (UG) tile(&mg, sA + (s*NA+1)*BM*PA, bar0+8*s, k0, expert*expert_rows+row0);
+            }
+            tile(&mb, sB + s*BN*BK, bar0+8*s, k0, first_col);
+        }
+    };
+    auto wait = [&](int s, int parity) {
+        unsigned done = 0;
+        while (!done) {
+            asm volatile("{\n .reg .pred p;\n mbarrier.try_wait.parity.shared::cta.b64 p, [%1], %2;\n selp.u32 %0, 1, 0, p;\n }"
+                : "=r"(done) : "r"(bar0+8*s), "r"(parity) : "memory");
+        }
+    };
+    if (tid == 0) {
+        asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;" :: "r"(bar0+16), "r"(BN*SG*4));
+        tile(&ms, sS, bar0+16, 0, first_col);
+    }
+    load(0, 0);
+    float res[ADD ? RM : 1][ADD ? RN : 1][4];
+    GGML_UNUSED(res);
+    if constexpr (ADD) {
+#pragma unroll
+        for (int i = 0; i < RM; ++i) {
+#pragma unroll
+            for (int h = 0; h < 2; ++h) {
+                const int rl = wm*16*RM + 16*i + g + 8*h, rp = BLK ? rl%JR*J + rl/JR : rl;
+#pragma unroll
+                for (int j = 0; j < RN; ++j) {
+#pragma unroll
+                    for (int l = 0; l < 2; ++l) {
+                        const int c = wn*8*RN + 8*j + 2*t4 + l;
+                        res[i][j][2*h+l] = c < ncols ? other[size_t(routing.rows ? routing.rows[first_col+c] : first_col+c)*M + row0 + rp] : 0.0f;
+                    }
+                }
+            }
+        }
+    }
+    wait(2, 0);
+    float total[NA][RM][RN][4];
+#pragma unroll
+    for (int t = 0; t < NA; ++t) {
+#pragma unroll
+        for (int i = 0; i < RM; ++i) {
+#pragma unroll
+            for (int j = 0; j < RN; ++j) {
+#pragma unroll
+                for (int l = 0; l < 4; ++l) total[t][i][j][l] = 0;
+            }
+        }
+    }
+    for (int k0 = 0, s = 0; k0 < K; k0 += BK, s ^= 1) {
+        load(k0 + BK, s^1);
+        wait(s, (k0/BK/2)&1);
+        const uint8_t * pb = sB + (s*BN + wn*8*RN)*BK + 32*t4;
+        uint4 a[NA][RM][2][2];
+        float bw[NA][RM][2];
+        GGML_UNUSED(bw);
+#pragma unroll
+        for (int t = 0; t < NA; ++t) {
+            if constexpr (BLK) {
+                const uint8_t * pa = sA + ((s*NA+t)*BM + wm*16*RM)*PA;
+                const int ph = (wm*16*RM/JR*int(routing.row_stride) + k0/BK*132)%16/4;
+#pragma unroll
+                for (int i = 0; i < RM; ++i) {
+#pragma unroll
+                    for (int h = 0; h < 2; ++h) {
+                        const uint8_t * row = pa + (16*i+g+8*h)*PA;
+                        const uint4 * r = (const uint4 *)row + 2*t4 + (ph == 3);
+                        const uint4 v0 = r[0], v1 = r[1], v2 = r[ph == 3 ? 1 : 2];
+                        bw[t][i][h] = *(const float *)(row + 4*ph);
+                        if (ph == 0) {
+                            a[t][i][h][0] = make_uint4(v0.y, v0.z, v0.w, v1.x);
+                            a[t][i][h][1] = make_uint4(v1.y, v1.z, v1.w, v2.x);
+                        } else if (ph == 1) {
+                            a[t][i][h][0] = make_uint4(v0.z, v0.w, v1.x, v1.y);
+                            a[t][i][h][1] = make_uint4(v1.z, v1.w, v2.x, v2.y);
+                        } else if (ph == 2) {
+                            a[t][i][h][0] = make_uint4(v0.w, v1.x, v1.y, v1.z);
+                            a[t][i][h][1] = make_uint4(v1.w, v2.x, v2.y, v2.z);
+                        } else {
+                            a[t][i][h][0] = v0;
+                            a[t][i][h][1] = v1;
+                        }
+                    }
+                }
+            } else {
+                const uint8_t * pa = sA + ((s*NA+t)*BM + wm*16*RM)*BK + 32*t4;
+#pragma unroll
+                for (int i = 0; i < RM; ++i) {
+                    const uint4 * r0 = (const uint4 *)(pa + (16*i+g)*BK), * r1 = (const uint4 *)(pa + (16*i+g+8)*BK);
+                    a[t][i][0][0] = r0[0]; a[t][i][0][1] = r0[1]; a[t][i][1][0] = r1[0]; a[t][i][1][1] = r1[1];
+                }
+            }
+        }
+#pragma unroll
+        for (int j = 0; j < RN; ++j) {
+            if (wn*8*RN + 8*j >= ncols) continue;
+            const uint4 * c = (const uint4 *)(pb + (8*j+g)*BK);
+            const uint4 b[2] = {c[0], c[1]};
+            const float e0 = sS[(wn*8*RN + 8*j + 2*t4)*SG + k0/BK], e1 = sS[(wn*8*RN + 8*j + 2*t4 + 1)*SG + k0/BK];
+#pragma unroll
+            for (int t = 0; t < NA; ++t) {
+#pragma unroll
+                for (int i = 0; i < RM; ++i) {
+                    float acc[4] = {0, 0, 0, 0};
+#pragma unroll
+                    for (int q = 0; q < 4; ++q) {
+                        const uint4 bv = b[q/2], x0 = a[t][i][0][q/2], x1 = a[t][i][1][q/2];
+                        const uint32_t b0 = q%2 ? bv.z : bv.x, b1 = q%2 ? bv.w : bv.y;
+                        const uint32_t a0 = q%2 ? x0.z : x0.x, a2 = q%2 ? x0.w : x0.y, a1 = q%2 ? x1.z : x1.x, a3 = q%2 ? x1.w : x1.y;
+                        asm volatile("mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 "
+                            "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
+                            : "+f"(acc[0]), "+f"(acc[1]), "+f"(acc[2]), "+f"(acc[3])
+                            : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
+                    }
+                    if constexpr (BLK) {
+                        total[t][i][j][0] = fmaf(acc[0], e0*bw[t][i][0], total[t][i][j][0]);
+                        total[t][i][j][1] = fmaf(acc[1], e1*bw[t][i][0], total[t][i][j][1]);
+                        total[t][i][j][2] = fmaf(acc[2], e0*bw[t][i][1], total[t][i][j][2]);
+                        total[t][i][j][3] = fmaf(acc[3], e1*bw[t][i][1], total[t][i][j][3]);
+                    } else {
+                        total[t][i][j][0] = fmaf(acc[0], e0, total[t][i][j][0]);
+                        total[t][i][j][1] = fmaf(acc[1], e1, total[t][i][j][1]);
+                        total[t][i][j][2] = fmaf(acc[2], e0, total[t][i][j][2]);
+                        total[t][i][j][3] = fmaf(acc[3], e1, total[t][i][j][3]);
+                    }
+                }
+            }
+        }
+        __syncthreads();
+    }
+    float * hs = (float *)smem;
+#pragma unroll
+    for (int i = 0; i < RM; ++i) {
+#pragma unroll
+        for (int h = 0; h < 2; ++h) {
+            const int rl = wm*16*RM + 16*i + g + 8*h, rp = BLK ? rl%JR*J + rl/JR : rl, r = row0 + rp;
+            const size_t offset = size_t(expert)*routing.expert_stride + size_t(r)*routing.row_stride;
+            const float scale = BLK ? 1.0f : ggml_cuda_f8_row::scale(x + offset);
+            const float bias = routing.bias ? ((const float *)(routing.bias + size_t(expert)*routing.bias_stride))[r] : 0.0f;
+            float scale_g = 0, bias_g = 0;
+            if constexpr (UG) {
+                scale_g = BLK ? 1.0f : ggml_cuda_f8_row::scale(xg + offset);
+                if (bias_gate) bias_g = ((const float *)(bias_gate + size_t(expert)*routing.bias_stride))[r];
+            }
+#pragma unroll
+            for (int j = 0; j < RN; ++j) {
+#pragma unroll
+                for (int l = 0; l < 2; ++l) {
+                    const int c = wn*8*RN + 8*j + 2*t4 + l;
+                    if (c < ncols) {
+                        float value = total[0][i][j][2*h+l]*scale;
+                        if (routing.bias) value += bias;
+                        if constexpr (UG) {
+                            float gate = total[NA-1][i][j][2*h+l]*scale_g;
+                            if (bias_gate) gate += bias_g;
+                            hs[c*BM + rp] = gate * value / (1.0f + expf(-gate));
+                        } else {
+                            const size_t o = size_t(routing.rows ? routing.rows[first_col+c] : first_col+c)*M + r;
+                            if constexpr (ADD) value = __fadd_rn(value, res[i][j][2*h+l]);
+                            if (zb) zb[o] = __float2bfloat16(value);
+                            else z[o] = value;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if constexpr (UG) {
+        __syncthreads();
+        const int group = bx;
+        for (int c = warp; c < BN && c < ncols; c += NW) {
+            f8_quantize_group<128>(hs + c*BM - group*128, codes + size_t(first_col+c)*M,
+                    out_scales + size_t(first_col+c)*out_stride, M, group);
+        }
+    }
+#else
+    GGML_UNUSED(K); GGML_UNUSED(M); GGML_UNUSED(expert_rows); GGML_UNUSED(x); GGML_UNUSED(xg); GGML_UNUSED(z); GGML_UNUSED(zb); GGML_UNUSED(codes);
+    GGML_UNUSED(out_scales); GGML_UNUSED(out_stride); GGML_UNUSED(routing); GGML_UNUSED(bias_gate); GGML_UNUSED(SG); GGML_UNUSED(CG); GGML_UNUSED(cols); GGML_UNUSED(other);
+    NO_DEVICE_CODE;
+#endif
+}
+
+template <int RN, bool UG, bool BLK = false, bool ADD = false>
+static bool launch_f8_tma(int K, int M, int cols, const char * x, const char * xg, const uint8_t * y, const float * scales, int SG,
+        float * z, nv_bfloat16 * zb, uint8_t * codes, float * out_scales, int out_stride, const f8_moe_routing & routing,
+        const char * bias_gate, cudaStream_t stream, int cg = 0, const float * other = nullptr) {
+    constexpr int BN = 16*RN;
+    const int expert_rows = routing.expert_stride/routing.row_stride;
+    alignas(64) CUtensorMap ma, mg{}, mb, ms;
+    const int J = BLK ? (routing.row_stride%16 == 0 ? 1 : routing.row_stride%8 == 0 ? 2 : 4) : 1;
+    auto weights = [&](CUtensorMap & map, const char * w) {
+        const uint64_t rows = uint64_t(routing.experts)*expert_rows/J;
+        return BLK ? f8_tma_map(map, CU_TENSOR_MAP_DATA_TYPE_UINT8, w, J*routing.row_stride, rows, J*routing.row_stride, 144, 128/J) :
+            f8_tma_map(map, CU_TENSOR_MAP_DATA_TYPE_UINT8, w + ggml_cuda_f8_row::row_meta_size, K, rows, routing.row_stride, 128, 128);
+    };
+    if (!weights(ma, x) || (UG && !weights(mg, xg)) ||
+        !f8_tma_map(mb, CU_TENSOR_MAP_DATA_TYPE_UINT8, y, K, cols, K, 128, BN) ||
+        !f8_tma_map(ms, CU_TENSOR_MAP_DATA_TYPE_FLOAT32, scales, SG, cols, SG*4, SG, BN)) return false;
+    const int bytes = f8_tma_shared<RN, UG, BLK>(SG);
+    static int limit[GGML_CUDA_MAX_DEVICES] = {};
+    const int id = ggml_cuda_get_device();
+    if (bytes > limit[id]) {
+        CUDA_CHECK(cudaFuncSetAttribute((mul_mat_f8_tma<RN, UG, BLK, ADD>), cudaFuncAttributeMaxDynamicSharedMemorySize, bytes));
+        limit[id] = bytes;
+    }
+    mul_mat_f8_tma<RN, UG, BLK, ADD><<<cg > 0 ? dim3(cg, (M/128)*(((cols+BN-1)/BN+cg-1)/cg)) : dim3(M/128, (cols+BN-1)/BN+routing.experts), 256, bytes, stream>>>(K, M, expert_rows, x, xg, z, zb,
+            codes, out_scales, out_stride, routing, bias_gate, ma, mg, mb, ms, SG, cg, cols, other);
+    return true;
+}
+#endif
+
 template <typename layout, int BN, int NW, int stages, int BK, int G = 0>
 static void launch_f8_moe(int n, int rows, int cols, const char * x, const f8_activation<G> * y, float * z,
         const f8_moe_routing & routing, cudaStream_t stream, const float * activation_scales = nullptr) {
