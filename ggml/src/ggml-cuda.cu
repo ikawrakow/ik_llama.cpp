@@ -5208,6 +5208,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_NVFP4_KS:
+                    case GGML_TYPE_F8_E4M3_KS:
+                    case GGML_TYPE_F8_E4M3_B128:
                         return true;
                     case GGML_TYPE_I32:
                         return op->src[0]->type == op->type;
@@ -5269,6 +5271,10 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 if (src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_I32) {
                     // DSA lightning-indexer top_k indices (I32) copy/cont.
                     return true;
+                }
+                if (src0_type == GGML_TYPE_F8_E4M3_KS || src0_type == GGML_TYPE_F8_E4M3_B128) {
+                    return src1_type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]) &&
+                           ggml_are_same_shape(op->src[0], op->src[1]);
                 }
                 if (ggml_is_quantized(src0_type) && (src1_type == GGML_TYPE_F16 || src1_type == GGML_TYPE_F32)) {
                     return true;
