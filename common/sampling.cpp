@@ -1181,7 +1181,7 @@ void common_expiring_logit_bias_rewind(struct common_sampler* ctx_sampling) {
                 continue;
             }
 
-            // keyword match within rewinded text?
+            // keyword match within rewound text?
             size_t count = 0;
             auto pos = window.find(keyword, entry.max_keyword_len - SSIZE(keyword) + std::max(0, elb.init_pos - min_window_pos));
             while (pos != std::string::npos) {

@@ -105,7 +105,7 @@ class SimpleChat {
      *   Then return the full chat history
      * Else
      *   Return chat messages from latest going back till the last/latest system prompt.
-     *   While keeping track that the number of user queries/messages doesnt exceed iRecentUserMsgCnt.
+     *   While keeping track that the number of user queries/messages doesn't exceed iRecentUserMsgCnt.
      * @param {number} iRecentUserMsgCnt
      */
     recent_chat(iRecentUserMsgCnt) {
@@ -333,7 +333,7 @@ class SimpleChat {
                     console.error(`ERRR:SimpleChat:SC:${msgTag}:You need to specify system prompt before any user query, ignoring...`);
                 } else {
                     if (this.xchat[0].content !== sysPrompt) {
-                        console.error(`ERRR:SimpleChat:SC:${msgTag}:You cant change system prompt, mid way through, ignoring...`);
+                        console.error(`ERRR:SimpleChat:SC:${msgTag}:You can't change system prompt, mid way through, ignoring...`);
                     }
                 }
             }

@@ -313,8 +313,8 @@ struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
     }
     inline void prepare(const uint8_t * q4) {
         bits.prepare64(q4);
-        // We now have in bits.valuse[0]: 0...15, 32...47, 64...79, 96...111
-        //                bits.valuse[1]: 16..31, 48...63, 80...95, 112..127
+        // We now have in bits.values[0]: 0...15, 32...47, 64...79, 96...111
+        //                bits.values[1]: 16..31, 48...63, 80...95, 112..127
         //                etc.
         auto tmp = _mm512_permutex2var_epi64(bits.values[0], permute1, bits.values[1]);
         bits.values[1] = _mm512_shuffle_epi8(values, _mm512_permutex2var_epi64(bits.values[0], permute2, bits.values[1]));

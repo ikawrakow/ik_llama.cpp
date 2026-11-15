@@ -1636,7 +1636,7 @@ static void ggml_metal_encode_node(
                 const bool inplace = (bool) ((int32_t *) dst->op_params)[4];
 
                 if (!inplace) {
-                    // run a separete kernel to cpy src->dst
+                    // run a separate kernel to cpy src->dst
                     // not sure how to avoid this
                     // TODO: make a simpler cpy_bytes kernel
 

@@ -234,7 +234,7 @@ static inline bool are_kv_types_supported(ggml_type type_k, ggml_type type_v) {
     return it_k != supported.end() && it_v != supported.end();
 }
 
-// TODO: get the ggml_type enum here without polution
+// TODO: get the ggml_type enum here without pollution
 //
 extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
                             int neq3, int neq2, long nbq3, long nbq2,

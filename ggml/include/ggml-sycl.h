@@ -19,7 +19,7 @@ extern "C" {
 // backend API
 GGML_API ggml_backend_t ggml_backend_sycl_init(int device);
 
-// devide buffer
+// device buffer
 GGML_API ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int device);
 
 // split tensor buffer that splits matrices by rows across multiple devices

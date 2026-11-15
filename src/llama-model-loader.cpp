@@ -1535,7 +1535,7 @@ bool llama_model_loader::load_all_data(
 
     ggml_backend_t cuda_backend = nullptr;
     if (!use_mmap && !check_tensors) {
-        // When not using mmaped io use async uploads from pinned memory to GPU memory.
+        // When not using mmap io use async uploads from pinned memory to GPU memory.
         // First determine if the CUDA backend is active, and if so, determine the device ID.
         ggml_backend_buffer_t buf = bufs_mmap.count(0) ? bufs_mmap.at(0) : nullptr;
         if (buf) {

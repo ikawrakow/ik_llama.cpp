@@ -48,7 +48,7 @@ class GET_ROW_F32 {
         local_buffer_elems = local_buffer_size / sizeof(float);
 
         // TODO, consider long row that can't put in UB.
-        // All data should asign to 32. It's ok because all data is align to 32.
+        // All data should be aligned to 32. It's ok because all data is aligned to 32.
         pipe.InitBuffer(input_queue, BUFFER_NUM, local_buffer_size);
         pipe.InitBuffer(output_queue, BUFFER_NUM, local_buffer_size);
     }
