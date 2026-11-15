@@ -1788,6 +1788,11 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             }
         }
         const bool has_effective_bans = !slot.ban_regex_ci.empty() || !slot.ban_regex.empty() || !slot.ban_phrases.empty();
+        if (has_effective_bans && params_base.can_ban_phrases &&
+                llama_model_has_recurrent(model) && params_base.n_parallel > 1) {
+            send_error(task, "recurrent ban rewind requires --parallel 1", ERROR_TYPE_INVALID_REQUEST);
+            return false;
+        }
         if (has_effective_bans) {
             if (banbuffer_size > 0) {
                 slot.n_buffer = banbuffer_size;
@@ -4932,21 +4937,23 @@ bool server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
         }
     };
     if (recurrent) {
-        // ckpt that can be restored
-        llama_pos pos = llama_rewind_ckpt_pos(slot.ctx, { LLAMA_CHECKPOINT_REWIND, (int32_t)n_keep_cache - 1, 0 }, slot.id);
-        if (pos < 0) {
-            LOG_ERROR("request-time ban rewind failed: no valid checkpoint", {
+        const llama_pos expected_ckpt_pos = slot.cache_tokens.pos_next(n_keep_cache) - 1;
+        const llama_pos pos = llama_rewind_ckpt_pos(
+                slot.ctx, { LLAMA_CHECKPOINT_REWIND, expected_ckpt_pos, 0 }, slot.id);
+        if (pos != expected_ckpt_pos) {
+            LOG_ERROR("request-time ban rewind failed: exact checkpoint missing", {
                 {"id_slot", slot.id},
                 {"id_task", slot.id_task},
                 {"ban_pos", ban_pos},
-                {"max_checkpoint_pos", (int32_t)n_keep_cache - 1},
+                {"expected_checkpoint_pos", expected_ckpt_pos},
+                {"found_checkpoint_pos", pos},
             });
             reset_failed_rewind();
             return false;
         }
-        n_keep_cache = pos + 1;
         const llama_pos n_past = slot.cache_tokens.pos_next(n_keep_cache);
-        if (!llama_spec_ckpt_restore(slot.ctx, { LLAMA_CHECKPOINT_REWIND, n_past - 1, 0 }, slot.id, n_past, 0)) {
+        if (!llama_spec_ckpt_restore(
+                slot.ctx, { LLAMA_CHECKPOINT_REWIND, expected_ckpt_pos, 0 }, slot.id, n_past, 0)) {
             LOG_ERROR("request-time ban rewind failed: checkpoint restore failed", {
                 {"id_slot", slot.id},
                 {"id_task", slot.id_task},
