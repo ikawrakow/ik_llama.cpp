@@ -959,6 +959,7 @@ static struct ggml_backend_i cpu_backend_i = {
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
     /* .event_synchronize       = */ NULL,
+    /* .cpy_experts             = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_cpu_guid(void) {
@@ -2054,6 +2055,14 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
     constexpr bool k_set_sync = false;
     int split_backend_id = split->backend_id;
     ggml_backend_t split_backend = sched->backends[split_backend_id];
+    if (split_backend->iface.cpy_all_inputs) {
+        ggml_tensor * copies[GGML_SCHED_MAX_SPLIT_INPUTS];
+        for (int j = 0; j < split->n_inputs; ++j) copies[j] = tensor_copy(split->inputs[j], split_backend_id, sched->cur_copy);
+        auto inputs = (const struct ggml_tensor **)&split->inputs[0];
+        if (split_backend->iface.cpy_all_inputs(split_backend, split->n_inputs, inputs, copies, split->graph.nodes[0])) {
+            return;
+        }
+    }
     ggml_backend_t last_input_backend = nullptr;
     std::set<ggml_backend_t> backends_to_sync;
     bool synced_on_input = false;

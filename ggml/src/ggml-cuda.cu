@@ -88,6 +88,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <unordered_set>
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -699,6 +700,73 @@ GGML_CALL static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t 
     GGML_UNUSED(buffer);
 }
 
+template <typename data_t>
+static __global__ void k_copy_up_or_gate(const data_t * __restrict__ src, int64_t nb2, const int32_t * __restrict__ bounds, data_t * __restrict__ dst) {
+    int i02 = blockIdx.x;
+    dst += nb2*i02;
+    if (bounds && bounds[i02+1] <= bounds[i02]) {
+        for (int64_t i = threadIdx.x; i < nb2; i += blockDim.x) dst[i] = {};
+        return;
+    }
+    src += nb2*i02;
+    for (int64_t i = threadIdx.x; i < nb2; i += blockDim.x) {
+        dst[i] = src[i];
+    }
+}
+
+template <typename data_t>
+static __global__ void k_copy_up_gate(const data_t * __restrict__ src_up, const data_t * __restrict__ src_gate, int64_t nb2_up, int64_t nb2_gate,
+        const int32_t * __restrict__ bounds, data_t * __restrict__ dst_up, data_t * __restrict__ dst_gate) {
+    int i02 = blockIdx.x;
+    auto src = src_up + nb2_up*i02;
+    auto dst = dst_up + nb2_up*i02;
+    if (bounds && bounds[i02+1] <= bounds[i02]) {
+        for (int64_t i = threadIdx.x; i < nb2_up; i += blockDim.x) dst[i] = {};
+        dst = dst_gate + nb2_gate*i02;
+        for (int64_t i = threadIdx.x; i < nb2_gate; i += blockDim.x) dst[i] = {};
+        return;
+    }
+    for (int64_t i = threadIdx.x; i < nb2_up; i += blockDim.x) {
+        dst[i] = src[i];
+    }
+    src = src_gate + nb2_gate*i02;
+    dst = dst_gate + nb2_gate*i02;
+    for (int64_t i = threadIdx.x; i < nb2_gate; i += blockDim.x) {
+        dst[i] = src[i];
+    }
+}
+
+static void copy_up_and_gate_experts(const ggml_tensor * up, const ggml_tensor * gate, const int32_t * expert_bounds,
+        char * dst_up, char * dst_gate, cudaStream_t stream) {
+    constexpr int k_block_size = 32;
+    GGML_ASSERT(up && gate);
+    GGML_ASSERT(up->ne[2] == gate->ne[2]);
+    GGML_ASSERT(up->nb[2] % sizeof(uint32_t) == 0);
+    GGML_ASSERT(gate->nb[2] % sizeof(uint32_t) == 0);
+    if (up->nb[2] % sizeof(uint4) == 0) {
+        auto ts = sizeof(uint4);
+        k_copy_up_gate<<<up->ne[2], k_block_size, 0, stream>>>((const uint4 *)up->data, (const uint4 *)gate->data,
+                up->nb[2]/ts, gate->nb[2]/ts, expert_bounds, (uint4 *)dst_up, (uint4 *)dst_gate);
+    } else {
+        auto ts = sizeof(uint32_t);
+        k_copy_up_gate<<<up->ne[2], k_block_size, 0, stream>>>((const uint32_t *)up->data, (const uint32_t *)gate->data,
+                up->nb[2]/ts, gate->nb[2]/ts, expert_bounds, (uint32_t *)dst_up, (uint32_t *)dst_gate);
+    }
+}
+
+static void copy_up_or_gate_experts(const ggml_tensor * src, const int32_t * expert_bounds, char * dst, cudaStream_t stream) {
+    GGML_ASSERT(src);
+    GGML_ASSERT(src->nb[2] % sizeof(uint32_t) == 0);
+    constexpr int k_block_size = 32;
+    if (src->nb[2] % sizeof(uint4) == 0) {
+        auto ts = sizeof(uint4);
+        k_copy_up_or_gate<<<src->ne[2], k_block_size, 0, stream>>>((const uint4 *)src->data, src->nb[2]/ts, expert_bounds, (uint4 *)dst);
+    } else {
+        auto ts = sizeof(uint32_t);
+        k_copy_up_or_gate<<<src->ne[2], k_block_size, 0, stream>>>((const uint32_t *)src->data, src->nb[2]/ts, expert_bounds, (uint32_t *)dst);
+    }
+}
+
 GGML_CALL static void ggml_backend_cuda_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
@@ -707,6 +775,214 @@ GGML_CALL static void ggml_backend_cuda_buffer_clear(ggml_backend_buffer_t buffe
     CUDA_CHECK(cudaMemset(ctx->dev_ptr, value, buffer->size));
     CUDA_CHECK(cudaDeviceSynchronize());
 }
+
+GGML_CALL static bool ggml_backend_cuda_copy_all_inputs(ggml_backend_t backend, int n_inputs,
+        const ggml_tensor ** inputs, ggml_tensor ** input_copies, const ggml_tensor * node0) {
+    if (n_inputs < 1) return true;
+    //printf("================================ %s: %d inputs\n", __func__, n_inputs);
+    //return false;
+    if (!backend || !ggml_backend_is_cuda(backend)) return false;
+    if (!node0) return false;
+    //if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) return false;
+    if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) {
+        auto ptr = (uintptr_t)node0->src[0]->data;
+        if ((ptr % 16) != 0) printf("%s is not 16-byte aligned\n", node0->src[0]->name);
+        for (int j = 0; j < n_inputs; ++j) {
+            if (input_copies[j] == node0->src[0]) {
+                ptr = (uintptr_t)inputs[j]->data;
+                if ((ptr % 16) != 0) printf("%s is not 16-byte aligned\n", inputs[j]->name);
+                break;
+            }
+        }
+        if (node0->op == GGML_OP_MOE_FUSED_UP_GATE && node0->src[1] != nullptr) {
+            ptr = (uintptr_t)node0->src[1]->data;
+            if ((ptr % 16) != 0) printf("%s is not 16-byte aligned\n", node0->src[1]->name);
+            for (int j = 0; j < n_inputs; ++j) {
+                if (input_copies[j] == node0->src[1]) {
+                    ptr = (uintptr_t)inputs[j]->data;
+                    if ((ptr % 16) != 0) printf("%s is not 16-byte aligned\n", inputs[j]->name);
+                    break;
+                }
+            }
+        }
+    }
+
+    auto & ctx = *(ggml_backend_cuda_context *)backend->context;
+    for (int j = 0; j < n_inputs; ++j) {
+        if (!inputs[j] || !inputs[j]->buffer) return false;
+        if (!input_copies[j] || !input_copies[j]->buffer) return false;
+        if (!ggml_backend_buffer_is_cuda(input_copies[j]->buffer)) return false;
+        if (!ggml_backend_buffer_is_cuda(inputs[j]->buffer) && !ggml_backend_buffer_is_host(inputs[j]->buffer)) return false;
+        auto cuda_ctx = (ggml_backend_cuda_buffer_context *)input_copies[j]->buffer->context;
+        if (!cuda_ctx || cuda_ctx->device != ctx.device) return false;
+    }
+    ggml_tensor * experts[2] = { nullptr, nullptr };
+    if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) {
+        experts[0] = node0->src[0];
+        if (node0->op == GGML_OP_MOE_FUSED_UP_GATE) experts[1] = node0->src[1];
+    }
+    std::unordered_set<int> copied;
+    ggml_cuda_set_device(ctx.device);
+    // First copy all host inputs that are not experts
+    for (int j = 0; j < n_inputs; ++j) {
+        if (!ggml_backend_buffer_is_host(inputs[j]->buffer)) continue;
+        if (input_copies[j] == experts[0] || input_copies[j] == experts[1]) continue;
+        CUDA_CHECK(cudaMemcpyAsync(input_copies[j]->data, inputs[j]->data, ggml_nbytes(inputs[j]), cudaMemcpyHostToDevice, ctx.stream()));
+        copied.insert(j);
+    }
+    // Then copy all device inputs that are on the same device
+    for (int j = 0; j < n_inputs; ++j) {
+        if (!ggml_backend_buffer_is_cuda(inputs[j]->buffer)) continue;
+        auto src_ctx = (ggml_backend_cuda_buffer_context *)inputs[j]->buffer->context;
+        auto dst_ctx = (ggml_backend_cuda_buffer_context *)input_copies[j]->buffer->context;
+        //printf("%d  %s -> %s, %d -> %d, %d\n", j, inputs[j]->name, input_copies[j]->name, src_ctx->device, dst_ctx->device, ctx.device);
+        if (src_ctx->device != ctx.device) continue;
+        if (input_copies[j]->data == inputs[j]->data) printf("Oops: scheduler wants to copy %s over itself\n", inputs[j]->name);
+        else {
+            printf("Copied %s on same device %d\n", inputs[j]->name, ctx.device);
+            CUDA_CHECK(cudaMemcpyAsync(input_copies[j]->data, inputs[j]->data, ggml_nbytes(inputs[j]), cudaMemcpyDeviceToDevice, ctx.stream()));
+        }
+        copied.insert(j);
+    }
+    std::unordered_set<int> event_recorded;
+    auto & info = ggml_cuda_info();
+    for (int j = 0; j < n_inputs; ++j) {
+        if (copied.find(j) != copied.end()) continue;
+        if (ggml_backend_buffer_is_host(inputs[j]->buffer)) continue; // experts have not been copied yet
+        auto src_device = ((ggml_backend_cuda_buffer_context *)inputs[j]->buffer->context)->device;
+        if (auto it = info.all_ctx.find(ctx.model); it != info.all_ctx.end()) {
+            auto src_ctx = it->second[src_device];
+            if (auto it1 = event_recorded.find(src_device); it1 == event_recorded.end()) {
+                ggml_cuda_set_device(src_ctx->device);
+                if (!src_ctx->copy_event) {
+                    CUDA_CHECK(cudaEventCreateWithFlags(&src_ctx->copy_event, cudaEventDisableTiming));
+                }
+                //printf("Copying %s from device %d to device %d\n", inputs[j]->name, src_ctx->device, ctx.device);
+                CUDA_CHECK(cudaEventRecord(src_ctx->copy_event, src_ctx->stream()));
+                ggml_cuda_set_device(ctx.device);
+                CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), src_ctx->copy_event));
+                event_recorded.insert(src_device);
+            }
+            CUDA_CHECK(cudaMemcpyAsync(input_copies[j]->data, inputs[j]->data, ggml_nbytes(inputs[j]),
+                        cudaMemcpyDeviceToDevice, ctx.stream()));
+            copied.insert(j);
+        } else {
+            GGML_ABORT("Fatal error");
+        }
+    }
+    if (int(copied.size()) == n_inputs) return true;
+    //printf("------------------ Here\n");
+    // At this point the only inputs left to copy are experts on the host that we deferred further up
+    // If node0 is not GGML_OP_MUL_MAT_ID or GGML_OP_MOE_FUSED_UP_GATE something went wrong with our logic
+    if (node0->op != GGML_OP_MUL_MAT_ID && node0->op != GGML_OP_MOE_FUSED_UP_GATE) {
+        GGML_ABORT("Fatal error");
+    }
+    //CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
+    auto ids    = node0->op == GGML_OP_MOE_FUSED_UP_GATE ? node0->src[3] : node0->src[2];
+    auto dst0_1 = node0->src[0];
+    auto dst0_2 = node0->op == GGML_OP_MOE_FUSED_UP_GATE ? node0->src[1] : nullptr;
+    auto src1   = node0->op == GGML_OP_MOE_FUSED_UP_GATE ? node0->src[2] : node0->src[1];
+    auto src0   = dst0_1;
+    auto dst    = node0;
+    GGML_TENSOR_BINARY_OP_LOCALS
+    const int64_t n_ids = ids->ne[0];
+    const int64_t n_as = ne02;
+    const int64_t ne_get_rows = ne12 * n_ids;
+    //printf("n_ids = %ld, n_as = %ld, ne12 = %ld, ne_get_rows = %ld\n", n_ids, n_as, ne12, ne_get_rows);
+    ggml_cuda_pool_alloc<int32_t> ids_device(ctx.pool(), ne_get_rows + ne_get_rows + n_as + 1);
+    auto ids_src1 = ids_device.get();
+    auto ids_dst  = ids_src1 + ne_get_rows;
+    auto expert_bounds = ids_dst + ne_get_rows;
+
+    compute_row_ids((const int32_t *)ids->data, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_ids, ne11, nb11, nb12, ids->nb[1], ctx.stream());
+
+    //std::vector<int> host_bounds(n_as + 1);
+    //CUDA_CHECK(cudaMemcpyAsync(host_bounds.data(), expert_bounds, host_bounds.size()*sizeof(int32_t),
+    //            cudaMemcpyDeviceToHost, ctx.stream()));
+    //CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
+
+    //int n_on = 0;
+    //for (int j = 0; j < int(n_as); ++j) if (host_bounds[j+1] > host_bounds[j]) ++n_on;
+    //printf("%s: %d experts are on\n", dst0_1->name, n_on);
+
+    //const int64_t n_ids = ids->ne[0];
+    //const int64_t n_as = dst0_1->ne[2];
+    //const int64_t ne_get_rows = src1->ne[2] * n_ids;
+    //ggml_cuda_pool_alloc<int32_t> ids_device(ctx.pool(), ne_get_rows + ne_get_rows + n_as + 1);
+    //auto ids_src1 = ids_device.get();
+    //auto ids_dst  = ids_src1 + ne_get_rows;
+    //auto expert_bounds = ids_dst + ne_get_rows;
+
+    //compute_row_ids((const int32_t *)ids->data, ids_src1, ids_dst, expert_bounds,
+    //        dst0_1->ne[2], src1->ne[2], n_ids, src1->ne[1], src1->nb[1], src1->nb[2], ids->nb[1], ctx.stream());
+
+    //int32_t * expert_bounds = nullptr;
+
+    const ggml_tensor *src0_1 = nullptr, *src0_2 = nullptr;
+    for (int j = 0; j < n_inputs; ++j) {
+        if (input_copies[j] == dst0_1) src0_1 = inputs[j];
+        if (input_copies[j] == dst0_2) src0_2 = inputs[j];
+    }
+    GGML_ASSERT(src0_1 != nullptr && (dst0_2 == nullptr || src0_2 != nullptr));
+    GGML_ASSERT(((ggml_backend_cuda_buffer_context *)dst0_1->buffer->context)->device == ctx.device);
+    if (dst0_2) {
+        GGML_ASSERT(((ggml_backend_cuda_buffer_context *)dst0_2->buffer->context)->device == ctx.device);
+    }
+    if (src0_1 && src0_2) {
+        copy_up_and_gate_experts(src0_1, src0_2, expert_bounds, (char *)dst0_1->data, (char *)dst0_2->data, ctx.stream());
+    } else {
+        copy_up_or_gate_experts(src0_1, expert_bounds, (char *)dst0_1->data, ctx.stream());
+    }
+    //if (src0_2) {
+    //    copy_up_or_gate_experts(src0_2, expert_bounds, (char *)dst0_2->data, ctx.stream());
+    //}
+    //printf("%s: copied %d inputs\n", __func__, n_inputs);
+    return true;
+}
+
+#if 0
+GGML_CALL static bool ggml_backend_cuda_copy_experts(ggml_backend_t backend, const ggml_tensor * ids,
+        const ggml_tensor * src0_1, const ggml_tensor * src0_2, ggml_tensor * dst1, ggml_tensor * dst2) {
+    if (!backend || ggml_backend_is_cuda(backend)) return false;
+    if (!ids || !src0_1 || !ids->buffer || !src0_1->buffer || !dst1 || !dst1->buffer) return false;
+    if (!ggml_backend_buffer_is_cuda(ids->buffer)  ||
+        !ggml_backend_buffer_is_cuda(dst1->buffer) ||
+        !ggml_backend_buffer_is_host(src0_1->buffer)) return false;
+    if (src0_2) {
+        if (!src0_2->buffer || !dst2 || !dst2->buffer) return false;
+        if (!ggml_backend_buffer_is_cuda(dst2->buffer) ||
+            !ggml_backend_buffer_is_host(src0_2->buffer)) return false;
+    }
+    auto ctx_ids  = (ggml_backend_cuda_buffer_context *)ids->buffer->context;
+    auto ctx_dst1 = (ggml_backend_cuda_buffer_context *)dst1->buffer->context;
+    if (ctx_ids->device != ctx_dst1->device) return false;
+    ggml_backend_cuda_buffer_context * ctx_dst2 = nullptr;
+    if (dst2) {
+        ctx_dst2 = (ggml_backend_cuda_buffer_context *)dst2->buffer->context;
+        if (ctx_ids->device != ctx_dst2->device) return false;
+    }
+    auto & ctx = *(ggml_backend_cuda_context *)backend->context;
+    if (ctx.device != ctx_ids->device) return false;
+
+    const int64_t n_as = src0_1->ne[2];
+    const int64_t ne_get_rows = ids->ne[0] * ids->ne[1];
+    ggml_cuda_pool_alloc<int32_t> ids_device(ctx.pool(), ne_get_rows + ne_get_rows + n_as + 1);
+    auto ids_src1 = ids_device.get();
+    auto ids_dst  = ids_src1 + ne_get_rows;
+    auto expert_bounds = ids_dst + ne_get_rows;
+
+    ggml_cuda_set_device(ctx.device);
+
+    //compute_row_ids((const int32_t *)ids->data, ids_src1, ids_dst, expert_bounds,
+    //            src0_1->ne[2], ids->ne[1], ids->ne[0], ne11, nb11, nb12, ids->nb[1], ctx.stream());
+
+
+    if (src0_1 && src0_2) {
+    }
+    return true;
+}
+#endif
 
 static ggml_backend_buffer_i ggml_backend_cuda_buffer_interface = {
     /* .get_name        = */ ggml_backend_cuda_buffer_get_name,
@@ -5587,6 +5863,7 @@ static ggml_backend_i ggml_backend_cuda_interface = {
     /* .event_record            = */ ggml_backend_cuda_event_record,
     /* .event_wait              = */ ggml_backend_cuda_event_wait,
     /* .event_synchronize       = */ ggml_backend_cuda_event_synchronize,
+    /* .cpy_all_inputs          = */ ggml_backend_cuda_copy_all_inputs,
 };
 
 static ggml_guid_t ggml_backend_cuda_guid() {
