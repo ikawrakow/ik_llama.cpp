@@ -701,6 +701,22 @@ GGML_CALL static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t 
 }
 
 template <typename data_t>
+static __global__ void k_copy_up_or_gate_tg(const data_t * __restrict__ src, int64_t nb2, const int32_t * __restrict__ ids,
+        data_t * __restrict__ dst, int n_ids, int n_as) {
+    int i02 = ids[blockIdx.x];
+    dst += nb2*i02;
+    src += nb2*i02;
+    for (int64_t i = threadIdx.x; i < nb2; i += blockDim.x) {
+        dst[i] = src[i];
+    }
+    for (int j = 0; j < n_ids; ++j) {
+        if (ids[j] == i02 + 1) return;
+    }
+    dst += nb2;
+    for (int64_t i = threadIdx.x; i < 512/sizeof(data_t); i += blockDim.x) dst[i] = {};
+}
+
+template <typename data_t>
 static __global__ void k_copy_up_or_gate(const data_t * __restrict__ src, int64_t nb2, const int32_t * __restrict__ bounds, data_t * __restrict__ dst) {
     int i02 = blockIdx.x;
     dst += nb2*i02;
@@ -736,8 +752,37 @@ static __global__ void k_copy_up_gate(const data_t * __restrict__ src_up, const 
     }
 }
 
+template <typename data_t>
+static __global__ void k_copy_up_gate_tg(const data_t * __restrict__ src_up, const data_t * __restrict__ src_gate,
+        int64_t nb2_up, int64_t nb2_gate,
+        const int32_t * __restrict__ ids, data_t * __restrict__ dst_up, data_t * __restrict__ dst_gate, int n_ids, int n_as) {
+    int i02 = ids[blockIdx.x];
+    auto src = src_up + nb2_up*i02;
+    auto dst = dst_up + nb2_up*i02;
+    bool clear_bytes = true;
+    for (int j = 0; j < n_ids; ++j) {
+        if (ids[j] == i02 + 1) clear_bytes = false;
+    }
+    for (int64_t i = threadIdx.x; i < nb2_up; i += blockDim.x) {
+        dst[i] = src[i];
+    }
+    if (clear_bytes) {
+        dst += nb2_up;
+        for (int64_t i = threadIdx.x; i < 512/sizeof(data_t); ++i) dst[i] = {};
+    }
+    src = src_gate + nb2_gate*i02;
+    dst = dst_gate + nb2_gate*i02;
+    for (int64_t i = threadIdx.x; i < nb2_gate; i += blockDim.x) {
+        dst[i] = src[i];
+    }
+    if (clear_bytes) {
+        dst += nb2_gate;
+        for (int64_t i = threadIdx.x; i < 512/sizeof(data_t); ++i) dst[i] = {};
+    }
+}
+
 static void copy_up_and_gate_experts(const ggml_tensor * up, const ggml_tensor * gate, const int32_t * expert_bounds,
-        char * dst_up, char * dst_gate, cudaStream_t stream) {
+        char * dst_up, char * dst_gate, cudaStream_t stream, int n_ids = 0) {
     constexpr int k_block_size = 256;
     GGML_ASSERT(up && gate);
     GGML_ASSERT(up->ne[2] == gate->ne[2]);
@@ -749,26 +794,44 @@ static void copy_up_and_gate_experts(const ggml_tensor * up, const ggml_tensor *
     auto dst_g_ptr = (uintptr_t)dst_gate;
     if (auto ts = sizeof(uint4); up->nb[2] % ts == 0 && gate->nb[2] % ts == 0 &&
             src_u_ptr % ts == 0 && src_g_ptr % ts == 0 && dst_u_ptr % ts == 0 && dst_g_ptr % ts == 0) {
-        k_copy_up_gate<<<up->ne[2], k_block_size, 0, stream>>>((const uint4 *)up->data, (const uint4 *)gate->data,
-                up->nb[2]/ts, gate->nb[2]/ts, expert_bounds, (uint4 *)dst_up, (uint4 *)dst_gate);
+        if (n_ids > 0) {
+            k_copy_up_gate_tg<<<n_ids, k_block_size, 0, stream>>>((const uint4 *)up->data, (const uint4 *)gate->data,
+                    up->nb[2]/ts, gate->nb[2]/ts, expert_bounds, (uint4 *)dst_up, (uint4 *)dst_gate, n_ids, up->ne[2]);
+        } else {
+            k_copy_up_gate<<<up->ne[2], k_block_size, 0, stream>>>((const uint4 *)up->data, (const uint4 *)gate->data,
+                    up->nb[2]/ts, gate->nb[2]/ts, expert_bounds, (uint4 *)dst_up, (uint4 *)dst_gate);
+        }
     } else {
         ts = sizeof(uint32_t);
-        k_copy_up_gate<<<up->ne[2], k_block_size, 0, stream>>>((const uint32_t *)up->data, (const uint32_t *)gate->data,
-                up->nb[2]/ts, gate->nb[2]/ts, expert_bounds, (uint32_t *)dst_up, (uint32_t *)dst_gate);
+        if (n_ids > 0) {
+            k_copy_up_gate_tg<<<n_ids, k_block_size, 0, stream>>>((const uint32_t *)up->data, (const uint32_t *)gate->data,
+                    up->nb[2]/ts, gate->nb[2]/ts, expert_bounds, (uint32_t *)dst_up, (uint32_t *)dst_gate, n_ids, up->ne[2]);
+        } else {
+            k_copy_up_gate<<<up->ne[2], k_block_size, 0, stream>>>((const uint32_t *)up->data, (const uint32_t *)gate->data,
+                    up->nb[2]/ts, gate->nb[2]/ts, expert_bounds, (uint32_t *)dst_up, (uint32_t *)dst_gate);
+        }
     }
 }
 
-static void copy_up_or_gate_experts(const ggml_tensor * src, const int32_t * expert_bounds, char * dst, cudaStream_t stream) {
+static void copy_up_or_gate_experts(const ggml_tensor * src, const int32_t * expert_bounds, char * dst, cudaStream_t stream, int n_ids = 0) {
     GGML_ASSERT(src);
     GGML_ASSERT(src->nb[2] % sizeof(uint32_t) == 0);
     constexpr int k_block_size = 256;
     auto src_ptr = (uintptr_t)src->data;
     auto dst_ptr = (uintptr_t)dst;
     if (auto ts = sizeof(uint4); src->nb[2] % ts == 0 && src_ptr % ts == 0 && dst_ptr % ts == 0) {
-        k_copy_up_or_gate<<<src->ne[2], k_block_size, 0, stream>>>((const uint4 *)src->data, src->nb[2]/ts, expert_bounds, (uint4 *)dst);
+        if (n_ids > 0) {
+            k_copy_up_or_gate_tg<<<n_ids, k_block_size, 0, stream>>>((const uint4 *)src->data, src->nb[2]/ts, expert_bounds, (uint4 *)dst, n_ids, src->ne[2]);
+        } else {
+            k_copy_up_or_gate<<<src->ne[2], k_block_size, 0, stream>>>((const uint4 *)src->data, src->nb[2]/ts, expert_bounds, (uint4 *)dst);
+        }
     } else {
         ts = sizeof(uint32_t);
-        k_copy_up_or_gate<<<src->ne[2], k_block_size, 0, stream>>>((const uint32_t *)src->data, src->nb[2]/ts, expert_bounds, (uint32_t *)dst);
+        if (n_ids > 0) {
+            k_copy_up_or_gate_tg<<<n_ids, k_block_size, 0, stream>>>((const uint32_t *)src->data, src->nb[2]/ts, expert_bounds, (uint32_t *)dst, n_ids, src->ne[2]);
+        } else {
+            k_copy_up_or_gate<<<src->ne[2], k_block_size, 0, stream>>>((const uint32_t *)src->data, src->nb[2]/ts, expert_bounds, (uint32_t *)dst);
+        }
     }
 }
 
@@ -898,6 +961,30 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
     GGML_TENSOR_BINARY_OP_LOCALS
     const int64_t n_ids = ids->ne[0];
     const int64_t n_as = ne02;
+
+    const ggml_tensor *src0_1 = nullptr, *src0_2 = nullptr;
+    for (int j = 0; j < n_inputs; ++j) {
+        if (input_copies[j] == dst0_1) src0_1 = inputs[j];
+        if (input_copies[j] == dst0_2) src0_2 = inputs[j];
+    }
+
+    if (node0->ne[2] == 1) {
+        //size_t offload_size = dst0_1->nb[2]*n_ids;
+        //if (dst0_2) offload_size += dst0_2->nb[2]*n_ids;
+        //printf("TG case with %d active experts -> need to offload %.3f MiB\n", (int)ids->ne[0], offload_size/(1024.*1024.));
+        //CUDA_CHECK(cudaMemsetAsync(dst0_1->data, 0, ggml_nbytes(dst0_1), ctx.stream()));
+        //if (dst0_2) {
+        //    CUDA_CHECK(cudaMemsetAsync(dst0_2->data, 0, ggml_nbytes(dst0_1), ctx.stream()));
+        //}
+        if (src0_1 && src0_2) {
+            copy_up_and_gate_experts(src0_1, src0_2, (const int32_t *)ids->data,
+                    (char *)dst0_1->data, (char *)dst0_2->data, ctx.stream(), n_ids);
+        } else {
+            copy_up_or_gate_experts(src0_1, (const int32_t *)ids->data, (char *)dst0_1->data, ctx.stream(), n_ids);
+        }
+        return true;
+    }
+
     const int64_t ne_get_rows = ne12 * n_ids;
     ggml_cuda_pool_alloc<int32_t> ids_device(ctx.pool(), ne_get_rows + ne_get_rows + n_as + 1);
     auto ids_src1 = ids_device.get();
@@ -906,12 +993,6 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
 
     compute_row_ids((const int32_t *)ids->data, ids_src1, ids_dst, expert_bounds,
                     ne02, ne12, n_ids, ne11, nb11, nb12, ids->nb[1], ctx.stream());
-
-    const ggml_tensor *src0_1 = nullptr, *src0_2 = nullptr;
-    for (int j = 0; j < n_inputs; ++j) {
-        if (input_copies[j] == dst0_1) src0_1 = inputs[j];
-        if (input_copies[j] == dst0_2) src0_2 = inputs[j];
-    }
     GGML_ASSERT(src0_1 != nullptr && (dst0_2 == nullptr || src0_2 != nullptr));
     GGML_ASSERT(((ggml_backend_cuda_buffer_context *)dst0_1->buffer->context)->device == ctx.device);
     if (dst0_2) {
