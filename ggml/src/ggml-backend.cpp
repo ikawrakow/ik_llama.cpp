@@ -938,6 +938,18 @@ GGML_CALL static bool ggml_backend_cpu_supports_buft(ggml_backend_t backend, ggm
     GGML_UNUSED(backend);
 }
 
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+static bool copy_all_inputs_to_cpu(ggml_backend_sched_t sched, ggml_backend_t backend, int n_inputs,
+        ggml_tensor ** inputs, ggml_tensor ** input_copies, const ggml_tensor * node0, bool has_lru_cache) {
+    return ggml_backend_cuda_copy_all_inputs_to_cpu(sched, backend, n_inputs, inputs, input_copies, node0, has_lru_cache);
+}
+#else
+static bool copy_all_inputs_to_cpu(ggml_backend_sched_t, ggml_backend_t, int,
+        ggml_tensor **, ggml_tensor **, const ggml_tensor *, bool) {
+    return false;
+#endif
+
 static struct ggml_backend_i cpu_backend_i = {
     /* .get_name                = */ ggml_backend_cpu_name,
     /* .free                    = */ ggml_backend_cpu_free,
@@ -959,7 +971,7 @@ static struct ggml_backend_i cpu_backend_i = {
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
     /* .event_synchronize       = */ NULL,
-    /* .cpy_experts             = */ NULL,
+    /* .cpy_all_inputs          = */ copy_all_inputs_to_cpu,
 };
 
 static ggml_guid_t ggml_backend_cpu_guid(void) {
@@ -2058,7 +2070,7 @@ static bool ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
     if (split_backend->iface.cpy_all_inputs) {
         ggml_tensor * copies[GGML_SCHED_MAX_SPLIT_INPUTS];
         for (int j = 0; j < split->n_inputs; ++j) copies[j] = tensor_copy(split->inputs[j], split_backend_id, sched->cur_copy);
-        if (split_backend->iface.cpy_all_inputs(split_backend, split->n_inputs, split->inputs, copies,
+        if (split_backend->iface.cpy_all_inputs(sched, split_backend, split->n_inputs, split->inputs, copies,
                     split->graph.nodes[0], sched->callback_copy != nullptr)) {
             return true;
         }
@@ -2986,6 +2998,16 @@ int ggml_backend_sched_get_backend_idx(ggml_backend_sched_t sched, ggml_backend_
         }
     }
     return -1;
+}
+
+ggml_backend_t ggml_backend_sched_get_backend_from_buffer(ggml_backend_sched_t sched, ggml_backend_buffer_t buffer) {
+    if (!buffer || !buffer->buft) return nullptr;
+    if (buffer && buffer->buft) {
+        for (int i = 0; i < sched->n_backends; ++i) {
+            if (ggml_backend_get_default_buffer_type(sched->backends[i]) == buffer->buft) return sched->backends[i];
+        }
+    }
+    return nullptr;
 }
 
 size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend) {

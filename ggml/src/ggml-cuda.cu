@@ -791,7 +791,7 @@ static bool is_cuda_registered_host_ptr(const void * ptr) {
     return false;
 }
 
-GGML_CALL static bool ggml_backend_cuda_copy_all_inputs(ggml_backend_t backend, int n_inputs,
+GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_backend_sched_t sched, ggml_backend_t backend, int n_inputs,
         ggml_tensor ** inputs, ggml_tensor ** input_copies, const ggml_tensor * node0, bool has_lru_cache) {
     if (n_inputs < 1) return true;
     if (!backend || !ggml_backend_is_cuda(backend)) return false;
@@ -921,6 +921,33 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs(ggml_backend_t backend, 
         copy_up_and_gate_experts(src0_1, src0_2, expert_bounds, (char *)dst0_1->data, (char *)dst0_2->data, ctx.stream());
     } else {
         copy_up_or_gate_experts(src0_1, expert_bounds, (char *)dst0_1->data, ctx.stream());
+    }
+    return true;
+}
+
+GGML_CALL bool ggml_backend_cuda_copy_all_inputs_to_cpu(ggml_backend_sched_t sched, ggml_backend_t backend, int n_inputs,
+        ggml_tensor ** inputs, ggml_tensor ** input_copies, [[maybe_unused]] const ggml_tensor * node0, bool has_lru_cache) {
+    if (n_inputs < 1) return true;
+    if (has_lru_cache) return false;
+    if (!backend || !ggml_backend_is_cpu(backend)) return false;
+    for (int j = 0; j < n_inputs; ++j) {
+        if (!input_copies[j] || !input_copies[j]->buffer || !ggml_backend_buffer_is_host(input_copies[j]->buffer)) return false;
+        if (!inputs[j] || !inputs[j]->buffer || !ggml_backend_buffer_is_cuda(inputs[j]->buffer)) return false;
+    }
+    std::unordered_set<ggml_backend_cuda_context *> ctx_to_sync;
+    //printf("%s: copying %d inputs for node %s\n", __func__, n_inputs, node0->name);
+    for (int j = 0; j < n_inputs; ++j) {
+        auto this_backend = ggml_backend_sched_get_backend_from_buffer(sched, inputs[j]->buffer);
+        GGML_ASSERT(this_backend);
+        auto ctx = (ggml_backend_cuda_context *)this_backend->context;
+        ggml_cuda_set_device(ctx->device);
+        CUDA_CHECK(cudaMemcpyAsync(input_copies[j]->data, inputs[j]->data, ggml_nbytes(inputs[j]),
+                    cudaMemcpyDeviceToHost, ctx->stream()));
+        ctx_to_sync.insert(ctx);
+    }
+    for (auto ctx : ctx_to_sync) {
+        ggml_cuda_set_device(ctx->device);
+        CUDA_CHECK(cudaStreamSynchronize(ctx->stream()));
     }
     return true;
 }
