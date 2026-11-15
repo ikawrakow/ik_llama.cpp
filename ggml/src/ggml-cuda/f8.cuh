@@ -58,3 +58,23 @@ static __global__ void convert_f8_rows(const void * vx, float * y, int64_t n, in
     const void * row = (const char *)vx + (i/ne0)*layout::row_size(ne0);
     y[i] = ggml_cuda_f8_e4m3_to_float(layout::code(row, i % ne0)) * layout::scale(row, i % ne0);
 }
+
+int ggml_cuda_mul_mat_f8(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const ggml_cgraph * cgraph, int node_n);
+int ggml_cuda_f8_norm_chain(ggml_backend_cuda_context & ctx, ggml_tensor * norm, const ggml_cgraph * cgraph, int i);
+bool ggml_cuda_mul_mat_id_f8(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+int ggml_cuda_moe_up_gate_f8(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const ggml_cgraph * graph, int i,
+        ggml_tensor * next, const ggml_tensor * hada);
+void ggml_cuda_f8_lt_prepare(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph);
+
+// defined in ggml-cuda.cu
+GGML_CALL bool ggml_backend_buffer_is_cuda(ggml_backend_buffer_t buffer);
+void ggml_cuda_op_mul_mat_cublas(
+    ggml_backend_cuda_context & ctx,
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
+    const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+    const int64_t src1_padded_row_size, cudaStream_t stream);
+void ggml_cuda_op_mul_mat(
+    ggml_backend_cuda_context & ctx,
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, decltype(&ggml_cuda_op_mul_mat_cublas) op,
+    quantize_cuda_t quantize_src1);

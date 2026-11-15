@@ -1775,6 +1775,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         split->i_start = 0;
         split->n_inputs = 0;
         int cur_backend_id = split->backend_id;
+        std::vector<int> node_split(sched->hash_set.size, -1);
         for (; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
 
@@ -1843,11 +1844,18 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 cur_backend_id = node_backend_id;
             }
 
+            node_split[hash_id(node)] = i_split;
+
             // find inputs that are not on the same backend
             for (int j = 0; j < GGML_MAX_SRC; j++) {
                 struct ggml_tensor * src = node->src[j];
                 if (src == NULL) {
                     continue;
+                }
+
+                struct ggml_tensor * root = src->view_src ? src->view_src : src;
+                if (const int root_split = node_split[ggml_hash_find(&sched->hash_set, root)]; root_split >= 0 && root_split != i_split) {
+                    root->flags |= GGML_TENSOR_FLAG_CROSS_SPLIT;
                 }
 
                 size_t src_id = hash_id(src);
@@ -2293,6 +2301,9 @@ static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_back
         }
     } else {
         // similar to ggml_backend_compare_graph_backend
+        for (int j = 0; j < split->graph.n_nodes; j++) {
+            split->graph.nodes[j]->flags |= GGML_TENSOR_FLAG_CROSS_SPLIT;
+        }
         for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
             struct ggml_tensor * t = split->graph.nodes[j0];
 
