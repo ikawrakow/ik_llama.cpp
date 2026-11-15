@@ -4148,7 +4148,7 @@ bool server_context::create_checkpoint(server_slot & slot, bool prompt_end) {
             if (params_base.ctx_checkpoint_eviction == COMMON_CHECKPOINT_EVICTION_VARIANCE ||
                 params_base.ctx_checkpoint_eviction == COMMON_CHECKPOINT_EVICTION_AUTO) {
                 it = evict_checkpoint_by_variance(slot, slot.server_cached_prompt.checkpoints);
-            } 
+            }
             it = skip_prompt_end(slot.server_cached_prompt.checkpoints, it);
             const auto & cur = *it;
             SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
@@ -4940,7 +4940,7 @@ bool server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
         const llama_pos expected_ckpt_pos = slot.cache_tokens.pos_next(n_keep_cache) - 1;
         const llama_pos pos = llama_rewind_ckpt_pos(
                 slot.ctx, { LLAMA_CHECKPOINT_REWIND, expected_ckpt_pos, 0 }, slot.id);
-        if (pos != expected_ckpt_pos) {
+        if (pos < 0 || pos != expected_ckpt_pos) {
             LOG_ERROR("request-time ban rewind failed: exact checkpoint missing", {
                 {"id_slot", slot.id},
                 {"id_task", slot.id_task},
@@ -5053,7 +5053,7 @@ bool server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     }
     if (ban_pos >= 0 && allow_rewind) {
         if (!rewind_context(slot, ban_pos)) {
-            send_error(slot, "request-time ban rewind failed; request aborted", ERROR_TYPE_SERVER);
+            send_error(slot, "request-time ban rewind failed, request aborted", ERROR_TYPE_SERVER);
             slot.cache_tokens.clear();
             slot.n_past = 0;
             slot.n_past_prompt = 0;
@@ -5341,7 +5341,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                         llama_rewind_ckpt_discard(slot.ctx, { LLAMA_CHECKPOINT_REWIND, 0,   n<0?0:n}, slot.id);
                     }
                     create_rewind_checkpoint(slot);
-                }      
+                }
             }
 
             slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;

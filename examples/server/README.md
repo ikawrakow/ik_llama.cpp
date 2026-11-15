@@ -556,8 +556,6 @@ node index.js
 
     `banbuffer_size`: Set the token buffer size for ban detection. Larger values detect banned patterns spanning more tokens but delay streaming more. When `0`, automatically sets to the longest banned string/regex length plus 1. Default: `0`
 
-    Effective banned strings or regular expressions on recurrent models require `--parallel 1`, because ban rewind restores recurrent state.
-
     `rewind_count_max`: Set the maximum number of regeneration attempts when banned content is encountered. When `-1`, automatically sets to `max(20, 2 * (number of banned_strings + banned_regex + banned_regex_case_insensitive))`. When `0`, allows infinite retries. Default: `-1`
 
     `banned_n`: Control how many tokens to ban when a banned string is detected at a specific position. For a string tokenizing to `["I", " can", " do"]`, `1` bans only "I", `2` bans "I" and " can", etc. When `-1`, bans all tokens in the match. **Note:** Using `-1` with regex patterns may cause excessive unintended bans. Default: `1`
