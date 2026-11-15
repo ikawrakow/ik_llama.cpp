@@ -1208,7 +1208,7 @@ struct ggml_backend_sched {
 
     ggml_backend_sched_eval_callback callback_eval;
     void * callback_eval_user_data;
-    ggml_backend_sched_copy_callback callback_copy;
+    ggml_backend_sched_copy_callback callback_copy = nullptr;
     void * callback_copy_user_data;
     ggml_backend_sched_expert_range_copy_callback callback_expert_range_copy;
     int64_t callback_expert_range_copy_min_tokens = 0;
@@ -2055,10 +2055,11 @@ static bool ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
     constexpr bool k_set_sync = false;
     int split_backend_id = split->backend_id;
     ggml_backend_t split_backend = sched->backends[split_backend_id];
-    if (!sched->callback_copy && split_backend->iface.cpy_all_inputs) {
+    if (split_backend->iface.cpy_all_inputs) {
         ggml_tensor * copies[GGML_SCHED_MAX_SPLIT_INPUTS];
         for (int j = 0; j < split->n_inputs; ++j) copies[j] = tensor_copy(split->inputs[j], split_backend_id, sched->cur_copy);
-        if (split_backend->iface.cpy_all_inputs(split_backend, split->n_inputs, split->inputs, copies, split->graph.nodes[0])) {
+        if (split_backend->iface.cpy_all_inputs(split_backend, split->n_inputs, split->inputs, copies,
+                    split->graph.nodes[0], sched->callback_copy != nullptr)) {
             return true;
         }
     }
