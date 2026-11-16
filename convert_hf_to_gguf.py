@@ -2712,6 +2712,10 @@ class ModelOptModel(Model):
                     consumed.update((scale_name, base + ".input_scale"))
                     continue
                 self._write_fp8_projection(name, weight, scale)
+                input_scale = self.model_tensors.get(base + ".input_scale")
+                if input_scale is not None and not self._expert_part(name)[0] and math.prod(input_scale().shape) == 1:
+                    self.gguf_writer.add_tensor(self.map_tensor_name(name).removesuffix(".weight") + ".input_scale",
+                                                input_scale().float().reshape(-1).numpy())
             elif self._is_nvfp4:
                 if weight.ndim != 2 or scale.shape != (weight.shape[0], weight.shape[1] // 8):
                     raise ValueError(f"NVFP4 weight {name!r} has incompatible shapes: {list(weight.shape)}, {list(scale.shape)}")
