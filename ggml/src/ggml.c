@@ -312,6 +312,7 @@ inline static void * ggml_aligned_malloc(size_t size) {
                 break;
         }
         GGML_PRINT("%s: %s (attempted to allocate %6.2f MB)\n", __func__, error_desc, size/(1024.0*1024.0));
+        GGML_ABORT("fatal error");
         return NULL;
     }
     return aligned_memory;
@@ -5680,9 +5681,8 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
 
     struct ggml_context * ctx = malloc(sizeof(struct ggml_context));
     if (ctx == NULL) {
-        GGML_PRINT("%s: failed to allocate context\n", __func__);
         ggml_critical_section_end();
-        return NULL;
+        GGML_ABORT("%s: failed to allocate context object (%zu bytes)", __func__, sizeof(struct ggml_context));
     }
 
     // allow to call ggml_init with 0 size
@@ -5696,7 +5696,7 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
     if (mem_buffer == NULL) {
         free(ctx);
         ggml_critical_section_end();
-        return NULL;
+        GGML_ABORT("%s: failed to allocate context arena (%zu bytes)", __func__, mem_size);
     }
 
     *ctx = (struct ggml_context) {

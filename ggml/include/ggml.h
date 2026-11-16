@@ -235,9 +235,9 @@
 #define GGML_MAX_DIMS           4
 #define GGML_MAX_PARAMS         2048
 #ifndef GGML_MAX_CONTEXTS
-// Maximum number of model contexts (e.g., for model shards).
-// Increase this value using -DGGML_MAX_CONTEXTS=<value> in CMake
-// if you need to load more than 64 model shards.
+// Legacy build setting; this does not limit the number of live ggml_context objects.
+// The llama.cpp Windows model loader uses values above 512 to raise the stdio
+// limit when loading models split into many shards.
 #define GGML_MAX_CONTEXTS       64
 #endif
 #ifndef GGML_MAX_SRC

@@ -47,6 +47,7 @@ In order to build `ik_llama.cpp` you have four different options.
     - For `Q4_0_4_4` quantization type build, add the `-DGGML_LLAMAFILE=OFF` cmake option. For example, use `cmake -B build -DGGML_LLAMAFILE=OFF`.
     - For faster compilation, add the `-j` argument to run multiple jobs in parallel. For example, `cmake --build build --config Release -j 8` will run 8 jobs in parallel.
     - For faster repeated compilation, install [ccache](https://ccache.dev/).
+    - `-DGGML_MAX_CONTEXTS=N` no longer limits the number of live GGML contexts. On Windows, values above 512 still raise the model loader's stdio limit for models with more than 512 shards; the limit is capped at 8192.
     - For debug builds, there are two cases:
 
       1. Single-config generators (e.g. default = `Unix Makefiles`; note that they just ignore the `--config` flag):
