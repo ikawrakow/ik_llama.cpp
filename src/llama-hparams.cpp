@@ -1013,6 +1013,7 @@ void llm_load_hparams(
                 if (hparams.n_ff_shexp == 0) hparams.n_ff_shexp = hparams.n_ff_exp;
             } break;
         case LLM_ARCH_RAON1:
+        case LLM_ARCH_RAON1_NANO:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,    hparams.n_embd_head_k_mla_impl);
@@ -1062,6 +1063,16 @@ void llm_load_hparams(
                 }
                 for (uint32_t i = 0; i < hparams.n_layer; ++i) {
                     hparams.recurrent_layer_arr[i] = hparams.n_head_kv(i) == 0;
+                }
+
+                if (model.arch == LLM_ARCH_RAON1_NANO) {
+                    // dense trunk + PLE + 1 MTP block
+                    ml.get_key(LLM_KV_EMBEDDING_LENGTH_PER_LAYER, hparams.n_embd_per_layer);
+                    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,       hparams.nextn_predict_layers, false);
+                    hparams.n_layer_kv_from_start = model.mtp
+                        ? hparams.n_layer
+                        : hparams.n_layer - hparams.nextn_predict_layers;
+                    hparams.n_layer_dense_lead = hparams.n_layer;
                 }
 
                 model.type = e_model::MODEL_UNKNOWN;

@@ -188,6 +188,9 @@ extern "C" {
     typedef bool (*ggml_backend_sched_copy_callback)(ggml_backend_t backend,
             const struct ggml_tensor * src, struct ggml_tensor * dst,
             struct ggml_cgraph * graph, enum ggml_backend_sched_copy_phase phase, void * user_data);
+    typedef size_t (*ggml_backend_sched_expert_range_copy_callback)(ggml_backend_t backend,
+            const struct ggml_tensor * src, struct ggml_tensor * dst,
+            int32_t first_expert, size_t max_experts, int64_t n_tokens, void * user_data);
 
     // Initialize a backend scheduler
     GGML_API ggml_backend_sched_t ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel);
@@ -222,6 +225,9 @@ extern "C" {
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
     GGML_API void                 ggml_backend_sched_set_copy_callback(
             ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data);
+    GGML_API void                 ggml_backend_sched_set_expert_range_copy_callback(
+            ggml_backend_sched_t sched, ggml_backend_sched_expert_range_copy_callback callback,
+            int64_t min_tokens, void * user_data);
 
     // enable or disable op offload for a given op
     GGML_API void                 ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op op, bool on_or_off);

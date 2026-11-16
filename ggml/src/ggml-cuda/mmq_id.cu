@@ -341,6 +341,10 @@ void compute_row_ids(const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst,
             launch_mmq_ids_helper< 8> (ids, ids_src1, ids_dst, expert_bounds,
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
             break;
+        case 10:
+            launch_mmq_ids_helper<10> (ids, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+            break;
         case 16:
             launch_mmq_ids_helper<16> (ids, ids_src1, ids_dst, expert_bounds,
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);

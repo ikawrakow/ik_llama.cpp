@@ -338,7 +338,9 @@ static __global__ void flash_attn_ext_f16(
             }
         }
 
-        frag_c_VKQ VKQ_c[Dv/VKQ_stride][ncols/frag_n];
+        // With ncols == 8 the rows past Dv would overwrite the next column. With ncols >= 16 they stay in their own column and are not read.
+        constexpr int D_store = ncols == 8 ? Dv : Dk;
+        frag_c_VKQ VKQ_c[D_store/VKQ_stride][ncols/frag_n];
 #pragma unroll
         for (int i_VKQ_0 = 0; i_VKQ_0 < Dv; i_VKQ_0 += VKQ_stride) {
 #pragma unroll
@@ -363,7 +365,7 @@ static __global__ void flash_attn_ext_f16(
 
         const int offset_k = (threadIdx.y % VKQ_ratio) * (ncols*Dk_padded);
 #pragma unroll
-        for (int i_KQ_0 = 0; i_KQ_0 < Dk; i_KQ_0 += VKQ_stride) {
+        for (int i_KQ_0 = 0; i_KQ_0 < D_store; i_KQ_0 += VKQ_stride) {
 #pragma unroll
             for (int j0 = 0; j0 < ncols; j0 += frag_n) {
                 nvcuda::wmma::store_matrix_sync(
