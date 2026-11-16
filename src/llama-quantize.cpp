@@ -365,11 +365,18 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
     const llm_arch arch = qs.model.arch;
 
     // Raon-1/Xing4.0: keep MLA latents at source precision for Q6_K/Q8_0.
-    if ((arch == LLM_ARCH_RAON1 || arch == LLM_ARCH_XING4_0) &&
+    if ((arch == LLM_ARCH_RAON1 || arch == LLM_ARCH_RAON1_NANO || arch == LLM_ARCH_XING4_0) &&
             (ftype == LLAMA_FTYPE_MOSTLY_Q6_K || ftype == LLAMA_FTYPE_MOSTLY_Q8_0) &&
             (name.find("attn_kv_a_mqa.weight") != std::string::npos ||
              name.find("attn_k_b.weight")      != std::string::npos ||
              name.find("attn_v_b.weight")      != std::string::npos)) {
+        return tensor->type;
+    }
+    // Raon-1 nano: keep hc_* and ssm_f_a/ssm_f_b at source precision.
+    if (arch == LLM_ARCH_RAON1_NANO &&
+            (name.find("hc_")            != std::string::npos ||
+             name.find("ssm_f_a.weight") != std::string::npos ||
+             name.find("ssm_f_b.weight") != std::string::npos)) {
         return tensor->type;
     }
     const auto       tn = LLM_TN(arch);

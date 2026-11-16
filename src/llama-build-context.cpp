@@ -800,6 +800,29 @@ ggml_tensor * llm_build_context::build_mhc_pre_projection(
     return ggml_mul_mat(ctx0, fn, normed);
 }
 
+ggml_tensor * llm_build_context::build_per_layer_inputs(
+        ggml_tensor * inputs_embeds,
+        ggml_tensor * inp_per_layer,
+        int64_t n_embd_per_layer,
+        int64_t n_layer,
+        float eps_scale) {
+    const int64_t n_tokens = inputs_embeds->ne[1];
+
+    ggml_tensor * proj = ggml_mul_mat(ctx0, model.per_layer_model_proj, inputs_embeds);
+    cb(proj, "per_layer_proj", -1);
+    proj = ggml_reshape_3d(ctx0, proj, n_embd_per_layer, n_layer, n_tokens);
+    proj = llm_build_norm(ctx0, proj, hparams, model.per_layer_proj_norm, nullptr,
+            LLM_NORM_RMS, cb, -1, eps_scale);
+    cb(proj, "per_layer_proj_normed", -1);
+
+    ggml_tensor * out = ggml_add(ctx0, proj, inp_per_layer);
+    out = ggml_scale(ctx0, out, 1.0f/sqrtf(2.0f));
+    cb(out, "inp_per_layer", -1);
+
+    // [n_embd_per_layer, n_tokens, n_layer] strided view
+    return ggml_permute(ctx0, out, 0, 2, 1, 3);
+}
+
 ggml_tensor * llm_build_context::build_inp_mean() {
     lctx.inp_mean = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens);
     cb(lctx.inp_mean, "inp_mean", -1);
@@ -3724,6 +3747,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_RAON1:
             {
                 result = llm.build_raon1();
+            } break;
+        case LLM_ARCH_RAON1_NANO:
+            {
+                result = llm.build_raon1nano();
             } break;
         case LLM_ARCH_XING4_0:
             {
