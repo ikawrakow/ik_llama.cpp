@@ -3414,11 +3414,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
 
     struct ggml_cgraph * result = NULL;
 
-    const llama_vocab * vocab = &lctx.model.vocab; //llama_get_vocab(&lctx);
-    llama_token bos = vocab->token_bos();
-    llama_token eos = vocab->token_eos();
-    bool is_warming_up = lctx.n_eval == 0 && (batch.n_tokens == 1 && (batch.token[0] == ((bos != -1) ? bos : eos)));
-    struct llm_build_context llm(lctx, batch, cb, worst_case, is_warming_up, n_outputs);
+    struct llm_build_context llm(lctx, batch, cb, worst_case, lctx.cparams.warmup, n_outputs);
 
     llm.init();
 
