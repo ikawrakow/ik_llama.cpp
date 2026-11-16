@@ -196,7 +196,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     }
 
     //
-    // It turns out the new new MMA implementation is slower than the
+    // It turns out the new MMA implementation is slower than the
     // previous MMA implementation.
     // Hence, we use it only for DeepSeek with MLA enabled, where head sizes are 576, 512,
     // so no other implementation works.

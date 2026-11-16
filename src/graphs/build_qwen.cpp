@@ -72,7 +72,7 @@ ggml_cgraph * llm_build_context::build_qwen() {
         struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
 
-        // feed-forward forward
+        // feed-forward
         {
             cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
                     model.layers[il].ffn_up,   NULL, NULL,

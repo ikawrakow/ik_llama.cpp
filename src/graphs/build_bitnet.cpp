@@ -100,7 +100,7 @@ ggml_cgraph * llm_build_context::build_bitnet() {
         struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
 
-        // feed-forward forward
+        // feed-forward
         if (model.layers[il].ffn_gate_inp == nullptr) {
             cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);

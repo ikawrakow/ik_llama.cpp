@@ -363,7 +363,7 @@ static void dequantize_block_q5_K(const void * __restrict__ vx, dst_t * __restri
     const int tid = item_ct1.get_local_id(2);
     const int il  = tid/16;   // il is in 0...3
     const int ir  = tid%16;   // ir is in 0...15
-    const int is  = 2*il;     // is is in 0...6
+    const int is  = 2*il;     // is in 0...6
 
     dst_t * y = yy + i*QK_K + 64*il + 2*ir;
 

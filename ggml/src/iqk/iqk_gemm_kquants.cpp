@@ -1285,7 +1285,7 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                                                   _mm256_maddubs_epi16(qx[1], _mm256_shuffle_epi32(y, 0x55)));
                     auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[2], _mm256_shuffle_epi32(y, 0xaa)),
                                                   _mm256_maddubs_epi16(qx[3], _mm256_shuffle_epi32(y, 0xff)));
-                    // Quants are in 0...3, so we can add add up all of them as int16_t without overflowing
+                    // Quants are in 0...3, so we can add up all of them as int16_t without overflowing
                     auto sumi = _mm256_madd_epi16(m1, _mm256_add_epi16(sumi1, sumi2));
                     if constexpr (nrc_y == 1) {
                         acc[iy] = _mm256_fmadd_ps(scales, _mm256_cvtepi32_ps(sumi), acc[iy]);
@@ -1435,7 +1435,7 @@ static void mul_mat_q3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                                                   _mm256_maddubs_epi16(qx[1], _mm256_shuffle_epi32(y, 0x55)));
                     auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[2], _mm256_shuffle_epi32(y, 0xaa)),
                                                   _mm256_maddubs_epi16(qx[3], _mm256_shuffle_epi32(y, 0xff)));
-                    // Quants are in 0...8, so we can add add up all of them as int16_t without overflowing
+                    // Quants are in 0...8, so we can add up all of them as int16_t without overflowing
                     auto sumi = _mm256_madd_epi16(m1, _mm256_add_epi16(sumi1, sumi2));
                     if constexpr (nrc_y == 1) {
                         acc[iy] = _mm256_fmadd_ps(scales, _mm256_cvtepi32_ps(sumi), acc[iy]);
