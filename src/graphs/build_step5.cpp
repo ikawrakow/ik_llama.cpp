@@ -50,9 +50,8 @@ ggml_cgraph * llm_build_context::build_step5() {
             auto probs = ggml_sigmoid(ctx0, logits);
             auto selection = ggml_add(ctx0, probs, layer.ffn_exp_probs_b);
             auto ids = ggml_top_k(ctx0, selection, n_expert_used);
-            auto unbiased = ggml_sub(ctx0, selection, layer.ffn_exp_probs_b);
             auto weights = ggml_get_rows(ctx0,
-                    ggml_reshape_3d(ctx0, unbiased, 1, n_expert, input->ne[1]), ids);
+                    ggml_reshape_3d(ctx0, probs, 1, n_expert, input->ne[1]), ids);
             weights = ggml_reshape_2d(ctx0, weights, n_expert_used, input->ne[1]);
             if (hparams.expert_weights_norm) {
                 auto sum = ggml_scale_bias(ctx0, ggml_sum_rows(ctx0, weights), 1.0f, 1e-20f);
