@@ -3877,12 +3877,16 @@ void server_context::create_checkpoint_at_interval(server_slot & slot) {
     if (this->params_base.ctx_checkpoints_interval <= 0) {
         return;
     }
+    // a token is given the next position of cache_tokens when it is cached (after the system prompt's,
+    // if there is one), so the cache holds no position past pos_last: while pos_last is short of the
+    // next checkpoint none can be due, and the scan of the cache is skipped
+    const llama_pos pos_last = (llama_pos)system_tokens.size() + slot.cache_tokens.pos_next() - 1;
+    if (pos_last < slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval) {
+        return;
+    }
     auto pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
     if (slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval <= pos) {
-        bool created = create_checkpoint(slot);
-        if (created) {
-            slot.checkpoint_pos = pos;
-        }
+        create_checkpoint(slot);
     }
 }
 
@@ -4153,6 +4157,7 @@ bool server_context::create_checkpoint(server_slot & slot, bool prompt_end) {
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();
         server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), pos_min, pos_max);
         cur.prompt_end = prompt_end;
+        slot.checkpoint_pos = pos_max;
 
         SLT_WRN(slot, "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
             (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,
