@@ -5419,7 +5419,7 @@ bool create_tensors_helper::create_raon1nano_tensors(const LLM_TN & tn) {
         }
     }
 
-    return true;
+    return use_mmap_buffer;
 }
 
 bool create_tensors_helper::create_ernie45_tensors(const LLM_TN & tn) {
