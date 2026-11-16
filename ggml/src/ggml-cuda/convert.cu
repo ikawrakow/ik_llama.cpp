@@ -295,7 +295,7 @@ static __global__ void dequantize_block_q5_K(const void * __restrict__ vx, dst_t
     const int64_t tid = threadIdx.x;
     const int64_t il  = tid/16;   // il is in 0...3
     const int64_t ir  = tid%16;   // ir is in 0...15
-    const int64_t is  = 2*il;     // is in 0...6
+    const int64_t is  = 2*il;     // is is in 0...6
 
     dst_t * y = yy + i*QK_K + 64*il + 2*ir;
 
