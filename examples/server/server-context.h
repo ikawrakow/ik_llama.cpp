@@ -387,9 +387,9 @@ struct server_context {
 
     void send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n = 0);
 
-    void rewind_context(server_slot& slot, int32_t ban_pos);
+    bool rewind_context(server_slot& slot, int32_t ban_pos);
 
-    void buffer_and_check_string_ban(server_slot& slot, completion_token_output& result);
+    bool buffer_and_check_string_ban(server_slot& slot, completion_token_output& result);
 
     void update_allowlist_state(server_slot& slot);
 
