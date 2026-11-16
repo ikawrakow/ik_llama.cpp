@@ -7320,6 +7320,146 @@ class LagunaModel(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@Model.register("Step5ForCausalLM", "Step5ForConditionalGeneration", "MMGPTStepRoboticsForCausalLM")
+class Step5Model(Model):
+    """BF16 Step-5 text backbone, using the reference's dense attention fallback."""
+    model_arch = gguf.MODEL_ARCH.STEP5
+
+    @staticmethod
+    def load_hparams(dir_model: Path) -> dict[str, Any]:
+        config = Model.load_hparams(dir_model)
+        return {**config, **config.get("text_config", {})}
+
+    def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
+        # Some releases repeat tensors across shards; the index is authoritative.
+        index = self.dir_model / "model.safetensors.index.json"
+        if not self.is_safetensors or not index.is_file():
+            yield from super().get_tensors()
+            return
+        weight_map = json.loads(index.read_text(encoding="utf-8"))["weight_map"]
+        from safetensors import safe_open
+        for part in self.part_names:
+            with safe_open(self.dir_model / part, framework="pt", device="cpu") as shard:
+                for name in shard.keys():
+                    if weight_map.get(name) != part:
+                        continue
+                    data = (LazyTorchTensor.from_safetensors_slice(shard.get_slice(name))
+                            if self.lazy else shard.get_tensor(name))
+                    yield name, data
+
+    def set_gguf_parameters(self):
+        hp = self.hparams
+        n = self.block_count
+        d = int(hp["head_dim"])
+        layer_types = hp["layer_types"][:n]
+        rope_dims = [round(d * float(f)) for f in hp["partial_rotary_factors"][:n]]
+        theta = hp["rope_theta"][:n]
+        if len(layer_types) != n or len(rope_dims) != n or len(theta) != n:
+            raise ValueError("Step5 requires per-layer attention and RoPE configuration")
+        scaling = hp.get("rope_scaling") or {}
+        if float(scaling.get("factor", 1.0)) != 1.0:
+            raise ValueError("Step5 dense converter currently supports identity RoPE scaling only")
+        arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
+        self.gguf_writer.add_block_count(n)  # omit the appended MTP blocks
+        self.gguf_writer.add_context_length(int(hp["max_position_embeddings"]))
+        self.gguf_writer.add_embedding_length(int(hp["hidden_size"]))
+        self.gguf_writer.add_feed_forward_length(int(hp["intermediate_size"]))
+        self.gguf_writer.add_head_count(int(hp["num_attention_heads"]))
+        self.gguf_writer.add_head_count_kv(int(hp["num_attention_groups"]))
+        self.gguf_writer.add_key_length(d)
+        self.gguf_writer.add_value_length(d)
+        self.gguf_writer.add_layer_norm_rms_eps(float(hp["rms_norm_eps"]))
+        self.gguf_writer.add_file_type(self.ftype)
+        self.gguf_writer.add_sliding_window(int(hp["sliding_window"]))
+        self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in layer_types])
+        self.gguf_writer.add_rope_dimension_count(max(rope_dims))
+        self.gguf_writer.add_array(f"{arch}.rope.dimension_count_per_layer", rope_dims)
+        self.gguf_writer.add_rope_freq_base(float(max(theta)))
+        self.gguf_writer.add_array(f"{arch}.rope.freq_base_per_layer", [float(t) for t in theta])
+        apply = hp.get("yarn_only_types")
+        self.gguf_writer.add_uint32(f"{arch}.rope.scaling.apply_mask",
+                3 if not apply else (1 if "full_attention" in apply else 0) | (2 if "sliding_attention" in apply else 0))
+        self.gguf_writer.add_expert_count(int(hp["moe_num_experts"]))
+        self.gguf_writer.add_expert_used_count(int(hp["num_experts_per_tok"]))
+        self.gguf_writer.add_expert_feed_forward_length(int(hp["moe_intermediate_size"]))
+        self.gguf_writer.add_expert_shared_feed_forward_length(int(hp["share_expert_dim"]))
+        self.gguf_writer.add_expert_weights_scale(float(hp["moe_router_scaling_factor"]))
+        self.gguf_writer.add_expert_weights_norm(bool(hp["norm_expert_weight"]))
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        self.gguf_writer.add_array(f"{arch}.swiglu_limits", [float(v) for v in hp["swiglu_limits"][:n]])
+        self.gguf_writer.add_array(f"{arch}.swiglu_limits_shared", [float(v) for v in hp["swiglu_limits_shared"][:n]])
+
+        sc = hp.get("sparse_config") or {}
+        if sc:
+            p = f"{arch}.sparse."
+            self.gguf_writer.add_bool(p + "enabled", bool(sc.get("enabled", True)))
+            self.gguf_writer.add_string(p + "attention_impl", sc.get("attention_impl", "sparse_gqa"))
+            self.gguf_writer.add_array(p + "apply_to_layer_types", sc.get("apply_to_layer_types", ["full_attention"]))
+            self.gguf_writer.add_uint32(p + "region_block_size", int(sc.get("region_block_size", 8)))
+            self.gguf_writer.add_uint32(p + "topk", int(sc.get("topk", 512)))
+            self.gguf_writer.add_uint32(p + "proxy_dim", int(sc.get("proxy_dim", 256)))
+            self.gguf_writer.add_uint32(p + "num_provider_groups", int(sc.get("num_provider_groups", 4)))
+            self.gguf_writer.add_string(p + "compression_method", sc.get("compression_method", "csa_block_compress"))
+            p += "indexer."
+            self.gguf_writer.add_uint32(p + "num_heads", int(sc.get("sparse_indexer_num_heads", 16)))
+            self.gguf_writer.add_uint32(p + "num_k_heads", int(sc.get("sparse_indexer_num_k_heads", 1)))
+            self.gguf_writer.add_uint32(p + "rope_dim", int(sc.get("sparse_indexer_rope_dim", 32)))
+            self.gguf_writer.add_bool(p + "use_rope", bool(sc.get("sparse_indexer_use_rope", True)))
+            self.gguf_writer.add_string(p + "q_norm_type", sc.get("sparse_indexer_q_norm_type", "rmsnorm"))
+            self.gguf_writer.add_string(p + "k_norm_type", sc.get("sparse_indexer_k_norm_type", "layernorm"))
+            self.gguf_writer.add_string(p + "csa_z_norm_type", sc.get("sparse_indexer_csa_z_norm_type", "none"))
+            self.gguf_writer.add_string(p + "softmax_variant", sc.get("sparse_indexer_softmax_variant", "ssmax"))
+            self.gguf_writer.add_string(p + "ssmax_s_granularity", sc.get("sparse_indexer_ssmax_s_granularity", "q_head"))
+
+    def get_vocab_base_pre(self, tokenizer) -> str:
+        return "deepseek-v3"  # Step5 uses this byte-level BPE pre-tokenizer
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        top = {"model.embed_tokens.weight": "token_embd.weight",
+               "model.norm.weight": "output_norm.weight", "lm_head.weight": "output.weight"}
+        if name in top:
+            return [(top[name], data_torch + 1.0 if name == "model.norm.weight" else data_torch)]
+        if not name.startswith("model.layers."):
+            if name.startswith(("vision_model.", "vit", "mm_projector.")):
+                return []
+            raise ValueError(f"Unexpected Step5 tensor: {name}")
+        assert bid is not None
+        if bid >= self.block_count:
+            return []
+        indexer = re.fullmatch(
+            r"model\.layers\.\d+\.self_attn\.(?:sparse_indexer_(q|k|z|w|q_norm|k_norm)(\.weight|\.bias)|ssmax_s)", name)
+        if indexer:
+            part = indexer.group(1) or "ssmax_s"
+            suffix = indexer.group(2) or ""
+            # q_norm is zero-centered RMSNorm; k_norm is plain LayerNorm.
+            if part == "q_norm":
+                data_torch = data_torch + 1.0
+            return [(f"blk.{bid}.indexer.{part}{suffix}", data_torch)]
+        part = name.split(".", 3)[3]
+        names = {
+            "input_layernorm.weight": "attn_norm.weight",
+            "post_attention_layernorm.weight": "ffn_norm.weight",
+            "self_attn.q_norm.weight": "attn_q_norm.weight",
+            "self_attn.k_norm.weight": "attn_k_norm.weight",
+            "self_attn.q_proj.weight": "attn_q.weight", "self_attn.k_proj.weight": "attn_k.weight",
+            "self_attn.v_proj.weight": "attn_v.weight", "self_attn.o_proj.weight": "attn_output.weight",
+            "self_attn.g_proj.weight": "attn_gate.weight",
+            "mlp.gate_proj.weight": "ffn_gate.weight", "mlp.up_proj.weight": "ffn_up.weight",
+            "mlp.down_proj.weight": "ffn_down.weight", "moe.gate.weight": "ffn_gate_inp.weight",
+            "moe.router_bias": "exp_probs_b.bias", "moe.gate_proj.weight": "ffn_gate_exps.weight",
+            "moe.up_proj.weight": "ffn_up_exps.weight", "moe.down_proj.weight": "ffn_down_exps.weight",
+            "share_expert.gate_proj.weight": "ffn_gate_shexp.weight",
+            "share_expert.up_proj.weight": "ffn_up_shexp.weight",
+            "share_expert.down_proj.weight": "ffn_down_shexp.weight",
+        }
+        if part not in names:
+            raise ValueError(f"Unexpected Step5 text tensor: {name}")
+        target = names[part]
+        if target.endswith("norm.weight"):
+            data_torch = data_torch + 1.0  # zero-centered RMSNorm -> engine scale
+        return [(f"blk.{bid}.{target}", data_torch)]
+
+
 @Model.register("Lfm2ForCausalLM", "LFM2ForCausalLM")
 class LFM2Model(Model):
     """Converter for Liquid AI's dense LFM2 hybrid shortconv/GQA models."""

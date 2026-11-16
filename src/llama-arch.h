@@ -107,6 +107,7 @@ enum llm_arch {
     LLM_ARCH_RAON1,
     LLM_ARCH_RAON1_NANO,
     LLM_ARCH_XING4_0,
+    LLM_ARCH_STEP5,
     LLM_ARCH_UNKNOWN,
 };
 
