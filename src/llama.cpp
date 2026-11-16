@@ -807,7 +807,7 @@ bool llama_context::update_cache_copies() {
         const int32_t cache_head = kv_self.is_compacted(il) ? (int32_t) kv_self.head_swa : (int32_t) kv_self.head;
         auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
         if (kl) {
-            GGML_ASSERT(model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN);
+            GGML_ASSERT(model.split_mode == LLAMA_SPLIT_MODE_GRAPH);
             GGML_ASSERT(model.splits.size() > 1);
             auto vl = !kv_self.v_l.empty() && kv_self.v_l[il] ? (ggml_split_tensor_t *)kv_self.v_l[il]->extra : nullptr;
             GGML_ASSERT(kl && (kv_self.v_l.empty() || !kv_self.v_l[il] || vl));
@@ -868,7 +868,7 @@ static std::vector<llama_context *> & llama_all_contexts() {
 llama_context::llama_context(const llama_model & model)
     : model(model) , sampling(llama_n_vocab(&model)) , t_start_us(model.t_start_us) , t_load_us(model.t_load_us) {
     const auto & hparams = model.hparams;
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
         cache_copies.resize(2*model.splits.size()*hparams.n_layer);
     } else {
         cache_copies.resize(2*hparams.n_layer);
@@ -1336,7 +1336,7 @@ static bool llama_kv_cache_init(
 
     bool split_cache   = false;
     bool replicate_mla = false;
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload && !is_dsv4_k_only) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && !is_mla_attn && offload && !is_dsv4_k_only) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
         if (llama_model_has_recurrent(&model)) {
@@ -1344,7 +1344,7 @@ static bool llama_kv_cache_init(
         }
         split_cache = true;
     }
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && is_mla_attn && offload) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && is_mla_attn && offload) {
         cache.replicated_k_l.reserve(n_layer);
         if (llama_model_has_recurrent(&model)) {
             cache.split_s_l.reserve(n_layer);
@@ -3463,9 +3463,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
 
             // Per-head split wk_b/wv_b under -sm graph/attn so each rank's batched matmul
             // reads only its share of heads (split_dim=2), mirroring prepare_split_tensors.
-            const bool tp_replicate =
-                (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)
-                && l.wo && l.wo->extra;
+            const bool tp_replicate = model.split_mode == LLAMA_SPLIT_MODE_GRAPH && l.wo && l.wo->extra;
 
             auto materialize = [&](ggml_tensor * source,
                                    std::shared_ptr<ggml_tensor> & computed,
@@ -3583,7 +3581,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
             // with the wk_b synthesis above and skipping it breaks absorb on some
             // quant combinations. Second pass below gates the mla=1 saving for
             // GGUFs that ship wk_b directly.
-            if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+            if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
                 ggml_graph_clear(graph);
                 auto wk_b_pp = ggml_cast(ctx, wk_b_f32, new_type);
                 wk_b_pp->data = (char *)wk_b->data + ggml_nbytes(wk_b);
@@ -3629,7 +3627,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     // Second pass: for layers where wk_b came from the GGUF directly, produce
     // wk_b_pp here. Only under -sm graph/attn AND mla > 1; mla=1 skips pp_opt.
     int n_computed = 0;
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && mla > 1) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && mla > 1) {
         int n_pp_to_compute = 0;
         for (auto & l : model.layers) {
             if (l.wk_b && !l.wk_b_pp) ++n_pp_to_compute;
@@ -4695,7 +4693,7 @@ static bool llm_load_tensors(
         }
     }
 
-    if (split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) {
+    if (split_mode == LLAMA_SPLIT_MODE_GRAPH) {
         const bool unsupported_gemma_split = model.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0;
 
         if (unsupported_gemma_split) {
@@ -4728,7 +4726,7 @@ static bool llm_load_tensors(
             }
         }
     }
-    if ((split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) &&
+    if (split_mode == LLAMA_SPLIT_MODE_GRAPH &&
         (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT)) {
         auto & all_models = llama_all_loaded_models();
         bool has_target_gemma = false;
@@ -4847,7 +4845,7 @@ static bool llm_load_tensors(
     }
 
     int device_count = model.splits.size();
-    if (device_count < 2 && (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH)) {
+    if (device_count < 2 && model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
         throw std::runtime_error("It is not possible to use split mode 'graph' with less than 2 devices");
     }
     if (fit && device_count > 1) {
@@ -4865,7 +4863,6 @@ static bool llm_load_tensors(
     }
 
     model.default_layer_device = std::vector<int32_t>(hparams.n_layer+1, device_count-1);
-    int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
     std::vector<llama_model_tensor_buft_override> overrides;
     // device_count comes from model.splits (at least 1), but device_mem below is sized by
     // model.devices, which is empty on a CPU-only run of a CUDA build (no GPU present or
@@ -4946,7 +4943,7 @@ static bool llm_load_tensors(
         if (fit && required_mem > available_mem) {
             auto buft = ggml_backend_cpu_buffer_type();
             if (has_experts) {
-            if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+            if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
                 auto cur_mem = required_mem;
                 int n_override = 0;
                 for (int il = 0; il < n_layer; ++il) {
@@ -5118,7 +5115,7 @@ static bool llm_load_tensors(
         }
     } else {
         ggml_backend_buffer_type_t split_buft;
-        if ((split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
+        if (split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
             split_buft = llama_default_buffer_type_split(model, model.devices[main_gpu]);
             model.split_buft = split_buft;
         } else {
@@ -5128,14 +5125,7 @@ static bool llm_load_tensors(
         // assign the repeating layers
         for (int i = i_gpu_start; i < n_layer; ++i) {
             auto buft_layer = llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[i]]);
-            if (split_mode == LLAMA_SPLIT_MODE_ATTN) {
-                int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count,
-                        float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
-                model.buft_layer[i] = { split_buft, llama_default_buffer_type_offload(model, model.devices[layer_gpu]) };
-                LLAMA_LOG_INFO("Layer %d: assigning buft_layer to GPU %d\n", i, layer_gpu);
-            } else {
-                model.buft_layer[i] = { split_buft, buft_layer };
-            }
+            model.buft_layer[i] = { split_buft, buft_layer };
         }
         // assign the output layer
         if (n_gpu_layers > n_layer) {
@@ -5555,8 +5545,7 @@ static bool llm_load_tensors(
 
     if (model.is_mla_model()) {
         // -sm graph/attn needs wk_b->extra populated; run prepare even under dry-run.
-        const bool graph_mode = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
-                                 model.split_mode == LLAMA_SPLIT_MODE_ATTN);
+        const bool graph_mode = model.split_mode == LLAMA_SPLIT_MODE_GRAPH;
         if (!dry_run || graph_mode) {
             llm_prepare_mla(model, mla_attn);
         }
@@ -9642,8 +9631,7 @@ struct llama_context * llama_init_from_model(
     // The DSA lightning indexer is built only in the layer-mode (non-TP) attention path. Under
     // -sm graph / -sm attn the model runs the tensor-parallel attention path, which has no indexer,
     // so --dsa would silently run dense MLA. Warn instead of degrading silently.
-    if (cparams.dsa && model->arch != LLM_ARCH_MINIMAX_M3 &&
-            (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN)) {
+    if (cparams.dsa && model->arch != LLM_ARCH_MINIMAX_M3 && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
         LLAMA_LOG_WARN("%s: --dsa is not active under -sm graph/attn (tensor-parallel attention has no indexer); running dense MLA\n", __func__);
     }
     cparams.prefetch_experts = params.prefetch_experts;
@@ -9921,7 +9909,7 @@ struct llama_context * llama_init_from_model(
             }
         }
 #elif defined(GGML_USE_VULKAN)
-        if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN) {
+        if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
             LLAMA_LOG_ERROR("%s: split mode 'graph' or 'attn' not supported. Failed to initialize Vulkan backend\n", __func__);
             llama_free(ctx);
             return nullptr;
@@ -10851,7 +10839,7 @@ static bool llama_control_vector_init(struct llama_control_vector & cvec, const 
     // split mode graph: one more copy of every layer on each device, so apply_to can
     // steer a device's partial before the reduce (see llama_control_vector::apply_to_reduce)
     std::vector<ggml_backend_buffer_type_t> dev_buft;
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
         for (size_t id = 0; id < model.splits.size(); ++id) {
             dev_buft.push_back(llama_default_buffer_type_offload(model, model.devices[id]));
         }

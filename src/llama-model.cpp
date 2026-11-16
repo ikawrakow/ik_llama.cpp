@@ -3081,7 +3081,7 @@ bool llama_is_gemma4_mtp_file(const char * path) {
 }
 
 bool llama_model_is_split_mode_graph(const struct llama_model * model) {
-    return model && (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN);
+    return model && model->split_mode == LLAMA_SPLIT_MODE_GRAPH;
 }
 
 bool llama_model_supports_ctx_shift(const struct llama_model * model) {
