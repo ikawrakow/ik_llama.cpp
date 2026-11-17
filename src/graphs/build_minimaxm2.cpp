@@ -26,7 +26,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
         cur = inpL;
 
         // self_attention
-        if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+        if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
             // Unfortunately we cannot use build_std_attention because Q and K get normed before being RoPE'd,
             // but the RMS norm is applied on the whole row, and not per head as it is normally done.
             // Hence, we need to keep a copy of wq and wk on each device, do the whole matrix multiplications

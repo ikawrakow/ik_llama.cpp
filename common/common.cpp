@@ -2296,7 +2296,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.split_mode = LLAMA_SPLIT_MODE_LAYER;
         }
         else if (arg_next == "attn") {
-            params.split_mode = LLAMA_SPLIT_MODE_ATTN;
+            LLAMA_LOG_WARN("XXXXXXXXXXXXXXXXXXXXXXXXXXXX Split mode 'attn' has been deprecated\n");
         }
         else if (arg_next == "graph") {
             params.split_mode = LLAMA_SPLIT_MODE_GRAPH;
