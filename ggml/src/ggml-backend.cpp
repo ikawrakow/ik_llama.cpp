@@ -948,6 +948,7 @@ static bool copy_all_inputs_to_cpu(ggml_backend_sched_t sched, ggml_backend_t ba
 static bool copy_all_inputs_to_cpu(ggml_backend_sched_t, ggml_backend_t, int,
         ggml_tensor **, ggml_tensor **, const ggml_tensor *, bool) {
     return false;
+}
 #endif
 
 static struct ggml_backend_i cpu_backend_i = {
