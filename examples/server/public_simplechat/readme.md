@@ -30,15 +30,15 @@ The UI follows a responsive web design so that the layout can adapt to available
 enough manner, in general.
 
 Allows developer/end-user to control some of the behaviour by updating gMe members from browser's devel-tool
-console. Parallely some of the directly useful to end-user settings can also be changed using the provided
+console. In parallel, some of the directly useful to end-user settings can also be changed using the provided
 settings ui.
 
-NOTE: Current web service api doesnt expose the model context length directly, so client logic doesnt provide
+NOTE: Current web service api doesn't expose the model context length directly, so client logic doesn't provide
 any adaptive culling of old messages nor of replacing them with summary of their content etal. However there
 is a optional sliding window based chat logic, which provides a simple minded culling of old messages from
 the chat history before sending to the ai model.
 
-NOTE: Wrt options sent with the request, it mainly sets temperature, max_tokens and optionaly stream for now.
+NOTE: Wrt options sent with the request, it mainly sets temperature, max_tokens and optionally stream for now.
 However if someone wants they can update the js file or equivalent member in gMe as needed.
 
 NOTE: One may be able to use this to chat with openai api web-service /chat/completions endpoint, in a very
@@ -80,29 +80,29 @@ Once inside
   * oneshot or streamed mode.
 
 * In completion mode
-  * one normally doesnt use a system prompt in completion mode.
-  * logic by default doesnt insert any role specific "ROLE: " prefix wrt each role's message.
+  * one normally doesn't use a system prompt in completion mode.
+  * logic by default doesn't insert any role specific "ROLE: " prefix wrt each role's message.
     If the model requires any prefix wrt user role messages, then the end user has to
     explicitly add the needed prefix, when they enter their chat message.
     Similarly if the model requires any prefix to trigger assistant/ai-model response,
     then the end user needs to enter the same.
     This keeps the logic simple, while still giving flexibility to the end user to
     manage any templating/tagging requirement wrt their messages to the model.
-  * the logic doesnt insert newline at the beginning and end wrt the prompt message generated.
+  * the logic doesn't insert newline at the beginning and end wrt the prompt message generated.
     However if the chat being sent to /completions end point has more than one role's message,
     then insert newline when moving from one role's message to the next role's message, so
     that it can be clearly identified/distinguished.
-  * given that /completions endpoint normally doesnt add additional chat-templating of its
+  * given that /completions endpoint normally doesn't add additional chat-templating of its
     own, the above ensures that end user can create a custom single/multi message combo with
     any tags/special-tokens related chat templating to test out model handshake. Or enduser
     can use it just for normal completion related/based query.
 
 * If you want to provide a system prompt, then ideally enter it first, before entering any user query.
-  Normally Completion mode doesnt need system prompt, while Chat mode can generate better/interesting
+  Normally Completion mode doesn't need system prompt, while Chat mode can generate better/interesting
   responses with a suitable system prompt.
   * if chat.add_system_begin is used
-    * you cant change the system prompt, after it is has been submitted once along with user query.
-    * you cant set a system prompt, after you have submitted any user query
+    * you can't change the system prompt, after it is has been submitted once along with user query.
+    * you can't set a system prompt, after you have submitted any user query
   * if chat.add_system_anytime is used
     * one can change the system prompt any time during chat, by changing the contents of system prompt.
     * in turn the updated/changed system prompt will be inserted into the chat session.
@@ -129,7 +129,7 @@ Once inside
 
 ### Reason behind this
 
-The idea is to be easy enough to use for basic purposes, while also being simple and easily discernable
+The idea is to be easy enough to use for basic purposes, while also being simple and easily discernible
 by developers who may not be from web frontend background (so in turn may not be familiar with template /
 end-use-specific-language-extensions driven flows) so that they can use it to explore/experiment things.
 
@@ -167,7 +167,7 @@ It is attached to the document object. Some of these can also be updated using t
   messages that get inserted into prompt field wrt /Completion endpoint.
 
   bTrimGarbage - whether garbage repetition at the end of the generated ai response, should be
-  trimmed or left as is. If enabled, it will be trimmed so that it wont be sent back as part of
+  trimmed or left as is. If enabled, it will be trimmed so that it won't be sent back as part of
   subsequent chat history. At the same time the actual trimmed text is shown to the user, once
   when it was generated, so user can check if any useful info/data was there in the response.
 
@@ -240,15 +240,15 @@ However a developer when testing the server of ai-model may want to change these
 
 Using iRecentUserMsgCnt reduce chat history context sent to the server/ai-model to be
 just the system-prompt, prev-user-request-and-ai-response and cur-user-request, instead of
-full chat history. This way if there is any response with garbage/repetition, it doesnt
+full chat history. This way if there is any response with garbage/repetition, it doesn't
 mess with things beyond the next question/request/query, in some ways. The trim garbage
 option also tries to help avoid issues with garbage in the context to an extent.
 
-Set max_tokens to 1024, so that a relatively large previous response doesnt eat up the space
+Set max_tokens to 1024, so that a relatively large previous response doesn't eat up the space
 available wrt next query-response. However dont forget that the server when started should
 also be started with a model context size of 1k or more, to be on safe side.
 
-  The /completions endpoint of examples/server doesnt take max_tokens, instead it takes the
+  The /completions endpoint of examples/server doesn't take max_tokens, instead it takes the
   internal n_predict, for now add the same here on the client side, maybe later add max_tokens
   to /completions endpoint handling code on server side.
 

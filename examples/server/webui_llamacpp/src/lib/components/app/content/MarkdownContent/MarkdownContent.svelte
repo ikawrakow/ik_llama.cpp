@@ -537,7 +537,7 @@
 		// Read mode before await so Svelte tracks it reactively.
 		const isDark = mode.current === ColorMode.DARK;
 
-		// lazy load the mermaid dependecy only when needed to reduce bundle size.
+		// lazy load the mermaid dependency only when needed to reduce bundle size.
 		const { default: mermaid } = await import('mermaid');
 
 		mermaid.initialize({

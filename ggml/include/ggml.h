@@ -563,8 +563,8 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ4_K   = 132, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ5_K   = 133, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ6_K   = 134, // except 1d tensors
-        // depricated: GGML_FTYPE_MOSTLY_IQ2_TN  = 135, // except 1d tensors
-        // depricated: GGML_FTYPE_MOSTLY_IQ1_TN  = 136, // except 1d tensors
+        // deprecated: GGML_FTYPE_MOSTLY_IQ2_TN  = 135, // except 1d tensors
+        // deprecated: GGML_FTYPE_MOSTLY_IQ1_TN  = 136, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_KS  = 137, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_KS  = 138, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_KSS = 139, // except 1d tensors
@@ -2507,7 +2507,7 @@ extern "C" {
             struct ggml_tensor  * a,
             float                 c);
 
-    // Overwrite values in a with c for the indeces stored in b
+    // Overwrite values in a with c for the indices stored in b
     GGML_API struct ggml_tensor * ggml_blend(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,

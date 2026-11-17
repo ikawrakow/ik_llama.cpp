@@ -434,8 +434,8 @@ struct DequantizerIQ4KS final : public BaseDequantizer<block_iq4_ks, true> {
     }
     inline void prepare(const uint8_t * q4) {
         bits.prepare64(q4);
-        // We now have in bits.valuse[0]: 0...15, 32...47, 64...79, 96...111
-        //                bits.valuse[1]: 16..31, 48...63, 80...95, 112..127
+        // We now have in bits.values[0]: 0...15, 32...47, 64...79, 96...111
+        //                bits.values[1]: 16..31, 48...63, 80...95, 112..127
         //                etc.
         auto tmp = _mm512_permutex2var_epi64(bits.values[0], permute1, bits.values[1]);
         bits.values[1] = _mm512_shuffle_epi8(values, _mm512_permutex2var_epi64(bits.values[0], permute2, bits.values[1]));
@@ -466,8 +466,8 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
     }
     inline void prepare(const uint8_t * q4) {
         bits.prepare64(q4);
-        // We now have in bits.valuse[0]: 0...15, 32...47, 64...79, 96...111
-        //                bits.valuse[1]: 16..31, 48...63, 80...95, 112..127
+        // We now have in bits.values[0]: 0...15, 32...47, 64...79, 96...111
+        //                bits.values[1]: 16..31, 48...63, 80...95, 112..127
         //                etc.
         auto tmp = _mm512_permutex2var_epi64(bits.values[0], permute1, bits.values[1]);
         bits.values[1] = _mm512_shuffle_epi8(values, _mm512_permutex2var_epi64(bits.values[0], permute2, bits.values[1]));
@@ -564,8 +564,8 @@ struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
         m2 = _mm512_cmpeq_epi8_mask(_mm512_and_si512(hbits, hmask2), hmask2);
         bits.values[2] = _mm512_mask_shuffle_epi8(_mm512_maskz_shuffle_epi8(_knot_mask64(m1), values[0], bits.values[2]), m1, values[1], bits.values[2]);
         bits.values[3] = _mm512_mask_shuffle_epi8(_mm512_maskz_shuffle_epi8(_knot_mask64(m2), values[0], bits.values[3]), m2, values[1], bits.values[3]);
-        // We now have in bits.valuse[0]: 0...31, 64...95
-        //                bits.valuse[1]: 32..63, 96..127
+        // We now have in bits.values[0]: 0...31, 64...95
+        //                bits.values[1]: 32..63, 96..127
         //                etc.
         auto tmp = _mm512_permutex2var_epi64(bits.values[0], permute1, bits.values[1]);
         bits.values[1] = _mm512_permutex2var_epi64(bits.values[0], permute2, bits.values[1]);
@@ -632,8 +632,8 @@ struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
         bits.values[1] = make_one(bits.values[1], _mm512_srli_epi16(h1, 2));
         bits.values[2] = make_one(bits.values[2], h2);
         bits.values[3] = make_one(bits.values[3], _mm512_srli_epi16(h2, 2));
-        // We now have in bits.valuse[0]: 0...31, 64...95
-        //                bits.valuse[1]: 32..63, 96..127
+        // We now have in bits.values[0]: 0...31, 64...95
+        //                bits.values[1]: 32..63, 96..127
         //                etc.
         auto tmp = _mm512_permutex2var_epi64(bits.values[0], permute1, bits.values[1]);
         bits.values[1] = _mm512_permutex2var_epi64(bits.values[0], permute2, bits.values[1]);

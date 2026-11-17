@@ -6963,7 +6963,7 @@ bool create_tensors_helper::create_tensors() {
                     if (layer.bq) {
                         prepare_split_tensors(-1, ctx_split, layer.bq, layer.split_bq, split_vo, mem_used);
                     }
-                    LLAMA_LOG_DEBUG("Not splitting wq, attn_q_norm in layer layer %d because of RMS norm\n", il);
+                    LLAMA_LOG_DEBUG("Not splitting wq, attn_q_norm in layer %d because of RMS norm\n", il);
                 } else {
                     prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                     if (layer.attn_q_norm) {
@@ -7018,7 +7018,7 @@ bool create_tensors_helper::create_tensors() {
                     if (layer.bk) {
                         prepare_split_tensors(-1, ctx_split, layer.bk, layer.split_bk, split_vo, mem_used);
                     }
-                    LLAMA_LOG_DEBUG("Not splitting wk, attn_k_norm in layer layer %d because of RMS norm\n", il);
+                    LLAMA_LOG_DEBUG("Not splitting wk, attn_k_norm in layer %d because of RMS norm\n", il);
                 } else {
                     prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split_kq, mem_used);
                     if (layer.bk) {

@@ -22,7 +22,7 @@ fi
 
 if [ $GGML_SYCL_SINGLE_GPU -eq 1 ]; then
     echo "use $GGML_SYCL_DEVICE as main GPU"
-    #use signle GPU only
+    #use single GPU only
     ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m models/llama-2-7b.Q4_0.gguf -p "${INPUT2}" -n 400 -e -ngl 33 -s 0 -mg $GGML_SYCL_DEVICE -sm none
 else
     #use multiple GPUs with same max compute units

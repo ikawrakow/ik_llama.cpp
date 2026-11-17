@@ -47,7 +47,7 @@
 //
 // Main idea is that unpacking the quants and the block scales to
 // be ready for dot products with the corresponding Q8_X quants
-// takes time. Hence, if we are performing a QX x Q8_X matrix matrix
+// takes time. Hence, if we are performing a QX x Q8_X matrix-matrix
 // multiplication (as needed for prompt processing), we can get
 // a significant speedup by reusing the unpacked QX quants and scales
 // for multiplication with several Q8_X columns.

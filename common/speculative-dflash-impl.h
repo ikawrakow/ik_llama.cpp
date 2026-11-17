@@ -87,7 +87,7 @@ static void dflash_record_window_update(common_speculative_state_dflash & state,
 
 // DFlash runtime state and draft path.
 struct common_speculative_state_dflash : public common_speculative_state {
-    // Separated seed for dflash 2 againts target samplers
+    // Separated seed for dflash 2 against target samplers
     static constexpr uint32_t SELECTOR_SEED_XOR = 0x85ebca6bU;
     llama_context * ctx_tgt;
     llama_context * ctx_dft;

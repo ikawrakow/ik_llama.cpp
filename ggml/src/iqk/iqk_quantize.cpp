@@ -9247,7 +9247,7 @@ static void repack_iq3_s(int nrows, int n_per_row, const block_iq3_s * x, block_
                     y[ibl].scales[(j+4)%16] |= ((x4[k][ibl].scales[ib] >>  4) << 4*((j+4)/16));
                 }
                 for (int ib = 0; ib < QK_K/32; ++ib) {
-                    y[ibl].qh[4*ib+k] = x4[k][ibl].qh[ib]; // leave ot like this?
+                    y[ibl].qh[4*ib+k] = x4[k][ibl].qh[ib]; // leave it like this?
                     for (int i = 0; i < 4; ++i) {
                         y[ibl].qs[32*ib+k+8*i+0] = x4[k][ibl].qs[8*ib+i+0];
                         y[ibl].qs[32*ib+k+8*i+4] = x4[k][ibl].qs[8*ib+i+4];
