@@ -34,7 +34,7 @@
 //                         blck_size_interleave bytes
 // - xor_mask            : the mask to convert the nibbles in block_q4_0 quants bytes
 //                         from bias offset form to pure sign form (this saves subtract
-//                         operations durin unpacking)
+//                         operations during unpacking)
 //
 static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_interleave, unsigned int xor_mask) {
     block_q4_0x4 out;

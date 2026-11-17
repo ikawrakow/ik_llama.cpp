@@ -853,7 +853,7 @@ int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
             LOG_ERR("%s: model does not support vision input\n", __func__);
             return 1;
         }
-        // If in the future, we somehow accidentally try to reencode an already-encoded chunk,
+        // If in the future, we somehow accidentally try to re-encode an already-encoded chunk,
         // chunk->tokens_image will have been cleared out to save memory
         GGML_ASSERT(!chunk->tokens_image->batch_f32.entries.empty()
             && "mtmd_encode_chunk: image data already released (double encode?)");
@@ -863,7 +863,7 @@ int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
             LOG_ERR("%s: model does not support audio input\n", __func__);
             return 1;
         }
-        // If in the future, we somehow accidentally try to reencode an already-encoded chunk,
+        // If in the future, we somehow accidentally try to re-encode an already-encoded chunk,
         // chunk->tokens_audio will have been cleared out to save memory
         GGML_ASSERT(!chunk->tokens_audio->batch_f32.entries.empty()
             && "mtmd_encode_chunk: audio data already released (double encode?)");

@@ -4,7 +4,7 @@
 #include "../llama-model.h"
 
 ggml_cgraph * llm_build_context::build_bailingmoe3() {
-    const bool tp_mode = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
+    const bool tp_mode = model.split_mode == LLAMA_SPLIT_MODE_GRAPH;
 #ifdef GGML_USE_VULKAN
     const bool use_f32_attn_precision = true;
 #else

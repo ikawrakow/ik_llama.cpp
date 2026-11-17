@@ -2296,7 +2296,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.split_mode = LLAMA_SPLIT_MODE_LAYER;
         }
         else if (arg_next == "attn") {
-            params.split_mode = LLAMA_SPLIT_MODE_ATTN;
+            LLAMA_LOG_WARN("XXXXXXXXXXXXXXXXXXXXXXXXXXXX Split mode 'attn' has been deprecated\n");
         }
         else if (arg_next == "graph") {
             params.split_mode = LLAMA_SPLIT_MODE_GRAPH;
@@ -4565,6 +4565,8 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     if (params.warmup) {
         LOG("warming up the model with an empty run\n");
 
+        llama_set_warmup(lctx, true);
+
         std::vector<llama_token> tmp;
         llama_token bos = llama_token_bos(model);
         llama_token eos = llama_token_eos(model);
@@ -4589,6 +4591,7 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         llama_kv_cache_clear(lctx);
         llama_synchronize(lctx);
         llama_reset_timings(lctx);
+        llama_set_warmup(lctx, false);
     }
 
     iparams.model   = model;

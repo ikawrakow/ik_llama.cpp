@@ -3774,7 +3774,7 @@ inline static float ggml_silu_f32(float x) {
 }
 
 #if __FINITE_MATH_ONLY__
-#error "some routines in ggml.c require non-finite math arithmetics -- pass -fno-finite-math-only to the compiler to fix"
+#error "some routines in ggml.c require non-finite math arithmetic -- pass -fno-finite-math-only to the compiler to fix"
 #error "ref: https://github.com/ggerganov/llama.cpp/pull/7154#issuecomment-2143844461"
 #endif
 
@@ -5042,9 +5042,9 @@ struct ggml_numa_nodes {
     struct ggml_numa_node nodes[GGML_NUMA_MAX_NODES];
     uint32_t n_nodes;
     uint32_t total_cpus; // hardware threads on system
-    uint32_t current_node; // node on which main process is execting
     bool moe_band_split; // stage 2a: node-partitioned MoE chunk scheduling armed (see ggml_numa_moe_band_split_set)
     bool dense_band_split; // stage 3a: dense-matmul row-band dispatch armed (see ggml_numa_dense_band_split_set)
+    uint32_t current_node; // node on which main process is executing
 #if defined(__gnu_linux__)
     cpu_set_t cpuset; // cpuset from numactl
 #else

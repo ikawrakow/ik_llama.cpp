@@ -1,4 +1,4 @@
-// coversations is stored in localStorage
+// conversations is stored in localStorage
 // format: { [convId]: { id: string, lastModified: number, messages: [...] } }
 //import { useState } from 'react';
 import {BASE_URL,  CONFIG_DEFAULT } from '../Config';

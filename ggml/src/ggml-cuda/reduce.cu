@@ -202,7 +202,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     // bound rather than latency bound).
     // The following implements a ring communication+reduction that achieves this goal.
     // I would have thought that this is automatically done by NCCL, but it doesn't look that
-    // way (or I simply don't understand how to use NCCL) as the ring implementation bellow achieves quite a bit
+    // way (or I simply don't understand how to use NCCL) as the ring implementation below achieves quite a bit
     // better performance compared to what I get with NCCL.
     //
     // We do the data reduction in stages. Let's N be the number of GPUs.

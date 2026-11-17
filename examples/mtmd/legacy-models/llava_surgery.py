@@ -8,7 +8,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("-m", "--model", help="Path to LLaVA v1.5 model")
 args = ap.parse_args()
 
-# find the model part that includes the the multimodal projector weights
+# find the model part that includes the multimodal projector weights
 path = sorted(glob.glob(f"{args.model}/pytorch_model*.bin"))[-1]
 checkpoint = torch.load(path)
 

@@ -234,7 +234,7 @@ When targeting an intel GPU, the user should expect one or more level-zero devic
 
 - **Nvidia GPU**
 
-Similarly, user targeting Nvidia GPUs should expect at least one SYCL-CUDA device [`ext_oneapi_cuda:gpu`] as bellow:
+Similarly, user targeting Nvidia GPUs should expect at least one SYCL-CUDA device [`ext_oneapi_cuda:gpu`] as below:
 ```
 [opencl:acc:0] Intel(R) FPGA Emulation Platform for OpenCL(TM), Intel(R) FPGA Emulation Device OpenCL 1.2  [2023.16.12.0.12_195853.xmain-hotfix]
 [opencl:cpu:1] Intel(R) OpenCL, Intel(R) Xeon(R) Gold 6326 CPU @ 2.90GHz OpenCL 3.0 (Build 0) [2023.16.12.0.12_195853.xmain-hotfix]
@@ -618,7 +618,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
   - Remove **build** folder or try a clean-build.
 
-- I can **not** see `[ext_oneapi_level_zero:gpu]` afer installing the GPU driver on Linux.
+- I can **not** see `[ext_oneapi_level_zero:gpu]` after installing the GPU driver on Linux.
 
   Please double-check with `sudo sycl-ls`.
 
@@ -634,7 +634,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
   No. We can't support Ollama issue directly, because we aren't familiar with Ollama.
 
-  Sugguest reproducing on llama.cpp and report similar issue to llama.cpp. We will surpport it.
+  Suggest reproducing on llama.cpp and report similar issue to llama.cpp. We will support it.
 
   It's same for other projects including llama.cpp SYCL backend.
 

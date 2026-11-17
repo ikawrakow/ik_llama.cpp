@@ -840,7 +840,7 @@ void llama_sampler_dry_apply(struct llama_sampler_dry* smpl, llama_token_data_ar
     // 'aaa1' are used as restart strings, both could start with 'aaa' when tokenized). The
     // longest matching sequence (if any) is used to limit the maximum repetition length.
     //
-    // Note that in the case case of a short sequence contained in a longer one, this might fail to
+    // Note that in the case of a short sequence contained in a longer one, this might fail to
     // find the smallest value for `rep_limit`. For example, if 'amniotic' and 'ni' are both used as
     // restart sequences, 'ni' will be found first, and since it's shorter it will fail to suppress
     // 'otic'. This is a minor issue since fully contained restart sequences are likely to be rare.

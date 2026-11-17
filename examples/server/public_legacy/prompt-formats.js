@@ -56,7 +56,7 @@ export const promptFormats = {
   // ----------------------------
 
   "llama2": {
-  template: `<s>[INST] <<SYS>>\n{{prompt}}\n<</SYS>>\n\nTest Message [/INST] Test Successfull </s>{{history}}{{char}}`,
+  template: `<s>[INST] <<SYS>>\n{{prompt}}\n<</SYS>>\n\nTest Message [/INST] Test Successful </s>{{history}}{{char}}`,
 
   historyTemplate: `{{name}}: {{message}}`,
 

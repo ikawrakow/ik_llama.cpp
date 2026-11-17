@@ -1316,7 +1316,7 @@ struct FlashQKfp32 {
             const block_q8 * q, const char * mask, FlashMS<q_step, k_step>& fms) {
         // As far as I can tell, this static assert is a remnant of the times where the matrix multiplications were done inline
         // here with bespoke kernels instead of just using the regular mat mul kernels. But, just in case, leaving it in place
-        // but commneted out.
+        // but commented out.
         //constexpr int kMaxQ = 8;
         //static_assert(q_step < kMaxQ || q_step%kMaxQ == 0);
         DataInfo info{fms.cache, (const char *)q, k_step, (D/KHelper::block_size_q)*sizeof(block_q8), 0, 1, nullptr};
