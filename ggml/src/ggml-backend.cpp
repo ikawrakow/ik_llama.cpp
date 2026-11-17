@@ -1390,6 +1390,12 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
             int src_backend_id = ggml_backend_sched_backend_from_buffer(sched, src, tensor);
             // check if a backend with higher prio wants to offload the op
             if (offload_enabled && src_backend_id == sched->n_backends - 1) {
+                if (int b = tensor->op_params[11] - 1; b >= 0) {
+                    if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
+                        SET_CAUSE(tensor, "1.off");
+                        return b;
+                    }
+                }
                 for (int b = 0; b < src_backend_id; b++) {
                     if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
                         SET_CAUSE(tensor, "1.off");
