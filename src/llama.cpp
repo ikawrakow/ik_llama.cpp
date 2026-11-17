@@ -7426,7 +7426,7 @@ static void llama_graph_compute(
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
 
-    if (lctx.moe_cache) lctx.moe_cache->begin_compute();
+    if (lctx.moe_cache) lctx.moe_cache->begin_compute(lctx.cparams.warmup);
     ggml_backend_sched_graph_compute_async(lctx.sched, gf);
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
@@ -7449,7 +7449,7 @@ static void llama_graph_compute_sched(
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
 
-    if (lctx.moe_cache && sched == lctx.sched) lctx.moe_cache->begin_compute();
+    if (lctx.moe_cache && sched == lctx.sched) lctx.moe_cache->begin_compute(lctx.cparams.warmup);
     ggml_backend_sched_graph_compute_async(sched, gf);
 }
 
@@ -13823,6 +13823,10 @@ void llama_set_mtp_n_heads(llama_context * ctx, int32_t mtp_n_heads) {
 
 void llama_synchronize(struct llama_context * ctx) {
     ggml_backend_sched_synchronize(ctx->sched);
+
+    if (ctx->n_queued_tokens == 1 && !ctx->cparams.warmup && ctx->moe_cache) {
+        ctx->moe_cache->periodic_tg_token_complete();
+    }
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats

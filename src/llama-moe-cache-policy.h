@@ -173,7 +173,7 @@ struct state {
         return -1;
     }
 
-    int32_t victim(int32_t il) const {
+    int32_t try_victim(int32_t il) const {
         int32_t best = -1;
         double best_score = -1.0;
         for (int c = 0; c < n_class; ++c) {
@@ -188,6 +188,11 @@ struct state {
                 best_score = score;
             }
         }
+        return best;
+    }
+
+    int32_t victim(int32_t il) const {
+        const int32_t best = try_victim(il);
         GGML_ASSERT(best >= 0);
         return best;
     }
