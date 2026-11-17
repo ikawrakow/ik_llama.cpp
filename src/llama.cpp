@@ -6246,6 +6246,10 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         const ggml_half h_boost = ggml_fp32_to_fp16(65504.f);
         const ggml_half h_inf   = ggml_fp32_to_fp16(-INFINITY);
         const ggml_half h_zero  = ggml_fp32_to_fp16(0.0f);
+        std::vector<ggml_half> base_bias(n_kv);
+        for (int32_t j = 0; j < n_kv; ++j) {
+            base_bias[j] = blk_of[j] < 0 ? h_inf : h_zero;
+        }
         auto fill_bias = [&](int32_t i0, int32_t i1) {
             for (int32_t i = i0; i < i1; ++i) {
                 // n_kv times n_tokens reaches 2^31 at the model's full context, so index wide
@@ -6259,12 +6263,14 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 const llama_pos q          = batch.pos[i];
                 const llama_pos tail_start = (q + 1)/r*r;
 
+                const llama_pos * pos_j  = cell_pos.data();
+                const ggml_half * base_j = base_bias.data();
                 for (int32_t j = 0; j < n_kv; ++j) {
-                    const llama_pos p = cell_pos[j];
+                    const llama_pos p = pos_j[j];
 
                     // finite, so it can never meet a -inf and produce a nan
                     cur_bias[j] = (p >= tail_start && p <= q) ? h_boost // max. fp16 value in case math is done with fp16 precision
-                                : (blk_of[j] < 0 ? h_inf : h_zero);
+                                : base_j[j];
                 }
             }
         };
@@ -6668,10 +6674,55 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     }
                 };
                 std::vector<std::thread> workers(n_thread-1);
-                int it = 0;
-                for (auto& w : workers) w = std::thread(compute, it++);
-                compute(it);
-                for (auto& w : workers) w.join();
+                auto run = [](std::vector<std::thread> & workers, auto && fn) {
+                    int it = 0;
+                    for (auto& w : workers) w = std::thread(fn, it++);
+                    fn(it);
+                    for (auto& w : workers) w.join();
+                };
+                if (!hparams.use_alibi && cparams.flash_attn && data_f16 && !data_swa_f16) {
+                    std::vector<llama_seq_id> seqs;
+                    std::vector<int32_t> tok_seq(n_tokens);
+                    for (int j = 0; j < n_tokens; ++j) {
+                        const llama_seq_id s = batch.seq_id[j][0];
+                        auto f = std::find(seqs.begin(), seqs.end(), s);
+                        tok_seq[j] = int32_t(f - seqs.begin());
+                        if (f == seqs.end()) {
+                            seqs.push_back(s);
+                        }
+                    }
+                    const llama_pos p_none = std::numeric_limits<llama_pos>::max();
+                    std::vector<llama_pos> vis(seqs.size()*n_kv);
+                    auto fill_vis = [&](int ith) {
+                        const int64_t first = int64_t(ith)*npt;
+                        const int64_t last  = std::min(n_kv, first + npt);
+                        for (size_t s = 0; s < seqs.size(); ++s) {
+                            llama_pos * v = vis.data() + s*n_kv;
+                            for (int64_t i = first; i < last; ++i) {
+                                const auto & cell = mask_kv_self.cells[i];
+                                v[i] = cell.has_seq_id(seqs[s]) ? cell.pos : p_none;
+                            }
+                        }
+                    };
+                    const int tpt = (n_tokens + n_thread - 1)/n_thread;
+                    auto fill_rows = [&](int ith) {
+                        const ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
+                        const ggml_half h_zero = ggml_fp32_to_fp16(0.f);
+                        const int j1 = std::min(int(n_tokens), (ith + 1)*tpt);
+                        for (int j = ith*tpt; j < j1; ++j) {
+                            const llama_pos pos = batch.pos[j];
+                            const llama_pos * v = vis.data() + size_t(tok_seq[j])*n_kv;
+                            ggml_half * dst = data_f16 + int64_t(j)*n_kv;
+                            for (int64_t i = 0; i < n_kv; ++i) {
+                                dst[i] = v[i] > pos ? h_inf : h_zero;
+                            }
+                        }
+                    };
+                    run(workers, fill_vis);
+                    run(workers, fill_rows);
+                } else {
+                    run(workers, compute);
+                }
                 int64_t n_tokens_padded = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
                 if (n_tokens_padded > n_tokens) {
                     if (data) {
