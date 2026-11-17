@@ -362,6 +362,20 @@ struct llama_control_vector {
 
 struct llama_context {
 
+    struct periodic_tg_completion_state {
+        bool pending = false;
+
+        void arm(bool eligible, bool submitted) {
+            pending |= eligible && submitted;
+        }
+
+        bool consume(bool synchronization_eligible) {
+            const bool completed = pending && synchronization_eligible;
+            pending = false;
+            return completed;
+        }
+    };
+
     llama_context(const llama_model & model);
 
     ~llama_context();
@@ -394,6 +408,7 @@ struct llama_context {
 
     int64_t t_compute_start_us = 0;
     int64_t n_queued_tokens = 0;
+    periodic_tg_completion_state periodic_tg_completion;
 
     int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
     int32_t n_eval   = 0; // number of eval calls

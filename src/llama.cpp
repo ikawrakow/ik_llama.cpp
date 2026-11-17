@@ -7413,7 +7413,8 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
 static void llama_graph_compute(
         llama_context & lctx,
           ggml_cgraph * gf,
-                  int   n_threads) {
+                  int   n_threads,
+                 bool   single_token_decode = false) {
 #ifdef GGML_USE_METAL
     if (ggml_backend_is_metal(lctx.backend_metal)) {
         ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
@@ -7426,8 +7427,10 @@ static void llama_graph_compute(
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
 
-    if (lctx.moe_cache) lctx.moe_cache->begin_compute(lctx.cparams.warmup);
-    ggml_backend_sched_graph_compute_async(lctx.sched, gf);
+    const bool periodic_tg_eligible = single_token_decode && !lctx.cparams.warmup && lctx.moe_cache;
+    if (lctx.moe_cache) lctx.moe_cache->begin_compute(periodic_tg_eligible);
+    const ggml_status status = ggml_backend_sched_graph_compute_async(lctx.sched, gf);
+    lctx.periodic_tg_completion.arm(periodic_tg_eligible, status == GGML_STATUS_SUCCESS);
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
 }
@@ -7449,7 +7452,7 @@ static void llama_graph_compute_sched(
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
 
-    if (lctx.moe_cache && sched == lctx.sched) lctx.moe_cache->begin_compute(lctx.cparams.warmup);
+    if (lctx.moe_cache && sched == lctx.sched) lctx.moe_cache->begin_compute(false);
     ggml_backend_sched_graph_compute_async(sched, gf);
 }
 
@@ -7934,7 +7937,7 @@ static int llama_decode_internal(
         tim1 = ggml_time_us();
 #endif
         //fprintf(stderr, "%s: invoking llama_graph_compute\n", __func__);
-        llama_graph_compute(lctx, gf, n_threads);
+        llama_graph_compute(lctx, gf, n_threads, n_tokens_all == 1);
 
         if (llm_arch_is_dsv4(lctx.model.arch) &&
             llama_dsv4_per_step_capture_active(lctx, { LLAMA_CHECKPOINT_SPEC, 0, 0 }) &&
@@ -13824,7 +13827,9 @@ void llama_set_mtp_n_heads(llama_context * ctx, int32_t mtp_n_heads) {
 void llama_synchronize(struct llama_context * ctx) {
     ggml_backend_sched_synchronize(ctx->sched);
 
-    if (ctx->n_queued_tokens == 1 && !ctx->cparams.warmup && ctx->moe_cache) {
+    const bool periodic_tg_sync_eligible = ctx->n_queued_tokens == 1 &&
+            !ctx->cparams.warmup && ctx->moe_cache != nullptr;
+    if (ctx->periodic_tg_completion.consume(periodic_tg_sync_eligible)) {
         ctx->moe_cache->periodic_tg_token_complete();
     }
 
