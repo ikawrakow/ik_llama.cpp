@@ -283,19 +283,6 @@ void ggml_abort(const char * file, int line, const char * fmt, ...) {
 //#define GGML_SOFT_MAX_ACCELERATE
 #endif
 
-inline static size_t ggml_aligned_malloc_alignment(void) {
-#if defined(_MSC_VER) || defined(__MINGW32__)
-    return GGML_MEM_ALIGN;
-#elif defined(GGML_USE_CPU_HBM)
-    return 16;
-#elif GGML_USE_METAL
-    const long page_size = sysconf(_SC_PAGESIZE);
-    return page_size > 0 ? (size_t) page_size : 0;
-#else
-    return GGML_MEM_ALIGN;
-#endif
-}
-
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #define GGML_ALIGNED_MALLOC(size) _aligned_malloc(size, GGML_MEM_ALIGN)
 #define GGML_ALIGNED_FREE(ptr)    _aligned_free(ptr)
@@ -306,11 +293,12 @@ inline static void * ggml_aligned_malloc(size_t size) {
         return NULL;
     }
     void * aligned_memory = NULL;
-    const size_t alignment = ggml_aligned_malloc_alignment();
 #ifdef GGML_USE_CPU_HBM
-    int result = hbw_posix_memalign(&aligned_memory, alignment, size);
+    int result = hbw_posix_memalign(&aligned_memory, 16, size);
+#elif GGML_USE_METAL
+    int result = posix_memalign(&aligned_memory, sysconf(_SC_PAGESIZE), size);
 #else
-    int result = posix_memalign(&aligned_memory, alignment, size);
+    int result = posix_memalign(&aligned_memory, GGML_MEM_ALIGN, size);
 #endif
     if (result != 0) {
         // Handle allocation failure
@@ -3144,9 +3132,6 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 struct ggml_context {
     size_t mem_size;
     void* mem_buffer;
-#ifdef GGML_USE_CPU_HBM
-    bool context_alloc_hbm;
-#endif
     bool   no_alloc;
     bool   no_alloc_save; // this is used to save the no_alloc state when using scratch buffers
 
@@ -5720,42 +5705,37 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
         return NULL;
     }
 
-    size_t arena_offset = 0;
     size_t allocation_size = sizeof(struct ggml_context);
     if (params.mem_buffer == NULL) {
-        const size_t alignment = ggml_aligned_malloc_alignment();
-        if (!ggml_align_up_size(allocation_size, alignment, &arena_offset) ||
-                mem_size > SIZE_MAX - arena_offset) {
+        const size_t alignment_slack = GGML_MEM_ALIGN - 1;
+        if (allocation_size > SIZE_MAX - alignment_slack ||
+                mem_size > SIZE_MAX - (allocation_size + alignment_slack)) {
             ggml_critical_section_end();
             GGML_ABORT("%s: context allocation size overflow", __func__);
             return NULL;
         }
-        allocation_size = arena_offset + mem_size;
+        allocation_size += alignment_slack + mem_size;
     }
 
-    struct ggml_context * ctx;
-#ifdef GGML_USE_CPU_HBM
-    if (params.mem_buffer != NULL) {
-        ctx = malloc(allocation_size);
-    } else
-#endif
-    {
-        ctx = GGML_ALIGNED_MALLOC(allocation_size);
-    }
+    struct ggml_context * ctx = malloc(allocation_size);
     if (ctx == NULL) {
         ggml_critical_section_end();
-        GGML_ABORT("%s: failed to allocate context block (%zu bytes)", __func__, allocation_size);
+        GGML_PRINT("%s: insufficient memory (attempted to allocate %zu bytes)\n", __func__, allocation_size);
+        GGML_ABORT("fatal error: %s failed to allocate context block (%zu bytes)", __func__, allocation_size);
         return NULL;
     }
 
-    void * mem_buffer = params.mem_buffer ? params.mem_buffer : (uint8_t *) ctx + arena_offset;
+    void * mem_buffer = params.mem_buffer;
+    if (mem_buffer == NULL) {
+        uint8_t * arena = (uint8_t *) (ctx + 1);
+        const uintptr_t arena_addr = (uintptr_t) arena;
+        const size_t padding = (GGML_MEM_ALIGN - arena_addr % GGML_MEM_ALIGN) % GGML_MEM_ALIGN;
+        mem_buffer = arena + padding;
+    }
 
     *ctx = (struct ggml_context) {
         /*.mem_size           =*/ mem_size,
         /*.mem_buffer         =*/ mem_buffer,
-#ifdef GGML_USE_CPU_HBM
-        /*.context_alloc_hbm  =*/ params.mem_buffer == NULL,
-#endif
         /*.no_alloc           =*/ params.no_alloc,
         /*.no_alloc_save      =*/ params.no_alloc,
         /*.n_objects          =*/ 0,
@@ -5788,15 +5768,7 @@ void ggml_free(struct ggml_context * ctx) {
     GGML_PRINT_DEBUG("%s: context has been freed. memory used = %zu\n",
             __func__, ggml_used_mem(ctx));
 
-#ifdef GGML_USE_CPU_HBM
-    if (ctx->context_alloc_hbm) {
-        GGML_ALIGNED_FREE(ctx);
-    } else {
-        free(ctx);
-    }
-#else
-    GGML_ALIGNED_FREE(ctx);
-#endif
+    free(ctx);
 }
 
 size_t ggml_used_mem(const struct ggml_context * ctx) {
