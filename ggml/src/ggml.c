@@ -31249,6 +31249,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         /*.numa_active_nodes       =*/ 0,
         /*.numa_node_count         =*/ {0},
         /*.numa_node_of            =*/ {0},
+        /*.numa_node_rank_of       =*/ {0},
         /*.nb_node                 =*/ {{0}},
         /*.nb_g_arrived            =*/ 0,
         /*.nb_g_passed             =*/ 0,
