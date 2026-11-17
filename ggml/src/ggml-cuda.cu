@@ -3823,9 +3823,11 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             CUDA_CHECK(cudaGetLastError());
         } else {
             auto local_dst = *dst;
+            local_dst.op_params[0] = GGML_PREC_DEFAULT;
             local_dst.data = dst_up.get();
             ggml_cuda_mul_mat(ctx, src0_1, src1, &local_dst, nullptr, 0);
-            ggml_cuda_mul_mat(ctx, src0_2, src1, dst, nullptr, 0);
+            local_dst.data = dst->data;
+            ggml_cuda_mul_mat(ctx, src0_2, src1, &local_dst, nullptr, 0);
         }
     }
 
