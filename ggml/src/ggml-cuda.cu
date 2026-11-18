@@ -859,6 +859,7 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
     if (n_inputs < 1) return true;
     if (!backend || !ggml_backend_is_cuda(backend)) return false;
     if (!node0) return false;
+    if (has_lru_cache && (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE)) return false;
     //printf("%s(%s, %s, %d)\n", __func__, node0->name, ggml_op_name(node0->op), n_inputs);
     if (has_lru_cache && node0->op == GGML_OP_GET_ROWS) return false;
     //if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) return false;
