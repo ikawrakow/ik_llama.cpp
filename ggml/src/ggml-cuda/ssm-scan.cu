@@ -474,7 +474,9 @@ static void ssm_scan_ssd_f32_cuda(
 
     // Step 3: chunked SSD loop
     // Per chunk: pre_matmul (incl. M) + 4 cuBLAS (CB, Y, S@C, state update) + scale_state
-    cublasHandle_t handle = ctx.cublas_handle();
+    // The stream-aware overload: in this tree cublas_handle() does not bind the stream, so the
+    // GEMMs would run out of order against the kernels above (garbage above 128 tokens).
+    cublasHandle_t handle = ctx.cublas_handle(ctx.device, stream);
     const float alpha_one  = 1.0f;
     const float beta_zero  = 0.0f;
     const float beta_one   = 1.0f;

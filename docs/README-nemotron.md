@@ -102,8 +102,14 @@ the whole difference to mainline. Three fixes, all in this branch and all measur
 | conv input concat (transposed source): shared-memory tile transpose | 49.4 ms | 19.0 ms | 24.5 ms |
 | FFN `relu^2`: one fused kernel instead of `relu` + `sqr` | 27.2 ms | 13.5 ms | 13.5 ms |
 
-Decode 87.7 -> 104.6 t/s, prefill 2 810 -> 3 205 t/s at 2k; total kernel time on the 2.8k prompt
-904.5 ms against 899.8 ms for mainline `e0949d09b` on the same box. The first row is the Mamba-2 op and the builder,
+Decode 87.7 -> 104.7 t/s, prefill 2 810 -> 3 104 t/s at 2k (3 068 at 4k; mainline `e0949d09b` on
+the same box: 3 274 / 3 225).
+
+One porting hazard worth knowing when moving kernels from mainline into this tree: `cublas_handle()`
+here does *not* bind a stream (mainline's does, per stream). The Mamba-2 SSD prefill path takes the
+handle with `ctx.cublas_handle(ctx.device, stream)`; without that the GEMMs run out of order against
+the kernels and every prompt longer than 128 tokens is silently wrong (measured before the fix:
+PPL 377 908 where CPU and mainline say 3.93). The first row is the Mamba-2 op and the builder,
 the last is the FFN activation; rows two and three touch `ggml-cuda/cpy.cu` and
 `ggml-cuda/concat.cu` and help any model that copies a strided view or concatenates a transposed
 tensor.
