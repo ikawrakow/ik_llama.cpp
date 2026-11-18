@@ -5628,21 +5628,6 @@ static inline int ggml_up(int n, int m) {
 #define GGML_ASSERT_ALIGNED(ptr) \
     GGML_ASSERT(((uintptr_t) (ptr))%GGML_MEM_ALIGN == 0)
 
-static bool ggml_align_up_size(size_t value, size_t alignment, size_t * result) {
-    if (alignment == 0) {
-        return false;
-    }
-
-    const size_t remainder = value % alignment;
-    const size_t padding = remainder ? alignment - remainder : 0;
-    if (value > SIZE_MAX - padding) {
-        return false;
-    }
-
-    *result = value + padding;
-    return true;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 
 struct ggml_context * ggml_init(struct ggml_init_params params) {
@@ -5698,24 +5683,12 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
         params.mem_size = GGML_MEM_ALIGN;
     }
 
-    size_t mem_size = params.mem_size;
-    if (params.mem_buffer == NULL && !ggml_align_up_size(mem_size, GGML_MEM_ALIGN, &mem_size)) {
-        ggml_critical_section_end();
-        GGML_ABORT("%s: context arena size overflow", __func__);
-        return NULL;
-    }
-
-    size_t allocation_size = sizeof(struct ggml_context);
-    if (params.mem_buffer == NULL) {
-        const size_t alignment_slack = GGML_MEM_ALIGN - 1;
-        if (allocation_size > SIZE_MAX - alignment_slack ||
-                mem_size > SIZE_MAX - (allocation_size + alignment_slack)) {
-            ggml_critical_section_end();
-            GGML_ABORT("%s: context allocation size overflow", __func__);
-            return NULL;
-        }
-        allocation_size += alignment_slack + mem_size;
-    }
+    const size_t mem_size = params.mem_buffer
+        ? params.mem_size
+        : GGML_PAD(params.mem_size, GGML_MEM_ALIGN);
+    const size_t allocation_size = params.mem_buffer
+        ? sizeof(struct ggml_context)
+        : sizeof(struct ggml_context) + mem_size + GGML_MEM_ALIGN;
 
     struct ggml_context * ctx = malloc(allocation_size);
     if (ctx == NULL) {
@@ -5727,10 +5700,7 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
 
     void * mem_buffer = params.mem_buffer;
     if (mem_buffer == NULL) {
-        uint8_t * arena = (uint8_t *) (ctx + 1);
-        const uintptr_t arena_addr = (uintptr_t) arena;
-        const size_t padding = (GGML_MEM_ALIGN - arena_addr % GGML_MEM_ALIGN) % GGML_MEM_ALIGN;
-        mem_buffer = arena + padding;
+        mem_buffer = (void *) GGML_PAD((uintptr_t) (ctx + 1), GGML_MEM_ALIGN);
     }
 
     *ctx = (struct ggml_context) {
