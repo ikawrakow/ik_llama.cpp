@@ -154,6 +154,22 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
     const ggml_tensor * Q = dst->src[0];
 
     if (Q->ne[1] <= 8/ncols2) {
+        if constexpr (D == 128 || D == 256) {
+            const ggml_tensor * K = dst->src[1];
+            const ggml_tensor * V = dst->src[2];
+            // With fewer K/V rows the conversion to f16 can be faster.
+            constexpr int min_rows_unpack = 8192;
+            if (Q->ne[1] == 1 && ggml_nrows(K) >= min_rows_unpack && K->type == V->type &&
+                    (K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0) &&
+                    cp_async_available(ggml_cuda_info().devices[ctx.device].cc)) {
+                if (K->type == GGML_TYPE_Q8_0) {
+                    ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q8_0>(ctx, dst);
+                } else {
+                    ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2, GGML_TYPE_Q4_0>(ctx, dst);
+                }
+                return;
+            }
+        }
         ggml_cuda_flash_attn_ext_mma_f16_case<D, 8/ncols2, ncols2>(ctx, dst);
         return;
     }
