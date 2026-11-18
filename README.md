@@ -112,10 +112,14 @@ Check [Step by step guide](./docker/README.md) for image customization and other
 
 ## Latest News
 
-_Last updated: 2026-11-05. Newest first. Older entries are in the sections below._
+_Last updated: 2026-11-17. Newest first. Older entries are in the sections below._
 
 **Models**
 
+- Step-5-Preview (dense text; sparse indexer, MTP, SWA-compress and vision pending) [PR 2914](https://github.com/ikawrakow/ik_llama.cpp/pull/2914)
+- Raon-1 nano (3.1B dense hybrid: RDA + NoPE MLA + MTP) [PR 2903](https://github.com/ikawrakow/ik_llama.cpp/pull/2903)
+- HY MT2-30B-A3B (Hunyuan V3 MoE, `hy_v3`) [PR 2900](https://github.com/ikawrakow/ik_llama.cpp/pull/2900)
+- Ripple-65B Preview [PR 2852](https://github.com/ikawrakow/ik_llama.cpp/pull/2852)
 - Xing4.0 [PR 2832](https://github.com/ikawrakow/ik_llama.cpp/pull/2832) [PR 2847](https://github.com/ikawrakow/ik_llama.cpp/pull/2847)
 - GLM-OCR (text, MTP, vision) [PR 2814](https://github.com/ikawrakow/ik_llama.cpp/pull/2814)
 - MiniMax-M3.1 conversion [PR 2793](https://github.com/ikawrakow/ik_llama.cpp/pull/2793)
@@ -129,6 +133,9 @@ _Last updated: 2026-11-05. Newest first. Older entries are in the sections below
 
 **Quantization**
 
+- Estimated imatrix: adds coupling for attention tensors; better PPL for dense models when combining estimated with computed imatrix [PR 2894](https://github.com/ikawrakow/ik_llama.cpp/pull/2894)
+- CUDA Blackwell: native W4A4 NVFP4 on the FP4 tensor cores via `--nvfp4-precision` [PR 2868](https://github.com/ikawrakow/ik_llama.cpp/pull/2868)
+- `NVFP4_KS` row-scale NVFP4 type, loads mainline/NVIDIA NVFP4 GGUFs [PR 2858](https://github.com/ikawrakow/ik_llama.cpp/pull/2858)
 - `Q8_K_R16` / `Q8_0_R16` [PR 2764](https://github.com/ikawrakow/ik_llama.cpp/pull/2764) [PR 2765](https://github.com/ikawrakow/ik_llama.cpp/pull/2765)
 - `Q8_0_R16` extended to `Q4_0`, `Q5_0`, `Q6_0`, `IQ4_NL` and `MXFP4` on AVX-512 [PR 2807](https://github.com/ikawrakow/ik_llama.cpp/pull/2807); faster `q8_k_r16` [PR 2813](https://github.com/ikawrakow/ik_llama.cpp/pull/2813)
 - Gyro Trellis quants (`TQ2_T`, `TQK6`/`TQK7`, `TQP5`–`TQP7`) [PR 2812](https://github.com/ikawrakow/ik_llama.cpp/pull/2812)
@@ -137,6 +144,8 @@ _Last updated: 2026-11-05. Newest first. Older entries are in the sections below
 
 **Performance**
 
+- CPU-resident experts: MoE combine runs on the CPU with `-ot 'ffn_.*_exps=CPU'`, cutting CPU→GPU copies ~9x [PR 2901](https://github.com/ikawrakow/ik_llama.cpp/pull/2901)
+- CUDA: faster one-column BF16/F16 and NVFP4_KS mat-vec, helps quantized models keeping attention in BF16/F16 [PR 2892](https://github.com/ikawrakow/ik_llama.cpp/pull/2892)
 - `deepseek41`: reuse selected rows [PR 2840](https://github.com/ikawrakow/ik_llama.cpp/pull/2840), fuse candidate pool block/position selection [PR 2819](https://github.com/ikawrakow/ik_llama.cpp/pull/2819)
 - `raon`: MLA decode micro-optimizations [PR 2804](https://github.com/ikawrakow/ik_llama.cpp/pull/2804), shared expanded MLA prefill [PR 2799](https://github.com/ikawrakow/ik_llama.cpp/pull/2799)
 - CUDA: MoE MMQ one block per row tile and expert [PR 2831](https://github.com/ikawrakow/ik_llama.cpp/pull/2831), Hadamard-aware CUDA graphs [PR 2824](https://github.com/ikawrakow/ik_llama.cpp/pull/2824), `qwen4exp` block scoring [PR 2809](https://github.com/ikawrakow/ik_llama.cpp/pull/2809)
@@ -147,7 +156,10 @@ _Last updated: 2026-11-05. Newest first. Older entries are in the sections below
 
 **Features**
 
+- MoE cache CPU share via `--moe-cache-cpu-share` [PR 2883](https://github.com/ikawrakow/ik_llama.cpp/pull/2883)
+- Estimated imatrix from the model weights: `--estimate-imatrix`, `--analytical-imatrix FILE` [PR 2862](https://github.com/ikawrakow/ik_llama.cpp/pull/2862)
 - `llama-bench`: common options and `-ncmoe` loader [PR 2841](https://github.com/ikawrakow/ik_llama.cpp/pull/2841)
+- `qwen4exp`: GGUFs with merged weight pairs [PR 2816](https://github.com/ikawrakow/ik_llama.cpp/pull/2816)
 - `ggml`: fused multiply-add (FMA) [PR 2794](https://github.com/ikawrakow/ik_llama.cpp/pull/2794)
 - `minimax-m3`: BF16 indexer projections [PR 2792](https://github.com/ikawrakow/ik_llama.cpp/pull/2792)
 - `minimax-m3`: CPU MSA behind `--dsa` [PR 2790](https://github.com/ikawrakow/ik_llama.cpp/pull/2790)
@@ -158,9 +170,11 @@ _Last updated: 2026-11-05. Newest first. Older entries are in the sections below
 
 **Fixes**
 
+- `llama-quantize`: NVFP4_KS conversions now keep the input `.input_scale` tensors, so converted files run W4A4 under `--nvfp4-precision auto` like the original; files converted earlier must be converted again from the source model [PR 2891](https://github.com/ikawrakow/ik_llama.cpp/pull/2891)
+- Server: correct context-checkpoint positions, skip the KV scan until a checkpoint is due [PR 2870](https://github.com/ikawrakow/ik_llama.cpp/pull/2870)
 - `IQ4_KSS`: pruning during quantization [PR 2834](https://github.com/ikawrakow/ik_llama.cpp/pull/2834)
-- Server: EOG tokens with `--special` [PR 2828](https://github.com/ikawrakow/ik_llama.cpp/pull/2828), duplicate tokens when restoring checkpoints [PR 2827](https://github.com/ikawrakow/ik_llama.cpp/pull/2827), truncated content on tool-call prefixes [PR 2811](https://github.com/ikawrakow/ik_llama.cpp/pull/2811), banned strings with speculative decoding for recurrent models [PR 2772](https://github.com/ikawrakow/ik_llama.cpp/pull/2772)
-- CUDA: overlapping logits in top-k MoE fusion [PR 2780](https://github.com/ikawrakow/ik_llama.cpp/pull/2780), `IQ1_S_R4`/`IQ1_M_R4` correctness [PR 2708](https://github.com/ikawrakow/ik_llama.cpp/pull/2708), double-counted KV block in MMA FA [PR 2698](https://github.com/ikawrakow/ik_llama.cpp/pull/2698)
+- Server: EOG tokens with `--special` [PR 2828](https://github.com/ikawrakow/ik_llama.cpp/pull/2828), duplicate tokens when restoring checkpoints [PR 2827](https://github.com/ikawrakow/ik_llama.cpp/pull/2827), truncated content on tool-call prefixes [PR 2811](https://github.com/ikawrakow/ik_llama.cpp/pull/2811), banned strings with speculative decoding for recurrent models [PR 2772](https://github.com/ikawrakow/ik_llama.cpp/pull/2772), held-back stop strings and partial UTF-8 in chat streams [PR 2802](https://github.com/ikawrakow/ik_llama.cpp/pull/2802)
+- CUDA: `TQ` quants looping in GEMV [PR 2821](https://github.com/ikawrakow/ik_llama.cpp/pull/2821), overlapping logits in top-k MoE fusion [PR 2780](https://github.com/ikawrakow/ik_llama.cpp/pull/2780), `IQ1_S_R4`/`IQ1_M_R4` correctness [PR 2708](https://github.com/ikawrakow/ik_llama.cpp/pull/2708), double-counted KV block in MMA FA [PR 2698](https://github.com/ikawrakow/ik_llama.cpp/pull/2698)
 - `-sm graph`: abort with Cohere partial drop and uneven splits [PR 2775](https://github.com/ikawrakow/ik_llama.cpp/pull/2775); `-sm attn`: assert for Flint and Qwen3-MoE [PR 2744](https://github.com/ikawrakow/ik_llama.cpp/pull/2744)
 - `IQ5_KS_R16`: AVX-512+VNNI GEMM [PR 2731](https://github.com/ikawrakow/ik_llama.cpp/pull/2731)
 
@@ -168,6 +182,10 @@ _Last updated: 2026-11-05. Newest first. Older entries are in the sections below
 
 Newest first.
 
+- Step-5-Preview dense text [PR 2914](https://github.com/ikawrakow/ik_llama.cpp/pull/2914)
+- Raon-1 nano (3.1B dense hybrid: RDA + NoPE MLA + MTP) [PR 2903](https://github.com/ikawrakow/ik_llama.cpp/pull/2903)
+- HY MT2-30B-A3B (Hunyuan V3 MoE, `hy_v3`) [PR 2900](https://github.com/ikawrakow/ik_llama.cpp/pull/2900)
+- Ripple-65B Preview [PR 2852](https://github.com/ikawrakow/ik_llama.cpp/pull/2852)
 - Xing4.0 [PR 2832](https://github.com/ikawrakow/ik_llama.cpp/pull/2832) [PR 2847](https://github.com/ikawrakow/ik_llama.cpp/pull/2847)
 - GLM-OCR (text, MTP, vision) [PR 2814](https://github.com/ikawrakow/ik_llama.cpp/pull/2814)
 - MiniMax-M3.1 conversion [PR 2793](https://github.com/ikawrakow/ik_llama.cpp/pull/2793)
@@ -198,6 +216,7 @@ Newest first.
 - Poolside Laguna XS.2 [PR 1911](https://github.com/ikawrakow/ik_llama.cpp/pull/1911)
 - Mimo-2.5 [PR 1723](https://github.com/ikawrakow/ik_llama.cpp/pull/1723)
 - Gemma4 [PR 1581](https://github.com/ikawrakow/ik_llama.cpp/pull/1581), including assistant
+- Gemma4 unified vision/audio projectors (`gemma4uv`, `gemma4ua`, incl. audio input via `llama-mtmd-cli`/`llama-server`) [PR 2896](https://github.com/ikawrakow/ik_llama.cpp/pull/2896)
 - Bonsai 1-bit [PR 1570](https://github.com/ikawrakow/ik_llama.cpp/pull/1570)
 - Mistral 4 [PR 1450](https://github.com/ikawrakow/ik_llama.cpp/pull/1450)
 - Qwen3.5-MoE [PR 1288](https://github.com/ikawrakow/ik_llama.cpp/pull/1288) and dense Qwen-3.5 [PR 1326](https://github.com/ikawrakow/ik_llama.cpp/pull/1326)
@@ -282,6 +301,8 @@ CPU [PR 1033](https://github.com/ikawrakow/ik_llama.cpp/pull/1033) and CUDA [PR 
 
 Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ikawrakow/ik_llama.cpp/pull/682) 
 
+`NVFP4_KS` NVFP4 with a row scale: mainline's 36-byte blocks (E2M1 values, UE4M3 block scales) with the FP32 tensor scale kept as a row scale, as for `IQ4_KS` [PR 2858](https://github.com/ikawrakow/ik_llama.cpp/pull/2858). Mainline NVFP4 GGUFs (type 40, incl. NVIDIA's NVFP4 checkpoints) load directly: `.scale` values become row scales, `.input_scale` tensors are dropped (activations stay int8), and converted tensors are read into memory instead of mmapped. Converting with `llama-quantize --allow-requantize --pure --output-tensor-type bf16 --token-embedding-type bf16` gives a bit-identical, mmap-able `NVFP4_KS` file. CPU (AVX2, AVX-512, NEON) and CUDA (MMVQ, MMQ, MoE); on CUDA the MMQ tile loader converts pairs of 16-value blocks into 32-value int8 blocks, bringing prefill to ~98% of `Q4_0`/`IQ4_KS`.
+
 #### Quantization improvements
 
 * `IQ1_M` [PR 327](https://github.com/ikawrakow/ik_llama.cpp/pull/327), `IQ2_XS` [PR 312](https://github.com/ikawrakow/ik_llama.cpp/pull/312), `Q2_K, Q4_K, Q5_K, Q4_1, Q5_1` [PR 302](https://github.com/ikawrakow/ik_llama.cpp/pull/302), `Q4_0, Q5_0, Q6_0, Q3_K, Q6_K, IQ4_XS, IQ4_NL` [PR 295](https://github.com/ikawrakow/ik_llama.cpp/pull/295)
@@ -290,6 +311,8 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 
 #### Quantization performance improvements 
 
+* CUDA Blackwell: MXFP4 via the native W4A4 FP4 kernels (`--nvfp4-precision w4a4`) [PR 2880](https://github.com/ikawrakow/ik_llama.cpp/pull/2880)
+* CUDA Blackwell (`sm_120`/`sm_121`): native W4A4 NVFP4 MMQ and MMQ-ID; activations are quantized to NVFP4 and multiplied on the FP4 tensor cores, roughly doubling prefill over the int8 path (`--nvfp4-precision`) [PR 2868](https://github.com/ikawrakow/ik_llama.cpp/pull/2868)
 * Much faster CPU prompt processing for all non-interleaved quants. Initial idea in [PR 515](https://github.com/ikawrakow/ik_llama.cpp/pull/515) and [PR 531](https://github.com/ikawrakow/ik_llama.cpp/pull/531), with many follow up PRs to apply to all quantization types for the 3 supported CPU platforms.
 * All quantization types now have quantized matrix multiplication CUDA kernels, see [PR 557](https://github.com/ikawrakow/ik_llama.cpp/pull/557) and several others
 * Faster CPU prompt processing for Trellis quants and MoE models. [PR 488](https://github.com/ikawrakow/ik_llama.cpp/pull/488)
@@ -302,6 +325,7 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 
 ## Features
 
+* Estimated imatrix from the model weights: `--estimate-imatrix`, `--analytical-imatrix FILE` [PR 2862](https://github.com/ikawrakow/ik_llama.cpp/pull/2862)
 * New split mode "graph" for multi GPU setups [PR 1022](https://github.com/ikawrakow/ik_llama.cpp/pull/1022)
 * Fused delta-net for Qwen3-Next and Qwen3.5-MoE [PR 1315](https://github.com/ikawrakow/ik_llama.cpp/pull/1315) [PR 1333](https://github.com/ikawrakow/ik_llama.cpp/pull/1333) [PR 1362](https://github.com/ikawrakow/ik_llama.cpp/pull/1362) [PR 1373](https://github.com/ikawrakow/ik_llama.cpp/pull/1373)
 * Hadamard transforms for K-cache and V-cache [PR 1033](https://github.com/ikawrakow/ik_llama.cpp/pull/1033) [PR 1034](https://github.com/ikawrakow/ik_llama.cpp/pull/1034) [PR 1527](https://github.com/ikawrakow/ik_llama.cpp/pull/1527)
@@ -322,12 +346,13 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 * jinja template support [PR 677](https://github.com/ikawrakow/ik_llama.cpp/pull/677)
 * Webui: New Features for Conversations, Settings, and Chat Messages [PR 618](https://github.com/ikawrakow/ik_llama.cpp/pull/618), MCP [PR 1904](https://github.com/ikawrakow/ik_llama.cpp/pull/1904)
 * On-demand tensor reload [PR 1989](https://github.com/ikawrakow/ik_llama.cpp/pull/1989)
-* Dynamic MoE expert cache [PR 2644](https://github.com/ikawrakow/ik_llama.cpp/pull/2644)
+* Dynamic MoE expert cache [PR 2644](https://github.com/ikawrakow/ik_llama.cpp/pull/2644), ClassLRU policy via `--moe-cache-policy` [PR 2861](https://github.com/ikawrakow/ik_llama.cpp/pull/2861), CPU share for cache misses with `--moe-cache-cpu-share` [PR 2883](https://github.com/ikawrakow/ik_llama.cpp/pull/2883)
 * Multi-GPU CUDA quantization [PR 2674](https://github.com/ikawrakow/ik_llama.cpp/pull/2674), with on-GPU encoding for more quantization types [PR 2671](https://github.com/ikawrakow/ik_llama.cpp/pull/2671) [PR 2682](https://github.com/ikawrakow/ik_llama.cpp/pull/2682)
 * `-cuda max-graphs=N` [PR 2715](https://github.com/ikawrakow/ik_llama.cpp/pull/2715)
 * Unicode NFC normalization for BPE tokenizers that declare `tokenizer.ggml.normalizer.nfc` [PR 2735](https://github.com/ikawrakow/ik_llama.cpp/pull/2735)
 * Per-device memory usage reported on `/memory` and `/metrics` [PR 2776](https://github.com/ikawrakow/ik_llama.cpp/pull/2776)
 * Fused-multiply-add (FMA) op in `ggml` [PR 2794](https://github.com/ikawrakow/ik_llama.cpp/pull/2794)
+* Load GGUFs with merged weight pairs (upstream `Qwen3.8-Flash-Next` converter output, also `mimo2` QKV unmerge): the halves are row views of the merged tensor, `llama-quantize` finds imatrix data under the first half, `-rtr` leaves view tensors unrepacked, and a hot-swap that changes a merged weight type is refused [PR 2816](https://github.com/ikawrakow/ik_llama.cpp/pull/2816)
 * Dynamic control vector management endpoints [PR 1223](https://github.com/ikawrakow/ik_llama.cpp/pull/1223)
 * Legacy quants conversion schemes in `convert_hf_to_gguf.py` [PR 449](https://github.com/ikawrakow/ik_llama.cpp/pull/449), `Q6_0` in [PR 483](https://github.com/ikawrakow/ik_llama.cpp/pull/483)
 * Adaptive-P Sampler [PR 1100](https://github.com/ikawrakow/ik_llama.cpp/pull/1100) implemented as designed by it's author; supported on Webui
@@ -351,6 +376,15 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 
 ## Performance improvements
 
+* November 17 2026: Faster KQ-mask and QSA-bias fill for prompt processing [PR 2924](https://github.com/ikawrakow/ik_llama.cpp/pull/2924)
+* November 16 2026: MoE decode with empty prompt or warmup off up to ~5x `tg` on CPU, ~2.6x with `-sm graph` on 2 GPUs [PR 2926](https://github.com/ikawrakow/ik_llama.cpp/pull/2926)
+* November 16 2026: Reuse cached MoE experts during prompt processing with `--moe-cache-mib` [PR 2915](https://github.com/ikawrakow/ik_llama.cpp/pull/2915)
+* November 14 2026: `qwen4exp` PP with partial GPU offload: tiled delta-net prompt kernel, single-upload F16 QSA bias, 64b-aligned CUDA pinned buffers [PR 2913](https://github.com/ikawrakow/ik_llama.cpp/pull/2913)
+* November 13 2026: `dsv4`: fast device-side cache clear on sequence reset with a single stream [PR 2911](https://github.com/ikawrakow/ik_llama.cpp/pull/2911)
+* November 11 2026:: CUDA: run `SSM_CONV` and Q/K RMS norms on the GPU when layers are in RAM [PR 2889](https://github.com/ikawrakow/ik_llama.cpp/pull/2889)
+* November 10 2026: `DeepSeek-V4.1`: separate graph builder is now the default, giving much improved PP with `--swa-compress` [PR 2878](https://github.com/ikawrakow/ik_llama.cpp/pull/2878)
+* November 6 2026: Transposed `comb` in `ggml_hc_pre` [PR 2848](https://github.com/ikawrakow/ik_llama.cpp/pull/2848)
+* October 28 2026: CUDA fused indexer score kernel [PR 2784](https://github.com/ikawrakow/ik_llama.cpp/pull/2784), DMMV where available [PR 2781](https://github.com/ikawrakow/ik_llama.cpp/pull/2781), fused sigmoid+mul in delta-net [PR 2783](https://github.com/ikawrakow/ik_llama.cpp/pull/2783), fused SiTU IQK path for Raon [PR 2763](https://github.com/ikawrakow/ik_llama.cpp/pull/2763), pp512 round 2 for `qwen4exp` (+5.7% CPU PP, one fewer activation quantization) [PR 2777](https://github.com/ikawrakow/ik_llama.cpp/pull/2777)
 * October 30 2026: CUDA static per-stream cuBLAS workspace [PR 2803](https://github.com/ikawrakow/ik_llama.cpp/pull/2803), shared expanded MLA prefill path for Raon [PR 2799](https://github.com/ikawrakow/ik_llama.cpp/pull/2799), dropped dense top-k mask in `qwen4exp` [PR 2801](https://github.com/ikawrakow/ik_llama.cpp/pull/2801), CPU activation quantization tuning [PR 2796](https://github.com/ikawrakow/ik_llama.cpp/pull/2796)
 * October 29 2026: Reuse the DeepSeek-V4.1 decode graph [PR 2791](https://github.com/ikawrakow/ik_llama.cpp/pull/2791), dropped dense masks in DeepSeek-V4/V4.1 [PR 2787](https://github.com/ikawrakow/ik_llama.cpp/pull/2787) [PR 2779](https://github.com/ikawrakow/ik_llama.cpp/pull/2779), skipped indexer tensors in `MiniMax-M3` [PR 2788](https://github.com/ikawrakow/ik_llama.cpp/pull/2788), all-thread `pool_1d` [PR 2789](https://github.com/ikawrakow/ik_llama.cpp/pull/2789)
 * October 28 2026: CUDA fused indexer score kernel [PR 2784](https://github.com/ikawrakow/ik_llama.cpp/pull/2784), DMMV where available [PR 2781](https://github.com/ikawrakow/ik_llama.cpp/pull/2781), fused sigmoid+mul in delta-net [PR 2783](https://github.com/ikawrakow/ik_llama.cpp/pull/2783), fused SiTU IQK path for Raon [PR 2763](https://github.com/ikawrakow/ik_llama.cpp/pull/2763)
@@ -415,6 +449,15 @@ Implemented for Zen4, AVX2, ARM_NEON, Metal, CUDA [PR 682](https://github.com/ik
 
 ## Fixes
 
+* November 17 2026: jinja: implement the `unique` filter for arrays; restores tool calling for GLM-5.3-Flash [PR 2934](https://github.com/ikawrakow/ik_llama.cpp/pull/2934)
+* November 16 2026: CUDA: fix the wmma flash-attention store for `Dk != Dv` (head size 192/128 on Volta/Turing with `-mla 0 -fa 1`) [PR 2927](https://github.com/ikawrakow/ik_llama.cpp/pull/2927)
+* November 16 2026: Server: allocate ban-rewind checkpoints only for requests with effective banned strings/regexes, correct restore position after a failed save [PR 2922](https://github.com/ikawrakow/ik_llama.cpp/pull/2922)
+* November 16 2026: Server: accept `input_image` parts in `function_call_output` on `/v1/responses` [PR 2917](https://github.com/ikawrakow/ik_llama.cpp/pull/2917)
+* November 11 2026: Fix quantized K-cache `vec_dot` in the generic CPU flash attention (ALiBi models, `-ctk q6_0` gave PPL 937) and multi-head indexer selection with `-ictk q8_KV`/`q8_0` [PR 2887](https://github.com/ikawrakow/ik_llama.cpp/pull/2887)
+* November 10 2026: Fix delta-net perplexity when delta-net layers run on the CPU with a visible CUDA device; fix Arm CPU results for `IQ1_BN`, `Q8_0`, `Q5_1` and one-column `MUL_MAT` (also `Q4_0`, `Q4_1`, `Q5_0`, `Q6_0`, `IQ4_NL`, `MXFP4`); CUDA MMVQ no longer reads one row past the last weight row; Metal no longer aborts on models with `NVFP4_KS` tensors [PR 2881](https://github.com/ikawrakow/ik_llama.cpp/pull/2881)
+* November 8 2026: Do not disable flash attention when LoRA adaptors are used [PR 2867](https://github.com/ikawrakow/ik_llama.cpp/pull/2867)
+* October 29 2026:Server: media parts use a random per-process marker, so quoted `<__media__>` text can no longer hijack image chunks or break prompt-cache extension [PR 2800](https://github.com/ikawrakow/ik_llama.cpp/pull/2800)
+* October 28 2026: `-sm graph`/`-sm attn`: refuse tensor overrides of router tensors (`ffn_gate_inp`, its bias, `exp_probs_b`, Gemma4 `ffn_gate_inp.scale`) while routed experts stay split; such overrides crashed or silently dropped the router bias. Moving the router with its experts is still allowed. [PR 2778](https://github.com/ikawrakow/ik_llama.cpp/pull/2778)
 * October 22 2026: Fix `IQ5_KS_R16` AVX-512+VNNI GEMM [PR 2731](https://github.com/ikawrakow/ik_llama.cpp/pull/2731)
 * October 18 2026: CUDA: fix double-counted KV block in the new MMA FA [PR 2698](https://github.com/ikawrakow/ik_llama.cpp/pull/2698)
 * October 14 2026: Fix `--prefetch-experts` being a no-op for CPU-only graphs [PR 2667](https://github.com/ikawrakow/ik_llama.cpp/pull/2667)
