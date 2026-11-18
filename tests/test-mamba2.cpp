@@ -12,6 +12,15 @@
 
 static int n_fail = 0;
 
+#if defined(GGML_USE_CUDA)
+#include "ggml-backend.h"
+#include "ggml-cuda.h"
+// The scan switches to the chunked SSD (cuBLAS) path above SSM_SSD_MIN_TOKENS, which is exactly the
+// path that shipped broken once: the handle was not bound to the stream, so on the GPU the chunked
+// result disagreed with token-by-token decoding while the CPU path was fine. Run both on the GPU.
+#define TEST_MAMBA2_CUDA 1
+#endif
+
 #define CHECK(cond) do { \
     if (!(cond)) { \
         fprintf(stderr, "%s:%d: FAILED: %s\n", __FILE__, __LINE__, #cond); \
@@ -208,7 +217,167 @@ struct scan_case {
         ggml_free(ctx);
         return true;
     }
+
+#ifdef TEST_MAMBA2_CUDA
+    // Same graph on a backend (the GPU), with x/B/C as views into one {d_proj, n_tok} tensor the
+    // way the model lays them out (the projection writes z | xBC | dt in one matmul), so the strides
+    // match production.
+    bool run_backend(ggml_backend_t backend, int64_t n_tok_run, const std::vector<float> & state_in,
+                     std::vector<float> & y_out, std::vector<float> & state_out) const {
+        struct ggml_init_params ip = { 8 * 1024 * 1024, nullptr, true };  // no_alloc
+        struct ggml_context * ctx = ggml_init(ip);
+
+        const int64_t slots  = 1;
+        const int64_t d_BC   = d_state * n_group;
+        const int64_t d_proj = head_dim * n_head + 2 * d_BC;
+
+        struct ggml_tensor * t_p  = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_proj, n_tok_run, n_seq);
+        struct ggml_tensor * t_x  = ggml_view_4d(ctx, t_p, head_dim, n_head, n_tok_run, n_seq,
+                                                 head_dim * sizeof(float), d_proj * sizeof(float),
+                                                 d_proj * n_tok_run * sizeof(float), 0);
+        struct ggml_tensor * t_B  = ggml_view_4d(ctx, t_p, d_state, n_group, n_tok_run, n_seq,
+                                                 d_state * sizeof(float), d_proj * sizeof(float),
+                                                 d_proj * n_tok_run * sizeof(float),
+                                                 head_dim * n_head * sizeof(float));
+        struct ggml_tensor * t_C  = ggml_view_4d(ctx, t_p, d_state, n_group, n_tok_run, n_seq,
+                                                 d_state * sizeof(float), d_proj * sizeof(float),
+                                                 d_proj * n_tok_run * sizeof(float),
+                                                 (head_dim * n_head + d_BC) * sizeof(float));
+        struct ggml_tensor * t_s  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d_state, head_dim, n_head, slots);
+        struct ggml_tensor * t_dt = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_head, n_tok_run, n_seq);
+        struct ggml_tensor * t_A  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, n_head);
+        struct ggml_tensor * t_id = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_seq);
+
+        // the scan result is created by the op, so it has to exist before the backend allocates
+        struct ggml_tensor * y = ggml_ssm_scan_m2(ctx, t_s, t_x, t_dt, t_A, t_B, t_C, t_id, /*K=*/1, nullptr);
+
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+        if (buf == nullptr) {
+            fprintf(stderr, "test-mamba2: cannot allocate the graph on the backend\n");
+            ggml_free(ctx);
+            return false;
+        }
+
+        ggml_backend_tensor_set(t_s,  state_in.data(), 0, state_in.size() * sizeof(float));
+        ggml_backend_tensor_set(t_A,  A.data(), 0, A.size() * sizeof(float));
+        ggml_backend_tensor_set(t_dt, dt.data(), 0, (size_t) (n_head * n_tok_run * n_seq) * sizeof(float));
+        for (int64_t q = 0; q < n_seq; ++q) {
+            for (int64_t t = 0; t < n_tok_run; ++t) {
+                const size_t row = (size_t) (q * n_tok_run + t) * d_proj * sizeof(float);
+                ggml_backend_tensor_set(t_p, x.data() + (size_t) (q * n_tok_run + t) * head_dim * n_head, row,
+                                        (size_t) head_dim * n_head * sizeof(float));
+                ggml_backend_tensor_set(t_p, B.data() + (size_t) (q * n_tok_run + t) * d_BC,
+                                        row + (size_t) head_dim * n_head * sizeof(float),
+                                        (size_t) d_BC * sizeof(float));
+                ggml_backend_tensor_set(t_p, C.data() + (size_t) (q * n_tok_run + t) * d_BC,
+                                        row + (size_t) (head_dim * n_head + d_BC) * sizeof(float),
+                                        (size_t) d_BC * sizeof(float));
+            }
+        }
+        for (int64_t i = 0; i < n_seq; ++i) {
+            const int32_t id = 0;
+            ggml_backend_tensor_set(t_id, &id, (size_t) i * sizeof(int32_t), sizeof(int32_t));
+        }
+
+        ggml_cgraph * g = ggml_new_graph(ctx);
+        ggml_build_forward_expand(g, y);
+        if (ggml_backend_graph_compute(backend, g) != GGML_STATUS_SUCCESS) {
+            fprintf(stderr, "test-mamba2: backend compute failed\n");
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return false;
+        }
+
+        const int64_t n_y = head_dim * n_head * n_tok_run * n_seq;
+        y_out.assign((size_t) n_y, 0.0f);
+        ggml_backend_tensor_get(y, y_out.data(), 0, y_out.size() * sizeof(float));
+
+        const int64_t n_state = d_state * head_dim * n_head * slots;
+        state_out.assign((size_t) n_state, 0.0f);
+        ggml_backend_tensor_get(y, state_out.data(), (size_t) n_y * sizeof(float),
+                                state_out.size() * sizeof(float));
+
+        ggml_backend_buffer_free(buf);
+        ggml_free(ctx);
+        return true;
+    }
+#endif
 };
+
+// ---------------------------------------------------------------- mamba-2 scan on the GPU
+
+#ifdef TEST_MAMBA2_CUDA
+// The chunked SSD (cuBLAS) path is taken only above SSM_SSD_MIN_TOKENS tokens, and it is the one
+// that shipped broken once (a cuBLAS handle that was not bound to the stream): the GPU result
+// disagreed with token-by-token decoding while the CPU reference was fine. Compare the two GPU
+// paths, which is the only way to see it without a model.
+static void test_mamba2_scan_cuda() {
+    ggml_backend_t backend = ggml_backend_cuda_init(0, nullptr, nullptr);
+    if (backend == nullptr) {
+        printf("mamba-2 cuda: no CUDA device, skipped\n");
+        return;
+    }
+
+    // d_state 96/128 are shapes the CUDA scan kernel instantiates, head_dim % 8 == 0 is required by
+    // the SSD path, and n_tok 160 is above the 128-token switch. n_tok must stay <= d_state*n_group
+    // because the SSD matmuls take the token stride of B/C as their leading dimension (in a model it
+    // is the projection width, always larger than the chunk).
+    for (int64_t d_state : { 96, 128 }) {
+        scan_case c;
+        c.d_state  = d_state;
+        c.head_dim = 64;
+        c.n_head   = 4;
+        c.n_group  = 2;
+        c.n_tok    = 160;
+        c.init();
+
+        std::vector<float> y_all, s_all;
+        if (!c.run_backend(backend, c.n_tok, c.s0, y_all, s_all)) {
+            n_fail++;
+            continue;
+        }
+
+        std::vector<float> y_chain, state = c.s0;
+        for (int64_t t = 0; t < c.n_tok; ++t) {
+            const size_t nx = (size_t) (c.head_dim * c.n_head);
+            const size_t nd = (size_t) c.n_head;
+            const size_t nb = (size_t) (c.d_state * c.n_group);
+            scan_case one = c;
+            one.x.assign(c.x.begin() + (size_t) t * nx, c.x.begin() + (size_t) (t + 1) * nx);
+            one.dt.assign(c.dt.begin() + (size_t) t * nd, c.dt.begin() + (size_t) (t + 1) * nd);
+            one.B.assign(c.B.begin() + (size_t) t * nb, c.B.begin() + (size_t) (t + 1) * nb);
+            one.C.assign(c.C.begin() + (size_t) t * nb, c.C.begin() + (size_t) (t + 1) * nb);
+            std::vector<float> y1, s1;
+            if (!one.run_backend(backend, 1, state, y1, s1)) {
+                n_fail++;
+                break;
+            }
+            y_chain.insert(y_chain.end(), y1.begin(), y1.end());
+            state = s1;
+        }
+
+        double worst = 0.0;
+        for (size_t i = 0; i < y_all.size() && i < y_chain.size(); ++i) {
+            worst = worst_of(worst, std::fabs((double) y_all[i] - (double) y_chain[i]));
+        }
+        double worst_s = 0.0;
+        for (size_t i = 0; i < s_all.size(); ++i) {
+            worst_s = worst_of(worst_s, std::fabs((double) s_all[i] - (double) state[i]));
+        }
+        // the SSD path keeps its intermediates (X_dt, B_weighted, M) in fp16, so this is looser than
+        // the CPU check - a wrong stream still shows up as an O(1) difference, a rounding one does not
+        const double scale = 1.0 + std::fabs((double) *std::max_element(y_all.begin(), y_all.end()));
+        CHECK(worst   < 3e-3 * scale);
+        CHECK(worst_s < 3e-3 * (1.0 + std::fabs((double) *std::max_element(s_all.begin(), s_all.end()))));
+
+        printf("mamba-2 scan cuda d_state=%lld (SSD path): chunked vs token-by-token, "
+               "worst |dy| %.2e, worst |dstate| %.2e\n",
+               (long long) d_state, worst, worst_s);
+    }
+
+    ggml_backend_free(backend);
+}
+#endif
 
 static void test_mamba2_scan(int64_t d_state, int64_t n_head, int64_t n_group) {
     scan_case c;
@@ -404,6 +573,10 @@ int main() {
     test_mamba2_scan(8, 2, 2);
     test_mamba2_scan(8, 4, 2);
     test_mamba2_scan(96, 4, 2);
+
+#ifdef TEST_MAMBA2_CUDA
+    test_mamba2_scan_cuda();
+#endif
 
     test_mamba2_scan_snapshots(8, 2, 2);
     test_mamba2_scan_snapshots(96, 4, 2);
