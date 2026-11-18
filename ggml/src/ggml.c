@@ -3263,7 +3263,6 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 struct ggml_context {
     size_t mem_size;
     void* mem_buffer;
-    bool   mem_buffer_owned;
     bool   no_alloc;
     bool   no_alloc_save; // this is used to save the no_alloc state when using scratch buffers
 
@@ -3274,12 +3273,6 @@ struct ggml_context {
 
     struct ggml_scratch scratch;
     struct ggml_scratch scratch_save;
-};
-
-struct ggml_context_container {
-    bool used;
-
-    struct ggml_context context;
 };
 
 struct ggml_compute_state_shared {
@@ -5153,7 +5146,6 @@ struct ggml_numa_nodes {
 //
 
 struct ggml_state {
-    struct ggml_context_container contexts[GGML_MAX_CONTEXTS];
     struct ggml_numa_nodes numa;
 };
 
@@ -5827,16 +5819,11 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
             const uint64_t t_start = ggml_time_us(); UNUSED(t_start);
 
             g_state = (struct ggml_state) {
-                /*.contexts =*/ { { 0 } },
                 /*.numa =*/ {
                     .n_nodes = 0,
                     .total_cpus = 0,
                 },
             };
-
-            for (int i = 0; i < GGML_MAX_CONTEXTS; ++i) {
-                g_state.contexts[i].used = false;
-            }
 
             const uint64_t t_end = ggml_time_us(); UNUSED(t_end);
 
@@ -5846,38 +5833,34 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
         is_first_call = false;
     }
 
-    // find non-used context in g_state
-    struct ggml_context * ctx = NULL;
-
-    for (int i = 0; i < GGML_MAX_CONTEXTS; i++) {
-        if (!g_state.contexts[i].used) {
-            g_state.contexts[i].used = true;
-            ctx = &g_state.contexts[i].context;
-
-            GGML_PRINT_DEBUG("%s: found unused context %d\n", __func__, i);
-            break;
-        }
-    }
-
-    if (ctx == NULL) {
-        GGML_PRINT_DEBUG("%s: no unused context found\n", __func__);
-
-        ggml_critical_section_end();
-
-        return NULL;
-    }
-
     // allow to call ggml_init with 0 size
     if (params.mem_size == 0) {
         params.mem_size = GGML_MEM_ALIGN;
     }
 
-    const size_t mem_size = params.mem_buffer ? params.mem_size : GGML_PAD(params.mem_size, GGML_MEM_ALIGN);
+    const size_t mem_size = params.mem_buffer
+        ? params.mem_size
+        : GGML_PAD(params.mem_size, GGML_MEM_ALIGN);
+    const size_t allocation_size = params.mem_buffer
+        ? sizeof(struct ggml_context)
+        : sizeof(struct ggml_context) + mem_size + GGML_MEM_ALIGN;
+
+    struct ggml_context * ctx = malloc(allocation_size);
+    if (ctx == NULL) {
+        ggml_critical_section_end();
+        GGML_PRINT("%s: insufficient memory (attempted to allocate %zu bytes)\n", __func__, allocation_size);
+        GGML_ABORT("fatal error: %s failed to allocate context block (%zu bytes)", __func__, allocation_size);
+        return NULL;
+    }
+
+    void * mem_buffer = params.mem_buffer;
+    if (mem_buffer == NULL) {
+        mem_buffer = (void *) GGML_PAD((uintptr_t) (ctx + 1), GGML_MEM_ALIGN);
+    }
 
     *ctx = (struct ggml_context) {
         /*.mem_size           =*/ mem_size,
-        /*.mem_buffer         =*/ params.mem_buffer ? params.mem_buffer : GGML_ALIGNED_MALLOC(mem_size),
-        /*.mem_buffer_owned   =*/ params.mem_buffer ? false : true,
+        /*.mem_buffer         =*/ mem_buffer,
         /*.no_alloc           =*/ params.no_alloc,
         /*.no_alloc_save      =*/ params.no_alloc,
         /*.n_objects          =*/ 0,
@@ -5886,8 +5869,6 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
         /*.scratch            =*/ { 0, 0, NULL, },
         /*.scratch_save       =*/ { 0, 0, NULL, },
     };
-
-    GGML_ASSERT(ctx->mem_buffer != NULL);
 
     GGML_ASSERT_ALIGNED(ctx->mem_buffer);
 
@@ -5909,32 +5890,10 @@ void ggml_free(struct ggml_context * ctx) {
         return;
     }
 
-    // make this function thread safe
-    ggml_critical_section_start();
+    GGML_PRINT_DEBUG("%s: context has been freed. memory used = %zu\n",
+            __func__, ggml_used_mem(ctx));
 
-    bool found = false;
-
-    for (int i = 0; i < GGML_MAX_CONTEXTS; i++) {
-        if (&g_state.contexts[i].context == ctx) {
-            g_state.contexts[i].used = false;
-
-            GGML_PRINT_DEBUG("%s: context %d has been freed. memory used = %zu\n",
-                    __func__, i, ggml_used_mem(ctx));
-
-            if (ctx->mem_buffer_owned) {
-                GGML_ALIGNED_FREE(ctx->mem_buffer);
-            }
-
-            found = true;
-            break;
-        }
-    }
-
-    if (!found) {
-        GGML_PRINT_DEBUG("%s: context not found\n", __func__);
-    }
-
-    ggml_critical_section_end();
+    free(ctx);
 }
 
 size_t ggml_used_mem(const struct ggml_context * ctx) {

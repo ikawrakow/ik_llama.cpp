@@ -542,7 +542,7 @@ cmake --build build --config Release -j$(nproc)
 | `-DCMAKE_TOOLCHAIN_FILE=[...]` | Example: on Windows tells `cmake` where is `sqlite3`. |
 | `-DGGML_NATIVE=ON` | Turn it off when cross-compiling. |
 | `-DGGML_NCCL=OFF` | To disable usage of NCCL. |
-| `-DGGML_MAX_CONTEXTS=2048` | Only need this if you are planning to use quants generated with the Thireus quantization suite |
+| `-DGGML_MAX_CONTEXTS=2048` | Does not limit live GGML contexts. On Windows, values above 512 still raise the model loader's stdio limit for models with many shards (capped at 8192). |
 | `-DGGML_MAX_SRC=N` | The maximum number of GPUs. |
 
 ### Environment variables
