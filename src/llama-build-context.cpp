@@ -1426,6 +1426,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
          post_norm_data * pnd) {
 
     auto can_fuse_up_gate = [type_op] (const ggml_tensor * u, const ggml_tensor * g) {
+        if (u->type == GGML_TYPE_F8_E4M3_KS || u->type == GGML_TYPE_F8_E4M3_B128) return false;
         if (type_op != LLM_FFN_SWIGLU_OAI && type_op != LLM_FFN_SITU) return true;
         return ggml_is_quantized(u->type) && u->type == g->type;
     };

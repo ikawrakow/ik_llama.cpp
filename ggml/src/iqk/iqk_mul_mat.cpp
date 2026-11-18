@@ -250,6 +250,10 @@ struct MulMat {
     }
     static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
     static inline ggml_type is_dequant_better(ggml_type type, int nrc_y) {
+        if (type == GGML_TYPE_F8_E4M3_KS) return nrc_y >= 32 ? GGML_TYPE_BF16 : type;
+#if defined __AVX2__ && !defined __AVX512F__
+        if (type == GGML_TYPE_F8_E4M3_B128) return nrc_y >= 32 ? GGML_TYPE_F32 : type;
+#endif
 #ifdef __AVX2__
 #ifdef HAVE_FANCY_SIMD
         auto q8_k_type = GGML_TYPE_Q8_K_R16;
@@ -505,6 +509,10 @@ static work_buffer_t & thread_local_work_buffer() {
 }
 
 bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy, size_t stride_y, int nrc_x) {
+    if (typeA == GGML_TYPE_F8_E4M3_KS || typeA == GGML_TYPE_F8_E4M3_B128) {
+        return iqk_convert_f8(typeA, n, vx, bx, vy, stride_y, nrc_x);
+    }
+
 
     switch (typeA) {
         //case GGML_TYPE_F16:
@@ -629,6 +637,43 @@ static void split_units_and_columns(int nunit, int nrow, int Ny, int max_units, 
     }
 }
 
+static void mul_mat_f8_ks_repacked(MulMat& mm, int n, const void * vx, size_t bx,
+        const void * scales, size_t scale_stride, DataInfo info, int nrc_x, int last_y) {
+    const DataInfo out = info;
+    mm.mul_mat_NxM(n, vx, bx, info, nrc_x, last_y);
+    for (int iy = 0; iy < last_y - out.cur_y; ++iy) {
+        float * dst = out.dst_row(iy);
+        for (int ix = 0; ix < nrc_x; ++ix) {
+            float scale;
+            memcpy(&scale, (const char *)scales + ix*scale_stride, sizeof(scale));
+            dst[ix] *= scale;
+        }
+    }
+}
+
+static inline bool is_f8_q80(int typeA, int typeB) {
+    return (typeA == GGML_TYPE_F8_E4M3_KS || typeA == GGML_TYPE_F8_E4M3_B128) && typeB != GGML_TYPE_F32 && typeB != GGML_TYPE_BF16;
+}
+
+static inline ggml_type f8_q80_type(long Nx, int Ny) {
+    const auto type = MulMat::is_dequant_better(GGML_TYPE_Q8_0, Ny);
+    return Nx%MulMat::num_rows(type) ? GGML_TYPE_Q8_0 : type;
+}
+
+static void convert_f8_q80(ggml_type type, int typeA, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    const size_t row_size = ggml_row_size(GGML_TYPE_Q8_0, n);
+    if (type == GGML_TYPE_Q8_0) {
+        iqk_convert_f8_q80(typeA, n, vx, bx, vy, row_size, nrc_x);
+        return;
+    }
+    thread_local work_buffer_t q8;
+    if (q8.size() < row_size*nrc_x) q8.resize(row_size*nrc_x);
+    iqk_convert_f8_q80(typeA, n, vx, bx, q8.data(), row_size, nrc_x);
+    if (!iqk_convert_repack(GGML_TYPE_Q8_0, n, q8.data(), row_size, vy, n, nrc_x)) {
+        GGML_ABORT("Fatal error");
+    }
+}
+
 extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
@@ -641,7 +686,8 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     size_t row_size_qx = strideA; //*ggml_type_size(ggml_type(typeA));
     size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
 
-    if (Nx/nth < k_min_step) {
+    const bool f8_q80 = is_f8_q80(typeA, typeB);
+    if (Nx/nth < k_min_step && !f8_q80) {
         if (auto dequant_type = MulMat::is_dequant_better(ggml_type(typeA), Ny); Ny >= 64 && dequant_type != ggml_type(typeA) &&
                 Nx%MulMat::num_rows(dequant_type) == 0 && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
             constexpr int k_y_step = 64;
@@ -668,7 +714,12 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
                     converted_ix = ix;
                 }
                 DataInfo info{C + ix, (const char *)B, (size_t)stride_C, row_size_qy, iy, 1, nullptr, 0};
-                mm.mul_mat_NxM(ne00, f.data(), row_size_dq, info, nrc_x, iy + nrc_y);
+                if (typeA == GGML_TYPE_F8_E4M3_KS) {
+                    mul_mat_f8_ks_repacked(mm, ne00, f.data(), row_size_dq,
+                            (const char *)A + ix*strideA, strideA, info, nrc_x, iy + nrc_y);
+                } else {
+                    mm.mul_mat_NxM(ne00, f.data(), row_size_dq, info, nrc_x, iy + nrc_y);
+                }
             }
             return true;
         }
@@ -722,7 +773,7 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     int npt = (Nx + nth - 1)/nth;
 
     auto etypeA = ggml_type(typeA);
-    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); npt >= 16 &&
+    if (auto dequant_type = f8_q80 ? f8_q80_type(Nx, Ny) : MulMat::is_dequant_better(etypeA, Ny); (npt >= 16 || f8_q80) &&
              dequant_type != etypeA && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny) &&
              Nx%MulMat::num_rows(ggml_type(dequant_type)) == 0) {
 
@@ -738,11 +789,18 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         split_units_and_columns(Nx/num_rows, num_rows, Ny, std::max(1, k_x_step/num_rows), true, ith, nth,
                 [&](int ix, int nrc_x, int first_y, int last_y) {
             if (f.size() < row_size_qx*nrc_x) f.resize(row_size_qx*nrc_x);
-            if (!iqk_convert_repack(typeA, ne00, (const char *)A + ix*strideA, strideA, f.data(), ne00, nrc_x)) {
+            if (f8_q80) {
+                convert_f8_q80(dequant_type, typeA, ne00, (const char *)A + ix*strideA, strideA, f.data(), nrc_x);
+            } else if (!iqk_convert_repack(typeA, ne00, (const char *)A + ix*strideA, strideA, f.data(), ne00, nrc_x)) {
                 GGML_ABORT("Fatal error");
             }
             DataInfo info{C + ix, (const char *)B, (size_t)stride_C, row_size_qy, first_y, 1, nullptr, 0};
-            mm.mul_mat_NxM(ne00, f.data(), row_size_qx, info, nrc_x, last_y);
+            if (typeA == GGML_TYPE_F8_E4M3_KS && !f8_q80) {
+                mul_mat_f8_ks_repacked(mm, ne00, f.data(), row_size_qx,
+                        (const char *)A + ix*strideA, strideA, info, nrc_x, last_y);
+            } else {
+                mm.mul_mat_NxM(ne00, f.data(), row_size_qx, info, nrc_x, last_y);
+            }
         });
 
         return true;
@@ -900,7 +958,8 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
 
     auto etypeA = ggml_type(typeA);
     //auto etypeB = ggml_type(typeB);
-    auto dequant_type = MulMat::is_dequant_better(etypeA, Ny);
+    const bool f8_q80 = is_f8_q80(typeA, typeB);
+    auto dequant_type = f8_q80 ? f8_q80_type(Nx, Ny) : MulMat::is_dequant_better(etypeA, Ny);
     //if (etypeB != GGML_TYPE_F32) {
     //    if (ith == 0) printf("%s: typeA = %s, typeB = %s, dequant_type = %s\n", __func__, ggml_type_name(etypeA), ggml_type_name(etypeB), ggml_type_name(dequant_type));
     //}
@@ -929,10 +988,17 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
             this_info.s += ix;
             int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
             if (f.size() < row_size_qx*this_nrc_x) f.resize(row_size_qx*this_nrc_x);
-            if (!iqk_convert_repack(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), ne00, this_nrc_x)) {
+            if (f8_q80) {
+                convert_f8_q80(dequant_type, typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), this_nrc_x);
+            } else if (!iqk_convert_repack(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), ne00, this_nrc_x)) {
                 GGML_ABORT("Fatal error");
             }
-            mm.mul_mat_NxM(ne00, f.data(), row_size_qx, this_info, this_nrc_x, Ny);
+            if (typeA == GGML_TYPE_F8_E4M3_KS && !f8_q80) {
+                mul_mat_f8_ks_repacked(mm, ne00, f.data(), row_size_qx,
+                        (const char *)A + (first_x + ix)*strideA, strideA, this_info, this_nrc_x, Ny);
+            } else {
+                mm.mul_mat_NxM(ne00, f.data(), row_size_qx, this_info, this_nrc_x, Ny);
+            }
         }
 
         return true;
@@ -972,7 +1038,8 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
     MulMat mm;
 
     auto etypeA = ggml_type(typeA);
-    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
+    const bool f8_q80 = is_f8_q80(typeA, typeB);
+    if (auto dequant_type = f8_q80 ? f8_q80_type(Nx, Ny) : typeA == GGML_TYPE_F8_E4M3_KS ? etypeA : MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
         if (MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
 
             constexpr int k_x_step = 64;
@@ -989,11 +1056,16 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
                 if (f.size() < 2*row_size_qx*nrc_x) f.resize(2*row_size_qx*nrc_x);
                 auto Xu = f.data();
                 auto Xg = f.data() + row_size_qx*nrc_x;
-                if (!iqk_convert_repack(typeA, ne00, (const char *)Aup   + ix*strideA, strideA, Xu, ne00, nrc_x)) {
-                    GGML_ABORT("Fatal error");
-                }
-                if (!iqk_convert_repack(typeA, ne00, (const char *)Agate + ix*strideA, strideA, Xg, ne00, nrc_x)) {
-                    GGML_ABORT("Fatal error");
+                if (f8_q80) {
+                    convert_f8_q80(dequant_type, typeA, ne00, (const char *)Aup   + ix*strideA, strideA, Xu, nrc_x);
+                    convert_f8_q80(dequant_type, typeA, ne00, (const char *)Agate + ix*strideA, strideA, Xg, nrc_x);
+                } else {
+                    if (!iqk_convert_repack(typeA, ne00, (const char *)Aup   + ix*strideA, strideA, Xu, ne00, nrc_x)) {
+                        GGML_ABORT("Fatal error");
+                    }
+                    if (!iqk_convert_repack(typeA, ne00, (const char *)Agate + ix*strideA, strideA, Xg, ne00, nrc_x)) {
+                        GGML_ABORT("Fatal error");
+                    }
                 }
                 auto up_b   = up_b_c   ? (const float *)up_b_c + ix : nullptr;
                 auto gate_b = gate_b_c ? (const float *)gate_b_c + ix : nullptr;
@@ -1034,6 +1106,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
     (void)Ny;
 
     switch (typeA) {
+        case GGML_TYPE_F8_E4M3_KS:
+        case GGML_TYPE_F8_E4M3_B128:
+            return iqk_set_kernels_f8(typeA, typeB, mm.funcs);
         case GGML_TYPE_F16:
         case GGML_TYPE_F32:
         case GGML_TYPE_BF16:
@@ -1149,6 +1224,9 @@ namespace {
 bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
 
     switch (typeA) {
+        case GGML_TYPE_F8_E4M3_KS:
+        case GGML_TYPE_F8_E4M3_B128:
+            return iqk_set_kernels_f8(typeA, typeB, m.funcs);
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
         case GGML_TYPE_F32:

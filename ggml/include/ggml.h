@@ -377,7 +377,9 @@ extern "C" {
     GGML_API void        ggml_fp32_to_fp16_row(const float *, ggml_fp16_t *, int64_t);
 
     // google brain half-precision bfloat16
+    typedef struct { uint8_t bits; } ggml_fp8_e4m3_t;
     typedef struct { uint16_t bits; } ggml_bf16_t;
+    GGML_API void ggml_fp8_e4m3_to_bf16_row(const ggml_fp8_e4m3_t *, ggml_bf16_t *, int64_t);
     GGML_API ggml_bf16_t ggml_fp32_to_bf16(float);
     GGML_API float       ggml_bf16_to_fp32(ggml_bf16_t);  // consider just doing << 16
     GGML_API void        ggml_bf16_to_fp32_row(const ggml_bf16_t *, float *, int64_t);
@@ -428,6 +430,7 @@ extern "C" {
         GGML_TYPE_NVFP4     = 40,
         GGML_TYPE_Q1_0_G128 = 41,  // Bonsai 1-bit quants
         GGML_TYPE_Q2_0      = 42,  // same type id as mainline GGML_TYPE_Q2_0
+        GGML_TYPE_F8_E4M3   = 43,
         //
         //
         GGML_TYPE_Q8_0_X4 = 97,
@@ -472,6 +475,8 @@ extern "C" {
         GGML_TYPE_TQP6       = 166, // pair trellis K=6, group 128 (Agention; on-disk id 148, remapped at load)
         GGML_TYPE_TQP7       = 167, // pair trellis K=7, group 128 (Agention; on-disk id 149, remapped at load)
         GGML_TYPE_NVFP4_KS   = 168,
+        GGML_TYPE_F8_E4M3_KS = 169,
+        GGML_TYPE_F8_E4M3_B128 = 170,
 
         GGML_TYPE_Q4_0_R8    = 202,
         GGML_TYPE_Q5_0_R4    = 206,
@@ -798,6 +803,7 @@ extern "C" {
         GGML_TENSOR_FLAG_OUTPUT = 2,
         GGML_TENSOR_FLAG_PARAM  = 4,
         GGML_TENSOR_FLAG_LOSS   = 8, // ...defines loss for numerical optimization (multiple loss tensors add up)
+        GGML_TENSOR_FLAG_CROSS_SPLIT = 16, // ...has a reader outside the graph that the backend receives
     };
 
     enum ggml_tri_type {

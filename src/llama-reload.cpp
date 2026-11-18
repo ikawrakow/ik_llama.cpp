@@ -292,6 +292,12 @@ static void populate_moe_siblings(const char * name, tensor_reload_source & src)
 // ------------------------------------------------------------------
 // Snapshot helper
 // ------------------------------------------------------------------
+static void reload_fp8_input_scale(ggml_tensor * tensor, const tensor_reload_source & src, bool fp8_w8a8) {
+    const bool is_fp8 = tensor->type == GGML_TYPE_F8_E4M3_KS || tensor->type == GGML_TYPE_F8_E4M3_B128;
+    const bool restore = src.original_type == tensor->type && (is_fp8 || tensor->type == GGML_TYPE_NVFP4_KS);
+    ggml_set_input_scale(tensor, restore ? src.original_input_scale : is_fp8 && fp8_w8a8 ? -1.0f : 0.0f);
+}
+
 static void snapshot_tensor_source(struct ggml_tensor * tensor,
                                    tensor_reload_source & src)
 {
@@ -301,6 +307,7 @@ static void snapshot_tensor_source(struct ggml_tensor * tensor,
     src.original_data   = tensor->data;
     src.original_nbytes = ggml_nbytes(tensor);
     src.original_type   = tensor->type;
+    src.original_input_scale = ggml_get_input_scale(tensor);
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         src.original_ne[i] = tensor->ne[i];
         src.original_nb[i] = tensor->nb[i];
@@ -331,7 +338,7 @@ static void snapshot_tensor_source(struct ggml_tensor * tensor,
 // ------------------------------------------------------------------
 // Constructor
 // ------------------------------------------------------------------
-reload_info::reload_info(const llama_model_loader & ml) {
+reload_info::reload_info(const llama_model_loader & ml) : fp8_w8a8(ml.fp8_w8a8) {
     if (ml.repack_tensors) {
         // -rtr repacks host tensors in place (type changes to the interleaved
         // _R4/_R8/_R16 variants); a later restore writes the plain file type,
@@ -421,6 +428,7 @@ static bool reattach_split_tensor_to_shared(llama_model & model, const char * na
     tensor->buffer = src.original_buffer;
     tensor->data   = src.original_data;
     tensor->type   = src.original_type;
+    reload_fp8_input_scale(tensor, src, model.reload->fp8_w8a8);
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         tensor->ne[i] = src.original_ne[i];
         tensor->nb[i] = src.original_nb[i];
@@ -442,6 +450,7 @@ static bool reattach_split_tensor_to_shared(llama_model & model, const char * na
                 extra->splits[i]->data   = os.data;
                 extra->splits[i]->buffer = os.buffer;
                 extra->splits[i]->type   = src.original_type;
+                reload_fp8_input_scale(extra->splits[i], src, model.reload->fp8_w8a8);
                 for (int j = 0; j < GGML_MAX_DIMS; ++j) {
                     extra->splits[i]->ne[j] = os.ne[j];
                     extra->splits[i]->nb[j] = os.nb[j];
@@ -763,6 +772,7 @@ static bool reload_tensor_non_split_path(
         tensor->buffer = src.original_buffer;
         tensor->data   = src.original_data;
         tensor->type   = src.original_type;
+        reload_fp8_input_scale(tensor, src, model.reload->fp8_w8a8);
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             tensor->ne[i] = src.original_ne[i];
             tensor->nb[i] = src.original_nb[i];
@@ -811,9 +821,9 @@ static bool reload_tensor_non_split_path(
 // apply_tensor_type_change
 // ------------------------------------------------------------------
 static bool apply_tensor_type_change(
-        llama_model & /*model*/,
+        llama_model & model,
         struct ggml_tensor * tensor,
-        tensor_reload_source & /*src*/,
+        tensor_reload_source & src,
         ggml_type curr_type)
 {
 #ifndef NDEBUG
@@ -821,6 +831,7 @@ static bool apply_tensor_type_change(
     (void)name;
 #endif
     tensor->type = curr_type;
+    reload_fp8_input_scale(tensor, src, model.reload->fp8_w8a8);
 
     int n_dims = 0;
     for (int i = GGML_MAX_DIMS - 1; i >= 0; --i) {
@@ -877,6 +888,7 @@ static bool apply_tensor_type_change(
             auto split = extra->splits[i];
             if (!split) continue;
             split->type = curr_type;
+            reload_fp8_input_scale(split, src, model.reload->fp8_w8a8);
             auto t = ggml_new_tensor(ctx, curr_type, n_dims, split->ne);
             if (t) {
                 for (int j = 0; j < GGML_MAX_DIMS; ++j) split->nb[j] = t->nb[j];
@@ -943,6 +955,11 @@ bool reload_info::reload_tensor(const char * name, llama_model & model) {
     }
     if (curr_type == GGML_TYPE_NVFP4) {
         LLAMA_LOG_WARN("hotswap: tensor '%s' cannot be hot-swapped: the file stores it as NVFP4 (type 40), which is converted only at load time; skipping\n", name);
+        return false;
+    }
+
+    if (curr_type == GGML_TYPE_F8_E4M3) {
+        LLAMA_LOG_WARN("hotswap: tensor '%s' cannot be hot-swapped: the file stores it as F8_E4M3 (type 43), which is converted only at load time; skipping\n", name);
         return false;
     }
 
@@ -1056,6 +1073,11 @@ bool reload_info::reload_changed_tensors(llama_model & model) {
             if (p.first == kv.first) { tensor = p.second; break; }
         }
         if (!tensor) continue;
+
+        if (ggml_get_input_scale(tensor) > 0.0f) {
+            LLAMA_LOG_ERROR("hotswap: tensor '%s' has a static input scale, which is set only at load time; no tensor is reloaded\n", kv.first.c_str());
+            return false;
+        }
 
         bool dims_ok = true;
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {

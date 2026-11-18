@@ -3699,6 +3699,9 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
             if (wq->type == wk->type) {
                 GGML_ASSERT(wq->ne[0] == wk->ne[0]);
                 layer.wkq_a_mqa = ggml_new_tensor_2d(ctx_split, wq->type, wq->ne[0], wq->ne[1] + wk->ne[1]);
+                if (wq->type == GGML_TYPE_F8_E4M3_KS || wq->type == GGML_TYPE_F8_E4M3_B128) {
+                    ggml_set_input_scale(layer.wkq_a_mqa, ggml_get_input_scale(wq) == ggml_get_input_scale(wk) ? ggml_get_input_scale(wq) : -1.0f);
+                }
                 snprintf(layer.wkq_a_mqa->name, GGML_MAX_NAME, "blk.%d.attn_qk_a_mqa.weight", i);
                 if (is_lite) {
                     layer.wq = ml.create_tensor_as_view(ctx_split, layer.wkq_a_mqa, q_name.c_str(), { wq->ne[0], wq->ne[1] }, 0);
@@ -4017,6 +4020,9 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
             if (wq->type == wk->type) {
                 GGML_ASSERT(wq->ne[0] == wk->ne[0]);
                 layer.wkq_a_mqa = ggml_new_tensor_2d(ctx_split, wq->type, wq->ne[0], wq->ne[1] + wk->ne[1]);
+                if (wq->type == GGML_TYPE_F8_E4M3_KS || wq->type == GGML_TYPE_F8_E4M3_B128) {
+                    ggml_set_input_scale(layer.wkq_a_mqa, ggml_get_input_scale(wq) == ggml_get_input_scale(wk) ? ggml_get_input_scale(wq) : -1.0f);
+                }
                 snprintf(layer.wkq_a_mqa->name, GGML_MAX_NAME, "blk.%d.attn_qk_a_mqa.weight", i);
                 layer.wq_a = ml.create_tensor_as_view(ctx_split, layer.wkq_a_mqa, q_name.c_str(), { wq->ne[0], wq->ne[1] }, 0, flags);
                 layer.wkv_a_mqa = ml.create_tensor_as_view(ctx_split, layer.wkq_a_mqa, k_name.c_str(), { wk->ne[0], wk->ne[1] }, wq->ne[1]*wq->nb[1], flags);
@@ -5771,7 +5777,7 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     auto u_meta = ml.require_tensor_meta(u_name.c_str());
     auto g_meta = ml.require_tensor_meta(g_name.c_str());
 
-    const bool same_scale = u_meta->type != GGML_TYPE_NVFP4_KS || ggml_get_input_scale(u_meta) == ggml_get_input_scale(g_meta);
+    const bool same_scale = ggml_get_input_scale(u_meta) == ggml_get_input_scale(g_meta);
     if (u_meta->type != g_meta->type || u_meta->ne[0] != g_meta->ne[0] || u_meta->ne[2] != g_meta->ne[2] || !same_scale) {
         LLAMA_LOG_INFO("%s: not merging because up/gate meta info is different\n", __func__);
         return false;
@@ -5793,7 +5799,7 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     LLAMA_LOG_INFO("%s: merging up/gate in layer %d\n", __func__, i);
 
     layer.ffn_up_gate_exps = ggml_new_tensor_3d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
-    if (u_meta->type == GGML_TYPE_NVFP4_KS) {
+    if (u_meta->type == GGML_TYPE_NVFP4_KS || u_meta->type == GGML_TYPE_F8_E4M3_KS || u_meta->type == GGML_TYPE_F8_E4M3_B128) {
         ggml_set_input_scale(layer.ffn_up_gate_exps, ggml_get_input_scale(u_meta));
     }
     snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_gate_up_exps.weight", i);
@@ -5916,15 +5922,15 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
     auto wv = ml.require_tensor_meta(wv_name.c_str());
     GGML_ASSERT(wq && wk && wv);
 
-    const bool same_qk_scale = wq->type != GGML_TYPE_NVFP4_KS || ggml_get_input_scale(wq) == ggml_get_input_scale(wk);
-    const bool same_qv_scale = wq->type != GGML_TYPE_NVFP4_KS || ggml_get_input_scale(wq) == ggml_get_input_scale(wv);
+    const bool same_qk_scale = ggml_get_input_scale(wq) == ggml_get_input_scale(wk);
+    const bool same_qv_scale = ggml_get_input_scale(wq) == ggml_get_input_scale(wv);
     bool fused_qkv = false;
     if (ml.merge_qkv && same_qk_scale && same_qv_scale && wq->type == wk->type && wq->type == wv->type && (ignore_attn_scale || hparams.f_attention_scale == 0.0f)) {
         GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
         GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
         GGML_ASSERT(wv->ne[0] == n_embd && wv->ne[1] == n_embd_gqa);
         layer.wqkv = ggml_new_tensor_2d(ctx_split, wq->type, n_embd, n_embd_head_k * (n_head + n_head_kv + n_head_kv));
-        if (wq->type == GGML_TYPE_NVFP4_KS) {
+        if (wq->type == GGML_TYPE_NVFP4_KS || wq->type == GGML_TYPE_F8_E4M3_KS || wq->type == GGML_TYPE_F8_E4M3_B128) {
             ggml_set_input_scale(layer.wqkv, ggml_get_input_scale(wq));
         }
         snprintf(layer.wqkv->name, GGML_MAX_NAME, "blk.%d.attn_qkv.weight", i);
@@ -5964,7 +5970,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
         GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
         GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
         layer.wqk = ggml_new_tensor_2d(ctx_split, wq->type, n_embd, n_embd_head_k * (n_head + n_head_kv));
-        if (wq->type == GGML_TYPE_NVFP4_KS) {
+        if (wq->type == GGML_TYPE_NVFP4_KS || wq->type == GGML_TYPE_F8_E4M3_KS || wq->type == GGML_TYPE_F8_E4M3_B128) {
             ggml_set_input_scale(layer.wqk, ggml_get_input_scale(wq));
         }
         snprintf(layer.wqk->name, GGML_MAX_NAME, "blk.%d.attn_qk.weight", i);
@@ -6119,6 +6125,9 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
     GGML_ASSERT(mem_used.size() >= splits.size());
     for (int i = 0; i < split_tensor.ggml.n_device; ++i) {
         if (split_tensor.ggml.splits[i]) {
+            if (tensor->type == GGML_TYPE_F8_E4M3_KS || tensor->type == GGML_TYPE_F8_E4M3_B128) {
+                ggml_set_input_scale(split_tensor.ggml.splits[i], ggml_get_input_scale(tensor));
+            }
             //auto nbytes = ggml_nbytes(split_tensor.ggml.splits[i]);
             //printf("mem_used(%s): %8.2f, total: %8.2f\n", split_tensor.ggml.splits[i]->name, nbytes/1024./1024., (mem_used[i] + nbytes)/1024./1024.);
             mem_used[i] += ggml_nbytes(split_tensor.ggml.splits[i]);
@@ -6761,6 +6770,12 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_step35_tensors(tn); break;
         default:
             throw std::runtime_error("unknown architecture");
+    }
+
+    for (int i = 0; i < (int)model.hparams.n_layer; ++i) {
+        const int unused = llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED;
+        ml.create_tensor(nullptr, tn(LLM_TENSOR_ATTN_K, "k_scale", i), {1}, unused);
+        ml.create_tensor(nullptr, tn(LLM_TENSOR_ATTN_V, "v_scale", i), {1}, unused);
     }
 
     // Tensor overrides to the CPU normally drop mmap so those weights land in pinned host memory.

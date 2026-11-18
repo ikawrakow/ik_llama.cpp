@@ -194,6 +194,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_MXFP4         = 38, // except 1d tensors, 38 to be compatible with mainline
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39,
         LLAMA_FTYPE_MOSTLY_Q1_0_G128     = 41, // except 1d tensors, 38 to be compatible with mainline
+        LLAMA_FTYPE_MOSTLY_F8_E4M3       = 42,
         //
         LLAMA_FTYPE_MOSTLY_Q6_0          = 135, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ1_BN        = 136, // except 1d tensors
@@ -228,6 +229,8 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_TQP6          = 167, // except 1d tensors (trellis, group-128)
         LLAMA_FTYPE_MOSTLY_TQP7          = 168, // except 1d tensors (trellis, group-128)
         LLAMA_FTYPE_MOSTLY_NVFP4_KS      = 169,
+        LLAMA_FTYPE_MOSTLY_F8_E4M3_KS    = 170,
+        LLAMA_FTYPE_MOSTLY_F8_E4M3_B128  = 171,
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q5_0_R4       = 208, // except 1d tensors
@@ -395,6 +398,12 @@ extern "C" {
         LLAMA_NVFP4_PRECISION_INT8 = 2,
     };
 
+    enum llama_fp8_precision {
+        LLAMA_FP8_PRECISION_AUTO = 0,
+        LLAMA_FP8_PRECISION_W8A16 = 1,
+        LLAMA_FP8_PRECISION_W8A8 = 2,
+    };
+
     struct llama_model_params {
         // comma separated list of devices to use for offloading
         const char* devices;
@@ -456,6 +465,7 @@ extern "C" {
         // separate GGUF with the n-gram tables (per-layer token embedding, Engram), NULL if none
         const char * ngram_file;
         enum llama_nvfp4_precision nvfp4_precision;
+        enum llama_fp8_precision fp8_precision;
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights
@@ -722,6 +732,8 @@ extern "C" {
     // - The functions return the length of the string on success, or -1 on failure
     // - The output string is always null-terminated and cleared on failure
     // - GGUF array values are not supported by these functions
+
+    LLAMA_API bool llama_model_fp8_w8a8(const struct llama_model * model);
 
     // Get metadata value as a string by key name
     LLAMA_API int32_t llama_model_meta_val_str(const struct llama_model * model, const char * key, char * buf, size_t buf_size);

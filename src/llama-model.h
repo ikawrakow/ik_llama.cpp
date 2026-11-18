@@ -769,6 +769,7 @@ struct llama_model {
     ggml_backend_buffer_type_t split_buft = nullptr;
 
     std::unique_ptr<reload_info> reload;
+    bool fp8_w8a8 = false;
 };
 
 // Recompute the load-time-derived combined wkv_b (computed_wkv_b) of layer il

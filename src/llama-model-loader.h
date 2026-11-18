@@ -49,6 +49,7 @@ struct llama_model_loader {
     bool use_mmap = false;
     bool check_tensors;
     bool repack_tensors = false;
+    bool fp8_w8a8 = false;
     bool use_thp = false;
     bool merge_qkv = false;
     bool merge_up_gate_exps = false;
@@ -71,11 +72,23 @@ struct llama_model_loader {
 
         ggml_tensor * tensor;
         std::vector<float> nvfp4_scale;
+        std::vector<float> f8_scale;
         bool mxfp4_repack = false;
 
-        llama_tensor_weight(const llama_file * file, uint16_t idx, const char * name, const struct gguf_context * gguf_ctx, ggml_tensor * tensor) : idx(idx), tensor(tensor) {
+        llama_tensor_weight(const llama_file * file, uint16_t idx, const char * name, const struct gguf_context * gguf_ctx, ggml_tensor * tensor, const std::vector<size_t> & tensor_ends) : idx(idx), tensor(tensor) {
             const int tensor_idx = gguf_find_tensor(gguf_ctx, name);
             offs = gguf_get_data_offset(gguf_ctx) + gguf_get_tensor_offset(gguf_ctx, tensor_idx);
+
+            if (tensor->type == GGML_TYPE_F8_E4M3) {
+                const size_t end = tensor_ends[tensor_idx];
+                const size_t size = ggml_nbytes(tensor);
+                const size_t alignment = gguf_get_alignment(gguf_ctx);
+                const size_t padded = GGML_PAD(size, alignment);
+                if (end < offs || end - offs < size || end - offs > padded) {
+                    throw std::runtime_error(format("tensor '%s': type 43 is not one-byte F8_E4M3 (expected %zu bytes, at most %zu with padding, stored extent %zu); block-scaled MXFP8 is not supported",
+                                name, size, padded, end >= offs ? end - offs : 0));
+                }
+            }
 
             if (offs + ggml_nbytes(tensor) < offs || offs + ggml_nbytes(tensor) > file->size()) {
                 auto data_offset = gguf_get_data_offset(gguf_ctx);
@@ -87,7 +100,7 @@ struct llama_model_loader {
         }
     };
     std::vector<llama_tensor_weight> weights;
-    std::vector<llama_tensor_weight> scale_weights; // the .scale and .input_scale tensors consumed by import_nvfp4
+    std::vector<llama_tensor_weight> scale_weights; // the .scale and .input_scale tensors consumed at load
 
     std::unordered_map<std::string, struct llama_model_kv_override> kv_overrides;
     const llama_model_tensor_buft_override * tensor_buft_overrides;
@@ -107,11 +120,14 @@ struct llama_model_loader {
             const llama_model_kv_override * param_overrides_p,
             const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
             const std::string & ngram_fname = std::string(),
-            llama_nvfp4_precision nvfp4_precision = LLAMA_NVFP4_PRECISION_AUTO);
+            llama_nvfp4_precision nvfp4_precision = LLAMA_NVFP4_PRECISION_AUTO,
+            llama_fp8_precision fp8_precision = LLAMA_FP8_PRECISION_AUTO);
 
     ~llama_model_loader();
 
+    void read_scale(const llama_tensor_weight & scale, float * dst);
     bool import_nvfp4(llama_nvfp4_precision precision);
+    bool import_f8_e4m3();
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type

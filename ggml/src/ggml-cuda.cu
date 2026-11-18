@@ -19,6 +19,7 @@
 #include "ggml-cuda/clamp.cuh"
 #include "ggml-cuda/concat.cuh"
 #include "ggml-cuda/convert.cuh"
+#include "ggml-cuda/f8.cuh"
 #include "ggml-cuda/cpy.cuh"
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/diagmask.cuh"
@@ -617,7 +618,7 @@ GGML_CALL static const char * ggml_backend_cuda_buffer_get_name(ggml_backend_buf
     return ctx->name.c_str();
 }
 
-GGML_CALL static bool ggml_backend_buffer_is_cuda(ggml_backend_buffer_t buffer) {
+GGML_CALL bool ggml_backend_buffer_is_cuda(ggml_backend_buffer_t buffer) {
     return buffer->iface.get_name == ggml_backend_cuda_buffer_get_name;
 }
 
@@ -1794,7 +1795,7 @@ static cudaError_t ggml_cuda_cpy_tensor_2d(
     }
 }
 
-static void ggml_cuda_op_mul_mat_cublas(
+void ggml_cuda_op_mul_mat_cublas(
     ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
@@ -2016,7 +2017,7 @@ static cudaError_t ggml_cuda_Memcpy2DPeerAsync(
 #endif // !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA)
 }
 
-static void ggml_cuda_op_mul_mat(
+void ggml_cuda_op_mul_mat(
     ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, ggml_cuda_op_mul_mat_t op,
     quantize_cuda_t quantize_src1) {
@@ -2598,8 +2599,8 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
         if (fusion && cgraph && node_n + 5 < cgraph->n_nodes &&
             cgraph->nodes[node_n+1]->op == GGML_OP_MUL_MAT &&
             cgraph->nodes[node_n+2]->op == GGML_OP_MUL_MAT &&
-            ggml_is_quantized(cgraph->nodes[node_n+1]->src[0]->type) &&
-            ggml_is_quantized(cgraph->nodes[node_n+2]->src[0]->type) &&
+            ggml_cuda_mmvq_type_supported(cgraph->nodes[node_n+1]->src[0]->type) &&
+            ggml_cuda_mmvq_type_supported(cgraph->nodes[node_n+2]->src[0]->type) &&
             cgraph->nodes[node_n+3]->op == GGML_OP_ADD &&
             cgraph->nodes[node_n+4]->op == GGML_OP_ADD &&
             cgraph->nodes[node_n+5]->op == GGML_OP_ADD &&
@@ -2766,6 +2767,10 @@ static __global__ void k_simple_gemm_T(int n, int nx, const src_t * x, const flo
 
 static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
         const ggml_cgraph * cgraph, int node_n) {
+
+    if (src0->type == GGML_TYPE_F8_E4M3_KS || src0->type == GGML_TYPE_F8_E4M3_B128) {
+        return ggml_cuda_mul_mat_f8(ctx, src0, src1, dst, cgraph, node_n);
+    }
 
     if ((src0->type == GGML_TYPE_F32 || ((src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) && src0->ne[0] % 2 == 0)) &&
          src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
@@ -2997,6 +3002,8 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
 
+    if ((src0->type == GGML_TYPE_F8_E4M3_KS || src0->type == GGML_TYPE_F8_E4M3_B128) && ggml_cuda_mul_mat_id_f8(ctx, dst)) return false;
+
     CUDA_CHECK(cudaMemsetAsync((char *)dst->data, 0, ggml_nbytes(dst), ctx.stream()));
 
     if (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE && src1->ne[2] == 1 && src1->ne[3] == 1 &&
@@ -3212,6 +3219,11 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     const ggml_tensor * src1 = dst->src[2];
     const ggml_tensor * ids  = dst->src[3];
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    const bool f8 = src0_1->type == GGML_TYPE_F8_E4M3_KS || src0_1->type == GGML_TYPE_F8_E4M3_B128;
+    if (f8) {
+        const int last = ggml_cuda_moe_up_gate_f8(ctx, dst, graph, i, next, hada);
+        if (last >= 0) return last;
+    }
 
     if (src1->ne[1] == 1 && src1->ne[2] <= 8 && src1->ne[3] == 1 &&
         ggml_is_quantized(src0_1->type) &&
@@ -3377,6 +3389,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     const int64_t n_ids = ids->ne[0];
 
     ggml_tensor dst_row = *dst;
+    if (f8) dst_row.op_params[0] = GGML_PREC_DEFAULT;
 
     // The heuristics src1->ne[2] <= 32*src0->ne[2] to use the mul_mat_id implementation instead of the original version
     // is derived from
@@ -4154,6 +4167,10 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_rms_norm(ctx, dst);
             break;
         case GGML_OP_FUSED_RMS_NORM:
+            if (const int last = ggml_cuda_f8_norm_chain(ctx, dst, cgraph, i); last >= 0) {
+                i = last;
+                break;
+            }
             if (false && fusion && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
@@ -4966,6 +4983,7 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
     ggml_cuda_set_device(cuda_ctx->device);
+    cuda_ctx->f8_readers.clear();
 
 #ifdef USE_CUDA_GRAPH
     cuda_ctx->cur_graph = nullptr;
@@ -5027,6 +5045,7 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     }
 
     if (use_cuda_graph && cuda_graph_update_required) {
+        ggml_cuda_f8_lt_prepare(*cuda_ctx, cgraph);
         // Start CUDA graph capture
         // Why are we protecting an atomic_int with a mutex?
         {
@@ -5191,6 +5210,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_TQP5:
                     case GGML_TYPE_TQP6:
                     case GGML_TYPE_TQP7:
+                    case GGML_TYPE_F8_E4M3_KS:
+                    case GGML_TYPE_F8_E4M3_B128:
                         return true;
                     default:
                         return false;
@@ -5210,6 +5231,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_NVFP4_KS:
+                    case GGML_TYPE_F8_E4M3_KS:
+                    case GGML_TYPE_F8_E4M3_B128:
                         return true;
                     case GGML_TYPE_I32:
                         return op->src[0]->type == op->type;
@@ -5271,6 +5294,10 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 if (src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_I32) {
                     // DSA lightning-indexer top_k indices (I32) copy/cont.
                     return true;
+                }
+                if (src0_type == GGML_TYPE_F8_E4M3_KS || src0_type == GGML_TYPE_F8_E4M3_B128) {
+                    return src1_type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]) &&
+                           ggml_are_same_shape(op->src[0], op->src[1]);
                 }
                 if (ggml_is_quantized(src0_type) && (src1_type == GGML_TYPE_F16 || src1_type == GGML_TYPE_F32)) {
                     return true;
