@@ -131,28 +131,97 @@ ggml_cgraph * llm_build_context::build_qwen35() {
 
         cur = nullptr;
 
+        // SenseNova-Loop: mHC residual streams over the looped layers
+        const bool use_mhc = hparams.mhc_num_stream >= 2 && hparams.mhc_end > hparams.mhc_start;
+        const int64_t S = hparams.mhc_num_stream;
+        const int mhc_iters = hparams.dsv4_hc_sinkhorn_iters;
+
+        auto mhc_apply = [&](ggml_tensor * y, ggml_tensor * R,
+                             ggml_tensor * post, ggml_tensor * comb) -> ggml_tensor * {
+            return build_mhc_post(y, post, R, comb, n_embd, S, true);
+        };
+
         const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
         for (int il = 0; il < n_transformer_layers; ++il) {
 
-            if (hparams.is_recurrent(il)) {
-                cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_transformer_layers - 1 && !lctx.cparams.mtp ? inp_out_ids : nullptr, il, cb);
-            } else {
-                cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos,
-                        il == n_transformer_layers - 1 && !lctx.cparams.mtp ? inp_out_ids : nullptr, nullptr,
-                        KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, true);
+            const uint32_t ip = hparams.phys_layer(il);
+            const bool in_mhc = use_mhc && ip >= hparams.mhc_start && ip < hparams.mhc_end;
+            const bool mhc_enter = in_mhc && ip == hparams.mhc_start;
+
+            ggml_tensor * Rin = inpL;
+            if (mhc_enter) {
+                Rin = ggml_repeat(ctx0, ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens),
+                                  ggml_new_tensor_3d(ctx0, inpL->type, n_embd, S, n_tokens));
+                cb(Rin, "mhc_R_entry", il);
             }
 
-            cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
-                    NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true, false);
+            ggml_tensor * out_ids = (!in_mhc && il == n_transformer_layers - 1 && !lctx.cparams.mtp) ? inp_out_ids : nullptr;
+
+            if (in_mhc) {
+                GGML_ASSERT(model.layers[il].mhc_attn_w != nullptr && model.layers[il].mhc_ffn_w != nullptr);
+
+                ggml_tensor * post = nullptr;
+                ggml_tensor * comb = nullptr;
+                ggml_tensor * x = build_mhc_pre_weight_bias(Rin, model.layers[il].mhc_attn_w,
+                        model.layers[il].mhc_attn_b, S, mhc_iters, &post, &comb, hparams.mhc_pre_scale);
+                ggml_tensor * y;
+                if (hparams.is_recurrent(il)) {
+                    y = delta.build_layer_attn_linear(ctx0, gf, x, nullptr, il, cb, true);
+                } else {
+                    y = build_std_attention(gf, model.layers[il].attn_norm, x, inp_pos,
+                            nullptr, nullptr, KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il,
+                            true, false, false, false, true);
+                }
+                Rin = mhc_apply(y, Rin, post, comb);
+
+                x = build_mhc_pre_weight_bias(Rin, model.layers[il].mhc_ffn_w,
+                        model.layers[il].mhc_ffn_b, S, mhc_iters, &post, &comb, hparams.mhc_pre_scale);
+                y = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, x,
+                        model.layers[il].ffn_up,   NULL, NULL,
+                        model.layers[il].ffn_gate, NULL, NULL,
+                        model.layers[il].ffn_down, NULL, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, false, false);
+                Rin = mhc_apply(y, Rin, post, comb);
+
+                if (ip + 1 == hparams.mhc_end) {
+                    // mean of the residual streams when leaving the region
+                    ggml_tensor * mean = ggml_sum_rows_ext(ctx0, Rin, 1);
+                    cur = ggml_reshape_2d(ctx0, ggml_scale(ctx0, mean, 1.0f/(float) S), n_embd, n_tokens);
+                    cb(cur, "mhc_R_exit", il);
+                } else {
+                    cur = Rin;
+                }
+            } else {
+                if (hparams.is_recurrent(il)) {
+                    cur = delta.build_layer_attn_linear(ctx0, gf, inpL, out_ids, il, cb);
+                } else {
+                    cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos,
+                            out_ids, nullptr,
+                            KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, true);
+                }
+
+                cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                        model.layers[il].ffn_up,   NULL, NULL,
+                        model.layers[il].ffn_gate, NULL, NULL,
+                        model.layers[il].ffn_down, NULL, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true, false);
+            }
 
             cur = lctx.cvec.apply_to(ctx0, cur, il);
             cb(cur, "l_out", il);
 
             inpL = cur;
+        }
+
+        // reduce output tokens if the last layer is looped
+        if (inp_out_ids && !lctx.cparams.mtp && use_mhc && n_transformer_layers > 0) {
+            const uint32_t ip_last = hparams.phys_layer(n_transformer_layers - 1);
+            if (ip_last >= hparams.mhc_start && ip_last < hparams.mhc_end) {
+                inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+                cur = inpL;
+            }
         }
 
         if (n_outputs == 0) {

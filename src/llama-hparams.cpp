@@ -4,6 +4,7 @@
 #include "llama-model.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <map>
@@ -366,17 +367,9 @@ void llm_load_hparams(
                     // size_t to avoid wrapping the product for a malformed file.
                     GGML_ASSERT((size_t) hparams.n_layer * (size_t) hparams.n_loops <= (size_t) LLAMA_MAX_LAYERS);
                     hparams.n_layer_phys = hparams.n_layer;
+                    hparams.loop_start   = 0;
+                    hparams.loop_end     = hparams.n_layer;
                     hparams.n_layer_all  = (uint32_t) ((size_t) hparams.n_layer * (size_t) hparams.n_loops);
-                    for (uint32_t il = hparams.n_layer_phys; il < hparams.n_layer_all; ++il) {
-                        const uint32_t ip = il % hparams.n_layer_phys;
-                        hparams.n_head_arr[il]    = hparams.n_head_arr[ip];
-                        hparams.n_head_kv_arr[il] = hparams.n_head_kv_arr[ip];
-                        hparams.n_ff_arr[il]      = hparams.n_ff_arr[ip];
-                        hparams.swa_layers[il]    = hparams.swa_layers[ip];
-                        hparams.recurrent_layer_arr[il] = hparams.recurrent_layer_arr[ip];
-                        hparams.rope_dim_per_layer[il]  = hparams.rope_dim_per_layer[ip];
-                        hparams.rope_freq_base_per_layer[il] = hparams.rope_freq_base_per_layer[ip];
-                    }
                 }
 
                 switch (hparams.n_layer) {
@@ -1256,6 +1249,108 @@ void llm_load_hparams(
                         model.type = e_model::MODEL_27B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
+
+                uint32_t loops = 1;
+                ml.get_key(LLM_KV_NUM_LOOPS, loops, false);
+                if (loops > 1) {
+                    throw std::runtime_error("qwen35: looped GGUFs must use the sensenova_loop architecture");
+                }
+            } break;
+        case LLM_ARCH_SENSENOVA_LOOP:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, true);
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                std::array<int32_t, LLAMA_MAX_LAYERS> kinds{};
+                if (ml.get_key_or_arr(LLM_KV_MHC_LAYER_KINDS, kinds, hparams.n_layer, false)) {
+                    throw std::runtime_error("SenseNova-Loop: preview-layout GGUF (mhc.layer_kinds); reconvert it with the updated converter");
+                }
+                ml.get_key(LLM_KV_LOOP_DOT_START, hparams.loop_start);
+                ml.get_key(LLM_KV_LOOP_DOT_END,   hparams.loop_end);
+                ml.get_key(LLM_KV_LOOP_COUNT,     hparams.n_loops);
+                if (!ml.get_key(LLM_KV_MHC_START, hparams.mhc_start, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_START, hparams.mhc_start);
+                }
+                if (!ml.get_key(LLM_KV_MHC_END, hparams.mhc_end, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_END, hparams.mhc_end);
+                }
+                if (!ml.get_key(LLM_KV_MHC_STREAMS, hparams.mhc_num_stream, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT, hparams.mhc_num_stream, false);
+                }
+                if (!ml.get_key(LLM_KV_MHC_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters, false);
+                }
+                if (!ml.get_key(LLM_KV_MHC_FIXED_IDENTITY, hparams.mhc_fixed_identity, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_FIXED_IDENTITY, hparams.mhc_fixed_identity, false);
+                }
+                if (!ml.get_key(LLM_KV_MHC_PRE_SCALE, hparams.mhc_pre_scale, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_PRE_SCALE, hparams.mhc_pre_scale, false);
+                }
+
+                const uint32_t n_block = hparams.n_layer;
+                const uint32_t nextn   = hparams.nextn_predict_layers;
+                if (nextn > 1) {
+                    throw std::runtime_error("SenseNova-Loop: at most one MTP layer is supported");
+                }
+                if (hparams.loop_start >= hparams.loop_end || hparams.loop_end > n_block ||
+                        hparams.n_loops < 1 || nextn >= n_block) {
+                    throw std::runtime_error("SenseNova-Loop: invalid loop range or count");
+                }
+                const uint32_t extra = (hparams.n_loops - 1) * (hparams.loop_end - hparams.loop_start);
+                if (extra + nextn >= n_block) {
+                    throw std::runtime_error("SenseNova-Loop: execution plan exceeds the block count");
+                }
+                const uint32_t n_phys = n_block - extra - nextn;
+                if (hparams.mhc_start >= hparams.mhc_end || hparams.mhc_end > n_phys ||
+                        hparams.mhc_fixed_identity || hparams.mhc_num_stream < 1 || hparams.mhc_num_stream > 8 ||
+                        hparams.dsv4_hc_sinkhorn_iters < 1 ||
+                        !std::isfinite(hparams.mhc_pre_scale) || hparams.mhc_pre_scale <= 0.0f) {
+                    throw std::runtime_error("SenseNova-Loop: unsupported mHC configuration");
+                }
+                if (!(hparams.mhc_end <= hparams.loop_start ||
+                      (hparams.mhc_start >= hparams.loop_start && hparams.mhc_end <= hparams.loop_end) ||
+                      hparams.mhc_start >= hparams.loop_end)) {
+                    throw std::runtime_error("SenseNova-Loop: mHC range crosses a loop boundary");
+                }
+
+                hparams.n_layer_phys = n_phys;
+                hparams.n_layer_all  = n_block - nextn;
+                hparams.n_layer      = n_phys;
+                hparams.n_layer_kv_from_start = n_block - nextn;
+                hparams.nextn_predict_layers = model.mtp ? nextn : 0;
+                hparams.skip_loop_final_norm = true;
+                hparams.loop_tail_sparse = true;
+
+                std::array<int32_t, LLAMA_MAX_LAYERS> recr{};
+                const bool has_recr = ml.get_key_or_arr(LLM_KV_ATTENTION_RECURRENT_LAYERS, recr, n_block, false);
+                uint32_t full_attn_interval = 4;
+                if (!has_recr) {
+                    ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
+                }
+                for (uint32_t i = 0; i < n_phys; ++i) {
+                    const uint32_t s = hparams.stored_layer(i);
+                    hparams.recurrent_layer_arr[i] = has_recr ? recr[s] != 0
+                                                              : ((s + 1) % full_attn_interval != 0);
+                }
+                if (has_recr) {
+                    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+                        const uint32_t ip = hparams.phys_layer(il);
+                        if ((recr[il] != 0) != (recr[ip] != 0)) {
+                            throw std::runtime_error("SenseNova-Loop: visits have different attention types");
+                        }
+                    }
+                    if (nextn > 0 && recr[hparams.n_layer_all] != 0) {
+                        throw std::runtime_error("SenseNova-Loop: the MTP layer must be full attention");
+                    }
+                }
+                model.type = n_phys == 32 ? e_model::MODEL_9B : e_model::MODEL_UNKNOWN;
             } break;
         case LLM_ARCH_QWEN3VLMOE:
             {

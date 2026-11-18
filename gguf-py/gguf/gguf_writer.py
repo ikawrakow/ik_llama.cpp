@@ -767,6 +767,24 @@ class GGUFWriter:
     def add_num_loops(self, n: int) -> None:
         self.add_uint32(Keys.Nanbeige.NUM_LOOPS.format(arch=self.arch), n)
 
+    def add_mhc_start(self, value: int) -> None:
+        self.add_uint32(Keys.MHC.START.format(arch=self.arch), value)
+
+    def add_mhc_end(self, value: int) -> None:
+        self.add_uint32(Keys.MHC.END.format(arch=self.arch), value)
+
+    def add_mhc_streams(self, value: int) -> None:
+        self.add_uint32(Keys.MHC.STREAMS.format(arch=self.arch), value)
+
+    def add_mhc_iterations(self, value: int) -> None:
+        self.add_uint32(Keys.MHC.ITERATIONS.format(arch=self.arch), value)
+
+    def add_mhc_fixed_identity(self, value: bool) -> None:
+        self.add_bool(Keys.MHC.FIXED_IDENTITY.format(arch=self.arch), value)
+
+    def add_mhc_pre_scale(self, value: float) -> None:
+        self.add_float32(Keys.MHC.PRE_SCALE.format(arch=self.arch), value)
+
     def add_skip_loop_final_norm(self, value: bool) -> None:
         self.add_bool(Keys.Nanbeige.SKIP_LOOP_FINAL_NORM.format(arch=self.arch), value)
 

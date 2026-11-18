@@ -412,6 +412,17 @@ struct llm_build_context {
         int64_t n_embd,
         int64_t n_stream);
 
+    // mHC weight+bias router: returns the branch input, post/comb go to build_mhc_post()
+    ggml_tensor * build_mhc_pre_weight_bias(
+        ggml_tensor * x,
+        ggml_tensor * w,
+        ggml_tensor * b,
+        int64_t n_stream,
+        int n_iters,
+        ggml_tensor ** post_out,
+        ggml_tensor ** comb_out,
+        float input_scale = 1.0f);
+
     ggml_tensor * build_mhc_pre_projection(
         ggml_tensor * x,
         ggml_tensor * fn,

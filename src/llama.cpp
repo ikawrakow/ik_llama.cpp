@@ -4546,6 +4546,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     size_t ow_size = 0;
     size_t embd_size = 0;
     size_t output_misc_size = 0;
+    size_t mtp_size = 0;
     int gemma4_rope_layer = -1;
 
     if (model.arch == LLM_ARCH_GEMMA4) {
@@ -4632,8 +4633,22 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         auto layer_string = name.substr(pos, pos1-pos);
         std::istringstream str(layer_string);
         int il; str >> il;
+        const int stored = il;
         if (str.fail()) {
             LLAMA_LOG_WARN("Oops: failed to read layer index from %s for tensor %s\n", layer_string.c_str(), name.c_str());
+        }
+        if (model.hparams.loop_tail_sparse) {
+            if (il >= (int) model.hparams.n_layer_all) {
+                // MTP block, accounted with the output layer
+                if (model.mtp) {
+                    mtp_size += size;
+                }
+                continue;
+            }
+            if (il >= (int) model.hparams.loop_end) {
+                // sparse tail: map the stored block to its physical slot
+                il -= (model.hparams.loop_end - model.hparams.loop_start) * (model.hparams.n_loops - 1);
+            }
         }
         if (il < 0 || il >= model.hparams.n_layer) {
             LLAMA_LOG_WARN("Oops: strange layer index %d for tensor %s\n", il, name.c_str());
@@ -4667,7 +4682,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             }
         }
         if (!is_mla) {
-            auto ttype = llm_tensor_type(model.arch, name, il);
+            auto ttype = llm_tensor_type(model.arch, name, stored);
             if (ttype == LLM_TENSOR_UNKNOWN) {
                 if (model.arch != LLM_ARCH_INKLING2_LOOP || name.find(".loop_") == std::string::npos) {
                     LLAMA_LOG_WARN("Oops: got unknown for tensor %s\n", name.c_str());
@@ -4751,7 +4766,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         }
     }
     if (!ow_size) ow_size = embd_size;
-    result[n_layer] = ow_size + output_misc_size;
+    result[n_layer] = ow_size + output_misc_size + mtp_size;
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
@@ -10036,6 +10051,7 @@ struct llama_context * llama_init_from_model(
     }
 
     if (model->arch != LLM_ARCH_GLM4 && model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_QWEN35 &&
+        model->arch != LLM_ARCH_SENSENOVA_LOOP &&
         model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GEMMA4 &&
         model->arch != LLM_ARCH_GEMMA4_MTP && model->arch != LLM_ARCH_GLM_DSA &&
         model->arch != LLM_ARCH_GLM5NEXT &&
@@ -10934,6 +10950,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_SENSENOVA_LOOP:
         case LLM_ARCH_QWEN4EXP:
             return LLAMA_ROPE_TYPE_IMROPE;
 

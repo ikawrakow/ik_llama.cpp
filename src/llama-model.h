@@ -520,6 +520,10 @@ struct llama_layer {
     struct ggml_tensor * mhc_mlp_alpha    = nullptr;
     struct ggml_tensor * mhc_mlp_beta     = nullptr;
     struct ggml_tensor * mhc_mlp_gamma    = nullptr;
+    struct ggml_tensor * mhc_attn_w       = nullptr;
+    struct ggml_tensor * mhc_attn_b       = nullptr;
+    struct ggml_tensor * mhc_ffn_w        = nullptr;
+    struct ggml_tensor * mhc_ffn_b        = nullptr;
 
     // shared_ptr so a looped model can alias the layers.
     std::shared_ptr<ggml_tensor> computed_wk_b;

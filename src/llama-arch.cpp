@@ -37,6 +37,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN3VLMOE,      "qwen3vlmoe"   },
     { LLM_ARCH_QWEN35MOE,       "qwen35moe"    },
     { LLM_ARCH_QWEN35,          "qwen35"       },
+    { LLM_ARCH_SENSENOVA_LOOP,  "sensenova_loop" },
     { LLM_ARCH_QWEN4EXP,        "qwen4exp"     },
     { LLM_ARCH_MELLUM,          "mellum"       },
     { LLM_ARCH_PHI2,            "phi2"         },
@@ -249,9 +250,21 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_HYPER_CONNECTION_COUNT,               "%s.hyper_connection.count"               },
     { LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, "%s.hyper_connection.sinkhorn_iterations" },
+    { LLM_KV_HYPER_CONNECTION_START,            "%s.hyper_connection.start"            },
+    { LLM_KV_HYPER_CONNECTION_END,              "%s.hyper_connection.end"              },
+    { LLM_KV_HYPER_CONNECTION_PRE_SCALE,        "%s.hyper_connection.pre_scale"        },
+    { LLM_KV_HYPER_CONNECTION_FIXED_IDENTITY,   "%s.hyper_connection.fixed_identity"   },
     { LLM_KV_HYPER_CONNECTION_EPSILON,          "%s.hyper_connection.epsilon"          },
     { LLM_KV_HYPER_CONNECTION_MAGNITUDE,        "%s.hyper_connection.magnitude"        },
     { LLM_KV_HYPER_CONNECTION_LOW_RANK,         "%s.hyper_connection.low_rank"         },
+    { LLM_KV_MHC_START,                         "%s.mhc.start"                         },
+    { LLM_KV_MHC_END,                           "%s.mhc.end"                           },
+    { LLM_KV_MHC_STREAMS,                       "%s.mhc.streams"                       },
+    { LLM_KV_MHC_ITERATIONS,                    "%s.mhc.iterations"                    },
+    { LLM_KV_MHC_FIXED_IDENTITY,                "%s.mhc.fixed_identity"                },
+    { LLM_KV_MHC_PRE_SCALE,                     "%s.mhc.pre_scale"                     },
+    { LLM_KV_MHC_LAYER_KINDS,                   "%s.mhc.layer_kinds"                   },
+    { LLM_KV_ATTENTION_RECURRENT_LAYERS,        "%s.attention.recurrent_layers"        },
 
     { LLM_KV_PLE_LAYERS,                       "%s.ple.layers"                      },
     { LLM_KV_PLE_NGRAM_SIZE,                   "%s.ple.ngram_size"                  },
@@ -412,6 +425,7 @@ bool llm_arch_uses_qnext_state_layout(const llm_arch & arch) {
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_SENSENOVA_LOOP:
         case LLM_ARCH_GLM5NEXT:
         case LLM_ARCH_RAON1:
         case LLM_ARCH_RAON1_NANO:
@@ -427,6 +441,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_QWEN3NEXT:
     case LLM_ARCH_QWEN35MOE:
     case LLM_ARCH_QWEN35:
+    case LLM_ARCH_SENSENOVA_LOOP:
     case LLM_ARCH_QWEN4EXP:
     case LLM_ARCH_DEEPSEEK4:
     case LLM_ARCH_DEEPSEEK41:
