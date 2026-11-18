@@ -126,6 +126,9 @@ extern "C" {
         void                 (*GGML_CALL event_wait)        (ggml_backend_t backend, ggml_backend_event_t event);
         // block until an event is recorded
         void                 (*GGML_CALL event_synchronize) (ggml_backend_event_t event);
+        bool         (*GGML_CALL cpy_all_inputs)(ggml_backend_sched_t sched, ggml_backend_t backend, int n_inputs,
+                      struct ggml_tensor ** inputs, struct ggml_tensor ** input_copies,
+                const struct ggml_tensor * node0, bool has_lru_cache);
     };
 
     struct ggml_backend {

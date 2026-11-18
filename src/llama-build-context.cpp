@@ -1015,6 +1015,7 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
         ggml_set_input(lctx.inp_tokens);
 
         inpL = ggml_get_rows(ctx, tok_embd, lctx.inp_tokens);
+        cb(inpL, "inp_embd", -1);
 
         // undo the Hadamard rotation of the embedding table
         if (auto rot = lctx.model.hadamard_rotation(tok_embd); rot != nullptr) {
@@ -1912,6 +1913,7 @@ llm_expert_gating_func_type   gating_op,
                         ggml_cont(ctx, selected_experts);
                 if (n_tokens > 1) lookup_ids = ggml_reshape_1d(ctx, lookup_ids, ggml_nelements(lookup_ids));
                 ggml_tensor * ids = ggml_get_rows(ctx, map, lookup_ids);
+                cb(ids, "lru_ids", il);
                 const bool supported = ggml_backend_supports_op(backend, ids);
                 if (supported) {
                     if (map == share_maps.cpu) {
@@ -1940,11 +1942,13 @@ llm_expert_gating_func_type   gating_op,
                         ggml_cont(ctx, selected_experts);
                 if (n_tokens > 1) lookup_ids = ggml_reshape_1d(ctx, lookup_ids, ggml_nelements(lookup_ids));
                 cache_slot_ids = ggml_get_rows(ctx, slot_map, lookup_ids);
+                cb(cache_slot_ids, "lru_cache_slot_ids", il);
             } else {
                 ggml_tensor * cache_lookup_ids = ggml_is_contiguous(selected_experts) ? selected_experts :
                         ggml_cont(ctx, selected_experts);
                 cache_lookup_ids = ggml_reshape_1d(ctx, cache_lookup_ids, ggml_nelements(cache_lookup_ids));
                 cache_slot_ids = ggml_get_rows(ctx, slot_map, cache_lookup_ids);
+                cb(cache_slot_ids, "lru_cache_slot_ids", il);
             }
             if (cache_slot_ids && ggml_backend_supports_op(cache_backend, cache_slot_ids)) {
                 ggml_backend_sched_set_tensor_backend(lctx.sched, cache_slot_ids, cache_backend);
@@ -2160,6 +2164,7 @@ llm_expert_gating_func_type   gating_op,
             scale = ggml_repeat_4d(ctx, scale, 1, n_expert, n_tokens, 1);
             supported &= force_op(gpu_backend, scale, gpu_ops);
             scale = ggml_get_rows(ctx, scale, selected_experts);
+            cb(scale, "lru_scale", il);
             supported &= force_op(gpu_backend, scale, gpu_ops);
             auto w_reshaped = ggml_reshape_2d(ctx, share_weights, n_expert_used, n_tokens);
             auto s_reshaped = ggml_reshape_2d(ctx, scale, n_expert_used, n_tokens);
