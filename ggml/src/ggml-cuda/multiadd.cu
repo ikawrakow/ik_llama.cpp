@@ -1,6 +1,6 @@
 #include "multiadd.cuh"
 
-static __global__ void multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, const char * src0, char * dst) {
+static __global__ void multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, const char * src0, char * dst, [[maybe_unused]] float scale) {
     const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
     int64_t k = ne0*ne1;
     if (i >= k) {
@@ -11,24 +11,36 @@ static __global__ void multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_
     float * result = (float *)(dst + i1*nb1);
     const float * s = (const float *)(src0 + i1*nb01) + i0;
     if (nused == 1) {
-        result[i0] = s[0];
+        result[i0] = s[0]*scale;
     } else {
         float sum = s[0] + s[ne0];
         for (int j = 2; j < nused; ++j) sum += s[j*ne0];
-        result[i0] = sum;
+        result[i0] = sum*scale;
     }
 }
 
-static void multi_add_f32_cuda(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, const char * src0, char * dst, cudaStream_t stream) {
+static void multi_add_f32_cuda(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, const char * src0, char * dst, cudaStream_t stream, float scale = 1.0f) {
     int64_t k = ne0 * ne1;
     const int num_blocks = (k + CUDA_MULTI_ADD_BLOCK_SIZE - 1) / CUDA_MULTI_ADD_BLOCK_SIZE;
-    multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, src0, dst);
+    multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, src0, dst, scale);
 }
 
 void ggml_cuda_op_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->ne[2] == 1 && dst->ne[3] == 1);
     GGML_ASSERT(dst->nb[0] == sizeof(float));
+    if (dst->op == GGML_OP_SCALE) {
+        auto madd = dst->src[0];
+        GGML_ASSERT(madd->op == GGML_OP_MULTI_ADD);
+        float scale;
+        memcpy(&scale, dst->op_params, sizeof(scale));
+        int nused = madd->op_params[0];
+        GGML_ASSERT(nused >= 1);
+        const char * src0 = (const char *)madd->src[0]->data;
+        cudaStream_t stream = ctx.stream();
+        multi_add_f32_cuda(nused, madd->ne[0], madd->ne[1], madd->nb[1], madd->src[0]->nb[1], src0, (char *)dst->data, stream, scale);
+        return;
+    }
     int nused = dst->op_params[0];
     GGML_ASSERT(nused >= 1);
     const char * src0 = (const char *)dst->src[0]->data;
