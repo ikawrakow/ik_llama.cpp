@@ -803,6 +803,38 @@ ggml_tensor * llm_build_context::build_mhc_pre_projection(
     return ggml_mul_mat(ctx0, fn, normed);
 }
 
+ggml_tensor * llm_build_context::build_mhc_pre_weight_bias(
+        ggml_tensor * x,
+        ggml_tensor * w,
+        ggml_tensor * b,
+        int64_t n_stream,
+        int n_iters,
+        ggml_tensor ** post_out,
+        ggml_tensor ** comb_out,
+        float input_scale) {
+    // logits = [pre | post | mix]
+    ggml_tensor * logits = build_mhc_pre_projection(x, w, nullptr, n_embd, n_stream, 1e-6f, true);
+    ggml_mul_mat_set_prec(logits, GGML_PREC_F32);
+    const int64_t nt = logits->ne[1];
+
+    logits = ggml_add(ctx0, logits, b);
+    ggml_tensor * sigm = ggml_sigmoid(ctx0, logits);
+    ggml_tensor * pre;
+    if (nt > 1) {
+        pre = ggml_cont(ctx0, ggml_view_2d(ctx0, sigm, n_stream, nt, sigm->nb[1], 0));
+        ggml_tensor * tmp = ggml_cont(ctx0, ggml_view_2d(ctx0, sigm, n_stream, nt, sigm->nb[1], n_stream*sizeof(float)));
+        *post_out = ggml_scale(ctx0, tmp, 2.0f);
+    } else {
+        pre = ggml_view_2d(ctx0, sigm, n_stream, nt, sigm->nb[1], 0);
+        *post_out = ggml_scale(ctx0, ggml_view_2d(ctx0, sigm, n_stream, nt, sigm->nb[1], n_stream*sizeof(float)), 2.0f);
+    }
+    ggml_tensor * comb_logits = ggml_view_2d(ctx0, logits, n_stream*n_stream, nt, logits->nb[1], 2*n_stream*sizeof(float));
+    *comb_out = ggml_sinkhorn(ctx0, ggml_cont(ctx0, comb_logits), (int) n_stream, n_iters, 0.0f, true);
+
+    ggml_tensor * out = build_mhc_weighted_sum(x, pre, n_embd, n_stream);
+    return input_scale == 1.0f ? out : ggml_scale(ctx0, out, input_scale);
+}
+
 ggml_tensor * llm_build_context::build_per_layer_inputs(
         ggml_tensor * inputs_embeds,
         ggml_tensor * inp_per_layer,
@@ -3331,6 +3363,7 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
         int idx_out = ggml_backend_sched_get_backend_idx(lctx.sched, lctx.model.output->buffer);
         if (idx_out >= 0) idx = idx_out;
         const bool is_qwen_mtp = (lctx.model.arch == LLM_ARCH_QWEN35 ||
+                                  lctx.model.arch == LLM_ARCH_SENSENOVA_LOOP ||
                                   lctx.model.arch == LLM_ARCH_QWEN35MOE ||
                                   lctx.model.arch == LLM_ARCH_GLM4 ||
                                   lctx.model.arch == LLM_ARCH_GLM4_MOE) && lctx.cparams.mtp;
@@ -3617,6 +3650,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
                 result = llm.build_qwen35moe();
             } break;
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_SENSENOVA_LOOP:
             {
                 result = llm.build_qwen35();
             } break;
@@ -4011,7 +4045,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 auto the_k_norm = model.layers[il].attn_k_norm ? model.layers[il].attn_k_norm->extra ?
                     ((ggml_split_tensor_t *)model.layers[il].attn_k_norm->extra)->splits[id] : model.layers[il].attn_k_norm : nullptr;
                 ggml_tensor *Qcur, *Kcur, *Vcur, *gate = nullptr;
-                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN4EXP) {
+                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE ||
+                    model.arch == LLM_ARCH_QWEN4EXP || model.arch == LLM_ARCH_SENSENOVA_LOOP) {
                     auto [Q, K, V, G] = llm_build_mul_mat_qkv_gated(gf, cur, split_wq, split_wk, split_wv,
                             the_q_norm, the_k_norm, il);
                     Qcur = Q; Kcur = K; Vcur = V; gate = G;
@@ -4267,7 +4302,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     }
 
     ggml_tensor *Qcur, *Kcur, *Vcur, *gate = nullptr;
-    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN4EXP) {
+    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE ||
+        model.arch == LLM_ARCH_QWEN4EXP || model.arch == LLM_ARCH_SENSENOVA_LOOP) {
         auto [Q, K, V, G] = llm_build_mul_mat_qkv_gated(gf, cur, model.layers[il].wq, model.layers[il].wk, model.layers[il].wv,
                 model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, il);
         Qcur = Q; Kcur = K; Vcur = V; gate = G;
