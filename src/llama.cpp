@@ -1936,6 +1936,7 @@ static bool llama_kv_cache_find_slot(
     }
 
     cache.used += n_tokens;
+    cache.used_max = std::max(cache.used_max, cache.head + n_tokens);
 
     return true;
 }
@@ -2098,22 +2099,14 @@ static uint32_t llama_kv_cache_cell_max(const struct llama_kv_cache & cache) {
     return 0;
 }
 
-static uint32_t llama_kv_cache_cell_max(const struct llama_kv_cache & cache, uint32_t pad) {
-    uint32_t last = cache.size;
-    for (uint32_t i = cache.size; i > 0; i -= pad) {
+static uint32_t llama_kv_cache_used_max(struct llama_kv_cache & cache) {
+    for (uint32_t i = cache.used_max; i > 0; --i) {
         const llama_kv_cell & cell = cache.cells[i - 1];
-
         if (cell.pos >= 0 && !cell.is_empty()) {
-            for (uint32_t j = last; j > i; --j) {
-                auto & cell_j = cache.cells[j - 1];
-                if (cell_j.pos >= 0 && !cell_j.is_empty()) return j;
-            }
-            return i;
+            return cache.used_max = i;
         }
-        last = i;
     }
-
-    return 0;
+    return cache.used_max = 0;
 }
 
 bool llama_kv_cache::checkpoint_supported() const {
@@ -2280,6 +2273,7 @@ bool llama_kv_cache::checkpoint_save(ggml_backend_sched_t sched, llama_ckpt_data
     ckpt.cells_snapshot = cells;
     ckpt.head_snapshot  = head;
     ckpt.used_snapshot  = used;
+    ckpt.used_max_snapshot = used_max;
 
     std::unordered_set<ggml_backend_t> backends_to_sync;
     // a row with no resolvable backend is copied generically, outside any stream;
@@ -2364,6 +2358,7 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched, llama_ckpt_d
     cells = ckpt.cells_snapshot;
     head  = ckpt.head_snapshot;
     used  = ckpt.used_snapshot;
+    used_max = ckpt.used_max_snapshot;
 
     std::unordered_set<ggml_backend_t> backends_to_sync;
     // a row with no resolvable backend is copied generically, outside any stream;
@@ -7940,7 +7935,7 @@ static int llama_decode_internal(
                 // after enough generations, the benefit from this heuristic disappears
                 // if we start defragmenting the cache, the benefit from this will be more important
                 const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
-                auto max_cell = llama_kv_cache_cell_max(kv_self, pad);
+                auto max_cell = llama_kv_cache_used_max(kv_self);
                 kv_self.n = std::min(kv_self.size, std::max(pad, GGML_PAD(max_cell, pad)));
             }
 
@@ -12654,6 +12649,7 @@ struct llama_data_read {
 
             kv_self.head = 0;
             kv_self.used = cell_count;
+            kv_self.used_max = cell_count;
         }
 
         return true;
