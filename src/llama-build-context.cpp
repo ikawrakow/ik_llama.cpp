@@ -2012,11 +2012,17 @@ llm_expert_gating_func_type   gating_op,
                     share_gpu_ids, nullptr, nullptr,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                     type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI));
+            if (lctx.cparams.force_experts_offload_device) {
+                cached_ops.back()->op_params[11] = lctx.model.default_layer_device[il]+1;
+            }
         } else if (use_fused) {
             cached_ops.push_back(ggml_moe_up_gate_ext(ctx, cached_up, cached_gate, probe_input,
                     share_gpu_ids, nullptr, nullptr,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                     type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI));
+            if (lctx.cparams.force_experts_offload_device) {
+                cached_ops.back()->op_params[11] = lctx.model.default_layer_device[il]+1;
+            }
         } else if (up_gate_exps) {
             cached_matmul(cached_up_gate, probe_input);
         } else {
@@ -2088,6 +2094,9 @@ llm_expert_gating_func_type   gating_op,
                 *((float *)(value->op_params + 1)) = lctx.model.swiglu_limit(il, false);
                 *((float *)(value->op_params + 2)) = lctx.model.hparams.situ_beta;
                 *((float *)(value->op_params + 3)) = lctx.model.hparams.situ_linear_beta;
+                if (lctx.cparams.force_experts_offload_device) {
+                    value->op_params[11] = lctx.model.default_layer_device[il]+1;
+                }
                 ops.push_back(value);
                 return value;
             }
@@ -2230,11 +2239,17 @@ llm_expert_gating_func_type   gating_op,
         *((float *)(par->op_params + 1)) = lctx.model.swiglu_limit(il, false);
         *((float *)(par->op_params + 2)) = lctx.model.hparams.situ_beta;
         *((float *)(par->op_params + 3)) = lctx.model.hparams.situ_linear_beta;
+        if (lctx.cparams.force_experts_offload_device) {
+            par->op_params[11] = lctx.model.default_layer_device[il]+1;
+        }
     } else {
     if (up_gate_exps) {
         GGML_ASSERT(cache_ids && cached_up_gate);
         ggml_tensor * gate_up = llm_build_lora_mm_id(lctx, ctx, up_gate_exps, cur,
                 selected_experts, cached_up_gate, cache_ids, true);
+        if (lctx.cparams.force_experts_offload_device) {
+            gate_up->op_params[11] = lctx.model.default_layer_device[il] + 1;
+        }
         if (up_gate_exps_b) {
             gate_up = ggml_add_id(ctx, gate_up, up_gate_exps_b, selected_experts);
         }
@@ -2327,6 +2342,9 @@ llm_expert_gating_func_type   gating_op,
             *(float *)(par->op_params + 1) = lctx.model.swiglu_limit(il, false);
             *(float *)(par->op_params + 2) = lctx.model.hparams.situ_beta;
             *(float *)(par->op_params + 3) = lctx.model.hparams.situ_linear_beta;
+            if (lctx.cparams.force_experts_offload_device) {
+                par->op_params[11] = lctx.model.default_layer_device[il]+1;
+            }
             up_gate_done = true;
         }
     }
@@ -2335,9 +2353,15 @@ llm_expert_gating_func_type   gating_op,
         // llm_build_lora_mm_id with a null weight and crash inside ggml_mul_mat_id
         GGML_ASSERT(gate_exps != nullptr);
         ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts, cached_up, cache_ids); // [n_ff, n_expert_used, n_tokens]
+        if (lctx.cparams.force_experts_offload_device) {
+            up->op_params[11] = lctx.model.default_layer_device[il] + 1;
+        }
         cb(up, "ffn_moe_up", il);
 
         ggml_tensor * gate = llm_build_lora_mm_id(lctx, ctx, gate_exps, cur, selected_experts, cached_gate, cache_ids); // [n_ff, n_expert_used, n_tokens]
+        if (lctx.cparams.force_experts_offload_device) {
+            gate->op_params[11] = lctx.model.default_layer_device[il] + 1;
+        }
         cb(gate, "ffn_moe_gate", il);
 
         if (graph) {
@@ -2383,6 +2407,9 @@ llm_expert_gating_func_type   gating_op,
     cb(par, "ffn_moe_gate_par", il);
 
     ggml_tensor * experts = llm_build_lora_mm_id(lctx, ctx, down_exps, par, selected_experts, cached_down, cache_ids); // [n_embd, n_expert_used, n_tokens]
+    if (lctx.cparams.force_experts_offload_device) {
+        experts->op_params[11] = lctx.model.default_layer_device[il] + 1;
+    }
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_b) {
