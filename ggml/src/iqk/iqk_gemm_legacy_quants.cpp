@@ -5494,12 +5494,12 @@ static void mul_mat_q2_0_q8_0_x4(int n, const void * vx, size_t bx, const DataIn
             for (int k = 0; k < 4; ++k) qx[k] = vsubq_s8(vandq_u8(vshlq_u8(qx[k], shifts), mask), one);
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto yb = (const block_q8_0 *)(q8.y[iy] + nb/2);
-                auto y0 = vld1q_s8_x2(yb[2*ib+0].qs);
+                auto y0 = vld1q_s8_x2(yb[0].qs);
                 auto p0 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[0], y0.val[0]), qx[1], y0.val[1]);
-                auto y1 = vld1q_s8_x2(yb[2*ib+1].qs);
+                auto y1 = vld1q_s8_x2(yb[1].qs);
                 auto p1 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[2], y1.val[0]), qx[3], y1.val[1]);
-                auto d1 = dx*GGML_FP16_TO_FP32(yb[2*ib+0].d);
-                auto d2 = dx*GGML_FP16_TO_FP32(yb[2*ib+1].d);
+                auto d1 = dx*GGML_FP16_TO_FP32(yb[0].d);
+                auto d2 = dx*GGML_FP16_TO_FP32(yb[1].d);
                 auto p01 = vpaddq_s32(p0, p1); // 0, 0, 1, 1
                 acc[iy]  = vfmaq_f32(acc[iy], float32x4_t{d1, d1, d2, d2}, vcvtq_f32_s32(p01));
             }
