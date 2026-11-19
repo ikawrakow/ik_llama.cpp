@@ -1667,6 +1667,10 @@ static bool llama_kv_cache_init(
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*cache.rows(i));
             } else {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*cache.rows(i));
+                if (!cparams.flash_attn && ggml_is_quantized(this_type_v)) {
+                    LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn (layer %d)\n", __func__, i);
+                    return false;
+                }
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
             }
 
