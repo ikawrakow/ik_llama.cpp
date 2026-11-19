@@ -861,9 +861,7 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
     if (!backend || !ggml_backend_is_cuda(backend)) return false;
     if (!node0) return false;
     if (has_lru_cache && (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE)) return false;
-    //printf("%s(%s, %s, %d)\n", __func__, node0->name, ggml_op_name(node0->op), n_inputs);
     if (has_lru_cache && node0->op == GGML_OP_GET_ROWS) return false;
-    //if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) return false;
     if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) {
         if (has_lru_cache && node0->ne[2] <= 32) return false;
         auto all_good = [&inputs, &input_copies, n_inputs] (const ggml_tensor * t) {
@@ -886,6 +884,7 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
         }
     }
 
+    bool has_inputs = false;
     auto & ctx = *(ggml_backend_cuda_context *)backend->context;
     for (int j = 0; j < n_inputs; ++j) {
         if (!inputs[j] || !inputs[j]->buffer) return false;
@@ -894,6 +893,10 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
         if (!ggml_backend_buffer_is_cuda(inputs[j]->buffer) && !ggml_backend_buffer_is_host(inputs[j]->buffer)) return false;
         auto cuda_ctx = (ggml_backend_cuda_buffer_context *)input_copies[j]->buffer->context;
         if (!cuda_ctx || cuda_ctx->device != ctx.device) return false;
+        if (inputs[j]->flags & GGML_TENSOR_FLAG_INPUT) has_inputs = true;
+    }
+    if (has_inputs) {
+        CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
     }
     ggml_tensor * experts[2] = { nullptr, nullptr };
     if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) {
