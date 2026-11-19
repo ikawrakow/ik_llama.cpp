@@ -371,7 +371,8 @@ ggml_cgraph * llm_build_context::build_s_copy() {
         }
 
         if (kv_self.s_l.size() > (size_t) il && kv_self.s_l[il] != nullptr) {
-            struct ggml_tensor * qnext_states_all = ggml_reshape_2d(ctx0, kv_self.s_l[il], hparams.n_embd_v_s(), kv_self.s_l[il]->ne[1]);
+            // a layer holding a per-layer-embedding conv window does not have rows of n_embd_v_s()
+            struct ggml_tensor * qnext_states_all = ggml_reshape_2d(ctx0, kv_self.s_l[il], kv_self.s_l[il]->ne[0], kv_self.s_l[il]->ne[1]);
             GGML_ASSERT((uint32_t) qnext_states_all->ne[1] == qnext_state_slots);
             struct ggml_tensor * qnext_state_copy = ggml_view_1d(ctx0, state_copy, qnext_state_slots, 0);
             struct ggml_tensor * qnext_states = ggml_get_rows(ctx0, qnext_states_all, qnext_state_copy);
