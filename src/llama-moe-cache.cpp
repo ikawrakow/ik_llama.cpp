@@ -21,8 +21,15 @@ namespace {
 
 static std::vector<ggml_tensor *> layer_experts(const llama_layer & layer) {
     std::vector<ggml_tensor *> res;
-    for (ggml_tensor * t : { layer.ffn_up_gate_exps, layer.ffn_gate_exps, layer.ffn_up_exps, layer.ffn_down_exps }) {
-        if (t) res.push_back(t);
+    if (layer.ffn_up_gate_exps) {
+        res.push_back(layer.ffn_up_gate_exps);
+    } else {
+        for (ggml_tensor * t : { layer.ffn_gate_exps, layer.ffn_up_exps }) {
+            if (t) res.push_back(t);
+        }
+    }
+    if (layer.ffn_down_exps) {
+        res.push_back(layer.ffn_down_exps);
     }
     return res;
 }
