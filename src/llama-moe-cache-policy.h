@@ -166,18 +166,13 @@ struct state {
         return key >= 0 && key_layer(key) == il && seen[key_expert(key)] == seen_gen;
     }
 
-    int32_t candidate(int c, int32_t il) const {
-        for (int32_t s = class_head[c]; s >= 0; s = next[s]) {
-            if (!is_selected(il, key_of[s])) return s;
-        }
-        return -1;
-    }
-
-    int32_t victim(int32_t il) const {
+    template <typename IsProtected>
+    int32_t try_class_victim(IsProtected is_protected) const {
         int32_t best = -1;
         double best_score = -1.0;
         for (int c = 0; c < n_class; ++c) {
-            const int32_t s = candidate(c, il);
+            int32_t s = class_head[c];
+            while (s >= 0 && is_protected(key_of[s])) s = next[s];
             if (s < 0) continue;
             const int32_t key = key_of[s];
             if (key < 0) return s;
@@ -188,8 +183,36 @@ struct state {
                 best_score = score;
             }
         }
+        return best;
+    }
+
+    int32_t try_victim(int32_t il) const {
+        return try_class_victim([&](int32_t key) { return is_selected(il, key); });
+    }
+
+    int32_t victim(int32_t il) const {
+        const int32_t best = try_victim(il);
         GGML_ASSERT(best >= 0);
         return best;
+    }
+
+    int32_t try_protected_victim(const std::vector<int32_t> & sorted_protected_keys) const {
+        const auto is_protected = [&](int32_t key) {
+            return std::binary_search(sorted_protected_keys.begin(), sorted_protected_keys.end(), key);
+        };
+        if (policy == kind::lru) {
+            for (int32_t s = head; s >= 0; s = next[s]) {
+                if (!is_protected(key_of[s])) return s;
+            }
+            return -1;
+        }
+        return try_class_victim(is_protected);
+    }
+
+    void replacement_published(int32_t slot) {
+        GGML_ASSERT(slot >= 0 && slot < n_slots && key_of[slot] >= 0);
+        if (policy == kind::lru) touch_lru(slot);
+        else move_class(slot, class_of(key_of[slot]));
     }
 
     bool plan_lru(int32_t il, const int32_t * ids, size_t n_ids,
