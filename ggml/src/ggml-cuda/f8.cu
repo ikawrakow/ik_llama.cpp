@@ -136,7 +136,7 @@ static int f8_next(const ggml_cgraph * graph, int j) {
     return j;
 }
 
-static int f8_readers(ggml_backend_cuda_context & ctx, const ggml_cgraph * graph, const ggml_tensor * t) {
+int f8_readers(ggml_backend_cuda_context & ctx, const ggml_cgraph * graph, const ggml_tensor * t) {
     if (t->view_src || (t->flags & (GGML_TENSOR_FLAG_OUTPUT | GGML_TENSOR_FLAG_CROSS_SPLIT))) return -1;
     auto & readers = ctx.f8_readers;
     if (readers.empty()) {
