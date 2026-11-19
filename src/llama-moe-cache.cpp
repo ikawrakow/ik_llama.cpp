@@ -463,7 +463,7 @@ struct llama_moe_cache::impl {
                     std::tie(groups[b.group].device, b.group, b.layer, b.expert);
         });
 
-        std::vector<size_t> remaining(devices.size(), 20u*1024u*1024u);
+        std::vector<size_t> remaining(devices.size(), 40u*1024u*1024u);
         std::vector<periodic_candidate> selected;
         for (const periodic_candidate & candidate : admitted) {
             const int32_t device = groups[candidate.group].device;
@@ -512,7 +512,7 @@ struct llama_moe_cache::impl {
 
     void periodic_tg_token_complete() {
         if (!periodic_track_cpu) return;
-        if (++periodic_tg_tokens % 64 == 0) periodic_refresh();
+        if (++periodic_tg_tokens % 2 == 0) periodic_refresh();
     }
 
     void begin_compute(bool track_single_token_decode) {
