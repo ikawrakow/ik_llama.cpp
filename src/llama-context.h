@@ -105,6 +105,7 @@ struct llama_kv_cache {
     uint32_t head = 0;
     uint32_t size = 0;
     uint32_t used = 0; // used cells (i.e. at least one seq_id)
+    uint32_t used_max = 0; // no cell at or above this index is used
 
     std::vector<uint32_t> row_count;
 
