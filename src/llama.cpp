@@ -11590,7 +11590,9 @@ enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
                 return LLAMA_SPEC_CKPT_RESTORE_FAILED;
             }
             const llama_pos accepted_pos = n_past + accepted_step;
-            if (seq_id >= 0 && (uint32_t)seq_id < kv.size) {
+            // only a recurrent cache keeps a sequence's state in cells[seq_id]; in a hybrid cache that
+            // cell is an attention cell of some other position
+            if (kv.recurrent && seq_id >= 0 && (uint32_t)seq_id < kv.size) {
                 kv.cells[seq_id].pos = accepted_pos;
             }
             llama_kv_cache_seq_rm(kv, seq_id, accepted_pos + 1, -1);
