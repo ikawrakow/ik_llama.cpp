@@ -63,6 +63,7 @@ int ggml_cuda_mul_mat_f8(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
         const ggml_cgraph * cgraph, int node_n);
 int ggml_cuda_f8_norm_chain(ggml_backend_cuda_context & ctx, ggml_tensor * norm, const ggml_cgraph * cgraph, int i);
 bool ggml_cuda_mul_mat_id_f8(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+int f8_readers(ggml_backend_cuda_context & ctx, const ggml_cgraph * graph, const ggml_tensor * t);
 int ggml_cuda_moe_up_gate_f8(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const ggml_cgraph * graph, int i,
         ggml_tensor * next, const ggml_tensor * hada);
 void ggml_cuda_f8_lt_prepare(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph);
