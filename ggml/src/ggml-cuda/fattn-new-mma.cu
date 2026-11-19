@@ -2315,9 +2315,11 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
 
     if (K->ne[0] == 128) {
         GGML_ASSERT(Q->ne[0] == 128 && V->ne[0] == 128);
-        if (gqa_ratio == 12) {
+        if (gqa_ratio == 5 && Q->ne[1] > 1) {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<128, 128, 2>(ctx, dst);
+        } else if (gqa_ratio == 12) {
             ggml_cuda_flash_attn_ext_mma_f16_case<128, 128, 1, 16>(ctx, dst);
-        } else if (gqa_ratio == 6) {
+        } else if (gqa_ratio == 6 || gqa_ratio == 5) {
             ggml_cuda_flash_attn_ext_mma_f16_case<128, 128, 1, 8>(ctx, dst);
         } else if (gqa_ratio == 10) {
             ggml_cuda_flash_attn_ext_mma_f16_case<128, 128, 1, 16>(ctx, dst);
