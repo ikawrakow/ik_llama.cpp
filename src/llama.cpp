@@ -9123,6 +9123,7 @@ struct llama_context_params llama_context_default_params() {
         /*.dsa                         =*/ false,
         /*.fused_idx_topk              =*/ true,
         /*.swa_compress                =*/ false,
+        /*.force_experts_offload_device=*/ false,
         /*.dsv41_replay_keep           =*/ 256,
         /*.dsv4_legacy_state           =*/ false,
         /*.dsa_top_k                   =*/ -1,
@@ -9660,6 +9661,7 @@ struct llama_context * llama_init_from_model(
     cparams.dsa              = params.dsa;
     cparams.fused_idx_topk   = params.fused_idx_topk;
     cparams.swa_compress     = params.swa_compress;
+    cparams.force_experts_offload_device = params.force_experts_offload_device;
     cparams.dsv41_replay_keep = params.dsv41_replay_keep;
     if (cparams.dsv41_replay_keep > 0) {
         if (model->arch != LLM_ARCH_DEEPSEEK41) {
@@ -9860,6 +9862,7 @@ struct llama_context * llama_init_from_model(
     LLAMA_LOG_INFO("%s: fused_mmad    = %d\n",     __func__, cparams.fused_mmad);
     LLAMA_LOG_INFO("%s: rope_cache    = %d\n",     __func__, cparams.rope_cache);
     LLAMA_LOG_INFO("%s: graph_reuse   = %d\n",     __func__, cparams.graph_reuse);
+    LLAMA_LOG_INFO("%s: feod          = %d\n",     __func__, cparams.force_experts_offload_device);
     if (model->arch == LLM_ARCH_GLM_DSA) {
         LLAMA_LOG_INFO("%s: dsa           = %d\n",     __func__, cparams.dsa);
         LLAMA_LOG_INFO("%s: dsa_idx_topk  = %d\n",     __func__, cparams.fused_idx_topk);

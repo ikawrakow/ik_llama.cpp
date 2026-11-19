@@ -2191,6 +2191,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.swa_compress = true;
         return true;
     }
+    if (arg == "-feod" || arg == "--force-expert-offload-device") {
+        params.feod = true;
+        return true;
+    }
     if (arg == "--dsv41-replay-keep") {
         CHECK_ARG
         params.dsv41_replay_keep = std::max(0, std::stoi(argv[i]));
@@ -3431,6 +3435,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-fidx,  --fused-indexer-topk",  "enable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fidx, --no-fused-indexer-topk", "disable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
     options.push_back({ "*",           "        --swa-compress",         "allocate sliding-window layers at window size instead of n_ctx (default: %s)", params.swa_compress ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-feod, --force-expert-offload-device", "force offload of experts left in RAM to the default layer device (default: %s)", params.feod ? "enabled" : "disabled" });
     options.push_back({ "*",           "        --dsv41-replay-keep N", "DeepSeek-V4.1 prefill: run the decoder layers on the last N prompt tokens only; requires --swa-compress (default: %d, 0 = off)", params.dsv41_replay_keep });
     options.push_back({ "*",           "-dsv4ls, --dsv4-legacy-state",   "write DeepSeek-V4 state in the legacy full-slice layout, byte-identical to main (default: %d)", params.dsv4_legacy_state });
     options.push_back({ "*",           "-dsatk, --dsa-top-k",           "DSA top-k override; <0 uses the model's configured indexer_top_k (default: %d)", params.dsa_top_k });
@@ -4833,6 +4838,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.dsa               = params.dsa;
     cparams.fused_idx_topk    = params.fused_idx_topk;
     cparams.swa_compress      = params.swa_compress;
+    cparams.force_experts_offload_device = params.feod;
     cparams.dsv41_replay_keep = params.dsv41_replay_keep;
     cparams.dsv4_legacy_state = params.dsv4_legacy_state;
     cparams.dsa_top_k         = params.dsa_top_k;
