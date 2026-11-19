@@ -7884,6 +7884,10 @@ static int llama_decode_internal(
                         lctx.swa_window_view.w_view,
                         lctx.swa_window_view.win_off,
                         seq_fingerprint, state_hash, gf});
+                // a graph that re-pools every QSA block must not be reused by the next tokens
+                if (lctx.qsa_pooled_stale) {
+                    prev.reset();
+                }
             }
         } else {
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
