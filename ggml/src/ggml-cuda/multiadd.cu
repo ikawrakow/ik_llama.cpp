@@ -43,28 +43,20 @@ static __global__ void multi_add_unary_f32(int nused, int64_t ne0, int64_t nelem
     result[i0] = sum*scale;
 }
 
-bool ggml_cuda_op_multi_add_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    if (dst->type != GGML_TYPE_F32 || dst->ne[2] != 1 || dst->ne[3] != 1 || dst->nb[0] != sizeof(float)) return false;
-    if (dst->op != GGML_OP_SCALE) return false;
-    if (!ggml_is_contiguous(dst)) return false;
-    auto madd = dst->src[0];
-    if (madd->op != GGML_OP_MULTI_ADD) return false;
+void ggml_cuda_op_multi_add_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 && dst->ne[2] == 1 && dst->ne[3] == 1 && ggml_is_contiguous(dst));
+    auto src0 = dst->src[0];
+    auto src1 = dst->src[1];
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 && src0->ne[2] == 1 && src0->ne[3] == 1 && ggml_is_contiguous(src0));
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 && src1->ne[2] == 1 && src1->ne[3] == 1 && ggml_is_contiguous(src1));
+    GGML_ASSERT(ggml_are_same_shape(src0, src1));
+    GGML_ASSERT(src0->ne[1] == dst->ne[1]);
+    GGML_ASSERT(src0->ne[0] % dst->ne[0] == 0);
+    int nused = src0->ne[0] / dst->ne[0];
+    auto unary_op = ggml_unary_op(dst->op_params[0]);
+    GGML_ASSERT(unary_op == GGML_UNARY_OP_SIGMOID);
     float scale;
-    memcpy(&scale, dst->op_params, sizeof(scale));
-    int nused = madd->op_params[0];
-    if (nused < 1) return false;
-    auto view = madd->src[0];
-    auto reshape = view->src[0];
-    auto fmu = reshape->src[0];
-    if (fmu->op != GGML_OP_FUSED_MUL_UNARY) return false;
-    if (ggml_unary_op(fmu->op_params[0]) != GGML_UNARY_OP_SIGMOID) return false;
-    auto src0 = fmu->src[0];
-    auto src1 = fmu->src[1];
-    if (!ggml_are_same_shape(src0, src1)) return false;
-    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32) return false;
-    if (src0->ne[0] != dst->ne[0]*nused) return false;
-    if (src0->ne[1] != dst->ne[1]) return false;
-    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) return false;
+    memcpy(&scale, dst->op_params + 1, sizeof(scale));
 
     auto nelem = ggml_nelements(dst);
     int nsm = ggml_cuda_info().devices[ctx.device].nsm;
@@ -77,11 +69,6 @@ bool ggml_cuda_op_multi_add_unary(ggml_backend_cuda_context & ctx, ggml_tensor *
         multi_add_unary_f32<<<num_blocks, 128, 0, ctx.stream()>>>(nused, dst->ne[0], nelem,
                 (const float *)src0->data, (const float *)src1->data, (float *)dst->data, scale);
     }
-    //int num_blocks = (nelem + CUDA_MULTI_ADD_BLOCK_SIZE - 1) / CUDA_MULTI_ADD_BLOCK_SIZE;
-    //multi_add_unary_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, ctx.stream()>>>(nused, dst->ne[0], nelem,
-    //        (const float *)src0->data, (const float *)src1->data, (float *)dst->data, scale);
-
-    return true;
 }
 
 void ggml_cuda_op_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

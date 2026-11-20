@@ -4398,18 +4398,10 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_fma(ctx, dst);
             break;
         case GGML_OP_FUSED_MUL_UNARY:
-            if (fusion && i + 4 < cgraph->n_nodes && cgraph->nodes[i+4]->op == GGML_OP_SCALE &&
-                cgraph->nodes[i+3]->op == GGML_OP_MULTI_ADD && cgraph->nodes[i+4]->src[0] == cgraph->nodes[i+3] &&
-                ggml_are_same_shape(dst->src[0], dst->src[1]) &&
-                cgraph->nodes[i+1]->op == GGML_OP_RESHAPE && cgraph->nodes[i+1]->src[0] == dst &&
-                cgraph->nodes[i+2]->op == GGML_OP_VIEW    && cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
-                cgraph->nodes[i+3]->src[0] == cgraph->nodes[i+2] &&
-                (ggml_unary_op)dst->op_params[0] == GGML_UNARY_OP_SIGMOID &&
-                ggml_cuda_op_multi_add_unary(ctx, cgraph->nodes[i+4])) {
-                i += 4;
-                break;
-            }
             ggml_cuda_op_fused_mul_unary(ctx, dst);
+            break;
+        case GGML_OP_MULTI_ADD_UNARY:
+            ggml_cuda_op_multi_add_unary(ctx, dst);
             break;
         case GGML_OP_DIV:
             ggml_cuda_op_div(ctx, dst);
@@ -5523,6 +5515,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     return false;
             }
             break;
+        case GGML_OP_MULTI_ADD_UNARY: return true;
         case GGML_OP_FUSED_MUL_UNARY: return ggml_is_contiguous(op->src[0]);
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:

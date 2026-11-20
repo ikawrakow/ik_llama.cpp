@@ -754,6 +754,7 @@ extern "C" {
         GGML_OP_DS4_COMP,
 
         GGML_OP_FMA,
+        GGML_OP_MULTI_ADD_UNARY,
 
         GGML_OP_COUNT,
     };
@@ -1187,6 +1188,14 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_multi_add_unary_scale(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * gate,
+            struct ggml_tensor  * up,
+            int                   nadd,
+            float                 scale,
+            enum ggml_unary_op    unary_op);
 
     // Source may be F32, F16, or a supported quantized type; output is always F32.
     GGML_API struct ggml_tensor * ggml_hadamard(
