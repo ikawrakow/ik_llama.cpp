@@ -422,9 +422,9 @@ extern "C" {
         GGML_TYPE_F64       = 28,
         GGML_TYPE_IQ1_M     = 29,
         GGML_TYPE_BF16      = 30,
-        GGML_TYPE_Q4_0_4_4  = 31,
-        GGML_TYPE_Q4_0_4_8  = 32,
-        GGML_TYPE_Q4_0_8_8  = 33,
+        // GGML_TYPE_Q4_0_4_4  = 31, <--- retired
+        // GGML_TYPE_Q4_0_4_8  = 32, <--- retired
+        // GGML_TYPE_Q4_0_8_8  = 33, <--- retired
         GGML_TYPE_I2_S      = 36,  // So we are able to consume MS BitNet I2_S quants
         GGML_TYPE_MXFP4     = 39,  // so we are compatible with mainline
         GGML_TYPE_NVFP4     = 40,

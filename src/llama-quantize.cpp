@@ -88,9 +88,6 @@ struct quantize_state_internal {
 
 std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
     static std::unordered_map<ggml_type, std::pair<ggml_type, int>> k_map = {
-        { GGML_TYPE_Q4_0_4_4,    { GGML_TYPE_Q4_0, 4} },
-        { GGML_TYPE_Q4_0_4_8,    { GGML_TYPE_Q4_0, 4} },
-        { GGML_TYPE_Q4_0_8_8,    { GGML_TYPE_Q4_0, 8} },
         { GGML_TYPE_Q4_0_R8,     { GGML_TYPE_Q4_0, 8} },
         { GGML_TYPE_Q5_0_R4,     { GGML_TYPE_Q5_0, 4} },
         { GGML_TYPE_Q6_0_R4,     { GGML_TYPE_Q6_0, 4} },
@@ -1453,9 +1450,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_IQ3_S:   default_type = GGML_TYPE_IQ3_S;   break;
         case LLAMA_FTYPE_MOSTLY_IQ3_S_R4:default_type = GGML_TYPE_IQ3_S_R4;break;
         case LLAMA_FTYPE_MOSTLY_IQ3_M:   default_type = GGML_TYPE_IQ3_S;   break;
-        case LLAMA_FTYPE_MOSTLY_Q4_0_4_4: default_type = GGML_TYPE_Q4_0_4_4; break;
-        case LLAMA_FTYPE_MOSTLY_Q4_0_4_8: default_type = GGML_TYPE_Q4_0_4_8; break;
-        case LLAMA_FTYPE_MOSTLY_Q4_0_8_8: default_type = GGML_TYPE_Q4_0_8_8; break;
 
         default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
     }
