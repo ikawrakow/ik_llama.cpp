@@ -966,8 +966,9 @@ ggml_cgraph * llm_build_context::build_gemma4() {
             inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, hparams.n_embd_per_layer, n_layer, 1);
             cb(inp_per_layer, "inp_per_layer_vision", -1);
         }
-        inp_per_layer = build_per_layer_inputs(inpL, inp_per_layer,
-                model.hparams.n_embd_per_layer, n_layer, 1.0f*n_embd);
+        // the GPU backends need a contiguous second operand for FUSED_MUL_UNARY
+        inp_per_layer = ggml_cont(ctx0, build_per_layer_inputs(inpL, inp_per_layer,
+                model.hparams.n_embd_per_layer, n_layer, 1.0f*n_embd));
 
     }
 
