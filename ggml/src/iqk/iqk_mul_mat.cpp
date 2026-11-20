@@ -947,6 +947,20 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
     return true;
 }
 
+static ggml_type moe_prepare(long Nx, long Ny, long ne00, int typeA, int typeB, MulMat& mm) {
+    auto etypeA = ggml_type(typeA);
+    auto dequant_type = is_f8_q80(typeA, typeB) ? f8_q80_type(Nx, Ny) : MulMat::is_dequant_better(etypeA, Ny);
+    if (dequant_type != etypeA && Nx%MulMat::num_rows(dequant_type) == 0 && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
+        return dequant_type;
+    }
+    return MulMat::prepare(typeA, typeB, ne00, mm, Ny) ? etypeA : GGML_TYPE_COUNT;
+}
+
+extern "C" IQK_API bool iqk_mul_mat_moe_supported(long Nx, long Ny, long ne00, int typeA, int typeB) {
+    MulMat mm;
+    return moe_prepare(Nx, Ny, ne00, typeA, typeB, mm) != GGML_TYPE_COUNT;
+}
+
 extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
@@ -959,12 +973,14 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
     auto etypeA = ggml_type(typeA);
     //auto etypeB = ggml_type(typeB);
     const bool f8_q80 = is_f8_q80(typeA, typeB);
-    auto dequant_type = f8_q80 ? f8_q80_type(Nx, Ny) : MulMat::is_dequant_better(etypeA, Ny);
+    auto dequant_type = moe_prepare(Nx, Ny, ne00, typeA, typeB, mm);
     //if (etypeB != GGML_TYPE_F32) {
     //    if (ith == 0) printf("%s: typeA = %s, typeB = %s, dequant_type = %s\n", __func__, ggml_type_name(etypeA), ggml_type_name(etypeB), ggml_type_name(dequant_type));
     //}
-    if (dequant_type != etypeA && Nx%MulMat::num_rows(dequant_type) == 0 &&
-        MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
+    if (dequant_type == GGML_TYPE_COUNT) {
+        return false;
+    }
+    if (dequant_type != etypeA) {
 
         constexpr int k_x_step = 32;
 
@@ -1005,9 +1021,6 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
 
     }
 
-    if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
-        return false;
-    }
     size_t row_size_qx = strideA;
     size_t row_size_qy = strideB;
     auto num_rows = MulMat::num_rows(ggml_type(typeA));
@@ -2779,6 +2792,10 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long /*Nx*/, long /*Ny*/, long /*ne00*/,
 extern "C" IQK_API bool iqk_mul_mat_moe(long, long, long, int, int, const void *, long, int, const void *, long, float *, long, long,
         const void *, int, int) {
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
+    return false;
+}
+
+extern "C" IQK_API bool iqk_mul_mat_moe_supported(long, long, long, int, int) {
     return false;
 }
 

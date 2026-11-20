@@ -19391,7 +19391,11 @@ static void ggml_compute_forward_mul_mat_id(
 
 #if GGML_USE_IQK_MULMAT
 #if defined GGML_EXPERT_CHUNKING
-    if (ne13 == 1 && dst->type == GGML_TYPE_F32) {
+    bool iqk_moe_ok = ne13 == 1 && dst->type == GGML_TYPE_F32;
+    for (int a = 0; a < n_as && iqk_moe_ok; a++) {
+        if (matrix_row_counts[a] > 0) iqk_moe_ok = iqk_mul_mat_moe_supported(ne01, matrix_row_counts[a], ne00, src0->type, vec_dot_type);
+    }
+    if (iqk_moe_ok) {
         const void * wdata_mm    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size_mm = ggml_row_size(vec_dot_type, ne10);
 
