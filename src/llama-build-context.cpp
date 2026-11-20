@@ -2810,6 +2810,65 @@ llm_expert_gating_func_type   gating_op,
     return cur;
 }
 
+ggml_tensor * llm_build_context::llm_build_latent_moe(
+        ggml_context * ctx, llama_context & lctx,
+        ggml_tensor * cur,
+        const llama_layer & layer,
+        int64_t n_expert, int64_t n_expert_used,
+        llm_ffn_op_type type_op,
+        bool norm_w, bool scale_w, float w_scale,
+        llm_expert_gating_func_type gating_op,
+        const llm_build_cb & cb, int il, ggml_cgraph * graph) {
+
+    ggml_tensor * inp_emb    = cur;
+    ggml_tensor * inp_latent = cur;
+    if (layer.ffn_latent_down) {
+        inp_latent = llm_build_lora_mm(lctx, ctx, layer.ffn_latent_down, cur);
+        cb(inp_latent, "ffn_moe_latent_down", il);
+    }
+
+    // The router reads the full-width input; the experts may read the latent.
+    ggml_tensor * router_logits = nullptr;
+    ggml_tensor * gate_inp      = layer.ffn_gate_inp;
+    if (layer.ffn_latent_down) {
+        ggml_tensor * router_in = cur->type == GGML_TYPE_F32 ? cur : ggml_cast(ctx, cur, GGML_TYPE_F32);
+        if (!ggml_is_contiguous(router_in)) router_in = ggml_cont(ctx, router_in);
+        router_logits = llm_build_lora_mm(lctx, ctx, layer.ffn_gate_inp, router_in);
+        gate_inp = nullptr;
+    }
+
+    ggml_tensor * moe_out = llm_build_moe_ffn(ctx, lctx, inp_latent,
+            gate_inp,            nullptr,
+            layer.ffn_up_exps,   nullptr,
+            nullptr,             nullptr, // no gate — relu^2(up)
+            layer.ffn_down_exps, nullptr,
+            layer.ffn_exp_probs_b,
+            n_expert, n_expert_used,
+            type_op, norm_w, scale_w, w_scale, gating_op,
+            cb, il, graph, /*add_input=*/false,
+            nullptr, nullptr, router_logits, nullptr, nullptr);
+    cb(moe_out, "ffn_moe_out", il);
+
+    if (layer.ffn_latent_up) {
+        moe_out = llm_build_lora_mm(lctx, ctx, layer.ffn_latent_up, moe_out);
+        cb(moe_out, "ffn_moe_latent_up", il);
+    }
+
+    if (layer.ffn_up_shexp && layer.ffn_down_shexp) {
+        ggml_tensor * shexp = llm_build_ffn(ctx, lctx, /*ffn_norm*/ nullptr, inp_emb,
+                layer.ffn_up_shexp,   nullptr, nullptr,
+                nullptr,              nullptr, nullptr,
+                layer.ffn_down_shexp, nullptr, nullptr,
+                nullptr,
+                type_op, LLM_FFN_PAR, cb, il);
+        cb(shexp, "ffn_shexp", il);
+        moe_out = ggml_add(ctx, moe_out, shexp);
+    }
+    cb(moe_out, "ffn_out", il);
+
+    return moe_out;
+}
+
 static ggml_tensor * llm_build_kqv(
         struct ggml_context * ctx,
        struct llama_context & lctx,
@@ -3769,6 +3828,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_NEMOTRON_H_MOE:
             {
                 result = llm.build_nemotron_h();
+            } break;
+        case LLM_ARCH_OLALA:
+            {
+                result = llm.build_olala();
             } break;
         case LLM_ARCH_XVERSE:
             {

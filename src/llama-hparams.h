@@ -136,6 +136,17 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_dt_rank_f = 0; // low-rank gate projection width (Raon-1: 128, while n_v_heads = 40)
     uint32_t ssm_n_group = 0;
+
+    // Olala (Mamba3-MIMO + Differential-TPA-V2)
+    uint32_t olala_mamba_mimo_dim  = 0; // R
+    uint32_t olala_mamba_headdim   = 0; // D_v
+    uint32_t olala_n_signal_heads  = 0;
+    uint32_t olala_n_noise_heads   = 0;
+    uint32_t olala_tpa_rank        = 0;
+    uint32_t olala_num_rope_angles = 0;
+    uint32_t olala_slw_wsize       = 0;
+    float    olala_gate_bias       = 0.0f;
+
     bool     kda_safe_gate = false;
     float    kda_gate_lower_bound = 0.0f;
 
@@ -518,7 +529,25 @@ struct llama_hparams {
         return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2 * ssm_n_group * ssm_d_state);
     }
 
+    uint32_t olala_mamba_state_size() const {
+        const uint32_t H     = ssm_dt_rank > 0 ? ssm_d_inner / ssm_dt_rank : 0;
+        const uint32_t D_v   = ssm_dt_rank;
+        const uint32_t D_qk  = ssm_d_state;
+        const uint32_t R     = olala_mamba_mimo_dim;
+        const uint32_t n_ang = ssm_d_state / 4;
+        return H * D_v * D_qk + H * R * D_qk + H * R * D_v + H * n_ang;
+    }
+
+    uint32_t olala_shift_state_size() const {
+        return 2u * n_embd_head_k_full * olala_n_noise_heads;
+    }
+
     uint32_t n_embd_v_s() const { // dimension of the recurrent state embeddings
+        if (olala_mamba_mimo_dim > 0) {
+            // Olala M layers pack: ssm state, previous K/V, and cumulative angle.
+            // V layers use olala_shift_state_size() in the same slot.
+            return olala_mamba_state_size();
+        }
         if (n_shortconv_l_cache > 0) {
             return (n_shortconv_l_cache - 1) * n_embd;
         }

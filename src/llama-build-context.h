@@ -13,6 +13,7 @@ struct llama_context;
 struct llama_cparams;
 struct llama_batch;
 struct llama_kv_cache;
+struct llama_layer;
 
 struct ggml_cgraph;
 struct ggml_tensor;
@@ -347,6 +348,8 @@ struct llm_build_context {
     ggml_cgraph * build_mamba();
 
     ggml_cgraph * build_nemotron_h();
+
+    ggml_cgraph * build_olala();
 
     ggml_tensor * build_nemotron_mamba2(ggml_cgraph * gf, ggml_tensor * cur, ggml_tensor * ssm_ids, int il);
 
@@ -698,6 +701,19 @@ llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input = false,
          ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr,
          ggml_tensor * shexp_gate = nullptr, ggml_tensor * add_extra = nullptr);
+
+    // Latent routed MoE + optional shared expert (full-width router).
+    static ggml_tensor * llm_build_latent_moe(ggml_context * ctx, llama_context & lctx,
+         ggml_tensor * cur,
+         const llama_layer & layer,
+                    int64_t   n_expert,
+                    int64_t   n_expert_used,
+            llm_ffn_op_type   type_op,
+                       bool   norm_w,
+                       bool   scale_w,
+                      float   w_scale,
+llm_expert_gating_func_type   gating_op,
+         const llm_build_cb & cb, int il, ggml_cgraph * graph);
 
     static ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids);
 
