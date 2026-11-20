@@ -897,9 +897,6 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
         if (!cuda_ctx || cuda_ctx->device != ctx.device) return false;
         if (inputs[j]->flags & GGML_TENSOR_FLAG_INPUT) has_inputs = true;
     }
-    if (has_inputs) {
-        CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
-    }
     ggml_tensor * experts[2] = { nullptr, nullptr };
     if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) {
         experts[0] = node0->src[0];
@@ -950,6 +947,9 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
         } else {
             GGML_ABORT("Fatal error");
         }
+    }
+    if (has_inputs || !event_recorded.empty()) {
+        CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
     }
     if (int(copied.size()) == n_inputs) return true;
 
