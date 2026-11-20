@@ -12,7 +12,7 @@ extern "C" {
 #define RPC_PROTO_PATCH_VERSION    6
 
 #ifdef  __cplusplus
-static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
+static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
 #endif
 
 #define GGML_RPC_MAX_SERVERS       16

@@ -1231,3 +1231,86 @@ bool iqk_op_scale_unary_scale(struct ggml_tensor * dst, int ith, int nth) {
 
     return true;
 }
+
+namespace {
+#ifdef __AVX2__
+inline void multi_add_unary_64(int ne0, int nsum, const float * gate, const float * up, float * dst, float scale) {
+    __m256 acc[8] = {};
+    auto one  = _mm256_set1_ps(1.0f);
+    auto zero = _mm256_setzero_ps();
+    for (int row = 0; row < nsum; ++row) {
+        for (int j = 0; j < 8; ++j) {
+            auto g = _mm256_loadu_ps(gate + 8*j);
+            auto u = _mm256_loadu_ps(up   + 8*j);
+            g = _mm256_add_ps(one, v_expf(_mm256_sub_ps(zero, g)));
+            acc[j] = _mm256_add_ps(acc[j], _mm256_div_ps(u, g));
+        }
+        gate += ne0;
+        up   += ne0;
+    }
+    auto vs = _mm256_set1_ps(scale);
+    for (int j = 0; j < 8; ++j) _mm256_storeu_ps(dst + 8*j, _mm256_mul_ps(vs, acc[j]));
+}
+#else
+inline void multi_add_unary_64(int ne0, int nsum, const float * gate, const float * up, float * dst, float scale) {
+    for (int j = 0; j < 64; ++j) dst[j] = 0.0f;
+    for (int row = 0; row < nsum; ++row) {
+        for (int j = 0; j < 64; ++j) {
+            dst[j] += up[j] / (1.0f + expf(-gate[j]));
+        }
+        gate += ne0;
+        up   += ne0;
+    }
+    for (int j = 0; j < 64; ++j) dst[j] *= scale;
+}
+#endif
+}
+
+void iqk_op_multiadd_unary_scale(struct ggml_tensor * dst, int ith, int nth) {
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 && dst->ne[2] == 1 && dst->ne[3] == 1 && ggml_is_contiguous(dst));
+    GGML_ASSERT(dst->ne[0] % 64 == 0);
+    auto src0 = dst->src[0];
+    auto src1 = dst->src[1];
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 && src0->ne[2] == 1 && src0->ne[3] == 1 && ggml_is_contiguous(src0));
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 && src1->ne[2] == 1 && src1->ne[3] == 1 && ggml_is_contiguous(src1));
+    GGML_ASSERT(ggml_are_same_shape(src0, src1));
+    GGML_ASSERT(src0->ne[1] == dst->ne[1]);
+    GGML_ASSERT(src0->ne[0] % dst->ne[0] == 0);
+    int nused = src0->ne[0] / dst->ne[0];
+    auto unary_op = ggml_unary_op(dst->op_params[0]);
+    GGML_ASSERT(unary_op == GGML_UNARY_OP_SIGMOID);
+    float scale;
+    std::memcpy(&scale, dst->op_params + 1, sizeof(scale));
+
+    auto x = (const float *)src0->data;
+    auto y = (const float *)src1->data;
+    auto z = (float *)dst->data;
+    int ne0 = dst->ne[0];
+#if 0
+    if (int ne1 = dst->ne[1]; ne1 >= nth) {
+        int npt = (ne1 + nth - 1)/nth;
+        int first = ith*npt;
+        int last  = std::min(ne1, first + npt);
+        for (int ir = first; ir < last; ++ir) {
+            auto xr = x + ir*ne0*nused;
+            auto yr = y + ir*ne0*nused;
+            auto zr = z + ir*ne0;
+            for (int i = 0; i < ne0; i += 64) {
+                multi_add_unary_64(ne0, nused, xr + i, yr + i, zr + i, scale);
+            }
+        }
+        return;
+    }
+#endif
+    int nelem = ggml_nelements(dst);
+    int nblock = nelem / 64;
+    int npt = (nblock + nth - 1)/nth;
+    int first = npt*ith*64;
+    if (first >= nelem) return;
+    int last = std::min(nelem, first + 64*npt);
+    for (int i = first; i < last; i += 64) {
+        int row = i / ne0;
+        int i0  = i - row*ne0;
+        multi_add_unary_64(ne0, nused, x + row*ne0*nused + i0, y + row*ne0*nused + i0, z + i, scale);
+    }
+}

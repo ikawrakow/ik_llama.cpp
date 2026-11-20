@@ -4400,6 +4400,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_FUSED_MUL_UNARY:
             ggml_cuda_op_fused_mul_unary(ctx, dst);
             break;
+        case GGML_OP_MULTI_ADD_UNARY:
+            ggml_cuda_op_multi_add_unary(ctx, dst);
+            break;
         case GGML_OP_DIV:
             ggml_cuda_op_div(ctx, dst);
             break;
@@ -5512,6 +5515,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     return false;
             }
             break;
+        case GGML_OP_MULTI_ADD_UNARY: return true;
         case GGML_OP_FUSED_MUL_UNARY: return ggml_is_contiguous(op->src[0]);
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:

@@ -4893,9 +4893,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "LATENT_ATTN",
     "DS4_COMP",
     "FMA",
+    "MULTI_ADD_UNARY_SCALE",
 };
 
-static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
+static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -5023,10 +5024,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "latent_attn_prefix(q,c,pk,pv,mask)",
     "ds4_comp(state, score, idx)",
     "c + a*b",
+    "c*sum(unary(x,y))",
 
 };
 
-static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
+static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6844,6 +6846,34 @@ struct ggml_tensor * ggml_multi_add(
 
     return result;
 }
+
+struct ggml_tensor * ggml_multi_add_unary_scale(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * gate,
+            struct ggml_tensor  * up,
+            int                   nadd,
+            float                 scale,
+            enum ggml_unary_op    unary_op) {
+    GGML_ASSERT(gate->type == GGML_TYPE_F32);
+    GGML_ASSERT(  up->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(gate));
+    GGML_ASSERT(ggml_is_contiguous(up));
+    GGML_ASSERT(ggml_are_same_shape(gate, up));
+    GGML_ASSERT(gate->ne[2] == 1 && gate->ne[3] == 1);
+    GGML_ASSERT(nadd > 1);
+    GGML_ASSERT(gate->ne[0] % nadd == 0);
+    GGML_ASSERT(unary_op == GGML_UNARY_OP_SIGMOID);
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, gate->ne[0]/nadd, gate->ne[1], gate->ne[2], gate->ne[3]);
+    result->op = GGML_OP_MULTI_ADD_UNARY;
+    result->op_params[0] = (int32_t)unary_op;
+    ((float *)result->op_params)[1] = scale;
+    result->src[0] = gate;
+    result->src[1] = up;
+
+    return result;
+}
+
 
 struct ggml_tensor * ggml_mul_multi_add(
         struct ggml_context * ctx,
@@ -27958,6 +27988,22 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
         case GGML_OP_FUSED_MUL_UNARY:
             {
                 ggml_compute_forward_fused_mul_unary(params, tensor);
+                //if (fusion && i + 4 < cgraph->n_nodes && cgraph->nodes[i+4]->op == GGML_OP_SCALE &&
+                //    cgraph->nodes[i+3]->op == GGML_OP_MULTI_ADD && cgraph->nodes[i+4]->src[0] == cgraph->nodes[i+3] &&
+                //    ggml_are_same_shape(tensor->src[0], tensor->src[1]) &&
+                //    cgraph->nodes[i+1]->op == GGML_OP_RESHAPE && cgraph->nodes[i+1]->src[0] == tensor &&
+                //    cgraph->nodes[i+2]->op == GGML_OP_VIEW    && cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
+                //    cgraph->nodes[i+3]->src[0] == cgraph->nodes[i+2] &&
+                //    (enum ggml_unary_op)tensor ->op_params[0] == GGML_UNARY_OP_SIGMOID &&
+                //    iqk_op_multiadd_unary_scale(cgraph->nodes[i+4], params->ith, params->nth)) {
+                //    i += 4;
+                //} else {
+                //    ggml_compute_forward_fused_mul_unary(params, tensor);
+                //}
+            } break;
+        case GGML_OP_MULTI_ADD_UNARY:
+            {
+                iqk_op_multiadd_unary_scale(tensor, params->ith, params->nth);
             } break;
         case GGML_OP_DIV:
             {
@@ -28898,6 +28944,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 }
             } break;
         case GGML_OP_FUSED_MUL_UNARY:
+            {
+                GGML_ABORT("fatal error"); // TODO: implement
+            }
+        case GGML_OP_MULTI_ADD_UNARY:
             {
                 GGML_ABORT("fatal error"); // TODO: implement
             }
@@ -30185,6 +30235,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MUL:
         case GGML_OP_FMA:
         case GGML_OP_FUSED_MUL_UNARY:
+        case GGML_OP_MULTI_ADD_UNARY:
         case GGML_OP_DIV:
         case GGML_OP_NORM:
         case GGML_OP_RMS_NORM:
