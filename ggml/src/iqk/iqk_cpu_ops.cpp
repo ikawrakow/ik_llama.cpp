@@ -1233,6 +1233,7 @@ bool iqk_op_scale_unary_scale(struct ggml_tensor * dst, int ith, int nth) {
 }
 
 namespace {
+#ifdef __AVX2__
 inline void multi_add_unary_64(int ne0, int nsum, const float * gate, const float * up, float * dst, float scale) {
     __m256 acc[8] = {};
     auto one  = _mm256_set1_ps(1.0f);
@@ -1250,6 +1251,19 @@ inline void multi_add_unary_64(int ne0, int nsum, const float * gate, const floa
     auto vs = _mm256_set1_ps(scale);
     for (int j = 0; j < 8; ++j) _mm256_storeu_ps(dst + 8*j, _mm256_mul_ps(vs, acc[j]));
 }
+#else
+inline void multi_add_unary_64(int ne0, int nsum, const float * gate, const float * up, float * dst, float scale) {
+    for (int j = 0; j < 64; ++j) dst[j] = 0.0f;
+    for (int row = 0; row < nsum; ++row) {
+        for (int j = 0; j < 64; ++j) {
+            dst[j] += up[j] / (1.0f + expf(-gate[j]));
+        }
+        gate += ne0;
+        up   += ne0;
+    }
+    for (int j = 0; j < 64; ++j) dst[j] *= scale;
+}
+#endif
 }
 
 void iqk_op_multiadd_unary_scale(struct ggml_tensor * dst, int ith, int nth) {
