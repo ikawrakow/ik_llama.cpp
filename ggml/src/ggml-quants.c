@@ -15979,14 +15979,8 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_Q8_K_R16: break;
         case GGML_TYPE_Q8_KV:    break;
         case GGML_TYPE_BF16_R16: break;
-        case GGML_TYPE_Q4_0_4_4:
-        case GGML_TYPE_Q4_0_4_8:
             {
                 VALIDATE_ROW_DATA_DVEC_F16_IMPL(block_q4_0x4, data, nbytes / sizeof(block_q4_0x4), 4);
-            } break;
-        case GGML_TYPE_Q4_0_8_8:
-            {
-                VALIDATE_ROW_DATA_DVEC_F16_IMPL(block_q4_0x8, data, nbytes / sizeof(block_q4_0x8), 8);
             } break;
 
         case GGML_TYPE_I8:

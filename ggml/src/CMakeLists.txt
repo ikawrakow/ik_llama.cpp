@@ -1390,7 +1390,6 @@ add_library(ggml
             ${GGML_SOURCES_IQK_MM}    ${GGML_HEADERS_IQK_MM}
             ${GGML_SOURCES_IQK}       ${GGML_HEADERS_IQK}
             ${GGML_SOURCES_CANN}      ${GGML_HEADERS_CANN}
-            ggml-aarch64.c            ggml-aarch64.h
             )
 
 if (EMSCRIPTEN)
