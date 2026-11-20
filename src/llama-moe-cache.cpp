@@ -11,16 +11,25 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_map>
 
 namespace {
 
 static std::vector<ggml_tensor *> layer_experts(const llama_layer & layer) {
     std::vector<ggml_tensor *> res;
-    for (ggml_tensor * t : { layer.ffn_up_gate_exps, layer.ffn_gate_exps, layer.ffn_up_exps, layer.ffn_down_exps }) {
-        if (t) res.push_back(t);
+    if (layer.ffn_up_gate_exps) {
+        res.push_back(layer.ffn_up_gate_exps);
+    } else {
+        for (ggml_tensor * t : { layer.ffn_gate_exps, layer.ffn_up_exps }) {
+            if (t) res.push_back(t);
+        }
+    }
+    if (layer.ffn_down_exps) {
+        res.push_back(layer.ffn_down_exps);
     }
     return res;
 }
@@ -72,6 +81,8 @@ struct llama_moe_cache::impl {
         llama_moe_cache_policy_detail::state::cpu_share_plan share_plan;
         bool share_planned = false;
         std::vector<ggml_tensor *> experts;
+        uint64_t periodic_generation = 0;
+        std::vector<int32_t> periodic_selected;
     };
     struct binding {
         int32_t layer;
@@ -85,9 +96,19 @@ struct llama_moe_cache::impl {
         size_t evictions = 0;
         size_t logical_uploaded_bytes = 0;
     };
+    struct periodic_candidate {
+        int32_t group = -1;
+        int32_t layer = -1;
+        int32_t expert = -1;
+        int32_t slot = -1;
+        int32_t victim_key = -1;
+        float margin = 0.0f;
+        size_t bytes = 0;
+    };
     static constexpr int64_t max_batch = llama_moe_cache_policy_detail::state::max_batch;
 
     int32_t n_expert_used;
+    int32_t n_expert;
     std::vector<device> devices;
     std::vector<group> groups;
     std::vector<layer> layers;
@@ -106,11 +127,17 @@ struct llama_moe_cache::impl {
     bool token_geometry_maps = false;
     mutable size_t large_batch_skips = 0;
     mutable size_t incompatible_layer_skips = 0;
+    bool periodic_enabled = false;
+    bool periodic_track_cpu = false;
+    uint64_t periodic_graph_generation = 0;
+    uint64_t periodic_tg_tokens = 0;
+    std::vector<uint8_t> periodic_observed_cpu;
 
     impl(const llama_model & model, const std::vector<ggml_backend *> & backends,
             const std::vector<ggml_backend_buffer_type *> & bufts, size_t size,
             enum llama_moe_cache_policy policy, float share)
-            : n_expert_used(model.hparams.n_expert_used), layers(model.layers.size()), requested_size(size), cpu_share(share) {
+            : n_expert_used(model.hparams.n_expert_used), n_expert(model.hparams.n_expert),
+              layers(model.layers.size()), requested_size(size), cpu_share(share) {
         if (!llama_moe_cache_policy_detail::cpu_share_q16(share, cpu_share_q16)) {
             throw std::invalid_argument("MoE cache CPU share must be finite and in [0,1]");
         }
@@ -163,6 +190,8 @@ struct llama_moe_cache::impl {
             LLAMA_LOG_WARN("%s: no complete host-resident expert layer is eligible. MoE cache is inactive\n", __func__);
             return;
         }
+        periodic_enabled = cpu_share == 1.0;
+        if (periodic_enabled) periodic_observed_cpu.assign(layers.size() * (size_t) n_expert, 0);
 
         std::vector<bool> eligible(model.splits.size(), false);
         for (const device & d : devices) {
@@ -255,7 +284,7 @@ struct llama_moe_cache::impl {
                     ggml_tensor * cached = ggml_view_3d(d.ctx.get(), bank, bank->ne[0], bank->ne[1],
                             g.n_slots + g.zero_slots,
                             bank->nb[1], bank->nb[2], 0);
-                    if (cached->type == GGML_TYPE_NVFP4_KS) {
+                    if (cached->type == GGML_TYPE_NVFP4_KS || cached->type == GGML_TYPE_F8_E4M3_KS || cached->type == GGML_TYPE_F8_E4M3_B128) {
                         ggml_set_input_scale(cached, ggml_get_input_scale(l.experts[ip]));
                     }
                     ggml_format_name(cached, "moe_cache.%s", l.experts[ip]->name);
@@ -364,7 +393,138 @@ struct llama_moe_cache::impl {
         return {l.gpu_map, l.cpu_map, l.gpu_bias_map, l.cpu_bias_map};
     }
 
-    void begin_compute() {
+    bool periodic_candidate_parts_compatible(const group & g, const layer & l,
+            int32_t expert, int32_t slot, size_t & bytes) const {
+        bytes = 0;
+        if (l.experts.empty() || l.experts.size() != g.banks.size() ||
+                !same_layout(l.experts, g.ref) || expert < 0 || slot < 0 || slot >= g.n_slots ||
+                expert >= g.cache.n_expert) return false;
+        for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+            const ggml_tensor * src = l.experts[ip];
+            const ggml_tensor * bank = g.banks[ip];
+            if (!is_host_weight(src) || !src->data || !bank || expert >= src->ne[2]) return false;
+            const size_t stride = src->nb[2];
+            if (stride == 0 || bytes > SIZE_MAX - stride) return false;
+            bytes += stride;
+        }
+        return true;
+    }
+
+    // Called after the normal scheduler synchronization at a completed T=1 eval.
+    void periodic_refresh() {
+        if (!periodic_enabled) return;
+
+        std::vector<periodic_candidate> best_by_group(groups.size());
+        std::vector<int32_t> protected_keys;
+        for (size_t ig = 0; ig < groups.size(); ++ig) {
+            group & g = groups[ig];
+            if (g.cache.n_slots <= 0 || g.cache.filled_real_slots != (size_t) g.n_slots || g.cache.crf.empty()) continue;
+            protected_keys.clear();
+            for (int32_t il : g.layers) {
+                const layer & l = layers[il];
+                if (l.periodic_generation != periodic_graph_generation) continue;
+                for (int32_t expert : l.periodic_selected) {
+                    protected_keys.push_back(g.cache.make_key(il, expert));
+                }
+            }
+            std::sort(protected_keys.begin(), protected_keys.end());
+            const int32_t victim_slot = g.cache.try_protected_victim(protected_keys);
+            if (victim_slot < 0) continue;
+            const int32_t victim_key = g.cache.key_of[victim_slot];
+            if (victim_key < 0) continue;
+            const float victim_score = g.cache.decayed_crf(g.cache.key_layer(victim_key), victim_key);
+
+            for (int32_t il : g.layers) {
+                const layer & l = layers[il];
+                for (int32_t expert = 0; expert < g.cache.n_expert; ++expert) {
+                    const size_t observed = (size_t) il*g.cache.n_expert + expert;
+                    if (!periodic_observed_cpu[observed] || g.cache.slot_map[il][expert] >= 0) continue;
+                    const int32_t key = g.cache.make_key(il, expert);
+                    const float score = g.cache.decayed_crf(il, key);
+                    if (!std::isfinite(score) || score < 1.0f) continue;
+
+                    const float margin = score - victim_score;
+                    if (!(margin > 0.0f)) continue;
+
+                    size_t bytes = 0;
+                    if (!periodic_candidate_parts_compatible(g, l, expert, victim_slot, bytes)) continue;
+                    const periodic_candidate candidate{(int32_t) ig, il, expert,
+                            victim_slot, victim_key, margin, bytes};
+                    auto & current = best_by_group[ig];
+                    if (current.group < 0 || candidate.margin > current.margin ||
+                            (candidate.margin == current.margin &&
+                             std::tie(candidate.layer, candidate.expert) < std::tie(current.layer, current.expert))) {
+                        current = candidate;
+                    }
+                }
+            }
+        }
+
+        std::vector<periodic_candidate> admitted;
+        for (const periodic_candidate & candidate : best_by_group) {
+            if (candidate.group >= 0) admitted.push_back(candidate);
+        }
+        std::sort(admitted.begin(), admitted.end(), [this](const periodic_candidate & a, const periodic_candidate & b) {
+            if (a.margin != b.margin) return a.margin > b.margin;
+            return std::tie(groups[a.group].device, a.group, a.layer, a.expert) <
+                    std::tie(groups[b.group].device, b.group, b.layer, b.expert);
+        });
+
+        std::vector<size_t> remaining(devices.size(), 40u*1024u*1024u);
+        std::vector<periodic_candidate> selected;
+        for (const periodic_candidate & candidate : admitted) {
+            const int32_t device = groups[candidate.group].device;
+            if (device < 0 || (size_t) device >= remaining.size() ||
+                    candidate.bytes > remaining[device]) continue;
+            remaining[device] -= candidate.bytes;
+            selected.push_back(candidate);
+        }
+        if (selected.empty()) return;
+
+        std::vector<bool> device_written(devices.size(), false);
+        for (const periodic_candidate & candidate : selected) {
+            const group & g = groups[candidate.group];
+            const layer & l = layers[candidate.layer];
+            const int32_t device = g.device;
+            for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+                const ggml_tensor * src = l.experts[ip];
+                ggml_tensor * bank = g.banks[ip];
+                const size_t stride = src->nb[2];
+                ggml_backend_tensor_set_async(devices[device].backend, bank,
+                        (const uint8_t *) src->data + (size_t) candidate.expert*stride,
+                        (size_t) candidate.slot*stride, stride);
+            }
+            device_written[device] = true;
+        }
+        for (size_t id = 0; id < devices.size(); ++id) {
+            if (device_written[id]) ggml_backend_synchronize(devices[id].backend);
+        }
+
+        for (const periodic_candidate & candidate : selected) {
+            group & g = groups[candidate.group];
+            auto & cache = g.cache;
+            const int32_t old_key = cache.key_of[candidate.slot];
+            if (old_key != candidate.victim_key || old_key < 0 ||
+                    cache.slot_map[cache.key_layer(old_key)][cache.key_expert(old_key)] != candidate.slot ||
+                    cache.slot_map[candidate.layer][candidate.expert] >= 0) {
+                GGML_ABORT("periodic MoE maintenance owner state changed before publication");
+            }
+            cache.slot_map[cache.key_layer(old_key)][cache.key_expert(old_key)] = -1;
+            const int32_t key = cache.make_key(candidate.layer, candidate.expert);
+            cache.key_of[candidate.slot] = key;
+            cache.slot_map[candidate.layer][candidate.expert] = candidate.slot;
+            cache.replacement_published(candidate.slot);
+        }
+    }
+
+    void periodic_tg_token_complete() {
+        if (!periodic_track_cpu) return;
+        if (++periodic_tg_tokens % 2 == 0) periodic_refresh();
+    }
+
+    void begin_compute(bool track_single_token_decode) {
+        if (periodic_enabled && ++periodic_graph_generation == 0) ++periodic_graph_generation;
+        periodic_track_cpu = periodic_enabled && track_single_token_decode;
         for (layer & l : layers) l.share_planned = false;
     }
 
@@ -524,6 +684,13 @@ struct llama_moe_cache::impl {
                         cpu_share, g.zero_slots, l.share_plan)) {
                     GGML_ABORT("Unable to plan MoE CPU-share assignments for layer %d", il);
                 }
+                if (periodic_track_cpu && n_tokens == 1) {
+                    l.periodic_generation = periodic_graph_generation;
+                    l.periodic_selected = g.cache.uniq;
+                    for (const auto & miss : l.share_plan.cpu) {
+                        periodic_observed_cpu[(size_t) il*g.cache.n_expert + miss.expert] = 1;
+                    }
+                }
                 auto store_map = [&](ggml_tensor * tensor, const std::vector<int32_t> & values) {
                     GGML_ASSERT(tensor && values.size() == (size_t) tensor->ne[1]);
                     std::memcpy(tensor->data, values.data(), ggml_nbytes(tensor));
@@ -601,6 +768,10 @@ struct llama_moe_cache::impl {
         size_t n_hit = 0;
         size_t n_eviction = 0;
         if (!g.cache.plan(il, ids.data(), ids.size(), n_tokens, fills, n_hit, n_eviction)) GGML_ABORT("MoE cache slot count is smaller than the routed expert set");
+        if (periodic_track_cpu && n_tokens == 1) {
+            l.periodic_generation = periodic_graph_generation;
+            l.periodic_selected = g.cache.uniq;
+        }
         size_t bytes = 0;
         for (size_t ip = 0; ip < l.experts.size(); ++ip) {
             const ggml_tensor * w = l.experts[ip];
@@ -665,7 +836,8 @@ ggml_backend * llama_moe_cache::backend(int32_t il) const { return pimpl->backen
 bool llama_moe_cache::requires_token_geometry_maps() const { return pimpl->requires_token_geometry_maps(); }
 ggml_tensor * llama_moe_cache::get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const { return pimpl->get_slot_map(il, n_tokens, n_expert_used); }
 llama_moe_cache::cpu_share_maps llama_moe_cache::get_cpu_share_maps(int32_t il, int64_t n_tokens, int64_t n_expert_used) const { return pimpl->get_cpu_share_maps(il, n_tokens, n_expert_used); }
-void llama_moe_cache::begin_compute() { pimpl->begin_compute(); }
+void llama_moe_cache::begin_compute(bool track_single_token_decode) { pimpl->begin_compute(track_single_token_decode); }
+void llama_moe_cache::periodic_tg_token_complete() { pimpl->periodic_tg_token_complete(); }
 ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * t) const { return pimpl->get_experts(t); }
 bool llama_moe_cache::copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
         ggml_backend_sched_copy_phase phase) { return pimpl->copy(backend, src, dst, graph, phase); }

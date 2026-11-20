@@ -173,7 +173,11 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     int gqa_ratio = Q->ne[2] / K->ne[2];
 
     if (new_mma_available(cc) && K->ne[0] == 128 && V->ne[0] == 128 && Q->ne[0] == 128 && Q->ne[1] == 1 &&
-            (gqa_ratio == 12 || gqa_ratio == 6 || gqa_ratio == 10)) {
+            (gqa_ratio == 12 || gqa_ratio == 6 || gqa_ratio == 10 || gqa_ratio == 5)) {
+        ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
+        return;
+    }
+    if (new_mma_available(cc) && K->ne[0] == 128 && V->ne[0] == 128 && Q->ne[0] == 128 &&  gqa_ratio == 5) {
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
         return;
     }

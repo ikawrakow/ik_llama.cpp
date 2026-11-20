@@ -24,6 +24,7 @@ struct tensor_reload_source {
     void                * original_data   = nullptr;
     ggml_type             original_type     = GGML_TYPE_COUNT;
     size_t                original_nbytes   = 0;
+    float                 original_input_scale = 0.0f;
     int64_t               original_ne[GGML_MAX_DIMS];
     size_t                original_nb[GGML_MAX_DIMS];
 
@@ -51,6 +52,7 @@ struct tensor_reload_source {
 struct reload_info {
     std::unordered_map<std::string, tensor_reload_source> tensor_reload_sources;
     std::atomic<bool> reload_snapshots_done{false};
+    bool fp8_w8a8;
 
     reload_info(const llama_model_loader & ml);
 

@@ -211,3 +211,61 @@ class LazyNumpyTensor(LazyBase):
         return eager.tofile(*args, **kwargs)
 
     # TODO: __array_function__
+
+
+class LazyChunkedTensor:
+
+    def __init__(
+        self, chunks: list[Callable[[], np.ndarray]], shape: tuple[int, ...], dtype: DTypeLike,
+        qtype: Any = None, byteswap: bool = False,
+    ):
+        self._chunks = chunks
+        self._qtype = qtype
+        self._byteswap = byteswap
+        self.shape = tuple(shape)
+        self.dtype = np.dtype(dtype)
+
+    @property
+    def nbytes(self) -> int:
+        n = self.dtype.itemsize
+        for d in self.shape:
+            n *= d
+        return n
+
+    def numpy(self) -> LazyChunkedTensor:
+        return self
+
+    def quantize(self, qtype: Any) -> LazyChunkedTensor:
+        from .constants import GGMLQuantizationType
+        from .quants import QuantError, quant_shape_to_byte_shape
+
+        if qtype == GGMLQuantizationType.F32:
+            shape, dtype = self.shape, np.dtype(np.float32)
+        elif qtype == GGMLQuantizationType.F16:
+            shape, dtype = self.shape, np.dtype(np.float16)
+        else:
+            try:
+                shape, dtype = quant_shape_to_byte_shape(self.shape, qtype), np.dtype(np.uint8)
+            except ValueError as e:
+
+                raise QuantError(str(e)) from e
+        return LazyChunkedTensor(self._chunks, shape, dtype, qtype, self._byteswap)
+
+    def byteswap(self, inplace: bool = False) -> LazyChunkedTensor:
+        return LazyChunkedTensor(self._chunks, self.shape, self.dtype, self._qtype, not self._byteswap)
+
+    def tofile(self, *args, **kwargs) -> None:
+        from .constants import GGMLQuantizationType
+        from .quants import quantize
+
+        for load_chunk in self._chunks:
+            chunk = load_chunk()
+            if self._qtype is not None:
+
+                chunk = quantize(chunk, self._qtype)
+            if self._byteswap:
+                if self._qtype == GGMLQuantizationType.BF16:
+                    chunk = chunk.view(np.uint16)
+                chunk = chunk.byteswap(inplace=False)
+            chunk.tofile(*args, **kwargs)
+            del chunk

@@ -55,6 +55,8 @@ IQK_API bool iqk_kda(int32_t head_dim, int32_t n_heads, int32_t gqa_ratio, int32
 
 bool iqk_op_scale_unary_scale(struct ggml_tensor * dst, int ith, int nth);
 
+void iqk_op_multiadd_unary_scale(struct ggml_tensor * dst, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif

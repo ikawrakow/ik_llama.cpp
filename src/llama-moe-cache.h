@@ -36,7 +36,8 @@ public:
     bool requires_token_geometry_maps() const;
     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const;
     cpu_share_maps get_cpu_share_maps(int32_t il, int64_t n_tokens, int64_t n_expert_used) const;
-    void begin_compute();
+    void begin_compute(bool track_single_token_decode);
+    void periodic_tg_token_complete();
     ggml_tensor * get_experts(const ggml_tensor * tensor) const;
     bool copy(ggml_backend * backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph,
             ggml_backend_sched_copy_phase phase);

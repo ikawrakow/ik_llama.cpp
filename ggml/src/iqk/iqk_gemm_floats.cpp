@@ -3,6 +3,7 @@
 #ifdef IQK_IMPLEMENT
 
 #include "ggml-impl.h"
+#include <cmath>
 
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
@@ -797,6 +798,33 @@ template <int nrc> struct QBF16 final : public QBF16Base {
     const uint16_t * y[nrc_y];
 };
 
+#if defined(__ARM_FEATURE_BF16)
+struct QBF16DotBase {
+    constexpr static int k_step = 8;
+    using Data = bfloat16x8_t;
+    using Acc = float32x4_t;
+    static inline Data load(const uint16_t * x) { return vreinterpretq_bf16_u16(vld1q_u16(x)); }
+    static inline Acc acc(Acc prev, const Data& y, const Data& x) { return vbfdotq_f32(prev, y, x); }
+    static inline Acc acc_first(const Data& y, const Data& x) { return acc(vdupq_n_f32(0), y, x); }
+    static inline float hsum(Acc acc) { return vaddvq_f32(acc); }
+};
+template <int nrc> struct QBF16Dot final : public QBF16DotBase {
+    using Base = QBF16DotBase;
+    constexpr static int nrc_y = nrc;
+    QBF16Dot(const DataInfo& info) {
+        for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const uint16_t *)info.src1_row(iy);
+    }
+    QBF16Dot(const char * cx, size_t bx) {
+        for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const uint16_t *)(cx + iy*bx);
+    }
+    IQK_ALWAYS_INLINE Data load1(int iy, int i) const { return load(y[iy] + k_step*i); }
+    IQK_ALWAYS_INLINE Data load_tail(int iy, int i) const {
+        return vreinterpretq_bf16_u16(vcombine_u16(vld1_u16(y[iy] + 4*i), vdup_n_u16(0)));
+    }
+    const uint16_t * y[nrc_y];
+};
+#endif
+
 struct QF32Base {
     constexpr static int k_step = 4;
     using Data = float32x4_t;
@@ -1088,6 +1116,17 @@ bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t,
             kernels[4] = mul_mat_f16_f16_T<5>;
             return true;
         }
+#if defined(__ARM_FEATURE_BF16)
+        else if (typeA == GGML_TYPE_BF16 && typeB == GGML_TYPE_BF16 && ne00 >= QBF16DotBase::k_step) {
+            for (auto& f : kernels) f = nullptr;
+            kernels[0] = mul_mat_Qx_Qy_T<QBF16Dot<1>, QBF16Dot>;
+            kernels[1] = mul_mat_Qx_Qy_T<QBF16Dot<2>, QBF16Dot>;
+            kernels[2] = mul_mat_Qx_Qy_T<QBF16Dot<3>, QBF16Dot>;
+            kernels[3] = mul_mat_Qx_Qy_T<QBF16Dot<4>, QBF16Dot>;
+            kernels[4] = mul_mat_Qx_Qy_T<QBF16Dot<5>, QBF16Dot>;
+            return true;
+        }
+#endif
         else if (typeA == GGML_TYPE_BF16 && typeB == GGML_TYPE_F32) {
             for (auto& f : kernels) f = nullptr;
             kernels[0] = mul_mat_Qx_Qy_T<QF32<1>, QBF16>;
@@ -1140,5 +1179,349 @@ void iqk_gemm_default_floats(int D, int nq, const char * cx, size_t bx, DataInfo
 }
 
 #endif
+
+namespace {
+
+#ifdef __x86_64__
+using F8Base = QFBase;
+#else
+struct F8Base {
+    constexpr static int k_step = 16;
+    using Data = float32x4x4_t;
+    static inline Data load(const float * x) {
+        return {{vld1q_f32(x), vld1q_f32(x + 4), vld1q_f32(x + 8), vld1q_f32(x + 12)}};
+    }
+    static inline Data acc(Data a, const Data& x, const Data& y) {
+        for (int i = 0; i < 4; ++i) a.val[i] = vfmaq_f32(a.val[i], x.val[i], y.val[i]);
+        return a;
+    }
+    static inline float hsum(const Data& a) {
+        return vaddvq_f32(vaddq_f32(vaddq_f32(a.val[0], a.val[1]), vaddq_f32(a.val[2], a.val[3])));
+    }
+};
+#endif
+
+struct F8 : F8Base {
+    using Y = float;
+    static inline float value(float y) { return y; }
+    static inline float decode(uint8_t x) {
+        const uint32_t mag = x & 127;
+        float value = mag * (1.0f/512);
+        uint32_t bits;
+        memcpy(&bits, &value, sizeof(bits));
+        if (mag >= 8) bits = (mag << 20) + (120u << 23);
+        if (mag == 127) bits = 0x7fc00000;
+        bits |= uint32_t(x & 128) << 24;
+        memcpy(&value, &bits, sizeof(value));
+        return value;
+    }
+
+#if defined __AVX512F__
+    static inline Data zero() { return _mm512_setzero_ps(); }
+    static inline Data decode(const uint8_t * x) {
+        const auto q = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)x));
+        const auto mag = _mm512_and_si512(q, _mm512_set1_epi32(127));
+        const auto sign = _mm512_slli_epi32(_mm512_and_si512(q, _mm512_set1_epi32(128)), 24);
+        auto v = _mm512_castsi512_ps(_mm512_add_epi32(_mm512_slli_epi32(mag, 20), _mm512_set1_epi32(120 << 23)));
+        const auto sub = _mm512_mul_ps(_mm512_cvtepi32_ps(mag), _mm512_set1_ps(1.0f/512));
+        v = _mm512_mask_mov_ps(v, _mm512_cmplt_epi32_mask(mag, _mm512_set1_epi32(8)), sub);
+        v = _mm512_mask_mov_ps(v, _mm512_cmpeq_epi32_mask(mag, _mm512_set1_epi32(127)),
+                _mm512_castsi512_ps(_mm512_set1_epi32(0x7fc00000)));
+        return _mm512_castsi512_ps(_mm512_or_si512(_mm512_castps_si512(v), sign));
+    }
+    static inline void decode_bf16(const uint8_t * x, uint16_t * y) {
+        _mm256_storeu_si256((__m256i *)y, _mm512_cvtepi32_epi16(_mm512_srli_epi32(_mm512_castps_si512(decode(x)), 16)));
+    }
+    static inline Data add(Data a, Data b) { return _mm512_add_ps(a, b); }
+#elif defined __AVX2__
+    static inline Data zero() { return _mm256_setzero_ps(); }
+    static inline Data decode(const uint8_t * x) {
+        const auto q = _mm_cvtepi8_epi16(_mm_loadl_epi64((const __m128i *)x));
+        auto bits = _mm_and_si128(_mm_slli_epi16(q, 7), _mm_set1_epi16(-16385));
+        const auto nan = _mm_cmpeq_epi16(_mm_and_si128(bits, _mm_set1_epi16(0x7fff)), _mm_set1_epi16(0x3f80));
+        bits = _mm_or_si128(bits, _mm_and_si128(nan, _mm_set1_epi16(0x7c00)));
+        return _mm256_mul_ps(_mm256_cvtph_ps(bits), _mm256_set1_ps(256));
+    }
+    static inline void decode_bf16(const uint8_t * x, uint16_t * y) {
+        const auto v = _mm256_srli_epi32(_mm256_castps_si256(decode(x)), 16);
+        _mm_storeu_si128((__m128i *)y, _mm_packus_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1)));
+    }
+    static inline Data add(Data a, Data b) { return _mm256_add_ps(a, b); }
+#else
+    static inline Data zero() {
+        const auto z = vdupq_n_f32(0);
+        return {{z, z, z, z}};
+    }
+    static inline uint16x8x2_t decode_bf16(const uint8_t * x) {
+        const uint8x16_t hi_fix = {0, 0, 0, 0, 0, 0, 0, 0x3c, 0x3c, 7, 7, 7, 0, 0, 0, 0};
+        const uint8x16_t lo_fix = {0, 0, 0, 0, 0, 0, 0, 0x30, 0, 0x10, 0xa0, 0xf0, 0x40, 0x70, 0x20, 0x10};
+        const auto q = vld1q_u8(x);
+        const uint8x16_t hi_base = {0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xc1, 0xc2, 0xc3};
+        const auto index = vandq_u8(vaddq_u8(q, vdupq_n_u8(8)), vdupq_n_u8(127));
+        const auto hi = veorq_u8(vqtbl1q_u8(hi_base, vshrq_n_u8(q, 4)), vqtbl1q_u8(hi_fix, index));
+        const auto lo = veorq_u8(vshlq_n_u8(q, 4), vqtbl1q_u8(lo_fix, index));
+        return {{vreinterpretq_u16_u8(vzip1q_u8(lo, hi)), vreinterpretq_u16_u8(vzip2q_u8(lo, hi))}};
+    }
+    static inline void decode_bf16(const uint8_t * x, uint16_t * y) {
+        const auto b = decode_bf16(x);
+        vst1q_u16(y, b.val[0]);
+        vst1q_u16(y + 8, b.val[1]);
+    }
+    static inline Data decode(const uint8_t * x) {
+        const auto b = decode_bf16(x);
+        return {{vreinterpretq_f32_u32(vshll_n_u16(vget_low_u16(b.val[0]), 16)),
+                 vreinterpretq_f32_u32(vshll_high_n_u16(b.val[0], 16)),
+                 vreinterpretq_f32_u32(vshll_n_u16(vget_low_u16(b.val[1]), 16)),
+                 vreinterpretq_f32_u32(vshll_high_n_u16(b.val[1], 16))}};
+    }
+#endif
+};
+
+#if defined(__ARM_FEATURE_BF16)
+struct F8BF16 {
+    constexpr static int k_step = 16;
+    using Y = uint16_t;
+    using Data = float32x4x2_t;
+    static inline float value(uint16_t y) { return GGML_BF16_TO_FP32(ggml_bf16_t{y}); }
+    static inline Data zero() { return {{vdupq_n_f32(0), vdupq_n_f32(0)}}; }
+    static inline uint16x8x2_t decode(const uint8_t * x) { return F8::decode_bf16(x); }
+    static inline uint16x8x2_t load(const uint16_t * y) { return {{vld1q_u16(y), vld1q_u16(y + 8)}}; }
+    static inline Data acc(Data a, const uint16x8x2_t& x, const uint16x8x2_t& y) {
+        for (int i = 0; i < 2; ++i) a.val[i] = vbfdotq_f32(a.val[i], vreinterpretq_bf16_u16(x.val[i]), vreinterpretq_bf16_u16(y.val[i]));
+        return a;
+    }
+    static inline float hsum(const Data& a) { return vaddvq_f32(vaddq_f32(a.val[0], a.val[1])); }
+};
+#endif
+
+#ifndef __x86_64__
+
+template <int nrc> struct F8QF32 : QF32Base {
+    using Base = QF32Base;
+    constexpr static int nrc_y = nrc;
+    const float * const * y;
+    F8QF32(const DataInfo& info) : y((const float * const *)info.cy) {}
+    Data load1(int iy, int i) const { return load(y[iy] + k_step*i); }
+    Data load_tail(int iy, int i) const { return load(y[iy] + 4*i); }
+};
+
+void mul_mat_f8_b128_bf16(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    constexpr int tile = 5, nrc_y = 8;
+    for (int ix = 0; ix < nrc_x; ix += tile) {
+        const int nx = std::min(tile, nrc_x - ix);
+        uint16_t weights[tile][128];
+        float sum[tile*nrc_y] = {}, partial[tile*nrc_y];
+        alignas(32) float scale[tile];
+        const float * y[nrc_y];
+        for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const float *)info.src1_row(iy);
+        const DataInfo local{partial, (const char *)y, tile, 0, 0, 1, nullptr, 0};
+        for (int ib = 0; ib < n/128; ++ib) {
+            for (int row = 0; row < nx; ++row) {
+                const auto * x = (const uint8_t *)vx + (ix + row)*bx + ib*132;
+                memcpy(scale + row, x, sizeof(float));
+                for (int i = 0; i < 128; i += 16) F8::decode_bf16(x + 4 + i, weights[row] + i);
+            }
+            mul_mat_Qx_Qy_T<F8QF32<4>, QBF16>(128, weights, sizeof(weights[0]), local, nx);
+            const DataInfo next{partial + 4*tile, (const char *)(y + 4), tile, 0, 0, 1, nullptr, 0};
+            mul_mat_Qx_Qy_T<F8QF32<4>, QBF16>(128, weights, sizeof(weights[0]), next, nx);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                for (int row = 0; row < nx; ++row) sum[iy*tile + row] += partial[iy*tile + row]*scale[row];
+                y[iy] += 128;
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            for (int row = 0; row < nx; ++row) info.store(ix + row, iy, sum[iy*tile + row]);
+        }
+    }
+}
+
+#endif
+
+struct F8Layout { int block_size, meta; };
+inline F8Layout f8_layout(bool block_scaled, int n) {
+    return {block_scaled ? 128 : n, block_scaled ? (int)sizeof(float) : (int)ggml_internal_get_type_traits(GGML_TYPE_F8_E4M3_KS).row_meta_size};
+}
+
+template <bool block_scaled, int nrc_y, typename F = F8>
+void mul_mat_f8(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+#ifndef __x86_64__
+    if constexpr (block_scaled && nrc_y == 8 && std::is_same_v<F, F8>) {
+        mul_mat_f8_b128_bf16(n, vx, bx, info, nrc_x);
+        return;
+    }
+#endif
+    const typename F::Y * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const typename F::Y *)info.src1_row(iy);
+    const auto [block_size, meta] = f8_layout(block_scaled, n);
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const auto * x = (const uint8_t *)vx + ix*bx;
+        float sum[nrc_y] = {};
+        for (int ib = 0; ib < n; ib += block_size) {
+            float scale;
+            memcpy(&scale, x, sizeof(scale));
+            x += meta;
+            typename F::Data acc[nrc_y][2];
+            for (int iy = 0; iy < nrc_y; ++iy) acc[iy][0] = acc[iy][1] = F::zero();
+            int i = 0;
+#ifdef __x86_64__
+            for (; i + 2*F::k_step <= block_size; i += 2*F::k_step) {
+                const auto x0 = F::decode(x + i);
+                const auto x1 = F::decode(x + i + F::k_step);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    acc[iy][0] = F::acc(acc[iy][0], x0, F::load(y[iy] + ib + i));
+                    acc[iy][1] = F::acc(acc[iy][1], x1, F::load(y[iy] + ib + i + F::k_step));
+                }
+            }
+#endif
+            for (; i + F::k_step <= block_size; i += F::k_step) {
+                const auto xv = F::decode(x + i);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    acc[iy][0] = F::acc(acc[iy][0], xv, F::load(y[iy] + ib + i));
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+#ifdef __x86_64__
+                float partial = F::hsum(F::add(acc[iy][0], acc[iy][1]));
+#else
+                float partial = F::hsum(acc[iy][0]);
+#endif
+                for (int j = i; j < block_size; ++j) partial += F8::decode(x[j]) * F::value(y[iy][ib + j]);
+                sum[iy] += partial * scale;
+            }
+            x += block_size;
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) info.store(ix, iy, sum[iy]);
+    }
+}
+
+}
+
+bool iqk_set_kernels_f8(int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels) {
+#if defined(__ARM_FEATURE_BF16)
+    if (typeB == GGML_TYPE_BF16) {
+        if (typeA == GGML_TYPE_F8_E4M3_KS) {
+            IQK_SET_MUL_MAT_FUNCTIONS_T2(mul_mat_f8, false, F8BF16, kernels);
+        } else {
+            IQK_SET_MUL_MAT_FUNCTIONS_T2(mul_mat_f8, true, F8BF16, kernels);
+        }
+        return true;
+    }
+#endif
+    if (typeB != GGML_TYPE_F32) return false;
+    if (typeA == GGML_TYPE_F8_E4M3_KS) {
+        IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_f8, false, kernels);
+        return true;
+    }
+    if (typeA == GGML_TYPE_F8_E4M3_B128) {
+        IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_f8, true, kernels);
+        return true;
+    }
+    return false;
+}
+
+bool iqk_convert_f8(int typeA, int n, const void * vx, size_t bx, void * vy, size_t stride_y, int nrc_x) {
+    if (typeA == GGML_TYPE_F8_E4M3_KS) {
+        const int meta = ggml_internal_get_type_traits(GGML_TYPE_F8_E4M3_KS).row_meta_size;
+        for (int row = 0; row < nrc_x; ++row) {
+            const auto * x = (const uint8_t *)vx + row*bx + meta;
+            auto * y = (uint16_t *)vy + row*stride_y;
+            int i = 0;
+            for (; i + F8::k_step <= n; i += F8::k_step) F8::decode_bf16(x + i, y + i);
+            for (; i < n; ++i) {
+                const float value = F8::decode(x[i]);
+                uint32_t bits;
+                memcpy(&bits, &value, sizeof(bits));
+                y[i] = bits >> 16;
+            }
+        }
+        return true;
+    }
+#if defined __AVX2__ && !defined __AVX512F__
+    if (typeA == GGML_TYPE_F8_E4M3_B128) {
+        for (int row = 0; row < nrc_x; ++row) {
+            const auto * x = (const uint8_t *)vx + row*bx;
+            auto * y = (float *)vy + row*stride_y;
+            for (int ib = 0; ib < n/128; ++ib, x += 132, y += 128) {
+                const auto scale = _mm256_broadcast_ss((const float *)x);
+                for (int i = 0; i < 128; i += 8) _mm256_storeu_ps(y + i, _mm256_mul_ps(F8::decode(x + 4 + i), scale));
+            }
+        }
+        return true;
+    }
+#endif
+    return false;
+}
+
+namespace {
+
+struct F8Q80 {
+    int8_t q[128][128] = {};
+    F8Q80() {
+        for (int m = 1; m < 127; ++m) for (int c = 0; c <= m; ++c) {
+            q[m][c] = (int8_t)std::lround(127.0*F8::decode(uint8_t(c))/F8::decode(uint8_t(m)));
+        }
+    }
+};
+
+inline void f8_to_q80(const int8_t (*table)[128], const uint8_t * x, float scale, block_q8_0 * y) {
+#if defined __AVX2__
+    const auto c = _mm256_loadu_si256((const __m256i *)x);
+    const auto mag = _mm256_and_si256(c, _mm256_set1_epi8(127));
+    const auto m8 = _mm_max_epu8(_mm256_castsi256_si128(mag), _mm256_extracti128_si256(mag, 1));
+    const int m = 255 - _mm_extract_epi16(_mm_minpos_epu16(_mm_cvtepu8_epi16(_mm_xor_si128(_mm_max_epu8(m8, _mm_srli_si128(m8, 8)), _mm_set1_epi8(-1)))), 0);
+#if defined HAVE_FANCY_SIMD && defined __AVX512VBMI__
+    const auto q = _mm512_castsi512_si256(_mm512_permutex2var_epi8(_mm512_loadu_si512(table[m]), _mm512_castsi256_si512(mag),
+                _mm512_loadu_si512(table[m] + 64)));
+#else
+    const auto hi = _mm256_and_si256(_mm256_srli_epi16(mag, 4), _mm256_set1_epi8(7));
+    auto q = _mm256_setzero_si256();
+    for (int k = 0; k <= m >> 4; ++k) {
+        const auto t = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)(table[m] + 16*k)));
+        q = _mm256_or_si256(q, _mm256_and_si256(_mm256_shuffle_epi8(t, mag), _mm256_cmpeq_epi8(hi, _mm256_set1_epi8(k))));
+    }
+#endif
+    _mm256_storeu_si256((__m256i *)y->qs, _mm256_sign_epi8(q, _mm256_or_si256(c, _mm256_set1_epi8(1))));
+#else
+    const uint8x16_t c[2] = {vld1q_u8(x), vld1q_u8(x + 16)};
+    const uint8x16_t mag[2] = {vandq_u8(c[0], vdupq_n_u8(127)), vandq_u8(c[1], vdupq_n_u8(127))};
+    const int m = vmaxvq_u8(vmaxq_u8(mag[0], mag[1]));
+    const auto lo = vld1q_u8_x4((const uint8_t *)table[m]), hi = vld1q_u8_x4((const uint8_t *)table[m] + 64);
+    for (int i = 0; i < 2; ++i) {
+        const auto q = vreinterpretq_s8_u8(vqtbx4q_u8(vqtbl4q_u8(lo, mag[i]), hi, vsubq_u8(mag[i], vdupq_n_u8(64))));
+        const auto s = vshrq_n_s8(vreinterpretq_s8_u8(c[i]), 7);
+        vst1q_s8(y->qs + 16*i, vsubq_s8(veorq_s8(q, s), s));
+    }
+#endif
+    y->d = GGML_FP32_TO_FP16(scale*F8::decode(uint8_t(m))*(1.0f/127));
+}
+
+}
+
+void iqk_convert_f8_q80(int typeA, int n, const void * vx, size_t bx, void * vy, size_t stride_y, int nrc_x) {
+    static const F8Q80 table;
+    const bool block_scaled = typeA == GGML_TYPE_F8_E4M3_B128;
+    const auto [block_size, meta] = f8_layout(block_scaled, n);
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const auto * x = (const uint8_t *)vx + ix*bx;
+        auto * y = (block_q8_0 *)((char *)vy + ix*stride_y);
+        for (int ib = 0; ib < n; ib += block_size, x += meta + block_size) {
+            float scale;
+            memcpy(&scale, x, sizeof(scale));
+            for (int i = 0; i < block_size; i += 32) f8_to_q80(table.q, x + meta + i, scale, y++);
+        }
+    }
+}
+
+extern "C" IQK_API void iqk_vec_dot_f8_e4m3_ks(int n, float * s, size_t, const void * x, size_t bx,
+        const void * y, size_t by, int) {
+    const DataInfo info{s, (const char *)y, 0, by, 0, 1, nullptr, 0};
+    mul_mat_f8<false, 1>(n, x, bx, info, 1);
+}
+
+extern "C" IQK_API void iqk_vec_dot_f8_e4m3_b128(int n, float * s, size_t, const void * x, size_t bx,
+        const void * y, size_t by, int) {
+    const DataInfo info{s, (const char *)y, 0, by, 0, 1, nullptr, 0};
+    mul_mat_f8<true, 1>(n, x, bx, info, 1);
+}
 
 #endif

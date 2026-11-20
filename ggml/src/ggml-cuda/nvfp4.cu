@@ -1,4 +1,5 @@
 #include "nvfp4.cuh"
+#include "quantize.cuh"
 
 #if defined(GGML_CUDA_NVFP4_120A) || defined(GGML_CUDA_NVFP4_121A)
 #include <cuda_fp8.h>
@@ -298,12 +299,8 @@ static __global__ void quantize_nvfp4(const float * x, float * r, uint8_t * q, u
     if (scale < 0) {
         float a = 0;
         for (int i = t; i < k; i += blockDim.x) a = fmaxf(a, fabsf(xr[i]));
-        a = warp_reduce_max(a);
-        if (t%32 == 0) red[t/32] = a;
-        __syncthreads();
+        a = block_reduce_max(a, red);
         if (t < 32) {
-            a = t < 8 ? red[t] : 0;
-            a = warp_reduce_max(a);
             rs = __fdiv_rn(a, 6.0f*448.0f);
         }
     }

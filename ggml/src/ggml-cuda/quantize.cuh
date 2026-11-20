@@ -17,6 +17,17 @@
 static_assert(MATRIX_ROW_PADDING %    CUDA_QUANTIZE_BLOCK_SIZE      == 0, "Risk of out-of-bounds access.");
 static_assert(MATRIX_ROW_PADDING % (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ) == 0, "Risk of out-of-bounds access.");
 
+static __device__ __forceinline__ float block_reduce_max(float value, float * shared) {
+    value = warp_reduce_max(value);
+    if (threadIdx.x%32 == 0) shared[threadIdx.x/32] = value;
+    __syncthreads();
+    if (threadIdx.x < 32) {
+        value = threadIdx.x < blockDim.x/32 ? shared[threadIdx.x] : 0;
+        value = warp_reduce_max(value);
+    }
+    return value;
+}
+
 typedef void (*quantize_cuda_t)(
     const float * x, void * vy, const int64_t kx0, const int64_t kx1, const int64_t channels, const int64_t kx0_padded,
     const ggml_type type_x, cudaStream_t stream);

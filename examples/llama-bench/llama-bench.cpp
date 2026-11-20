@@ -2330,6 +2330,7 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
                 return 1;
             }
+            fp8_auto_warning(lmodel, mparams.fp8_precision);
             prev_inst = &inst;
             if (!params.extra.prompt_file.empty() && !params.extra.prompt_is_binary) {
                 text = common_tokenize(lmodel, params.extra.prompt, true);

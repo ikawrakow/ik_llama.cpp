@@ -15909,6 +15909,25 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_MXFP4_R8: break;
         case GGML_TYPE_NVFP4: break;
         case GGML_TYPE_NVFP4_KS: break;
+        case GGML_TYPE_F8_E4M3_KS: break;
+        case GGML_TYPE_F8_E4M3_B128:
+            {
+                const uint8_t * q = (const uint8_t *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    float scale;
+                    memcpy(&scale, q, sizeof(scale));
+                    if (!validate_float(scale, i)) {
+                        return false;
+                    }
+                    for (int j = 0; j < 128; ++j) {
+                        if ((q[sizeof(scale) + j] & 0x7f) == 0x7f) {
+                            fprintf(stderr, "ggml_validate_row_data: found nan value at block %zu\n", i);
+                            return false;
+                        }
+                    }
+                    q += ggml_type_size(type);
+                }
+            } break;
         case GGML_TYPE_Q2_0: break;
         case GGML_TYPE_Q6_0: break;
         case GGML_TYPE_IQ2_K: break;
@@ -15960,14 +15979,8 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_Q8_K_R16: break;
         case GGML_TYPE_Q8_KV:    break;
         case GGML_TYPE_BF16_R16: break;
-        case GGML_TYPE_Q4_0_4_4:
-        case GGML_TYPE_Q4_0_4_8:
             {
                 VALIDATE_ROW_DATA_DVEC_F16_IMPL(block_q4_0x4, data, nbytes / sizeof(block_q4_0x4), 4);
-            } break;
-        case GGML_TYPE_Q4_0_8_8:
-            {
-                VALIDATE_ROW_DATA_DVEC_F16_IMPL(block_q4_0x8, data, nbytes / sizeof(block_q4_0x8), 8);
             } break;
 
         case GGML_TYPE_I8:

@@ -335,6 +335,8 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_shexp = nullptr;
     struct ggml_tensor * ffn_down_shexp = nullptr;
     struct ggml_tensor * ffn_up_shexp = nullptr;
+    struct ggml_tensor * ffn_latent_down = nullptr;
+    struct ggml_tensor * ffn_latent_up = nullptr;
 
     // K2 Horizon MoVA
     struct ggml_tensor * attn_v_gate   = nullptr;
@@ -769,6 +771,7 @@ struct llama_model {
     ggml_backend_buffer_type_t split_buft = nullptr;
 
     std::unique_ptr<reload_info> reload;
+    bool fp8_w8a8 = false;
 };
 
 // Recompute the load-time-derived combined wkv_b (computed_wkv_b) of layer il

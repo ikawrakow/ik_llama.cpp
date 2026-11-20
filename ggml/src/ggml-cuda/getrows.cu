@@ -6,6 +6,7 @@
 //
 
 #include "getrows.cuh"
+#include "f8.cuh"
 #include "dequantize.cuh"
 
 template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
@@ -70,7 +71,13 @@ static __global__ void k_get_rows_float(
     dst_t * dst_row = dst + i10*s1 + i11*s2 + i12*s3;
     const src0_t * src0_row = (const src0_t *)((const char *)src0 + i01*nb01 + i11*nb02 + i12*nb03);
 
-    dst_row[i00] = i01 >= 0 && i01 < ne01 ? dst_t(src0_row[i00]) : dst_t(0);
+    if constexpr (std::is_same_v<src0_t, ggml_fp8_e4m3_t>) {
+        dst_row[i00] = i01 >= 0 && i01 < ne01 ? dst_t(ggml_cuda_f8_value<ggml_cuda_f8_row>(src0_row, i00)) : dst_t(0);
+    } else if constexpr (std::is_same_v<src0_t, ggml_cuda_f8_block>) {
+        dst_row[i00] = i01 >= 0 && i01 < ne01 ? dst_t(ggml_cuda_f8_value<ggml_cuda_f8_block>(src0_row, i00)) : dst_t(0);
+    } else {
+        dst_row[i00] = i01 >= 0 && i01 < ne01 ? dst_t(src0_row[i00]) : dst_t(0);
+    }
 }
 
 template<int qk, int qr, dequantize_kernel_t dq>
@@ -264,6 +271,12 @@ void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_NVFP4_KS:
             get_rows_cuda<QK_NVFP4/4, QR_NVFP4, dequantize_nvfp4_ks>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_F8_E4M3_KS:
+            get_rows_cuda_float(src0, src1, dst, (const ggml_fp8_e4m3_t *)src0_d, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_F8_E4M3_B128:
+            get_rows_cuda_float(src0, src1, dst, (const ggml_cuda_f8_block *)src0_d, src1_i32, dst_d, stream);
             break;
         default:
             // TODO: k-quants

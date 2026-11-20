@@ -24,6 +24,7 @@ class Keys:
         QUANTIZATION_VERSION       = "general.quantization_version"
         ALIGNMENT                  = "general.alignment"
         FILE_TYPE                  = "general.file_type"
+        FP8_ACTIVATIONS            = "general.fp8.activations"
 
         # Authorship Metadata
         NAME                       = "general.name"
@@ -75,6 +76,7 @@ class Keys:
         DATASETS                   = "general.datasets"
 
     class LLM:
+        EMBD_LENGTH_PER_LAYER_INP = "{arch}.embedding_length_per_layer_input"
         VOCAB_SIZE                        = "{arch}.vocab_size"
         CONTEXT_LENGTH                    = "{arch}.context_length"
         EMBEDDING_LENGTH                  = "{arch}.embedding_length"
@@ -165,6 +167,7 @@ class Keys:
         LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count"
 
     class SSM:
+        GROUP_COUNT = "{arch}.ssm.group_count"
         CONV_KERNEL    = "{arch}.ssm.conv_kernel"
         INNER_SIZE     = "{arch}.ssm.inner_size"
         STATE_SIZE     = "{arch}.ssm.state_size"
@@ -238,6 +241,9 @@ class GGUFType:
 
 
 class MODEL_ARCH(IntEnum):
+    QWEN35 = auto()
+    QWEN4EXP = auto()
+
     LLAMA        = auto()
     NANBEIGE     = auto()
     DECI         = auto()
@@ -319,6 +325,32 @@ class MODEL_ARCH(IntEnum):
 
 
 class MODEL_TENSOR(IntEnum):
+    ATTN_QKV_GATE = auto()
+    HC_ATTN_DOWN = auto()
+    HC_ATTN_DOWN_INJECT = auto()
+    HC_ATTN_INJECT = auto()
+    HC_ATTN_NORM = auto()
+    HC_ATTN_UP = auto()
+    HC_FFN_DOWN = auto()
+    HC_FFN_DOWN_INJECT = auto()
+    HC_FFN_INJECT = auto()
+    HC_FFN_NORM = auto()
+    HC_FFN_UP = auto()
+    HC_HEAD_DOWN = auto()
+    HC_HEAD_NORM = auto()
+    HC_HEAD_UP = auto()
+    NEXTN_HC_HEAD_DOWN = auto()
+    NEXTN_HC_HEAD_NORM = auto()
+    NEXTN_HC_HEAD_UP = auto()
+    PLE_CONV1D = auto()
+    PLE_KEY = auto()
+    PLE_NORM_CONV = auto()
+    PLE_NORM_KEY = auto()
+    PLE_NORM_QUERY = auto()
+    PLE_VALUE = auto()
+    SSM_ALPHA = auto()
+    SSM_BETA_ALPHA_CAT = auto()
+
     TOKEN_EMBD           = auto()
     TOKEN_EMBD_NORM      = auto()
     TOKEN_TYPES          = auto()
@@ -514,6 +546,9 @@ class MODEL_TENSOR(IntEnum):
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.STEP5:          "step5",
+    MODEL_ARCH.QWEN35: 'qwen35',
+    MODEL_ARCH.QWEN4EXP: 'qwen4exp',
+
     MODEL_ARCH.LLAMA:          "llama",
     MODEL_ARCH.NANBEIGE:       "nanbeige",
     MODEL_ARCH.DECI:           "deci",
@@ -594,6 +629,32 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+    MODEL_TENSOR.ATTN_QKV_GATE: 'blk.{bid}.attn_qkv_gate',
+    MODEL_TENSOR.HC_ATTN_DOWN: 'blk.{bid}.hc_attn_down',
+    MODEL_TENSOR.HC_ATTN_DOWN_INJECT: 'blk.{bid}.hc_attn_down_inject',
+    MODEL_TENSOR.HC_ATTN_INJECT: 'blk.{bid}.hc_attn_inject',
+    MODEL_TENSOR.HC_ATTN_NORM: 'blk.{bid}.hc_attn_norm',
+    MODEL_TENSOR.HC_ATTN_UP: 'blk.{bid}.hc_attn_up',
+    MODEL_TENSOR.HC_FFN_DOWN: 'blk.{bid}.hc_ffn_down',
+    MODEL_TENSOR.HC_FFN_DOWN_INJECT: 'blk.{bid}.hc_ffn_down_inject',
+    MODEL_TENSOR.HC_FFN_INJECT: 'blk.{bid}.hc_ffn_inject',
+    MODEL_TENSOR.HC_FFN_NORM: 'blk.{bid}.hc_ffn_norm',
+    MODEL_TENSOR.HC_FFN_UP: 'blk.{bid}.hc_ffn_up',
+    MODEL_TENSOR.HC_HEAD_DOWN: 'output_hc_down',
+    MODEL_TENSOR.HC_HEAD_NORM: 'output_hc_norm',
+    MODEL_TENSOR.HC_HEAD_UP: 'output_hc_up',
+    MODEL_TENSOR.NEXTN_HC_HEAD_DOWN: 'blk.{bid}.nextn.hc_head_down',
+    MODEL_TENSOR.NEXTN_HC_HEAD_NORM: 'blk.{bid}.nextn.hc_head_norm',
+    MODEL_TENSOR.NEXTN_HC_HEAD_UP: 'blk.{bid}.nextn.hc_head_up',
+    MODEL_TENSOR.PLE_CONV1D: 'blk.{bid}.ple_conv1d',
+    MODEL_TENSOR.PLE_KEY: 'blk.{bid}.ple_key',
+    MODEL_TENSOR.PLE_NORM_CONV: 'blk.{bid}.ple_norm_conv',
+    MODEL_TENSOR.PLE_NORM_KEY: 'blk.{bid}.ple_norm_key',
+    MODEL_TENSOR.PLE_NORM_QUERY: 'blk.{bid}.ple_norm_query',
+    MODEL_TENSOR.PLE_VALUE: 'blk.{bid}.ple_value',
+    MODEL_TENSOR.SSM_ALPHA: 'blk.{bid}.ssm_alpha',
+    MODEL_TENSOR.SSM_BETA_ALPHA_CAT: 'blk.{bid}.ssm_beta_alpha',
+
     MODEL_TENSOR.TOKEN_EMBD:           "token_embd",
     MODEL_TENSOR.TOKEN_EMBD_NORM:      "token_embd_norm",
     MODEL_TENSOR.TOKEN_TYPES:          "token_types",
@@ -800,6 +861,97 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP, MODEL_TENSOR.FFN_DOWN_EXP, MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_GATE_SHEXP, MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP, MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
+    MODEL_ARCH.QWEN4EXP: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.HC_HEAD_NORM,
+        MODEL_TENSOR.HC_HEAD_DOWN,
+        MODEL_TENSOR.HC_HEAD_UP,
+        MODEL_TENSOR.HC_ATTN_NORM,
+        MODEL_TENSOR.HC_ATTN_DOWN,
+        MODEL_TENSOR.HC_ATTN_UP,
+        MODEL_TENSOR.HC_ATTN_INJECT,
+        MODEL_TENSOR.HC_FFN_NORM,
+        MODEL_TENSOR.HC_FFN_DOWN,
+        MODEL_TENSOR.HC_FFN_UP,
+        MODEL_TENSOR.HC_FFN_INJECT,
+        MODEL_TENSOR.HC_ATTN_DOWN_INJECT,
+        MODEL_TENSOR.HC_FFN_DOWN_INJECT,
+        MODEL_TENSOR.ATTN_QKV_GATE,
+        MODEL_TENSOR.SSM_BETA_ALPHA_CAT,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.INDEXER_Q_PROJ,
+        MODEL_TENSOR.INDEXER_K_PROJ,
+        MODEL_TENSOR.INDEXER_Q_NORM,
+        MODEL_TENSOR.INDEX_K_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_INP_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
+        MODEL_TENSOR.PLE_KEY,
+        MODEL_TENSOR.PLE_VALUE,
+        MODEL_TENSOR.PLE_NORM_KEY,
+        MODEL_TENSOR.PLE_NORM_QUERY,
+        MODEL_TENSOR.PLE_NORM_CONV,
+        MODEL_TENSOR.PLE_CONV1D,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_HC_HEAD_NORM,
+        MODEL_TENSOR.NEXTN_HC_HEAD_DOWN,
+        MODEL_TENSOR.NEXTN_HC_HEAD_UP,
+    ],
+    MODEL_ARCH.QWEN35: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -2422,6 +2574,7 @@ class GGMLQuantizationType(IntEnum):
     I2_S      =  36
     MXFP4     =  39
     NVFP4     =  40
+    F8_E4M3   =  43
     Q8_0_X4   =  97
     Q8_1_X4   =  98
     Q8_2_X4   =  99
@@ -2445,6 +2598,8 @@ class GGMLQuantizationType(IntEnum):
     TQP6      = 166
     TQP7      = 167
     NVFP4_KS  = 168
+    F8_E4M3_KS = 169
+    F8_E4M3_B128 = 170
     IQ4_KS    = 144
     IQ2_KS    = 145
     IQ4_KSS   = 146
@@ -2540,6 +2695,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_Q4_0_8_8      = 35  #except 1d tensors
     MOSTLY_MXFP4         = 38  #except 1d tensors, 38 to be compatible with mainline
     MOSTLY_NVFP4         = 39
+    MOSTLY_F8_E4M3       = 42
 
     MOSTLY_Q6_0          = 135 #except 1d tensors
     MOSTLY_IQ1_BN        = 136 #except 1d tensors
@@ -2570,6 +2726,8 @@ class LlamaFileType(IntEnum):
     MOSTLY_TQP6          = 167 #except 1d tensors  (trellis, group-128)
     MOSTLY_TQP7          = 168 #except 1d tensors  (trellis, group-128)
     MOSTLY_NVFP4_KS      = 169
+    MOSTLY_F8_E4M3_KS    = 170
+    MOSTLY_F8_E4M3_B128  = 171
 
     MOSTLY_Q4_0_R8       = 202 #except 1d tensors
     MOSTLY_Q8_0_R8       = 207 #except 1d tensors
@@ -2677,9 +2835,12 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.F64         : (   1,    8),
     GGMLQuantizationType.IQ1_M       : ( 256,   56),
     GGMLQuantizationType.BF16        : (   1,    2),
+    GGMLQuantizationType.F8_E4M3     : (   1,    1),
+    GGMLQuantizationType.F8_E4M3_KS  : (   1,    1),
     GGMLQuantizationType.MXFP4       : (  32,   17),
     GGMLQuantizationType.NVFP4       : (  64,   36),
     GGMLQuantizationType.NVFP4_KS    : (  64,   36),
+    GGMLQuantizationType.F8_E4M3_B128: ( 128,  132),
     GGMLQuantizationType.Q4_0_4_4    : (  32,   18),
     GGMLQuantizationType.Q4_0_4_8    : (  32,   18),
     GGMLQuantizationType.Q4_0_8_8    : (  32,   18),
@@ -2766,6 +2927,7 @@ GGML_ROW_META_SIZES: dict[GGMLQuantizationType, int] = {
     GGMLQuantizationType.IQ3_KS      :  2,
     GGMLQuantizationType.IQ4_KS      :  4,
     GGMLQuantizationType.NVFP4_KS    :  4,
+    GGMLQuantizationType.F8_E4M3_KS  : 16,
     GGMLQuantizationType.IQ4_KS_R4   :  4,
     GGMLQuantizationType.IQ4_KSS     :  4,
     GGMLQuantizationType.IQ5_KS      :  4,
