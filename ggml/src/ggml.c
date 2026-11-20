@@ -44,12 +44,6 @@
 
 #define IK_PRINT_TIMING 0
 
-// Set to 1 for a measurement build: accumulates the wall time every worker
-// spends inside ggml_barrier() and prints windowed totals to stderr from
-// ggml_graph_compute(). Keep the instrumentation identical across barrier
-// variants so wait-time deltas between builds are directly comparable.
-#define GGML_BARRIER_STATS 0
-
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
 #endif
@@ -5171,29 +5165,6 @@ inline static void ggml_critical_section_start(void) {
     }
 }
 
-#if GGML_BARRIER_STATS
-static __thread int64_t   tls_bs_wait_ns; // per-thread barrier wait accumulator
-static __thread long long tls_bs_calls;   // per-thread barrier call count
-static atomic_llong g_bs_total_wait_ns;   // flushed to these every 1024 calls
-static atomic_llong g_bs_total_calls;
-
-static inline int64_t ggml_bs_now(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec*1000000000ll + (int64_t)ts.tv_nsec;
-}
-
-static inline void ggml_bs_record(int64_t wait_ns) {
-    tls_bs_wait_ns += wait_ns;
-    if (++tls_bs_calls >= 1024) {
-        atomic_fetch_add_explicit(&g_bs_total_wait_ns, tls_bs_wait_ns, memory_order_relaxed);
-        atomic_fetch_add_explicit(&g_bs_total_calls,   tls_bs_calls,    memory_order_relaxed);
-        tls_bs_wait_ns = 0;
-        tls_bs_calls   = 0;
-    }
-}
-#endif // GGML_BARRIER_STATS
-
 #if defined(__gnu_linux__)
 static __thread int tls_numa_node = -1; // worker's node for the current graph
 static __thread int tls_numa_rank = -1; // worker's rank among its node's workers (stage 3a)
@@ -5317,15 +5288,7 @@ static void ggml_barrier_dispatch(struct ggml_compute_state_shared * shared) {
 }
 
 static void ggml_barrier(struct ggml_compute_state_shared * shared) {
-#if GGML_BARRIER_STATS
-    const int64_t bs_t0 = shared->n_threads > 1 ? ggml_bs_now() : 0;
-#endif
     ggml_barrier_dispatch(shared);
-#if GGML_BARRIER_STATS
-    if (shared->n_threads > 1) {
-        ggml_bs_record(ggml_bs_now() - bs_t0);
-    }
-#endif
 }
 
 // TODO: make this somehow automatically executed
@@ -31869,26 +31832,6 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         }
     }
 #endif
-
-#if GGML_BARRIER_STATS
-    {
-        static uint64_t bs_graphs = 0;
-        static long long bs_last_wait = 0;
-        static long long bs_last_calls = 0;
-        const long long bs_w = (long long)atomic_load_explicit(&g_bs_total_wait_ns, memory_order_relaxed);
-        const long long bs_c = (long long)atomic_load_explicit(&g_bs_total_calls,   memory_order_relaxed);
-        bs_graphs++;
-        if (bs_graphs % 256 == 0) {
-            const long long bs_dw = bs_w - bs_last_wait;
-            const long long bs_dc = bs_c - bs_last_calls;
-            fprintf(stderr, "[barrier-stats] graphs=%llu wait_ms=%.2f calls=%lld avg_wait_ns=%.0f\n",
-                    (unsigned long long)bs_graphs, (double)bs_dw/1e6, bs_dc,
-                    bs_dc > 0 ? (double)bs_dw/(double)bs_dc : 0.0);
-            bs_last_wait  = bs_w;
-            bs_last_calls = bs_c;
-        }
-    }
-#endif // GGML_BARRIER_STATS
 
     // don't leave affinity set on the main thread
     clear_numa_thread_affinity();
