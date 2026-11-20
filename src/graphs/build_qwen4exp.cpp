@@ -56,17 +56,14 @@ static ggml_tensor * qwen4exp_hc_mix(
     cb(up, "mix_up", il);
     auto gated = ggml_fused_mul_unary(ctx0, up, xn, GGML_UNARY_OP_SIGMOID);
     cb(gated, "mix_gated", il);
-    //auto gate = ggml_sigmoid(ctx0, up);
-    ////ggml_tensor * gate = ggml_sigmoid(ctx0, llm_build_context::llm_build_lora_mm(lctx, ctx0, w_up, lo));
-    //cb(gate, "hc_gate", il);
 
-    //ggml_tensor * gated = ggml_mul(ctx0, xn, gate);
     gated = ggml_reshape_3d(ctx0, gated, n_embd, hc, nt);
 
     ggml_tensor * mixed = ggml_multi_add(ctx0,
             ggml_view_2d(ctx0, gated, n_embd, nt, gated->nb[2], 0), hc);
-    mixed = ggml_scale(ctx0, mixed, 1.0f / (float) hc);
     cb(mixed, "hc_mixed", il);
+    mixed = ggml_scale(ctx0, mixed, 1.0f / (float) hc);
+    cb(mixed, "hc_mixed_scaled", il);
 
     GGML_UNUSED(bctx);
     return mixed;
