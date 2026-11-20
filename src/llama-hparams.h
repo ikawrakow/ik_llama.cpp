@@ -82,6 +82,11 @@ struct llama_hparams {
     uint32_t moe_latent_size      = 0; // latent MoE projection width (0 = none)
     uint32_t nextn_predict_layers = 0;
 
+    // joint decision head (clef): routing blocks, then joint blocks
+    uint32_t n_layer_decision_routing = 0;
+    uint32_t n_layer_decision_joint   = 0;
+    uint32_t n_head_decision          = 0;
+
     float f_norm_eps;
     float f_norm_rms_eps;
     float f_norm_group_eps;
