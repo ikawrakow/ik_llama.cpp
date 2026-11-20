@@ -897,9 +897,6 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
         if (!cuda_ctx || cuda_ctx->device != ctx.device) return false;
         if (inputs[j]->flags & GGML_TENSOR_FLAG_INPUT) has_inputs = true;
     }
-    if (has_inputs) {
-        CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
-    }
     ggml_tensor * experts[2] = { nullptr, nullptr };
     if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) {
         experts[0] = node0->src[0];
@@ -913,6 +910,9 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
         if (input_copies[j] == experts[0] || input_copies[j] == experts[1]) continue;
         CUDA_CHECK(cudaMemcpyAsync(input_copies[j]->data, inputs[j]->data, ggml_nbytes(inputs[j]), cudaMemcpyHostToDevice, ctx.stream()));
         copied.insert(j);
+    }
+    if (has_inputs) {
+        CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
     }
     // Then copy all device inputs that are on the same device
     for (int j = 0; j < n_inputs; ++j) {
