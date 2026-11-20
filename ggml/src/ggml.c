@@ -12637,23 +12637,17 @@ static void ggml_compute_forward_dup_same_cont(
     GGML_ASSERT(ggml_is_contiguous(dst) && ggml_is_contiguous(src0));
     GGML_ASSERT(src0->type == dst->type);
 
-    const size_t nb00 = src0->nb[0];
-    const size_t nb0 = dst->nb[0];
-
     const int ith = params->ith; // thread index
     const int nth = params->nth; // number of threads
 
-    // parallelize by elements
-    const int ne = ggml_nelements(dst);
-    const int dr = (ne + nth - 1) / nth;
-    const int ie0 = dr * ith;
-    const int ie1 = MIN(ie0 + dr, ne);
+    // parallelize by bytes
+    const size_t nb = ggml_nbytes(dst);
+    const size_t dr = (nb + nth - 1) / nth;
+    const size_t ib0 = dr * ith;
+    const size_t ib1 = MIN(ib0 + dr, nb);
 
-    if (ie0 < ie1) {
-        memcpy(
-            ((char *)  dst->data + ie0*nb0),
-            ((char *) src0->data + ie0*nb00),
-            (ie1 - ie0) * ggml_type_size(src0->type));
+    if (ib0 < ib1) {
+        memcpy((char *) dst->data + ib0, (const char *) src0->data + ib0, ib1 - ib0);
     }
 }
 

@@ -220,7 +220,8 @@ ggml_cgraph * llm_build_context::build_k_shift() {
                     0);
 
         struct ggml_tensor * tmp;
-        if (ggml_is_quantized(k->type)) {
+        const int hadamard_size = k_cache_hadamard ? model.hadamard_size_k(il) : 0;
+        if (ggml_is_quantized(k->type) || hadamard_size > 0) {
             // dequantize to f32 -> RoPE -> quantize back
             tmp = ggml_cast(ctx0, k, GGML_TYPE_F32);
             cb(tmp, "K_f32", il);
@@ -231,9 +232,11 @@ ggml_cgraph * llm_build_context::build_k_shift() {
                     break;
                 }
             }
+            if (hadamard_size > 0) tmp = ggml_hadamard(ctx0, tmp, hadamard_size);
             tmp = ggml_rope_ext_inplace(ctx0, tmp,
                     lctx.inp_K_shift, rope_factors, n_rot_l, rope_type_shift, n_ctx_orig, freq_base_l, freq_scale_l,
                     ext_factor, yarn_attn_factor_shift, beta_fast, beta_slow);
+            if (hadamard_size > 0) tmp = ggml_hadamard(ctx0, tmp, hadamard_size);
             cb(tmp, "K_shifted_f32", il);
             tmp = ggml_cpy(ctx0, tmp, k);
         } else {
