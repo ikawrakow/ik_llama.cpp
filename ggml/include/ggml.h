@@ -555,9 +555,6 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ1_M   = 23, // except 1d tensors
         GGML_FTYPE_MOSTLY_BF16    = 24, // except 1d tensors
         GGML_FTYPE_MOSTLY_MXFP4   = 25, // except 1d tensors, using 26 to be compatible with mainline
-        GGML_FTYPE_MOSTLY_Q4_0_4_4 = 26, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q4_0_4_8 = 27, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q4_0_8_8 = 28, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q1_0_128 = 29, // except 1d tensors
         //
         GGML_FTYPE_MOSTLY_Q6_0    = 127, // except 1d tensors
