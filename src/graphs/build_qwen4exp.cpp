@@ -53,8 +53,6 @@ static ggml_tensor * qwen4exp_hc_mix(
     cb(lo, "mix_down_silu", il);
     auto up = llm_build_context::llm_build_lora_mm(lctx, ctx0, w_up, lo);
     cb(up, "mix_up", il);
-    auto gated = ggml_fused_mul_unary(ctx0, up, xn, GGML_UNARY_OP_SIGMOID);
-    cb(gated, "mix_gated", il);
 
     auto mixed = ggml_multi_add_unary_scale(ctx0, up, xn, hc, 1.0f / (float) hc, GGML_UNARY_OP_SIGMOID);
     cb(mixed, "mixed", il);
