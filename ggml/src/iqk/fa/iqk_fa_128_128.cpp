@@ -4,7 +4,8 @@
 
 #include "iqk/fa/iqk_fa_templates.h"
 
-IQK_FA_CASE(iqk_fa_128_128) {
+template <typename Bias>
+static bool fa_128(IQK_FA_ARGS, Bias bias) {
 
     auto type_k = ggml_type(int_type_k);
     auto type_v = ggml_type(int_type_v);
@@ -19,27 +20,37 @@ IQK_FA_CASE(iqk_fa_128_128) {
         if (type_v != GGML_TYPE_BF16) return false; // we do not support mixing bf16 k-cache with other types
         if (nk%64 == 0) {
             iqk_flash_helper_T<128, 128, 64>(nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                    q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S);
+                    q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
             return true;
         }
         iqk_flash_helper_T<128, 128, 32>(nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                    q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S);
+                    q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         return true;
     }
 #endif
 
     if (nk%128 == 0) {
         return iqk_flash_helper_T<128, 128, 128>(type_k, type_v, nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S);
+                q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
     }
     if (nk%64 == 0) {
         return iqk_flash_helper_T<128, 128, 64>(type_k, type_v, nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S);
+                q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
     }
 
     return iqk_flash_helper_T<128, 128, 32>(type_k, type_v, nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S);
+                q, ck, cv, cm, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
 
+}
+
+IQK_FA_CASE(iqk_fa_128_128) {
+    return fa_128(int_type_k, int_type_v, nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
+            q, k, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, NoRelBias{});
+}
+
+bool iqk_fa_128_128_bias(IQK_FA_ARGS, const IQKRelBias & bias) {
+    return fa_128(int_type_k, int_type_v, nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
+            q, k, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
 }
 
 #endif

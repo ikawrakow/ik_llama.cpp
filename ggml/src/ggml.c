@@ -24184,7 +24184,7 @@ void ggml_compute_forward_flash_attn_ext_f16(
     // For now we do not implement sinks in the iqk FA implementation
     // DSV4 marks its FA nodes with the shared generic-FA backend hint.
     const bool use_iqk_fa = dst->op_params[4] != GGML_FLASH_ATTN_EXT_IQK_DISABLED;
-    if (!table && use_iqk_fa && iqk_flash_attn_noalibi(q->type, mask ? mask->type : GGML_TYPE_F16, max_bias,
+    if (use_iqk_fa && iqk_flash_attn_noalibi(q->type, mask ? mask->type : GGML_TYPE_F16, max_bias,
                 q->ne[3], q->ne[2], q->nb[3], q->nb[2],
                 k->ne[3], k->ne[2], k->nb[3], k->nb[2],
                 v->ne[3], v->ne[2], v->nb[3], v->nb[2],
@@ -24194,7 +24194,7 @@ void ggml_compute_forward_flash_attn_ext_f16(
                 q->data, k->data, v->data, mask ? mask->data : NULL, sinks ? sinks->data : NULL,
                 scale, softcap, (float *)dst->data,
                 params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, ith, nth, dst->op_params[4],
-                dst->src[5])) return;
+                dst)) return;
 
 //    if (max_bias <= 0.0f && q->type == GGML_TYPE_F32 && mask && mask->type == GGML_TYPE_F16) {
 //        //if (ith == 0) printf("k: %ld x %ld x %ld, q: %ld x %ld x %ld, v: %ld x %ld x %ld mask: %ld x %ld x %ld\n",
@@ -30630,10 +30630,8 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
 
                     cur = 3*sizeof(float)*D*n_tasks; // 3x head size/thread
 #if GGML_USE_IQK_MULMAT
-                    if (!node->src[6]) {
-                        size_t size = iqk_fa_work_buffer_size(node, n_tasks);
-                        cur = MAX(cur, size);
-                    }
+                    size_t size = iqk_fa_work_buffer_size(node, n_tasks);
+                    cur = MAX(cur, size);
 #endif
                 } break;
             case GGML_OP_LATENT_ATTN:
