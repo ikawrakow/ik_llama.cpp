@@ -209,6 +209,7 @@ struct llama_layer {
     struct ggml_tensor * wv_enc = nullptr;
     struct ggml_tensor * wo_enc = nullptr;
     struct ggml_tensor * attn_sinks = nullptr;
+    struct ggml_tensor * attn_gate  = nullptr;
 
     // DFlash2 dynamic grouped-convolution parameters.
     struct ggml_tensor * dflash_attn_conv_base = nullptr;
@@ -375,6 +376,29 @@ struct llama_layer {
     struct ggml_tensor * per_layer_inp_gate;
     struct ggml_tensor * per_layer_proj;
     struct ggml_tensor * per_layer_post_norm;
+
+    // Olala: Mamba3-MIMO + Differential-TPA-V2
+    struct ggml_tensor * ssm_in_dyn     = nullptr;
+    struct ggml_tensor * ssm_b_norm     = nullptr;
+    struct ggml_tensor * ssm_c_norm     = nullptr;
+    struct ggml_tensor * ssm_b_bias     = nullptr;
+    struct ggml_tensor * ssm_c_bias     = nullptr;
+    struct ggml_tensor * ssm_dt_bias    = nullptr;
+    struct ggml_tensor * ssm_mimo_x     = nullptr;
+    struct ggml_tensor * ssm_mimo_z     = nullptr;
+    struct ggml_tensor * ssm_mimo_o     = nullptr;
+    struct ggml_tensor * attn_wa_k           = nullptr;
+    struct ggml_tensor * attn_wa_v           = nullptr;
+    struct ggml_tensor * attn_wb_k           = nullptr;
+    struct ggml_tensor * attn_wb_v           = nullptr;
+    struct ggml_tensor * attn_shift_k        = nullptr;
+    struct ggml_tensor * attn_shift_v        = nullptr;
+    struct ggml_tensor * attn_lambda         = nullptr;
+    struct ggml_tensor * attn_softmax_scaler = nullptr;
+    struct ggml_tensor * geo_mixer_scale     = nullptr;
+    struct ggml_tensor * geo_mixer_bias      = nullptr;
+    struct ggml_tensor * geo_mlp_scale       = nullptr;
+    struct ggml_tensor * geo_mlp_bias        = nullptr;
 
     // mamba proj
     struct ggml_tensor * ssm_in = nullptr;
@@ -687,6 +711,10 @@ struct llama_model {
         if (arch == LLM_ARCH_XING4_0 || arch == LLM_ARCH_RAON1 || arch == LLM_ARCH_RAON1_NANO) {
             // heavy 4-stream mHC + PLE graph
             return std::max<size_t>(n_tokens * 160, 64u * n_tensors);
+        }
+        if (arch == LLM_ARCH_OLALA) {
+            // chunked prefill: ~100 nodes/token at CS=16
+            return std::max<size_t>(65536, 10240 + (size_t) n_tokens * 160);
         }
         //return std::max<size_t>(1024, 8*n_tensors);
         return 65536;

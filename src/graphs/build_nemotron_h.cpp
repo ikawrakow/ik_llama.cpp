@@ -205,59 +205,17 @@ ggml_cgraph * llm_build_context::build_nemotron_h() {
                 if (model.layers[il].ffn_gate_inp != nullptr) {
                     const auto & layer = model.layers[il];
 
-                    ggml_tensor * inp_emb = cur;
-                    ggml_tensor * inp_latent = cur;
-                    if (layer.ffn_latent_down) {
-                        inp_latent = llm_build_lora_mm(lctx, ctx0, layer.ffn_latent_down, cur);
-                        cb(inp_latent, "ffn_moe_latent_down", il);
-                    }
-
-                    // the router reads the full-width input; the experts may read the latent
-                    ggml_tensor * router_logits = nullptr;
-                    ggml_tensor * gate_inp = layer.ffn_gate_inp;
-                    if (layer.ffn_latent_down) {
-                        router_logits = llm_build_lora_mm(lctx, ctx0, layer.ffn_gate_inp, cur);
-                        gate_inp = nullptr;
-                    }
-
                     const int64_t n_expert_il      = layer.ffn_up_exps->ne[2]; // per-layer expert count
                     const int64_t n_expert_used_il = (int64_t) hparams.n_expert_used_layer(il);
 
-                    ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, inp_latent,
-                            gate_inp,            nullptr,
-                            layer.ffn_up_exps,   nullptr,
-                            nullptr,             nullptr, // no gate — relu^2(up)
-                            layer.ffn_down_exps, nullptr,
-                            layer.ffn_exp_probs_b,
+                    cur = llm_build_latent_moe(ctx0, lctx, cur, layer,
                             n_expert_il, n_expert_used_il,
                             LLM_FFN_RELU_SQR,
                             hparams.expert_weights_norm,
                             hparams.expert_weights_scale > 0.0f && hparams.expert_weights_scale != 1.0f,
                             hparams.expert_weights_scale,
                             LLM_EXPERT_GATING_FUNC_SIGMOID,
-                            cb, il, gf, false,
-                            nullptr, nullptr,
-                            router_logits, nullptr, nullptr);
-                    cb(moe_out, "ffn_moe_out", il);
-
-                    if (layer.ffn_latent_up) {
-                        moe_out = llm_build_lora_mm(lctx, ctx0, layer.ffn_latent_up, moe_out);
-                        cb(moe_out, "ffn_moe_latent_up", il);
-                    }
-
-                    if (layer.ffn_up_shexp && layer.ffn_down_shexp) {
-                        ggml_tensor * shexp = llm_build_ffn(ctx0, lctx, /*ffn_norm*/ nullptr, inp_emb,
-                                layer.ffn_up_shexp,   nullptr, nullptr,
-                                nullptr,              nullptr, nullptr,
-                                layer.ffn_down_shexp, nullptr, nullptr,
-                                nullptr,
-                                LLM_FFN_RELU_SQR, LLM_FFN_PAR, cb, il);
-                        cb(shexp, "ffn_shexp", il);
-                        cur = ggml_add(ctx0, moe_out, shexp);
-                    } else {
-                        cur = moe_out;
-                    }
-                    cb(cur, "ffn_out", il);
+                            cb, il, gf);
                 } else {
                     // dense FFN: up/down only, relu^2 (no gate)
                     cur = llm_build_ffn(ctx0, lctx, /*ffn_norm*/ nullptr, cur,

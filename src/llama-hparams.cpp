@@ -1522,6 +1522,60 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_OLALA:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                // The GGUF sliding_window is the scalable-softmax position clamp, not an SWA cache window.
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.olala_slw_wsize, false);
+                ml.get_key(LLM_KV_ATTN_LOGIT_SOFTCAPPING, hparams.f_attn_logit_softcapping, false);
+                hparams.attn_soft_cap = hparams.f_attn_logit_softcapping > 0.0f;
+
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, true);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
+                ml.get_key(LLM_KV_MOE_LATENT_SIZE,                   hparams.moe_latent_size, false);
+
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                // Mamba3-MIMO has no causal convolution.
+                hparams.ssm_d_conv = 0;
+
+                ml.get_key("olala.mamba_mimo_dim",   hparams.olala_mamba_mimo_dim);
+                ml.get_key("olala.mamba_headdim",    hparams.olala_mamba_headdim);
+                ml.get_key("olala.num_signal_heads", hparams.olala_n_signal_heads);
+                ml.get_key("olala.num_noise_heads",  hparams.olala_n_noise_heads);
+                ml.get_key("olala.tpa_rank",         hparams.olala_tpa_rank);
+                ml.get_key("olala.num_rope_angles",  hparams.olala_num_rope_angles);
+                ml.get_key("olala.gate_bias",        hparams.olala_gate_bias, false);
+
+                std::string layer_types;
+                ml.get_key("olala.layer_types", layer_types);
+                if (layer_types.size() != hparams.n_layer) {
+                    throw std::runtime_error("olala: layer_types length (" + std::to_string(layer_types.size()) +
+                                             ") != n_layer (" + std::to_string(hparams.n_layer) + ")");
+                }
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    const bool is_mamba = layer_types[i] == 'M';
+                    if (!is_mamba && layer_types[i] != 'V') {
+                        throw std::runtime_error("olala: unsupported layer type '" + std::string(1, layer_types[i]) + "'");
+                    }
+                    hparams.recurrent_layer_arr[i] = is_mamba;
+                    hparams.n_head_arr[i]    = hparams.olala_n_signal_heads + hparams.olala_n_noise_heads;
+                    hparams.n_head_kv_arr[i] = is_mamba ? 0u : hparams.olala_n_noise_heads;
+                    hparams.n_ff_arr[i]      = 0u;
+                }
+
+                if (hparams.olala_mamba_mimo_dim == 0 || hparams.olala_n_noise_heads == 0 ||
+                        hparams.olala_num_rope_angles != hparams.ssm_d_state / 4) {
+                    throw std::runtime_error("olala: invalid Mamba3/MIMO metadata");
+                }
+
+                model.type = e_model::MODEL_UNKNOWN;
+            } break;
         case LLM_ARCH_XVERSE:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);

@@ -1458,7 +1458,8 @@ static bool llama_kv_cache_init(
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
-    if ((model.arch == LLM_ARCH_NEMOTRON_H || model.arch == LLM_ARCH_NEMOTRON_H_MOE) && cparams.n_seq_max > 1) {
+    if ((model.arch == LLM_ARCH_NEMOTRON_H || model.arch == LLM_ARCH_NEMOTRON_H_MOE || model.arch == LLM_ARCH_OLALA) &&
+            cparams.n_seq_max > 1) {
         LLAMA_LOG_ERROR("%s: %s keeps one recurrent state per context, so it supports a single sequence "
                 "(n_seq_max = %u). Use one context per sequence.\n",
                 __func__, llama_model_arch_string(&model), cparams.n_seq_max);
@@ -1672,6 +1673,14 @@ static bool llama_kv_cache_init(
                     return false;
                 }
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
+            }
+
+            // Olala V layers keep the previous token's pre-shift K/V.
+            if (model.arch == LLM_ARCH_OLALA && cache.s_l[i] == nullptr) {
+                ggml_tensor * s_shift = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                        hparams.olala_shift_state_size(), qnext_state_slots);
+                ggml_format_name(s_shift, "cache_s_l%d", i);
+                cache.s_l[i] = s_shift;
             }
 
             // a PLE layer that is not recurrent has no state row to extend, so it gets one
@@ -10745,6 +10754,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_GLM5NEXT_DASHED:
         case LLM_ARCH_RAON1_NANO:
         case LLM_ARCH_RAON1:
+        case LLM_ARCH_OLALA:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
@@ -11247,6 +11257,13 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
     // openPangu carries only a conv state and LFM2 a short-conv state (no SSM
     // term); the per-step path would divide by zero (ssm_dt_rank == 0), decline
     if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_LFM2 || model.arch == LLM_ARCH_LFM2MOE || model.arch == LLM_ARCH_LFM3) {
+        kv.save_per_step_ssm = false;
+        return false;
+    }
+
+    // Olala packs its whole state in one s_l row and never fills per-step
+    // snapshots: use the full-row shadow snapshot instead.
+    if (model.arch == LLM_ARCH_OLALA) {
         kv.save_per_step_ssm = false;
         return false;
     }
