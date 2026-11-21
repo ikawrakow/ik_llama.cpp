@@ -14205,7 +14205,7 @@ float * llama_get_logits_ith(struct llama_context * ctx, int32_t i) {
             throw std::runtime_error(format("corrupt output buffer (j=%d, n_outputs=%d)", j, ctx->n_outputs));
         }
 
-        return ctx->logits + j*ctx->model.hparams.n_vocab;
+        return ctx->logits + (size_t) j*ctx->model.hparams.n_vocab;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
