@@ -351,6 +351,10 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
 
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
+    if (arch_name == "inkling2" && gguf_find_key(meta, "inkling2.loop.core_start") >= 0) {
+        llm_kv.arch = LLM_ARCH_INKLING2_LOOP;
+        llm_kv.metadata_prefix = "inkling2";
+    }
 
     files.emplace_back(new llama_file(fname.c_str(), "rb"));
     contexts.emplace_back(ctx);

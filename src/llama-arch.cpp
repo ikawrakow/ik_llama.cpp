@@ -7,6 +7,7 @@
 static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA,           "llama"        },
     { LLM_ARCH_NANBEIGE,        "nanbeige"     },
+    { LLM_ARCH_INKLING2_LOOP,   "inkling2_loop" },
     { LLM_ARCH_K2_HORIZON,      "k2-horizon"   },
     { LLM_ARCH_LLAMA4,          "llama4"       },
     { LLM_ARCH_DECI,            "deci"         },
@@ -356,12 +357,26 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_OPENPANGU_MHC_NUM_STREAM,      "%s.mhc_num_stream"     },
     { LLM_KV_OPENPANGU_MHC_RECUR_NORM,      "%s.mhc_recur_norm"     },
     { LLM_KV_OPENPANGU_PARAM_SINK_NUMBER,   "%s.param_sink_number"  },
+
+    { LLM_KV_VOCAB_SIZE_UNPADDED,            "%s.vocab_size_unpadded"          },
+    { LLM_KV_ATTN_RES_BLOCK_SIZE,            "%s.attn_res.block_size"          },
+    { LLM_KV_ATTENTION_RELATIVE_LENGTH,      "%s.attention.relative_length"     },
+    { LLM_KV_ATTENTION_RELATIVE_EXTENT,      "%s.attention.relative_extent"     },
+    { LLM_KV_ATTENTION_QK_CLIP,              "%s.attention.qk_clip"             },
+    { LLM_KV_ATTENTION_RELATIVE_CLIP,        "%s.attention.relative_clip"       },
+    { LLM_KV_ATTENTION_LOG_SCALE_FLOOR,      "%s.attention.log_scale_floor"     },
+    { LLM_KV_ATTENTION_LOG_SCALE_ALPHA,      "%s.attention.log_scale_alpha"     },
+    { LLM_KV_LOOP_DOT_START,                 "%s.loop.start"                    },
+    { LLM_KV_LOOP_DOT_END,                   "%s.loop.end"                      },
+    { LLM_KV_LOOP_COUNT,                     "%s.loop.count"                    },
+    { LLM_KV_LOOP_GATE_RANK,                 "%s.loop.gate_rank"                },
+    { LLM_KV_LOOP_VARYING,                   "%s.loop.varying"                  },
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char* suffix) : arch(arch), suffix(suffix) {}
 
 std::string LLM_KV::operator()(llm_kv kv) const {
-    std::string name = ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
+    std::string name = ::format(LLM_KV_NAMES.at(kv), metadata_prefix ? metadata_prefix : LLM_ARCH_NAMES.at(arch));
 
     if (suffix != nullptr) {
         name += ".";
@@ -425,6 +440,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_RAON1_NANO:
     case LLM_ARCH_NEMOTRON_H:
     case LLM_ARCH_NEMOTRON_H_MOE:
+    case LLM_ARCH_INKLING2_LOOP:
         return true;
     default:
         return false;

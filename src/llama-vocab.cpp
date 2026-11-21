@@ -2168,6 +2168,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
             } else if (
                 tokenizer_pre == "gpt-4o" ||
+                tokenizer_pre == "inkling2" ||
                 tokenizer_pre == "llama4" ||
                 tokenizer_pre == "kanana2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT4O;
@@ -2412,6 +2413,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
                 LLAMA_LOG_WARN("%s: override '%s' to 'true' for Gemma4\n", __func__, kv(LLM_KV_TOKENIZER_ADD_BOS).c_str());
             }
+
+            if (tokenizer_pre == "inkling2") {
+                special_bos_id = LLAMA_TOKEN_NULL;
+                add_bos = false;
+            }
         }
 
         // auto-detect special tokens by text
@@ -2428,7 +2434,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<|im_end|>"
                         || t.first == "<|end|>"
                         || t.first == "<end_of_turn>"
-                        || t.first == "<|endoftext|>"
+                        || (t.first == "<|endoftext|>" && tokenizer_pre != "inkling2")
                         || t.first == "<|end_of_text|>" // granite
                         || t.first == "<EOT>"
                         || t.first == "_<EOT>"
@@ -2628,7 +2634,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<|flush|>"  // solar-open
                     || t.first == "<|calls|>"  // solar-open
                     || t.first == "<end_of_turn>"
-                    || t.first == "<|endoftext|>"
+                    || (t.first == "<|endoftext|>" && tokenizer_pre != "inkling2")
                     || t.first == "</s>"      // paddleocr
                     || t.first == "<|eom_id|>"
                     || t.first == "<EOT>"

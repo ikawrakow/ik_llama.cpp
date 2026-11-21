@@ -1790,6 +1790,10 @@ llm_expert_gating_func_type   gating_op,
     ggml_tensor * logits = gate_inp ? llm_build_lora_mm(lctx, ctx, gate_inp, cur) : input_logits; // [n_expert, n_tokens]
     cb(logits, "ffn_moe_logits", il);
 
+    if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP && logits->op == GGML_OP_MUL_MAT) {
+        ggml_mul_mat_set_prec(logits, GGML_PREC_F32);
+    }
+
     if (gate_inp_b) {
         logits = ggml_add(ctx, logits, gate_inp_b);
         cb(logits, "ffn_moe_logits_biased", il);
@@ -1870,6 +1874,10 @@ llm_expert_gating_func_type   gating_op,
 
         ggml_tensor * weights_sum = ggml_sum_rows(ctx, weights); // [1, n_tokens]
         cb(weights_sum, "ffn_moe_weights_sum", il);
+
+        if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP) {
+            weights_sum = ggml_scale_bias(ctx, weights_sum, 1.0f, 1e-20f);
+        }
 
         if (lctx.model.arch == LLM_ARCH_LAGUNA) {
             weights_sum = ggml_clamp(ctx, weights_sum, 6.103515625e-5f, INFINITY);
@@ -2219,7 +2227,28 @@ llm_expert_gating_func_type   gating_op,
     }
 
     ggml_tensor * par;
-    if (can_use_fmoe && up_gate_exps && (!cache_ids || !up_gate_exps_b)) {
+    if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP) {
+        if (!cache_ids) {
+            cached_up_gate = cached_down = nullptr;
+        }
+        auto both = llm_build_lora_mm_id(lctx, ctx, up_gate_exps, cur, selected_experts, cached_up_gate, cache_ids);
+        if (lctx.cparams.force_experts_offload_device) {
+            both->op_params[11] = lctx.model.default_layer_device[il] + 1;
+        }
+        const int width = both->ne[0] / 2;
+        auto half = [&](int index) {
+            return ggml_cont(ctx, ggml_view_3d(ctx, both, width, both->ne[1], both->ne[2],
+                        both->nb[1], both->nb[2], index * width * both->nb[0]));
+        };
+        const auto & hp = lctx.model.hparams;
+        auto gate = half(0);
+        auto capped_gate = ggml_softcap(ctx, gate, 1.0f / hp.situ_beta, hp.situ_beta);
+        auto up = half(1);
+        if (hp.situ_linear_beta > 0) {
+            up = ggml_softcap(ctx, up, 1.0f / hp.situ_linear_beta, hp.situ_linear_beta);
+        }
+        par = ggml_mul(ctx, ggml_mul(ctx, capped_gate, ggml_sigmoid(ctx, gate)), up);
+    } else if (can_use_fmoe && up_gate_exps && (!cache_ids || !up_gate_exps_b)) {
         auto hadamard_u = lctx.model.hadamard_rotation(up_exps);
         auto hadamard_g = lctx.model.hadamard_rotation(gate_exps);
         GGML_ASSERT((!hadamard_u && !hadamard_g) || (hadamard_u == hadamard_g) ||
@@ -3549,6 +3578,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_NOMIC_BERT:
             {
                 result = llm.build_bert();
+            } break;
+        case LLM_ARCH_INKLING2_LOOP:
+            {
+                result = llm.build_inkling2_loop();
             } break;
         case LLM_ARCH_BLOOM:
             {

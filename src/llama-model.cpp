@@ -87,6 +87,56 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_GATE_UP_EXPS,"blk.%d.ffn_gate_up_exps" },
         },
     },
+    {
+        LLM_ARCH_INKLING2_LOOP,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,          "token_embd" },
+            { LLM_TENSOR_TOKEN_EMBD_NORM,     "token_embd_norm" },
+            { LLM_TENSOR_OUTPUT,              "output" },
+            { LLM_TENSOR_OUTPUT_NORM,         "output_norm" },
+            { LLM_TENSOR_OUTPUT_RES_QUERY,    "output_res_query" },
+            { LLM_TENSOR_ATTN_NORM,           "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,              "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,              "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,              "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,            "blk.%d.attn_output" },
+            { LLM_TENSOR_ATTN_GATE,           "blk.%d.attn_gate" },
+            { LLM_TENSOR_ATTN_REL,            "blk.%d.attn_rel" },
+            { LLM_TENSOR_ATTN_SINK_PROJ,      "blk.%d.attn_sink_proj" },
+            { LLM_TENSOR_ATTN_REL_BIAS,       "blk.%d.attn_rel_bias" },
+            { LLM_TENSOR_ATTN_Q_CLIP,         "blk.%d.attn_q_clip" },
+            { LLM_TENSOR_ATTN_REL_CLIP,       "blk.%d.attn_rel_clip" },
+            { LLM_TENSOR_ATTN_K_CONV,         "blk.%d.attn_k_conv" },
+            { LLM_TENSOR_ATTN_V_CONV,         "blk.%d.attn_v_conv" },
+            { LLM_TENSOR_ATTN_K_CONV_PROJ,    "blk.%d.attn_k_conv_proj" },
+            { LLM_TENSOR_ATTN_V_CONV_PROJ,    "blk.%d.attn_v_conv_proj" },
+            { LLM_TENSOR_ATTN_POST_CONV,      "blk.%d.attn_post_conv" },
+            { LLM_TENSOR_ATTN_Q_INP_NORM,     "blk.%d.attn_q_inp_norm" },
+            { LLM_TENSOR_ATTN_K_INP_NORM,     "blk.%d.attn_k_inp_norm" },
+            { LLM_TENSOR_ATTN_V_INP_NORM,     "blk.%d.attn_v_inp_norm" },
+            { LLM_TENSOR_ATTN_RES_QUERY,      "blk.%d.attn_res_query" },
+            { LLM_TENSOR_FFN_NORM,            "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_RES_QUERY,       "blk.%d.ffn_res_query" },
+            { LLM_TENSOR_FFN_POST_CONV,       "blk.%d.ffn_post_conv" },
+            { LLM_TENSOR_FFN_GATE_INP,        "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_EXP_PROBS_B,     "blk.%d.exp_probs_b" },
+            { LLM_TENSOR_FFN_GATE_UP_EXPS,    "blk.%d.ffn_gate_up_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,       "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_LOOP_Q_CTRL_DOWN,    "blk.%d.loop_q_ctrl_down" },
+            { LLM_TENSOR_LOOP_Q_CTRL_FORGET,  "blk.%d.loop_q_ctrl_forget" },
+            { LLM_TENSOR_LOOP_Q_CTRL_GAIN,    "blk.%d.loop_q_ctrl_gain" },
+            { LLM_TENSOR_LOOP_K_CTRL_DOWN,    "blk.%d.loop_k_ctrl_down" },
+            { LLM_TENSOR_LOOP_K_CTRL_FORGET,  "blk.%d.loop_k_ctrl_forget" },
+            { LLM_TENSOR_LOOP_K_CTRL_GAIN,    "blk.%d.loop_k_ctrl_gain" },
+            { LLM_TENSOR_LOOP_V_CTRL_DOWN,    "blk.%d.loop_v_ctrl_down" },
+            { LLM_TENSOR_LOOP_V_CTRL_FORGET,  "blk.%d.loop_v_ctrl_forget" },
+            { LLM_TENSOR_LOOP_V_CTRL_GAIN,    "blk.%d.loop_v_ctrl_gain" },
+            { LLM_TENSOR_LOOP_FFN_CTRL_DOWN,  "blk.%d.loop_ffn_ctrl_down" },
+            { LLM_TENSOR_LOOP_FFN_CTRL_FORGET,"blk.%d.loop_ffn_ctrl_forget" },
+            { LLM_TENSOR_LOOP_FFN_CTRL_GAIN,  "blk.%d.loop_ffn_ctrl_gain" },
+            { LLM_TENSOR_LOOP_MSG_QUERY,      "blk.%d.loop_msg_query" },
+        },
+    },
 {
         LLM_ARCH_K2_HORIZON,
         {
@@ -3175,7 +3225,7 @@ bool llama_model_is_split_mode_graph(const struct llama_model * model) {
 bool llama_model_supports_ctx_shift(const struct llama_model * model) {
     // openPangu and DeepSeek4 keep position-dependent private state outside the generic KV cache.
     // Gemma3 and Cohere2 vary rope geometry per layer without recording it in hparams.swa_layers.
-    return model && model->arch != LLM_ARCH_OPENPANGU && !llm_arch_is_dsv4(model->arch)
+    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_INKLING2_LOOP && !llm_arch_is_dsv4(model->arch)
         && model->arch != LLM_ARCH_GEMMA3 && model->arch != LLM_ARCH_COHERE2;
 }
 
@@ -3309,6 +3359,10 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
     if (hparams.n_embd_ple_conv(il) > 0) {
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
         k_size += hparams.n_embd_ple_conv(il) * (size_t) state_sots * sizeof(float);
+    }
+    if (arch == LLM_ARCH_INKLING2_LOOP) {
+        auto state_slots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
+        k_size += (size_t) hparams.inkling_state_width(il) * state_slots * sizeof(float);
     }
     return k_size + v_size;
 }
