@@ -102,10 +102,12 @@ struct DataInfo {
     const mmid_row_mapping * row_mapping = nullptr;
     size_t        bs2 = 0;
 
-    inline const char * src1_row(int iy) const {
+    IQK_ALWAYS_INLINE const char * src1_row(int iy) const {
         if (!row_mapping) return cy + (cur_y + iy)*by;
-        int i11 = row_mapping[cur_y + iy].i1 % ne11;
+        int i11 = row_mapping[cur_y + iy].i1;
         int i12 = row_mapping[cur_y + iy].i2;
+        // avoid the integer division for the common cases ne11 == 1 and i11 < ne11
+        i11 = ne11 == 1 ? 0 : i11 < ne11 ? i11 : i11 % ne11;
         return cy + (i11 + i12*ne11)*by;
     }
 
@@ -130,7 +132,7 @@ struct DataInfo {
         vst1q_f32(dst_row(iy) + ix, result);
     }
 #endif
-    inline float * dst_row(int iy) const {
+    IQK_ALWAYS_INLINE float * dst_row(int iy) const {
         if (!row_mapping) return s + (cur_y + iy)*bs;
         int i12 = row_mapping[cur_y + iy].i2;
         int i1  = row_mapping[cur_y + iy].i1;
