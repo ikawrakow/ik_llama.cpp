@@ -34,6 +34,21 @@ GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_typ
 // pinned host buffer for use with the CPU backend for faster copies between CPU and GPU
 GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type(void);
 
+// Stage 2a NUMA expert band placement: deferred pinning of CUDA_Host buffers.
+// While ggml_host_pin_defer(true) is set, CUDA host allocations come up as
+// plain anonymous mmap (unpinned, unfaulted) so the caller can mbind page
+// ranges to NUMA nodes before any page exists. Call ggml_host_pin_commit()
+// once placement is done (before any transient CUDA_Host allocation runs -
+// e.g. before loading weights): it prefaults every page through the band
+// mbind policy and registers (pins) the regions in place - pinned speed with
+// node-local pages. Weight bytes then write into the already-pinned pages.
+// Regions freed inside the defer window are discarded and never registered.
+// Returns the number of bytes successfully registered. Linux only; no-ops
+// elsewhere. GGML_CUDA_NO_NUMA_PIN=1 or GGML_NUMA_NO_DEFER_PIN=1 restores
+// the stock allocate-and-pin-immediately behavior.
+GGML_API void   ggml_host_pin_defer(bool enable);
+GGML_API size_t ggml_host_pin_commit(void);
+
 GGML_API GGML_CALL int  ggml_backend_cuda_get_device_count(void);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size);
 GGML_API GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total);

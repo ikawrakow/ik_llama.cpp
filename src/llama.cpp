@@ -9,6 +9,9 @@
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/mman.h>
 #include <unistd.h>
+#include <cerrno>
+#include <cstdio>
+#include <fstream>
 #endif
 #if defined(__APPLE__)
 #include <mach/mach.h>
@@ -4747,6 +4750,436 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     return std::make_pair(std::move(result), max_compute);
 }
 
+#if defined(__gnu_linux__)
+// Stage 3a: row-band placement for plain (non-expert) 2D matmul weights -
+// attention projections, dense FFN, shared experts, lm_head. Same binding
+// rule as the expert stacks: output-row band k goes to the k-th active node,
+// matching the band rank the dense dispatch (ggml_numa_dense_split_rows in
+// ggml.c) derives at compute time. Splitting a tensor that was never placed
+// is still correct (a band is just a work partition), so this gate only
+// decides locality, never results. GGML_NUMA_DENSE_SPLIT=0 keeps dense
+// weights on the default page policy.
+static bool llama_numa_dense_place(ggml_tensor * t, int n_band, long pg_size, uintptr_t pg_mask) {
+    if (t->ne[2] != 1 || t->ne[3] != 1) return false;
+    if (t->ne[1] < 2*n_band) return false;
+    if (t->nb[0] != ggml_type_size(t->type)) return false;
+    if (t->nb[1] != ggml_row_size(t->type, t->ne[0])) return false;
+    // bands smaller than ~1 MiB are not worth the page-rounding waste
+    // (same rule as the expert stacks)
+    if ((size_t)(t->ne[1]/n_band)*t->nb[1] < (size_t)1*1024*1024) return false;
+
+    // Skip everything that is not a row-streamed matmul weight: embedding
+    // tables (one row per token), routers, classifiers, conv/SSP state,
+    // alt projects, shortconv. Shape-exotic repacks are excluded by the
+    // layout checks above.
+    const char * name = ggml_get_name(t);
+    static const char * k_skip[] = {
+        "embd", "cls", "exp_probs", "gate_inp", "position", "conv", "alt", "ssm", "shortcon",
+    };
+    for (size_t i = 0; i < sizeof(k_skip)/sizeof(k_skip[0]); ++i) {
+        if (strstr(name, k_skip[i]) != nullptr) return false;
+    }
+
+    const char * base = (const char *)t->data;
+    for (int k = 0; k < n_band; ++k) {
+        const int64_t r0 =  t->ne[1] * k        / n_band;
+        const int64_t r1 = (t->ne[1] * (k + 1)) / n_band;
+        if (r1 <= r0) return false;
+        const int node = ggml_numa_band_node(k);
+        if (node < 0) return false;
+        // round inward, exactly like the expert bands: a page shared by two
+        // bands keeps the default policy
+        const uintptr_t s  = (uintptr_t)base + (size_t)r0*t->nb[1];
+        const uintptr_t w  = (uintptr_t)base + (size_t)r1*t->nb[1];
+        const uintptr_t ps = (s + pg_size - 1) & pg_mask;
+        const uintptr_t pe = w & pg_mask;
+        if (pe <= ps) continue;
+        if (!ggml_numa_mbind_range((void *)ps, pe - ps, node)) {
+            return false;
+        }
+        // THP is opportunistic here (band edges split the VMA, fault order
+        // matters); failure is non-fatal and shows up as low hp: in the
+        // verify report, same as for the expert bands
+        madvise((void *)ps, pe - ps, MADV_HUGEPAGE);
+    }
+    return true;
+}
+
+// Stage 2a: NUMA expert-weight band placement. Requires --no-mmap (the weight
+// buffer must be fresh host memory whose pages have not been faulted in yet)
+// and ggml_numa_init() having detected more than one node with CPUs from the
+// process affinity mask. For every MoE expert-weight stack we bind the page
+// range of output-row band k to the k-th active node, matching the band rank
+// that the node-partitioned chunk scheduler derives at compute time
+// (ggml_numa_moe_band_split_set). Returns true if at least one expert tensor
+// was placed; on any mbind failure the caller keeps the feature disarmed.
+static bool llama_numa_bandsplit_place(ggml_context * ctx) {
+    // Stage 2a fix: the placement hook runs during model loading, which is
+    // BEFORE the caller's ggml_numa_init() (that happens in context creation,
+    // e.g. llama_init_from_model). Parse the topology here if nobody did,
+    // otherwise ggml_numa_band_count() returns 0 and the feature never arms.
+    ggml_numa_ensure_topology();
+
+    // Respect an explicit numactl --membind: do not override a page policy
+    // the user asked for. Default and interleave policies are specialized.
+    if (ggml_numa_mem_policy_explicit_bind()) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            LLAMA_LOG_WARN("%s: [numa] explicit membind policy detected, expert band split disabled\n", __func__);
+        }
+        return false;
+    }
+
+    const int n_band = ggml_numa_band_count();
+    if (n_band <= 1) {
+        return false;
+    }
+
+    const long pg_size = sysconf(_SC_PAGESIZE);
+    if (pg_size <= 0) {
+        return false;
+    }
+    const uintptr_t pg_mask = ~((uintptr_t)pg_size - 1);
+
+    static const char * k_exp_suffix[] = {
+        "ffn_gate_exps.weight",
+        "ffn_up_exps.weight",
+        "ffn_down_exps.weight",
+    };
+
+    int n_placed = 0;
+    int n_dense  = 0;
+    const char * dense_env = getenv("GGML_NUMA_DENSE_SPLIT");
+    const bool dense_split = (dense_env == nullptr || dense_env[0] != '0');
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        const char * name = ggml_get_name(t);
+        const size_t nl   = strlen(name);
+
+        bool match = false;
+        for (size_t s = 0; s < sizeof(k_exp_suffix)/sizeof(k_exp_suffix[0]); ++s) {
+            const size_t sl = strlen(k_exp_suffix[s]);
+            if (nl > sl && strcmp(name + nl - sl, k_exp_suffix[s]) == 0) {
+                match = true;
+                break;
+            }
+        }
+        if (!match) {
+            // Stage 3a: dense weights ride the same placement pass; only
+            // host-resident plain 2D matmul weights qualify
+            if (dense_split && llama_numa_dense_place(t, n_band, pg_size, pg_mask)) {
+                ++n_dense;
+            }
+            continue;
+        }
+
+        // need a contiguous 3D expert stack [ne0, ne1, n_expert] with packed
+        // rows; anything else (RTR-repacked, interleaved, merged variants)
+        // keeps its default page policy and the feature stays off for it
+        if (t->ne[2] < 2 || t->ne[1] < 2*n_band) continue;
+        if (t->nb[1] != ggml_row_size(t->type, t->ne[0])) continue;
+        if (t->nb[2] != t->ne[1]*t->nb[1]) continue;
+        // band worth is set by what a node actually streams: the whole slab
+        // set of band k across all ne[2] experts, not one expert's slice
+        // (512-expert models have tiny slabs but multi-hundred-MiB bands).
+        // Keep a small per-slab floor so degenerate shapes stay out; the
+        // mbind page-rounding waste is <=2 pages per slab per band (<1%).
+        const size_t band_slab = (size_t)(t->ne[1]/n_band)*t->nb[1];
+        if (band_slab*(size_t)t->ne[2] < (size_t)1*1024*1024 ||
+            band_slab < (size_t)64*1024) continue;
+
+        bool ok = true;
+        const char * base = (const char *)t->data;
+        for (int k = 0; k < n_band && ok; ++k) {
+            const int64_t r0 =  t->ne[1] * k        / n_band;
+            const int64_t r1 = (t->ne[1] * (k + 1)) / n_band;
+            if (r1 <= r0) { ok = false; break; }
+            const int node = ggml_numa_band_node(k);
+            if (node < 0) { ok = false; break; }
+            // Stage 2e fix: the band scheduler routes the chunk range
+            // [k*C/N, (k+1)*C/N) of EVERY expert's ne01 rows, and expert e's
+            // slab starts at e*nb[2]. The pre-2e loop omitted the e*nb[2]
+            // stride and bound only expert 0's slab (1/n_expert of the
+            // streamed bytes); every other expert first-touched wherever the
+            // loader thread ran. Bind every expert's band-k row range.
+            for (int64_t e = 0; e < t->ne[2] && ok; ++e) {
+                const uintptr_t s = (uintptr_t)base + (size_t)e*t->nb[2] + (size_t)r0*t->nb[1];
+                const uintptr_t w = (uintptr_t)base + (size_t)e*t->nb[2] + (size_t)r1*t->nb[1];
+                // round inward: a page shared by two bands keeps the default
+                // policy (a few KB at worst per boundary)
+                const uintptr_t ps = (s + pg_size - 1) & pg_mask;
+                const uintptr_t pe = w & pg_mask;
+                if (pe <= ps) continue;
+                if (!ggml_numa_mbind_range((void *)ps, pe - ps, node)) {
+                    ok = false;
+                } else if (madvise((void *)ps, pe - ps, MADV_HUGEPAGE) != 0) {
+                    // Stage 2d, non-fatal: with THP=[always] pages collapse anyway;
+                    // with [madvise] this is what enables 2 MiB band pages, with
+                    // [never] the bands stay 4 KiB and the verify report shows it
+                    // in the hp: field.
+                    static bool hp_warned = false;
+                    if (!hp_warned) {
+                        hp_warned = true;
+                        LLAMA_LOG_WARN("%s: [numa] MADV_HUGEPAGE on expert bands failed (errno %d)\n", __func__, errno);
+                    }
+                }
+            }
+        }
+        if (!ok) {
+            LLAMA_LOG_WARN("%s: [numa] mbind failed for '%s', disabling expert band split\n", __func__, name);
+            return false;
+        }
+        ++n_placed;
+    }
+
+    // Stage 3a: arm the dense dispatch side only if dense tensors actually
+    // got placed. The compute side additionally requires the MoE split to be
+    // armed, so a failed expert placement leaves this flag inert.
+    if (n_dense > 0) {
+        ggml_numa_dense_band_split_set(true);
+        LLAMA_LOG_INFO("%s: [numa] dense band split armed: %d dense weight tensor(s) row-banded node-local (GGML_NUMA_DENSE_SPLIT=0 disables)\n",
+                __func__, n_dense);
+    }
+
+    return n_placed > 0;
+}
+
+// Stage 2a verification: run after all tensor data has been loaded, when every
+// band page is resident. Samples pages per band and reports where they
+// actually landed. Pinned host buffers (cudaHostAlloc without
+// GGML_CUDA_NO_PINNED=1) cannot migrate, so mbind silently leaves those pages
+// wherever the driver allocated them - detect that here and disarm with an
+// actionable message instead of benchmarking a no-op.
+static void llama_numa_bandsplit_verify(const llama_model & model) {
+    if (!ggml_numa_moe_band_split_enabled()) {
+        return;
+    }
+    const int n_band = ggml_numa_band_count();
+    if (n_band < 2 || n_band > 16) {
+        return;
+    }
+
+    const long pg_size = sysconf(_SC_PAGESIZE);
+    if (pg_size <= 0) {
+        return;
+    }
+    const uintptr_t pg_mask = ~((uintptr_t)pg_size - 1);
+
+    int  target[16];
+    long hits[16] = {0}, total[16] = {0};
+    long hp_bytes[16] = {0}, hp_total[16] = {0}; // 2 MiB-page coverage per band (Stage 2d)
+    int  n_host_stacks = 0, n_device_stacks = 0;
+
+    // Collect the VMAs that carry anonymous huge pages. mbind splits each band
+    // range into its own VMA, so per-band huge-page coverage reads off
+    // directly: sum AnonHugePages of the VMAs fully inside the band range.
+    struct numa_hp_vma { uintptr_t start, end; size_t huge_bytes; };
+    std::vector<numa_hp_vma> hp_vmas;
+    {
+        std::ifstream smaps("/proc/self/smaps");
+        std::string line;
+        uintptr_t vs = 0, ve = 0;
+        size_t huge_kb = 0;
+        bool have_vma = false;
+        auto flush_vma = [&]() {
+            if (have_vma && huge_kb > 0) {
+                hp_vmas.push_back({vs, ve, huge_kb * 1024});
+            }
+        };
+        while (std::getline(smaps, line)) {
+            uintptr_t s = 0, e = 0;
+            char perms[8];
+            if (sscanf(line.c_str(), "%lx-%lx %7s", &s, &e, perms) == 3) {
+                flush_vma();
+                vs = s; ve = e; huge_kb = 0; have_vma = true;
+            } else if (have_vma && line.compare(0, 14, "AnonHugePages:") == 0) {
+                long kb = 0;
+                if (sscanf(line.c_str(), "AnonHugePages:%ld kB", &kb) == 1 && kb > 0) {
+                    huge_kb += (size_t)kb;
+                }
+            }
+        }
+        flush_vma();
+    }
+    for (int k = 0; k < n_band; ++k) {
+        target[k] = ggml_numa_band_node(k);
+    }
+
+    static const char * k_exp_suffix[] = {
+        "ffn_gate_exps.weight",
+        "ffn_up_exps.weight",
+        "ffn_down_exps.weight",
+    };
+
+    for (const auto & kv : model.tensors_by_name) {
+        const char * name = kv.first.c_str();
+        const size_t nl   = strlen(name);
+
+        bool match = false;
+        for (size_t s = 0; s < sizeof(k_exp_suffix)/sizeof(k_exp_suffix[0]); ++s) {
+            const size_t sl = strlen(k_exp_suffix[s]);
+            if (nl > sl && strcmp(name + nl - sl, k_exp_suffix[s]) == 0) {
+                match = true;
+                break;
+            }
+        }
+        if (!match) {
+            continue;
+        }
+
+        const ggml_tensor * t = kv.second;
+        if (t->ne[2] < 2 || t->ne[1] < 2*n_band) continue;
+        if (t->nb[1] != ggml_row_size(t->type, t->ne[0])) continue;
+        if (t->nb[2] != t->ne[1]*t->nb[1]) continue;
+        // same total-band eligibility as llama_numa_bandsplit_place(): judge
+        // band k by slab x ne[2], not by one expert's slice
+        const size_t band_slab = (size_t)(t->ne[1]/n_band)*t->nb[1];
+        if (band_slab*(size_t)t->ne[2] < (size_t)1*1024*1024 ||
+            band_slab < (size_t)64*1024) continue;
+
+        // Stage 2a round 3: sample host-resident stacks only. Device-resident
+        // stacks (expert layers whose weights fit in VRAM) cannot be
+        // page-placed; counting them dilutes the report until a fully
+        // successful host placement reads as a miss (e.g. 17 host layers
+        // out of 43 MoE layers -> "40%" -> spurious disarm).
+        if (!t->buffer || !(ggml_backend_buffer_is_host(t->buffer) || strcmp(ggml_backend_buffer_name(t->buffer), "CUDA_Host") == 0)) {
+            ++n_device_stacks;
+            continue;
+        }
+        ++n_host_stacks;
+
+        const char * base = (const char *)t->data;
+        const int n_sample = 24;
+        for (int k = 0; k < n_band; ++k) {
+            const int64_t r0 =  t->ne[1] * k        / n_band;
+            const int64_t r1 = (t->ne[1] * (k + 1)) / n_band;
+            if (r1 <= r0) continue;
+            // Stage 2e fix: the scheduler reads band-k rows of EVERY expert,
+            // so sweep (expert, row) sample points across the whole stack;
+            // expert 0's slab alone proves nothing about the other ne[2]-1
+            // slabs. Expert e's slab starts at e*nb[2].
+            for (int i = 0; i < n_sample; ++i) {
+                const int64_t e = (t->ne[2] <= n_sample)
+                    ? (i < t->ne[2] ? i : t->ne[2] - 1)
+                    : (int64_t)((uint64_t)i * (uint64_t)t->ne[2] / n_sample);
+                const uintptr_t s = (uintptr_t)base + (size_t)e*t->nb[2] + (size_t)r0*t->nb[1];
+                const uintptr_t w = (uintptr_t)base + (size_t)e*t->nb[2] + (size_t)r1*t->nb[1];
+                const uintptr_t ps = (s + pg_size - 1) & pg_mask;
+                const uintptr_t pe = w & pg_mask;
+                if (pe <= ps) continue;
+                const uintptr_t p = (ps + (pe - ps) * (uintptr_t)i / n_sample) & pg_mask;
+                const int node = ggml_numa_page_node((void *)p);
+                ++total[k];
+                if (node == target[k]) {
+                    ++hits[k];
+                }
+            }
+            // hp accounting: the band's full byte span across all experts
+            for (int64_t e = 0; e < t->ne[2]; ++e) {
+                const uintptr_t s = (uintptr_t)base + (size_t)e*t->nb[2] + (size_t)r0*t->nb[1];
+                const uintptr_t w = (uintptr_t)base + (size_t)e*t->nb[2] + (size_t)r1*t->nb[1];
+                const uintptr_t ps = (s + pg_size - 1) & pg_mask;
+                const uintptr_t pe = w & pg_mask;
+                if (pe <= ps) continue;
+                hp_total[k] += (long)(pe - ps);
+                for (const auto & v : hp_vmas) {
+                    if (v.start >= ps && v.end <= pe) {
+                        hp_bytes[k] += (long)v.huge_bytes;
+                    }
+                }
+            }
+        }
+    }
+
+    // Stage 3a: sweep the dense row-banded tensors the same way. Eligibility
+    // mirrors llama_numa_dense_place(), including the host-buffer check.
+    int n_dense_stacks = 0;
+    for (const auto & kv : model.tensors_by_name) {
+        const ggml_tensor * t = kv.second;
+        if (t->ne[2] != 1 || t->ne[3] != 1) continue;
+        if (t->ne[1] < 2*n_band) continue;
+        if (t->nb[0] != ggml_type_size(t->type)) continue;
+        if (t->nb[1] != ggml_row_size(t->type, t->ne[0])) continue;
+        if ((size_t)(t->ne[1]/n_band)*t->nb[1] < (size_t)1*1024*1024) continue;
+
+        const char * name = kv.first.c_str();
+        static const char * k_dense_skip[] = {
+            "embd", "cls", "exp_probs", "gate_inp", "position", "conv", "alt", "ssm", "shortcon",
+        };
+        bool skip = false;
+        for (size_t i = 0; i < sizeof(k_dense_skip)/sizeof(k_dense_skip[0]) && !skip; ++i) {
+            skip = strstr(name, k_dense_skip[i]) != nullptr;
+        }
+        if (skip) continue;
+
+        // host-resident stacks only, same check as the expert loop above
+        if (!t->buffer || !(ggml_backend_buffer_is_host(t->buffer) || strcmp(ggml_backend_buffer_name(t->buffer), "CUDA_Host") == 0)) {
+            continue;
+        }
+        ++n_dense_stacks;
+        ++n_host_stacks;
+
+        const char * base = (const char *)t->data;
+        const int n_sample = 24;
+        for (int k = 0; k < n_band; ++k) {
+            const int64_t r0 =  t->ne[1] * k        / n_band;
+            const int64_t r1 = (t->ne[1] * (k + 1)) / n_band;
+            if (r1 <= r0) continue;
+            const uintptr_t s  = (uintptr_t)base + (size_t)r0*t->nb[1];
+            const uintptr_t w  = (uintptr_t)base + (size_t)r1*t->nb[1];
+            const uintptr_t ps = (s + pg_size - 1) & pg_mask;
+            const uintptr_t pe = w & pg_mask;
+            if (pe <= ps) continue;
+            for (int i = 0; i < n_sample; ++i) {
+                const uintptr_t p = (ps + (pe - ps) * (uintptr_t)i / n_sample) & pg_mask;
+                const int node = ggml_numa_page_node((void *)p);
+                ++total[k];
+                if (node == target[k]) {
+                    ++hits[k];
+                }
+            }
+            // hp accounting: the band's full byte span
+            hp_total[k] += (long)(pe - ps);
+            for (const auto & v : hp_vmas) {
+                if (v.start >= ps && v.end <= pe) {
+                    hp_bytes[k] += (long)v.huge_bytes;
+                }
+            }
+        }
+    }
+
+    if (n_host_stacks == 0) {
+        LLAMA_LOG_INFO("%s: [numa] no host-resident expert stacks to verify (all expert tensors in device memory); scheduler state unchanged\n", __func__);
+        return;
+    }
+
+    std::string report;
+    bool ok = true;
+    for (int k = 0; k < n_band; ++k) {
+        const int pct = total[k] > 0 ? (int)(100.0*hits[k]/total[k] + 0.5) : -1;
+        if (k > 0) {
+            report += ", ";
+        }
+        report += "band" + std::to_string(k) + "->node" + std::to_string(target[k]);
+        report += pct >= 0 ? ": " + std::to_string(pct) + "%" : ": n/a";
+        const int hp = hp_total[k] > 0 ? (int)(100.0*hp_bytes[k]/hp_total[k] + 0.5) : -1;
+        report += std::string(", hp: ") + (hp >= 0 ? std::to_string(hp) + "%" : "n/a");
+        // interleave lands ~50% on-target, a successful placement ~100%;
+        // 75% cleanly separates the two regimes.
+        if (pct >= 0 && pct < 75) {
+            ok = false;
+        }
+    }
+    LLAMA_LOG_INFO("%s: [numa] band split check: %s (host stacks: %d (%d dense), device-resident skipped: %d)\n",
+            __func__, report.c_str(), n_host_stacks, n_dense_stacks, n_device_stacks);
+    if (!ok) {
+        ggml_numa_moe_band_split_set(false);
+        ggml_numa_dense_band_split_set(false);
+        LLAMA_LOG_WARN("%s: [numa] band split ineffective (pages already existed at mbind time: pinned, pre-faulted or file-backed); disarmed - with GGML_CUDA_NO_NUMA_PIN unset CUDA_Host buffers are deferred-pinned and should place correctly, please report this run\n", __func__);
+    }
+}
+#endif
+
 // Returns false if canceled by progress_callback
 static bool llm_load_tensors(
         llama_model_loader & ml,
@@ -5362,6 +5795,38 @@ static bool llm_load_tensors(
 
     model.mappings.reserve(ml.mappings.size());
 
+    // Stage 2a: the band-split placement hooks below need the NUMA topology,
+    // but some tool paths call ggml_numa_init() only when the context is
+    // created - i.e. after model loading. Parse the topology here if nobody
+    // did (no-op when already initialized, no strategy side effects).
+    ggml_numa_ensure_topology();
+
+#if defined(__gnu_linux__) && defined(GGML_USE_CUDA)
+    // Stage 2a: on a multi-node box with --no-mmap, bring CUDA_Host weight
+    // buffers up unpinned and unfaulted so the placement hook below can
+    // mbind the expert row bands node-local before any page exists. The
+    // buffers are prefaulted and pinned in place (cudaHostRegister) right
+    // after placement - pinned speed with node-local pages. Stock behavior
+    // (pinned at allocation, pages immovable by mbind) returns with
+    // GGML_CUDA_NO_NUMA_PIN=1 or GGML_NUMA_NO_DEFER_PIN=1.
+    const bool numa_no_defer_pin = getenv("GGML_NUMA_NO_DEFER_PIN") != nullptr;
+    const bool numa_defer_pin = !numa_no_defer_pin && !ml.use_mmap && hparams.n_expert > 0 && ggml_numa_band_count() > 1 && !ggml_numa_mem_policy_explicit_bind();
+    ggml_host_pin_defer(numa_defer_pin);
+    if (numa_defer_pin) {
+        static bool numa_balancing_warned = false;
+        if (!numa_balancing_warned) {
+            numa_balancing_warned = true;
+            if (FILE * f = fopen("/proc/sys/kernel/numa_balancing", "r")) {
+                int balancing = 0;
+                if (fscanf(f, "%d", &balancing) == 1 && balancing != 0) {
+                    LLAMA_LOG_WARN("%s: [numa] kernel.numa_balancing=%d - auto-NUMA balancing fights explicit page placement; for a clean band-split measurement run: sysctl -w kernel.numa_balancing=0\n", __func__, balancing);
+                }
+                fclose(f);
+            }
+        }
+    }
+#endif
+
     // create the backend buffers
     std::vector<std::pair<ggml_context *, llama_buf_map>> ctx_bufs;
     ctx_bufs.reserve(ctx_map.size());
@@ -5439,6 +5904,16 @@ static bool llm_load_tensors(
                     throw std::runtime_error("unable to allocate backend buffer");
                 }
                 model.bufs.push_back(buf);
+#if defined(__gnu_linux__)
+                // Stage 2a: bind MoE expert-weight row bands node-local. Only
+                // meaningful for fresh host memory (--no-mmap); must run before
+                // the loader (or mlock) touches the buffer pages.
+                if (!ml.use_mmap && (ggml_backend_buffer_is_host(buf) || strcmp(ggml_backend_buffer_name(buf), "CUDA_Host") == 0) && llama_numa_bandsplit_place(ctx)) {
+                    ggml_numa_moe_band_split_set(true);
+                    LLAMA_LOG_INFO("%s: [numa] expert band split armed: %d node(s), MoE expert rows bound node-local\n",
+                            __func__, ggml_numa_band_count());
+                }
+#endif
                 if (use_mlock && ggml_backend_buffer_is_host(buf) && !ggml_backend_buffer_is_multi_buffer(buf)) {
                     model.mlock_bufs.emplace_back(new llama_mlock);
                     auto & mlock_buf = model.mlock_bufs.back();
@@ -5465,6 +5940,41 @@ static bool llm_load_tensors(
 
         ctx_bufs.emplace_back(ctx, bufs);
     }
+
+    // Stage 2a diagnostic: make a silent no-arm visible. The placement hook
+    // above only runs in the !use_mmap branch, so use_mmap still true here
+    // means the band split is off; say why, once, and only on multi-node
+    // boxes running expert models.
+    static bool numa_band_hint_done = false;
+    if (!numa_band_hint_done && hparams.n_expert > 0 && ggml_numa_band_count() > 1 && ml.use_mmap) {
+        numa_band_hint_done = true;
+        if (use_mmap_buffer) {
+            LLAMA_LOG_INFO("%s: [numa] expert band split not armed: weights alias mmap'd file pages; run with --no-mmap to bind expert bands node-local\n", __func__);
+        } else {
+            LLAMA_LOG_INFO("%s: [numa] expert band split not armed: file mappings kept for deferred (PLE) tables; band placement is unsupported for this model\n", __func__);
+        }
+    }
+
+#if defined(__gnu_linux__) && defined(GGML_USE_CUDA)
+    // Stage 2a round 4: commit the deferred pin BEFORE any loader allocation
+    // runs. load_all_data() allocates transient 16 MiB pinned staging buffers
+    // through the same CUDA_Host buffer type; with the defer window still open
+    // they used to land in the pending list and got cudaHostRegister'd after
+    // they were freed, on virtual addresses later allocations hand out again -
+    // the driver then held registrations that overlapped live buffers, which
+    // is what crashed round 3. Committing here means: pages fault through the
+    // band mbind policy (node-local placement, exactly as before), the buffer
+    // is pinned before the first weight byte is written, and the loader's
+    // staging buffers are allocated stock-pinned with the defer window closed.
+    if (numa_defer_pin && !dry_run) {
+        const size_t numa_pinned_bytes = ggml_host_pin_commit();
+        ggml_host_pin_defer(false);
+        if (numa_pinned_bytes > 0) {
+            LLAMA_LOG_INFO("%s: [numa] CUDA_Host weight buffers prefaulted and pinned node-local: %.2f MiB\n",
+                    __func__, numa_pinned_bytes/(1024.0*1024.0));
+        }
+    }
+#endif
 
     if (llama_supports_gpu_offload()) {
         const int n_gpu = std::min(n_gpu_layers, int(hparams.n_layer));
@@ -5572,6 +6082,20 @@ static bool llm_load_tensors(
             }
         }
 
+#if defined(__gnu_linux__) && defined(GGML_USE_CUDA)
+        // Stage 2a round 4: the deferred buffers were already prefaulted and
+        // pinned right after placement (before any loader allocation ran), so
+        // there is nothing left to commit here - the pending list is empty.
+        // Keep the ordering guarantee explicit: the commit below is a no-op
+        // and exists only as a safety net if a future change reopens the
+        // defer window past this point.
+        ggml_host_pin_defer(false);
+#endif
+
+        // Stage 2a: all expert band pages are resident now - check where they
+        // actually landed and disarm (with a hint) if the binding did not take.
+        llama_numa_bandsplit_verify(model);
+
         if (defer_expert_mmap) {
             ml.drop_mmap_expert_pages();
         }
@@ -5645,6 +6169,15 @@ static bool llm_load_tensors(
         }
 #endif
     }
+
+#if defined(__gnu_linux__) && defined(GGML_USE_CUDA)
+    // Stage 2a safety flush: dry runs never reach the commit inside the
+    // !dry_run block; never leak the defer flag into runtime allocations
+    // (compute/KV buffers must be pinned at allocation). No-op when nothing
+    // is pending.
+    ggml_host_pin_commit();
+    ggml_host_pin_defer(false);
+#endif
 
     if (model.is_mla_model()) {
         // -sm graph/attn needs wk_b->extra populated; run prepare even under dry-run.

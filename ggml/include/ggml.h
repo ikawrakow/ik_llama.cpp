@@ -972,6 +972,47 @@ extern "C" {
     GGML_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
 
+    // Stage 2a NUMA expert band-split support: partition the output rows of the
+    // MoE expert-weight stacks into one band per NUMA node so that each node's
+    // threads stream node-local memory (compute side: node-partitioned chunk
+    // scheduling in ggml_compute_forward_mul_mat_id / _up_gate). Bands are
+    // ranked by ascending node id.
+    // ggml_numa_band_count(): number of NUMA nodes holding at least one CPU from
+    //      the process affinity mask (0 if NUMA is unavailable or ggml_numa_init()
+    //      has not been called).
+    // ggml_numa_band_node(band): system node id of the band-th active node, -1 if
+    //      `band` is out of range.
+    // ggml_numa_mbind_range(): bind the page range [start, start+size) to `node`
+    //      (MPOL_BIND + MPOL_MF_MOVE); false on failure.
+    // ggml_numa_moe_band_split_set(): arm/disarm the node-partitioned MoE chunk
+    //      scheduler; arming is only meaningful after successful band placement.
+    GGML_API int  ggml_numa_band_count(void);
+    GGML_API int  ggml_numa_band_node(int band);
+    GGML_API bool ggml_numa_mbind_range(void * start, size_t size, int node);
+    GGML_API void ggml_numa_moe_band_split_set(bool on);
+
+    // Stage 2a follow-ups: make arming robust and verifiable.
+    // ggml_numa_ensure_topology(): parse the NUMA topology if ggml_numa_init()
+    //      has not been called yet (pure discovery, no strategy side effects).
+    // ggml_numa_moe_band_split_enabled(): true if the scheduler is armed.
+    // ggml_numa_page_node(): node of the page containing addr, -1 if unknown.
+    // ggml_numa_mem_policy_explicit_bind(): true if the task memory policy is
+    //      MPOL_BIND (numactl --membind) - band placement must not override it.
+    GGML_API void  ggml_numa_ensure_topology(void);
+    GGML_API bool  ggml_numa_moe_band_split_enabled(void);
+    GGML_API int   ggml_numa_page_node(void * addr);
+    GGML_API bool  ggml_numa_mem_policy_explicit_bind(void);
+
+    // Stage 3a: dense band dispatch. Same row-band scheme as the MoE split,
+    // applied to plain (non-expert) 2D matmul weights - attention
+    // projections, dense FFN, shared experts, lm_head. Arming happens in
+    // llama_numa_bandsplit_place() after the dense tensors were placed
+    // (GGML_NUMA_DENSE_SPLIT=0 keeps them on the default page policy); the
+    // compute side then partitions each eligible mul_mat by output-row bands
+    // (see ggml_numa_dense_split_rows in ggml.c).
+    GGML_API void  ggml_numa_dense_band_split_set(bool on);
+    GGML_API bool  ggml_numa_dense_band_split_enabled(void);
+
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);
 
