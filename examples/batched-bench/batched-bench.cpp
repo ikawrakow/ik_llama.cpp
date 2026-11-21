@@ -151,7 +151,10 @@ int main(int argc, char ** argv) {
                         common_batch_add(batch, 0, i, { j }, false);
                     }
                 }
-                batch.logits[batch.n_tokens - 1] = true;
+                // pp == 0 leaves n_tokens at 0, and logits[-1] corrupts the heap
+                if (batch.n_tokens > 0) {
+                    batch.logits[batch.n_tokens - 1] = true;
+                }
 
                 const auto t_pp_start = ggml_time_us();
 
