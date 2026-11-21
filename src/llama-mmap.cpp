@@ -335,9 +335,38 @@ struct llama_mmap::impl {
             }
         }
         if (numa) {
-            if (posix_madvise(addr, file->size(), POSIX_MADV_RANDOM)) {
-                LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_RANDOM) failed: %s\n",
-                        strerror(errno));
+            // numa-bands-fixup: the band-placement path reads this mapping
+            // sequentially, band by band, during model load. POSIX_MADV_RANDOM
+            // disables readahead AND fault-around, collapsing every fault to a
+            // 4 KiB disk request (~6k IOPS, ~24 MB/s on spinning SAS disks).
+            //
+            // This is safe wrt NUMA placement: the band policy is applied with
+            // mbind(MPOL_BIND) on the destination (deferred-pinned anonymous)
+            // buffers, and page-cache pages populated from this file mapping
+            // are node-agnostic. Changing the read pattern here cannot move
+            // weight pages between nodes.
+            //
+            // Default: populate the mapping through normal readahead, so the
+            // disk serves large sequential requests and placement faults/copy
+            // loops hit page cache instead of the platter.
+            // Export GGML_NUMA_MADV_RANDOM=1 to restore the old behavior.
+            if (getenv("GGML_NUMA_MADV_RANDOM") != nullptr) {
+                if (posix_madvise(addr, file->size(), POSIX_MADV_RANDOM)) {
+                    LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_RANDOM) failed: %s\n",
+                                   strerror(errno));
+                }
+            } else {
+#ifdef MADV_POPULATE_READ
+                if (madvise(addr, file->size(), MADV_POPULATE_READ)) {
+                    LLAMA_LOG_WARN("warning: madvise(.., MADV_POPULATE_READ) failed: %s\n",
+                                   strerror(errno));
+                }
+#else
+                if (posix_madvise(addr, file->size(), POSIX_MADV_WILLNEED)) {
+                    LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
+                                   strerror(errno));
+                }
+#endif
             }
         }
 
