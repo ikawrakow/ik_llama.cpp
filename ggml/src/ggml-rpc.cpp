@@ -1124,7 +1124,9 @@ GGML_CALL static void ggml_backend_rpc_event_wait(ggml_backend_t backend, ggml_b
 
 GGML_CALL static bool ggml_backend_rpc_supports_op(ggml_backend_t backend, const ggml_tensor * op) {
     UNUSED(backend);
-    UNUSED(op);
+    if (op->op == GGML_OP_FLASH_ATTN_EXT && op->src[6]) {
+        return false;
+    }
     //TODO: call the remote backend and cache the results
     return true;
 }

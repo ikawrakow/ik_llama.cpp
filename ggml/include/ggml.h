@@ -2614,6 +2614,14 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // table: [distance, query head, query row]; the last distance entry applies beyond the table extent.
+    // positions follow query and KV view order.
+    GGML_API void ggml_flash_attn_ext_add_rel_bias(
+            struct ggml_tensor * a,
+            struct ggml_tensor * table,
+            struct ggml_tensor * pos_q,
+            struct ggml_tensor * pos_k);
+
     // Latent attention over a packed K/V cache with an independently-visible K/V prefix.
     // The value vector of cache row n is cache[dv_off .. dv_off+dv, n] (MLA "absorbed"
     // layout: openPangu packs [ckv|k_pe] -> dv_off=0; DeepSeek/GLM_DSA packs [k_pe|ckv]
