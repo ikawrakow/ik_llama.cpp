@@ -2870,8 +2870,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
         //printf("Using cublasGemmStridedBatchedEx for %s\n", dst->name);
         // with a [0, 2, 1, 3] perm. and ne02==1 the matrix strides need to be determined from dim 3:
         const int64_t sma = ne02 == 1 ? nb03/nb00 : nb02/nb00;
-        //const int64_t smb = ne12 == 1 ? s13       : s12;
-        const int64_t smb = ne12 == 1 ? nb13/nb10 : nb12/nb10;
+        const int64_t smb = ne12 == 1 ? s13 : s12;
 
         // there is no broadcast and src0, src1 are contiguous across dims 2, 3
         // use cublasGemmStridedBatchedEx
