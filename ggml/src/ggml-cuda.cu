@@ -886,7 +886,7 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
         }
     }
 
-    bool has_inputs = false;
+    bool sync_after_copy = false;
     auto & ctx = *(ggml_backend_cuda_context *)backend->context;
     for (int j = 0; j < n_inputs; ++j) {
         if (!inputs[j] || !inputs[j]->buffer) return false;
@@ -895,7 +895,7 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
         if (!ggml_backend_buffer_is_cuda(inputs[j]->buffer) && !ggml_backend_buffer_is_host(inputs[j]->buffer)) return false;
         auto cuda_ctx = (ggml_backend_cuda_buffer_context *)input_copies[j]->buffer->context;
         if (!cuda_ctx || cuda_ctx->device != ctx.device) return false;
-        if (inputs[j]->flags & GGML_TENSOR_FLAG_INPUT) has_inputs = true;
+        if (inputs[j]->flags & GGML_TENSOR_FLAG_INPUT) sync_after_copy = true;
     }
     ggml_tensor * experts[2] = { nullptr, nullptr };
     if (node0->op == GGML_OP_MUL_MAT_ID || node0->op == GGML_OP_MOE_FUSED_UP_GATE) {
@@ -909,6 +909,10 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
         if (!ggml_backend_buffer_is_host(inputs[j]->buffer)) continue;
         if (input_copies[j] == experts[0] || input_copies[j] == experts[1]) continue;
         CUDA_CHECK(cudaMemcpyAsync(input_copies[j]->data, inputs[j]->data, ggml_nbytes(inputs[j]), cudaMemcpyHostToDevice, ctx.stream()));
+        // The scheduler can reuse host intermediates as soon as this split is submitted.
+        if (ggml_backend_buffer_get_usage(inputs[j]->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            sync_after_copy = true;
+        }
         copied.insert(j);
     }
     // Then copy all device inputs that are on the same device
@@ -948,7 +952,7 @@ GGML_CALL static bool ggml_backend_cuda_copy_all_inputs([[maybe_unused]] ggml_ba
             GGML_ABORT("Fatal error");
         }
     }
-    if (has_inputs || !event_recorded.empty()) {
+    if (sync_after_copy || !event_recorded.empty()) {
         CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
     }
     if (int(copied.size()) == n_inputs) return true;
@@ -3005,8 +3009,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
         //printf("Using cublasGemmStridedBatchedEx for %s\n", dst->name);
         // with a [0, 2, 1, 3] perm. and ne02==1 the matrix strides need to be determined from dim 3:
         const int64_t sma = ne02 == 1 ? nb03/nb00 : nb02/nb00;
-        //const int64_t smb = ne12 == 1 ? s13       : s12;
-        const int64_t smb = ne12 == 1 ? nb13/nb10 : nb12/nb10;
+        const int64_t smb = ne12 == 1 ? s13 : s12;
 
         // there is no broadcast and src0, src1 are contiguous across dims 2, 3
         // use cublasGemmStridedBatchedEx
@@ -4497,7 +4500,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_add_id(ctx, dst);
             break;
         case GGML_OP_MULTI_ADD:
-            if (fusion && i + 1 < cgraph->n_nodes &
+            if (fusion && i + 1 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_SCALE &&
                 cgraph->nodes[i+1]->src[0] == dst) {
                 ggml_cuda_op_multi_add(ctx, cgraph->nodes[i+1]);

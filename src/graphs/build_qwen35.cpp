@@ -74,6 +74,8 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         } else if (lctx.cparams.mtp) {
             auto hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
             cb(hidden, "result_norm", -1);
+            // MTP reads this after graph compute; do not recycle its buffer
+            ggml_set_output(hidden);
             if (inp_out_ids && hidden->ne[1] > n_outputs) {
                 inpL = ggml_get_rows(ctx0, hidden, inp_out_ids);
             } else {
@@ -159,6 +161,8 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         } else if (lctx.cparams.mtp) {
             auto hidden = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
             cb(hidden, "result_norm", -1);
+            // MTP reads this after graph compute; do not recycle its buffer
+            ggml_set_output(hidden);
             if (inp_out_ids && hidden->ne[1] > n_outputs) {
                 inpL = ggml_get_rows(ctx0, hidden, inp_out_ids);
             } else {
@@ -239,9 +243,14 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
 
+    if (mtp_layer.nextn.shared_head_norm != nullptr) {
+        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, nullptr, LLM_NORM_RMS, cb, -1);
+    }
     cb(cur, "result_norm", -1);
+    // MTP reads this after graph compute (chained drafts); do not recycle its buffer
+    ggml_set_output(cur);
 
-    cur = build_output(lctx, ctx0, cur, model.output_mtp, mtp_layer.nextn.shared_head_norm, cb);
+    cur = build_output(lctx, ctx0, cur, model.output_mtp, cb);
     cb(cur, "result_output", -1);
 
     return cur;
@@ -303,7 +312,14 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
 
-    cur = build_output(lctx, ctx0, cur, model.output_mtp, mtp_layer.nextn.shared_head_norm, cb);
+    if (mtp_layer.nextn.shared_head_norm != nullptr) {
+        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, nullptr, LLM_NORM_RMS, cb, -1);
+    }
+    cb(cur, "result_norm", -1);
+    // MTP reads this after graph compute (chained drafts); do not recycle its buffer
+    ggml_set_output(cur);
+
+    cur = build_output(lctx, ctx0, cur, model.output_mtp, cb);
     cb(cur, "result_output", -1);
 
     return cur;

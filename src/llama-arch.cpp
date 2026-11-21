@@ -399,6 +399,7 @@ bool llm_arch_uses_qnext_state_layout(const llm_arch & arch) {
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_GLM5NEXT:
         case LLM_ARCH_RAON1:
+        case LLM_ARCH_RAON1_NANO:
         case LLM_ARCH_BAILINGMOE3:
             return true;
         default:
