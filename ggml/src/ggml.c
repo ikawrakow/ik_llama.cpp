@@ -31470,118 +31470,6 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
     return cplan;
 }
 
-// Stage 2c: TG phase profiler. Runtime-gated by GGML_TG_PROFILE=1; measures,
-// on worker 0 only, the wall time of every graph node's forward (bucketed by
-// op) and the per-node barrier wait, then prints per-call and per-window
-// averages. Worker 0's timeline is (forward_i + barrier_wait_i) contiguous
-// over the whole pass, so the sums are the true wall time of the CPU graph
-// segment(s); the difference to the benchmark's token wall time is what the
-// GPU + backend-scheduler sync are eating. GGML_TG_PROFILE_MS (default 2000)
-// sets the report window.
-// Stage 2c round 2: also accumulate gap_ns - wall time between consecutive
-// graph computes (segments) on the calling thread. cpu_total + gap == wall
-// exactly (a window starts at its first graph_begin), so gaps expose per-row
-// stalls (CUDA graph re-capture at KV bucket changes, sched sync, sampling)
-// that a pure cpu-percentage read cannot attribute.
-#define GGML_TGP_CLASSES 5 // mul_mat_id, moe_fused_up_gate, mul_mat, add, other
-
-struct ggml_tgp_state {
-    int64_t   ns[GGML_TGP_CLASSES];
-    long long calls[GGML_TGP_CLASSES];
-    int64_t   barrier_ns;
-    int64_t   gap_ns;
-    long long graphs;
-    int64_t   window_t0;
-};
-
-static struct ggml_tgp_state g_tgp;
-static int64_t g_tgp_last_end; // graph end stamp of the calling thread
-
-static inline int64_t ggml_tgp_now(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000000ll + (int64_t)ts.tv_nsec;
-}
-
-static bool ggml_tgp_enabled(void) {
-    static int s_state = -1; // benign race: both writers store the same value
-    if (s_state < 0) {
-        s_state = getenv("GGML_TG_PROFILE") != NULL ? 1 : 0;
-    }
-    return s_state != 0;
-}
-
-static int64_t ggml_tgp_window_ns(void) {
-    static int64_t s_ns = 0; // benign race: idempotent
-    if (s_ns == 0) {
-        const char * env = getenv("GGML_TG_PROFILE_MS");
-        long v = env ? atol(env) : 2000;
-        if (v < 100) {
-            v = 100;
-        }
-        s_ns = v * 1000000ll;
-    }
-    return s_ns;
-}
-
-static void ggml_tgp_accum(const struct ggml_tensor * node, int64_t span_ns) {
-    int c;
-    switch (node->op) {
-        case GGML_OP_MUL_MAT_ID:        c = 0; break;
-        case GGML_OP_MOE_FUSED_UP_GATE: c = 1; break;
-        case GGML_OP_MUL_MAT:           c = 2; break;
-        case GGML_OP_ADD:               c = 3; break;
-        default:                        c = 4; break;
-    }
-    g_tgp.ns[c]    += span_ns;
-    g_tgp.calls[c] += 1;
-}
-
-static inline void ggml_tgp_graph_begin(void) {
-    const int64_t now = ggml_tgp_now();
-    if (g_tgp.window_t0 == 0) {
-        g_tgp.window_t0 = now;
-    } else if (g_tgp_last_end != 0) {
-        g_tgp.gap_ns += now - g_tgp_last_end; // wall outside CPU graph segments
-    }
-}
-
-static void ggml_tgp_report(int64_t now_ns) {
-    static const char * names[GGML_TGP_CLASSES] = {
-        "mul_mat_id", "up_gate", "mul_mat", "add", "other",
-    };
-    const double ms = 1e6; // ns -> ms
-
-    int64_t total = g_tgp.barrier_ns;
-    for (int i = 0; i < GGML_TGP_CLASSES; ++i) {
-        total += g_tgp.ns[i];
-    }
-
-    const double wall_ms = (now_ns - g_tgp.window_t0) / ms;
-    fprintf(stderr, "[tg-profile] graphs=%lld wall=%.1f ms | cpu_total=%.1f ms (%.1f%%) | gap=%.1f ms (%.1f%%) | barrier=%.1f ms | per-call ms(calls):",
-            g_tgp.graphs, wall_ms, total / ms, wall_ms > 0 ? 100.0 * total / (wall_ms * ms) : 0.0,
-            g_tgp.gap_ns / ms, wall_ms > 0 ? 100.0 * (double)g_tgp.gap_ns / (wall_ms * ms) : 0.0,
-            g_tgp.barrier_ns / ms);
-    for (int i = 0; i < GGML_TGP_CLASSES; ++i) {
-        fprintf(stderr, " %s=%.3f(%lld)", names[i],
-                g_tgp.calls[i] ? (double)g_tgp.ns[i] / g_tgp.calls[i] / ms : 0.0,
-                g_tgp.calls[i]);
-    }
-    fprintf(stderr, "\n");
-
-    memset(&g_tgp, 0, sizeof(g_tgp));
-    g_tgp.window_t0 = now_ns;
-}
-
-static inline void ggml_tgp_graph_end(void) {
-    g_tgp.graphs++;
-    const int64_t now = ggml_tgp_now();
-    g_tgp_last_end = now;
-    if (g_tgp.window_t0 != 0 && now - g_tgp.window_t0 >= ggml_tgp_window_ns()) {
-        ggml_tgp_report(now);
-    }
-}
-
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
 
@@ -31614,14 +31502,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         /*.shared=*/ state->shared,
     };
 
-    // Stage 2c: TG phase profiler (worker 0 only, runtime-gated, ~zero cost
-    // when GGML_TG_PROFILE is unset).
-    const bool tgp_on = ggml_tgp_enabled() && state->ith == 0;
-    int64_t tgp_b0 = 0;
-    if (tgp_on) {
-        ggml_tgp_graph_begin();
-    }
-
 #if IK_PRINT_TIMING
     int64_t t_start = ggml_time_us();
     int64_t t_eval  = 0;
@@ -31635,12 +31515,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
 #endif
-        const int64_t tgp_t0 = tgp_on ? ggml_tgp_now() : 0;
         node_n = ggml_compute_forward(&params, node, cgraph, node_n);
-        if (tgp_on) {
-            ggml_tgp_accum(node, ggml_tgp_now() - tgp_t0);
-            tgp_b0 = ggml_tgp_now();
-        }
 #if IK_PRINT_TIMING
         int64_t tim2 = ggml_time_us();
         t_eval += tim2 - tim1;
@@ -31652,17 +31527,9 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         ggml_barrier(state->shared);
 
-        if (tgp_on) {
-            g_tgp.barrier_ns += ggml_tgp_now() - tgp_b0;
-        }
-
         if (state->shared->ec != GGML_STATUS_SUCCESS) {
             break;
         }
-    }
-
-    if (tgp_on) {
-        ggml_tgp_graph_end();
     }
 #if IK_PRINT_TIMING
     int64_t t_end = ggml_time_us();
