@@ -14,7 +14,7 @@
 #define FABSUM_PV_BLOCK 16
 #define FABSUM_QK_BLOCK 8
 
-template<int D, int ncols, int nwarps, int parallel_blocks, bool use_softcap> // D == head size
+template<int D, int ncols, int nwarps, int parallel_blocks, bool use_softcap, bool use_rel_bias> // D == head size
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 __launch_bounds__(nwarps*WARP_SIZE, 1)
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
@@ -24,6 +24,7 @@ static __global__ void flash_attn_tile_ext_f16(
         const char * __restrict__ V,
         const char * __restrict__ mask,
         const char * __restrict__ sinks,
+        const fattn_rel_bias rel_bias,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -185,6 +186,10 @@ static __global__ void flash_attn_tile_ext_f16(
                     sum = __low2half(sum2[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps]) + __high2half(sum2[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps]);
                 }
                 sum += mask ? slopeh*maskh[j_KQ*stride_mask + k_VKQ_0 + i_KQ] : __float2half(0.0f);
+                if constexpr (use_rel_bias) {
+                    const int iq = ic0 + j_KQ < ne01 ? ic0 + j_KQ : ne01 - 1;
+                    sum = __float2half(__half2float(sum) + rel_bias.get(iq, blockIdx.y, k_VKQ_0 + i_KQ));
+                }
 
                 kqmax_new[j_KQ_0/nwarps] = ggml_cuda_hmax(kqmax_new[j_KQ_0/nwarps], sum);
 
@@ -333,13 +338,15 @@ void launch_fattn_tile_f16_64_128(ggml_backend_cuda_context & ctx, ggml_tensor *
         case  64: {
             constexpr int      D = 64;
             constexpr int nwarps = 8;
-            fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f16<D, cols_per_block, nwarps, parallel_blocks, use_softcap>;
+            fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f16<D, cols_per_block, nwarps, parallel_blocks, use_softcap, false>;
             launch_fattn<D, D, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         } break;
         case 128: {
             constexpr int      D = 128;
             constexpr int nwarps = 8;
-            fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f16<D, cols_per_block, nwarps, parallel_blocks, use_softcap>;
+            fattn_kernel_t fattn_kernel = dst->src[6] ?
+                flash_attn_tile_ext_f16<D, cols_per_block, nwarps, parallel_blocks, use_softcap, true> :
+                flash_attn_tile_ext_f16<D, cols_per_block, nwarps, parallel_blocks, use_softcap, false>;
             launch_fattn<D, D, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         } break;
         default: {
@@ -396,7 +403,7 @@ bool ggml_cuda_fattn_tile_f16_is_supported([[maybe_unused]] ggml_backend_cuda_co
     return K->ne[0] == 64 || K->ne[0] == 128;
 }
 
-template<int D, int ncols, int nwarps, int parallel_blocks, bool use_softcap> // D == head size
+template<int D, int ncols, int nwarps, int parallel_blocks, bool use_softcap, bool use_rel_bias> // D == head size
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 __launch_bounds__(nwarps*WARP_SIZE, 1)
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
@@ -406,6 +413,7 @@ static __global__ void flash_attn_tile_ext_f16_fabsum(
         const char * __restrict__ V,
         const char * __restrict__ mask,
         const char * __restrict__ sinks,
+        const fattn_rel_bias rel_bias,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -580,6 +588,10 @@ static __global__ void flash_attn_tile_ext_f16_fabsum(
                     sum = softcap * tanhf(sum);
                 }
                 sum += mask ? slopef*__half2float(maskh[j_KQ*stride_mask + k_VKQ_0 + i_KQ]) : 0.0f;
+                if constexpr (use_rel_bias) {
+                    const int iq = ic0 + j_KQ < ne01 ? ic0 + j_KQ : ne01 - 1;
+                    sum += rel_bias.get(iq, blockIdx.y, k_VKQ_0 + i_KQ);
+                }
 
                 kqmax_new[j_KQ_0/nwarps] = fmaxf(kqmax_new[j_KQ_0/nwarps], sum);
 
@@ -743,13 +755,15 @@ void launch_fattn_tile_f16_fabsum_64_128(ggml_backend_cuda_context & ctx, ggml_t
         case  64: {
             constexpr int      D = 64;
             constexpr int nwarps = 8;
-            fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f16_fabsum<D, cols_per_block, nwarps, parallel_blocks, use_softcap>;
+            fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f16_fabsum<D, cols_per_block, nwarps, parallel_blocks, use_softcap, false>;
             launch_fattn<D, D, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         } break;
         case 128: {
             constexpr int      D = 128;
             constexpr int nwarps = 8;
-            fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f16_fabsum<D, cols_per_block, nwarps, parallel_blocks, use_softcap>;
+            fattn_kernel_t fattn_kernel = dst->src[6] ?
+                flash_attn_tile_ext_f16_fabsum<D, cols_per_block, nwarps, parallel_blocks, use_softcap, true> :
+                flash_attn_tile_ext_f16_fabsum<D, cols_per_block, nwarps, parallel_blocks, use_softcap, false>;
             launch_fattn<D, D, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         } break;
         default: {

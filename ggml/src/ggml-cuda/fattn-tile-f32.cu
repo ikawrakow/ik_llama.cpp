@@ -37,7 +37,7 @@
 // each 64-element chunk (an artifact of its fp32 staging layout). Both are all-fp32 sums of the same
 // exact products; individual scores may differ by ~1 ulp. The P.V accumulation order is bit-identical.
 
-template<int D, int ncols, int nwarps, int parallel_blocks, bool use_softcap> // D == head size
+template<int D, int ncols, int nwarps, int parallel_blocks, bool use_softcap, bool use_rel_bias> // D == head size
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 __launch_bounds__(nwarps*WARP_SIZE, 2)
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
@@ -47,6 +47,7 @@ static __global__ void flash_attn_tile_ext_f32(
         const char * __restrict__ V,
         const char * __restrict__ mask,
         const char * __restrict__ sinks,
+        const fattn_rel_bias rel_bias,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -211,6 +212,10 @@ static __global__ void flash_attn_tile_ext_f32(
                 }
 
                 sum[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps] += mask ? slope*__half2float(maskh[j_KQ*stride_mask + k_VKQ_0 + i_KQ]) : 0.0f;
+                if constexpr (use_rel_bias) {
+                    const int iq = ic0 + j_KQ < ne01 ? ic0 + j_KQ : ne01 - 1;
+                    sum[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps] += rel_bias.get(iq, blockIdx.y, k_VKQ_0 + i_KQ);
+                }
 
                 kqmax_new[j_KQ_0/nwarps] = fmaxf(kqmax_new[j_KQ_0/nwarps], sum[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps]);
             }
@@ -359,13 +364,15 @@ void launch_fattn_tile_f32_64_128_256(ggml_backend_cuda_context & ctx, ggml_tens
         case  64: {
             constexpr int      D = 64;
             constexpr int nwarps = 8;
-            fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f32<D, cols_per_block, nwarps, parallel_blocks, use_softcap>;
+            fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f32<D, cols_per_block, nwarps, parallel_blocks, use_softcap, false>;
             launch_fattn<D, D, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         } break;
         case 128: {
             constexpr int      D = 128;
             constexpr int nwarps = 8;
-            fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f32<D, cols_per_block, nwarps, parallel_blocks, use_softcap>;
+            fattn_kernel_t fattn_kernel = dst->src[6] ?
+                flash_attn_tile_ext_f32<D, cols_per_block, nwarps, parallel_blocks, use_softcap, true> :
+                flash_attn_tile_ext_f32<D, cols_per_block, nwarps, parallel_blocks, use_softcap, false>;
             launch_fattn<D, D, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         } break;
         case 256: {
@@ -373,7 +380,7 @@ void launch_fattn_tile_f32_64_128_256(ggml_backend_cuda_context & ctx, ggml_tens
             if constexpr (cols_per_block <= 16) {
                 constexpr int      D = 256;
                 constexpr int nwarps = 8;
-                fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f32<D, cols_per_block, nwarps, parallel_blocks, use_softcap>;
+                fattn_kernel_t fattn_kernel = flash_attn_tile_ext_f32<D, cols_per_block, nwarps, parallel_blocks, use_softcap, false>;
                 launch_fattn<D, D, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
             } else {
                 GGML_ABORT("tile_f32 D == 256 requires cols_per_block <= 16 (shared-memory budget).");

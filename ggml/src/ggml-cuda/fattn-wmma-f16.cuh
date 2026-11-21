@@ -13,7 +13,7 @@
 #endif // FP16_MMA_AVAILABLE
 
 // Dk == K head size, Dv = V head size, VKQ_stride == num VKQ rows calculated in parallel:
-template<int Dk, int Dv, int ncols, int nwarps, int VKQ_stride, int parallel_blocks, typename KQ_acc_t, bool use_softcap, bool use_sinks>
+template<int Dk, int Dv, int ncols, int nwarps, int VKQ_stride, int parallel_blocks, typename KQ_acc_t, bool use_softcap, bool use_sinks, bool use_rel_bias>
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 __launch_bounds__(nwarps*WARP_SIZE, 1)
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
@@ -23,6 +23,7 @@ static __global__ void flash_attn_ext_f16(
         const char * __restrict__ V,
         const char * __restrict__ mask,
         const char * __restrict__ sinks,
+        const fattn_rel_bias rel_bias,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -242,6 +243,10 @@ static __global__ void flash_attn_ext_f16(
                     const int k = k0 + threadIdx.x;
 
                     KQ_f_tmp[k0/WARP_SIZE] += mask ? __half2float(slopeh*maskh[j*(nb31/sizeof(half)) + k_VKQ_0 + k]) : 0.0f;
+                    if constexpr (use_rel_bias) {
+                        const int iq = ic0 + j < ne01 ? ic0 + j : ne01 - 1;
+                        KQ_f_tmp[k0/WARP_SIZE] += rel_bias.get(iq, blockIdx.y, k_VKQ_0 + k);
+                    }
                     KQ_max_new = max(KQ_max_new, KQ_f_tmp[k0/WARP_SIZE]);
                 }
                 KQ_max_new = warp_reduce_max(KQ_max_new);
@@ -295,6 +300,14 @@ static __global__ void flash_attn_ext_f16(
                     const int k = k0 + threadIdx.x;
 
                     KQ2_tmp[k0/WARP_SIZE] += mask ? slope2*mask2[j*(nb31/sizeof(half2)) + k_VKQ_0/2 + k] : make_half2(0.0f, 0.0f);
+                    if constexpr (use_rel_bias) {
+                        const int iq = ic0 + j < ne01 ? ic0 + j : ne01 - 1;
+                        const int ik = k_VKQ_0 + 2*k;
+                        const float2 score = __half22float2(KQ2_tmp[k0/WARP_SIZE]);
+                        KQ2_tmp[k0/WARP_SIZE] = make_half2(
+                            score.x + rel_bias.get(iq, blockIdx.y, ik),
+                            score.y + rel_bias.get(iq, blockIdx.y, ik + 1));
+                    }
                     KQ_max_new = ggml_cuda_hmax2(KQ_max_new, KQ2_tmp[k0/WARP_SIZE]);
                 }
                 KQ_max_new = __half2half2(warp_reduce_max(ggml_cuda_hmax(__low2half(KQ_max_new), __high2half(KQ_max_new))));
@@ -478,15 +491,27 @@ static_assert(get_VKQ_stride( 80, 2, 16) ==  16, "Test failed.");
 static_assert(get_VKQ_stride( 80, 4, 16) ==  16, "Test failed.");
 
 template <int Dk, int Dv, int ncols, int nwarps, int VKQ_stride, int parallel_blocks, typename KQ_acc_t>
-static fattn_kernel_t get_flash_attn_ext_f16(const bool use_softcap, const bool use_sinks) {
+static fattn_kernel_t get_flash_attn_ext_f16(const bool use_softcap, const bool use_sinks, const bool use_rel_bias) {
+    if constexpr (Dk == 128 && Dv == 128) {
+        if (use_rel_bias) {
+            if (use_sinks) {
+                return use_softcap ?
+                    flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, true,  true,  true> :
+                    flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, false, true,  true>;
+            }
+            return use_softcap ?
+                flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, true,  false, true> :
+                flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, false, false, true>;
+        }
+    }
     if (use_sinks) {
         return use_softcap ?
-            flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, true,  true> :
-            flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, false, true>;
+            flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, true,  true,  false> :
+            flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, false, true,  false>;
     }
     return use_softcap ?
-        flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, true,  false> :
-        flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, false, false>;
+        flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, true,  false, false> :
+        flash_attn_ext_f16<Dk, Dv, ncols, nwarps, VKQ_stride, parallel_blocks, KQ_acc_t, false, false, false>;
 }
 
 template <int Dk, int Dv, int cols_per_block, typename KQ_acc_t>
@@ -502,21 +527,22 @@ void ggml_cuda_flash_attn_ext_wmma_f16_case(ggml_backend_cuda_context & ctx, ggm
     float softcap;
     memcpy(&softcap, (const float *) dst->op_params + 2, sizeof(float));
     const bool use_sinks = dst->src[4] != nullptr;
+    const bool use_rel_bias = dst->src[6] != nullptr;
 
     if (4*blocks_num_pb1 < 2*nsm) {
         constexpr int parallel_blocks = 4;
-        fattn_kernel_t fattn_kernel = get_flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t>(softcap != 0.0f, use_sinks);
+        fattn_kernel_t fattn_kernel = get_flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t>(softcap != 0.0f, use_sinks, use_rel_bias);
         launch_fattn<Dk, Dv, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         return;
     }
     if (2*blocks_num_pb1 < 2*nsm) {
         constexpr int parallel_blocks = 2;
-        fattn_kernel_t fattn_kernel = get_flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t>(softcap != 0.0f, use_sinks);
+        fattn_kernel_t fattn_kernel = get_flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t>(softcap != 0.0f, use_sinks, use_rel_bias);
         launch_fattn<Dk, Dv, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
         return;
     }
     constexpr int parallel_blocks = 1;
-    fattn_kernel_t fattn_kernel = get_flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t>(softcap != 0.0f, use_sinks);
+    fattn_kernel_t fattn_kernel = get_flash_attn_ext_f16<Dk, Dv, cols_per_block, nwarps, get_VKQ_stride(Dv, nwarps, frag_m), parallel_blocks, KQ_acc_t>(softcap != 0.0f, use_sinks, use_rel_bias);
     launch_fattn<Dk, Dv, parallel_blocks>(ctx, dst, fattn_kernel, nwarps, cols_per_block, true, true);
 }
 
