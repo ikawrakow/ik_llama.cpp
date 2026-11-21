@@ -519,6 +519,13 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
     bool split_requested = ctx == split_ctx;
     ctx = get_context_for_tensor(ctx, name);
     if (actual_context) *actual_context = ctx;
+    // a tied output head that lands in the same context as token_embd can use token_embd itself
+    // instead of a second copy of the same data
+    if ((flags & llama_model_loader::TENSOR_DUPLICATED) && model.tok_embd && ctx != split_ctx &&
+        name == ggml_get_name(model.tok_embd) && ggml_get_tensor(ctx, name.c_str()) == model.tok_embd &&
+        ne.size() == 2 && ne[0] == model.tok_embd->ne[0] && ne[1] == model.tok_embd->ne[1]) {
+        return model.tok_embd;
+    }
     auto tensor = ml.create_tensor(ctx, name, ne, flags);
     if (tensor && ctx == split_ctx) {
         split_tensors.insert(tensor);
