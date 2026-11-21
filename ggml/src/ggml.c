@@ -19918,11 +19918,11 @@ static void ggml_compute_forward_mul_mat_id(
         // placement right after loading; this re-checks the very stack this
         // op is about to stream, after cudaHostRegister/prefault/THP and
         // anything else had a chance to move pages. Costs n_band*12
-        // move_pages queries, once per process. GGML_NUMA_MOE_PROBE=0 opts
-        // out.
+        // move_pages queries, once per process. GGML_NUMA_MOE_PROBE=1 opts
+        // in.
         {
             const char * probe_env = getenv("GGML_NUMA_MOE_PROBE");
-            if (probe_env == NULL || probe_env[0] != '0') {
+            if (probe_env != NULL && probe_env[0] == '1') {
                 static atomic_int s_probe_done = 0;
                 int expected = 0;
                 if (atomic_compare_exchange_strong(&s_probe_done, &expected, 1)) {
