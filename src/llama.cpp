@@ -6518,27 +6518,37 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
     if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP) {
         const auto & cache = lctx.kv_self;
-        const int extent = hparams.n_relative_extent;
-        auto fill_distances = [&](ggml_tensor * ids, bool compact) {
-            const int width = ids->ne[0];
-            auto * data = (int32_t *) ids->data;
-            GGML_ASSERT(ggml_backend_buffer_is_host(ids->buffer));
-            for (int t = 0; t < batch.n_tokens; ++t) {
+        const int extent = hparams.inkling_relative_extent_max();
+        if (cparams.flash_attn) {
+            ggml_backend_tensor_set(lctx.inp_pos_q, batch.pos, 0, batch.n_tokens * sizeof(llama_pos));
+        }
+        auto fill_positions = [&](ggml_tensor * input, bool compact) {
+            if (!input) {
+                return;
+            }
+            const int width = input->ne[0];
+            auto * data = (int32_t *) input->data;
+            GGML_ASSERT(ggml_backend_buffer_is_host(input->buffer));
+            auto key_position = [&](int row) {
+                return compact ? cache.pos_base_swa + (llama_pos) lctx.swa_window_view.win_off + row - (llama_pos) cache.sink_rows
+                               : cache.cells[row].pos;
+            };
+            if (cparams.flash_attn) {
                 for (int c = 0; c < width; ++c) {
-                    const llama_pos key_pos = compact
-                        ? cache.pos_base_swa + (llama_pos) lctx.swa_window_view.win_off + c - (llama_pos) cache.sink_rows
-                        : cache.cells[c].pos;
-                    const int distance = key_pos >= 0 ? batch.pos[t] - key_pos : extent;
-                    data[(size_t) t * width + c] = distance >= 0 && distance < extent ? distance : extent;
+                    data[c] = key_position(c);
+                }
+            } else {
+                for (int t = 0; t < batch.n_tokens; ++t) {
+                    for (int c = 0; c < width; ++c) {
+                        const llama_pos key_pos = key_position(c);
+                        const int distance = key_pos >= 0 ? batch.pos[t] - key_pos : extent;
+                        data[(size_t) t * width + c] = distance >= 0 && distance < extent ? distance : extent;
+                    }
                 }
             }
         };
-        if (lctx.inp_rel_pos) {
-            fill_distances(lctx.inp_rel_pos, false);
-        }
-        if (lctx.inp_rel_pos_swa) {
-            fill_distances(lctx.inp_rel_pos_swa, true);
-        }
+        fill_positions(cparams.flash_attn ? lctx.inp_pos_k : lctx.inp_rel_pos, false);
+        fill_positions(cparams.flash_attn ? lctx.inp_pos_k_swa : lctx.inp_rel_pos_swa, true);
         if (lctx.inp_scale) {
             lctx.scale_data.resize(batch.n_tokens);
             for (int t = 0; t < batch.n_tokens; ++t) {

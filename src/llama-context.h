@@ -722,6 +722,9 @@ struct llama_context {
     struct ggml_tensor * inp_s_seq;       // I32 [n_kv, n_batch]
     struct ggml_tensor * inp_s_seq_qnext; // I32 [1, n_batch]
     struct ggml_tensor * inp_ssm_ids;     // I32 [n_seqs] — ssm_scan source state ids (Mamba-2 / Nemotron-H)
+    struct ggml_tensor * inp_pos_q = nullptr;
+    struct ggml_tensor * inp_pos_k = nullptr;
+    struct ggml_tensor * inp_pos_k_swa = nullptr;
     struct ggml_tensor * inp_rel_pos = nullptr;
     struct ggml_tensor * inp_rel_pos_swa = nullptr;
     struct ggml_tensor * inp_ple_rows = nullptr; // I32 [ple_n_heads * n_batch], qwen4exp n-gram rows

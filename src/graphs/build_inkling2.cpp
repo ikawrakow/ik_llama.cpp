@@ -110,7 +110,7 @@ static ggml_tensor * inkling_clip(ggml_context * ctx, ggml_tensor * x, ggml_tens
 
 static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf, int il,
         ggml_tensor * uq, ggml_tensor * uk, ggml_tensor * uv, ggml_tensor * mask,
-        ggml_tensor * indices, ggml_tensor * tau) {
+        ggml_tensor * tau) {
     auto ctx = llm.ctx0;
     const auto & layer = llm.model.layers[il];
     const auto & hp = llm.hparams;
@@ -138,11 +138,21 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
     auto v = inkling_conv(llm, gf, il, project(layer.wv, uv), dk * kv_heads, layer.attn_v_conv,
             tau ? project(layer.attn_v_conv_proj, uv) : nullptr);
     v = ggml_rms_norm(ctx, ggml_reshape_3d(ctx, v, dv, kv_heads, tokens), llm.norm_rms_eps);
+    if (llm.cparams.k_cache_hadamard) {
+        if (int block_size = llm.model.hadamard_size_k(il); block_size > 0) {
+            q = ggml_hadamard(ctx, q, block_size);
+            k = ggml_hadamard(ctx, k, block_size);
+        }
+    }
+    const int v_hadamard = llm.cparams.v_cache_hadamard ? llm.model.hadamard_size_v(il) : 0;
+    if (v_hadamard > 0) {
+        v = ggml_hadamard(ctx, v, v_hadamard);
+    }
     const bool compact = kv.is_compacted(il);
     llm.llm_build_kv_store(llm.lctx, ctx, hp, llm.cparams, kv, gf, k, v, tokens,
             compact ? llm.swa_head : llm.kv_head, llm.cb, il);
 
-    const int count = indices->ne[0];
+    const int count = mask->ne[0];
     const int offset = compact ? llm.lctx.swa_window_view.win_off : 0;
     auto cache_view = [&](ggml_tensor * cache, int dim) {
         const size_t stride = ggml_row_size(cache->type, dim);
@@ -150,35 +160,47 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
         return ggml_view_3d(ctx, cache, dim, kv_heads, count, stride, row, offset * row);
     };
     auto keys = ggml_permute(ctx, cache_view(kv.k_l[il], dk), 0, 2, 1, 3);
-    auto kq = ggml_mul_mat(ctx, keys, ggml_permute(ctx, q, 0, 2, 1, 3));
-    ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-    kq = ggml_scale(ctx, kq, 1.0f / std::sqrt(float(dk)));
+    q = ggml_permute(ctx, q, 0, 2, 1, 3);
+    const float scale = 1.0f / std::sqrt(float(dk));
 
     auto table = ggml_mul_mat(ctx, layer.attn_rel_bias, r);
-    table = ggml_pad(ctx, table, 1, 0, 0, 0);
+    table = ggml_pad(ctx, table, hp.inkling_relative_extent_max() + 1 - table->ne[0], 0, 0, 0);
     table = ggml_cont(ctx, ggml_transpose(ctx, table));
     auto sinks = ggml_reshape_3d(ctx, project(layer.attn_sink_proj, uq), heads, 1, tokens);
     table = ggml_sub(ctx, table, sinks);
-    auto bias = ggml_get_rows(ctx, table, indices);
-    bias = ggml_cont(ctx, ggml_permute(ctx, bias, 2, 0, 1, 3));
-    auto probs = ggml_soft_max_ext(ctx, ggml_add(ctx, kq, bias), mask, 1.0f, 0.0f);
     auto zero = ggml_fill(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, heads), 0.0f);
-    ggml_soft_max_add_sinks(probs, zero);
-
-    auto values = kv.v_l[il];
-    if (kv.v_trans) {
-        const size_t step = ggml_element_size(values);
-        const size_t stride = kv.rows(il) * step;
-        values = ggml_view_3d(ctx, values, count, dv, kv_heads, stride, dv * stride, offset * step);
-    } else {
-        values = cache_view(values, dv);
-        if (ggml_is_quantized(values->type)) {
-            values = ggml_cast(ctx, values, GGML_TYPE_F32);
+    ggml_tensor * result;
+    if (llm.flash_attn) {
+        auto v_cache = kv.v_l[il];
+        const size_t row = ggml_row_size(v_cache->type, dv * kv_heads);
+        auto values = ggml_view_3d(ctx, v_cache, dv, count, kv_heads, row, ggml_row_size(v_cache->type, dv), offset * row);
+        table = ggml_cont(ctx, ggml_transpose(ctx, table));
+        auto pos_k = compact ? llm.lctx.inp_pos_k_swa : llm.lctx.inp_pos_k;
+        result = ggml_flash_attn_ext(ctx, q, keys, values, mask, scale, 0.0f, 0.0f);
+        ggml_flash_attn_ext_add_rel_bias(result, table, llm.lctx.inp_pos_q, pos_k);
+        ggml_flash_attn_ext_add_sinks(result, zero);
+        const int n_swa = hp.swa_layers[il] ? hp.n_swa : 0;
+        if (n_swa > 0 && !kv.cells_disordered && llm.cparams.n_seq_max == 1) {
+            result->op_params[4] = n_swa;
         }
-        values = ggml_cont(ctx, ggml_permute(ctx, values, 1, 2, 0, 3));
+        llm.cb(result, "fa", il);
+    } else {
+        auto kq = ggml_mul_mat(ctx, keys, q);
+        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        kq = ggml_scale(ctx, kq, scale);
+        auto indices = compact ? llm.lctx.inp_rel_pos_swa : llm.lctx.inp_rel_pos;
+        auto bias = ggml_get_rows(ctx, table, indices);
+        bias = ggml_cont(ctx, ggml_permute(ctx, bias, 2, 0, 1, 3));
+        auto probs = ggml_soft_max_ext(ctx, ggml_add(ctx, kq, bias), mask, 1.0f, 0.0f);
+        ggml_soft_max_add_sinks(probs, zero);
+
+        auto values = ggml_cont(ctx, ggml_permute(ctx, cache_view(kv.v_l[il], dv), 1, 2, 0, 3));
+        result = ggml_mul_mat(ctx, values, probs);
+        result = ggml_cont(ctx, ggml_permute(ctx, result, 0, 2, 1, 3));
     }
-    auto result = ggml_mul_mat(ctx, values, probs);
-    result = ggml_cont(ctx, ggml_permute(ctx, result, 0, 2, 1, 3));
+    if (v_hadamard > 0) {
+        result = ggml_hadamard(ctx, result, v_hadamard);
+    }
     result = ggml_reshape_2d(ctx, result, dv * heads, tokens);
     llm.cb(result, "kqv_merged_cont", il);
     auto gated = ggml_fused_mul_unary(ctx, project(layer.wqkv_gate, uq), result, GGML_UNARY_OP_SIGMOID);
@@ -199,15 +221,21 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
     if (has_swa) {
         swa_mask = compact ? build_swa_mask_for_graph(hparams.n_swa, true) : build_inp_KQ_mask_swa();
     }
-    auto indices = [&](ggml_tensor * visibility, const char * name) {
-        auto ids = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, visibility->ne[0], n_tokens);
+    auto input = [&](int width, int rows, const char * name) {
+        auto ids = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, width, rows);
         cb(ids, name, -1);
         ggml_set_input(ids);
         return ids;
     };
     auto full_width = mask ? mask : swa_mask;
-    lctx.inp_rel_pos = has_full || !compact ? indices(full_width, "inp_rel_pos") : nullptr;
-    lctx.inp_rel_pos_swa = compact ? indices(swa_mask, "inp_rel_pos_swa") : nullptr;
+    if (flash_attn) {
+        lctx.inp_pos_q = input(full_width->ne[1], 1, "inp_pos_q");
+        lctx.inp_pos_k = has_full || !compact ? input(full_width->ne[0], 1, "inp_pos_k") : nullptr;
+        lctx.inp_pos_k_swa = compact ? input(swa_mask->ne[0], 1, "inp_pos_k_swa") : nullptr;
+    } else {
+        lctx.inp_rel_pos = has_full || !compact ? input(full_width->ne[0], n_tokens, "inp_rel_pos") : nullptr;
+        lctx.inp_rel_pos_swa = compact ? input(swa_mask->ne[0], n_tokens, "inp_rel_pos_swa") : nullptr;
+    }
 
     auto inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
     auto x = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
@@ -266,8 +294,7 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         } else {
             k = v = q;
         }
-        auto ids = kv_self.is_compacted(il) ? lctx.inp_rel_pos_swa : lctx.inp_rel_pos;
-        auto residual = inkling_attention(*this, gf, il, q, k, v, full ? mask : swa_mask, ids, full ? lctx.inp_scale : nullptr);
+        auto residual = inkling_attention(*this, gf, il, q, k, v, full ? mask : swa_mask, full ? lctx.inp_scale : nullptr);
         if (ip % hparams.attn_res_block_size == 0) {
             blocks.push_back(x);
         } else {
@@ -278,11 +305,11 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         ffn_input = ggml_fused_rms_norm(ctx0, blend(ffn_input, 3), layer.ffn_norm, norm_rms_eps);
         auto ffn = llm_build_moe_ffn(ctx0, lctx, ffn_input, layer.ffn_gate_inp,
                 nullptr, nullptr, layer.ffn_down_exps, layer.ffn_exp_probs_b,
-                n_expert, n_expert_used, LLM_FFN_SITU, true, true, hparams.expert_weights_scale,
-                LLM_EXPERT_GATING_FUNC_SIGMOID, cb, il, gf, false, layer.ffn_up_gate_exps,
-                nullptr, nullptr, layer.ffn_down_exps_s);
+                n_expert, n_expert_used < n_expert ? hparams.n_expert_used_layer(il) : n_expert_used, LLM_FFN_SITU, true, true, hparams.expert_weights_scale,
+                LLM_EXPERT_GATING_FUNC_SIGMOID, cb, il, gf, false, layer.ffn_up_gate_exps);
         const int offset = (hparams.n_embd_k_gqa(il) + hparams.n_embd_v_gqa(il) + hparams.n_embd);
         x = ggml_add(ctx0, residual, inkling_conv(*this, gf, il, ffn, offset, layer.ffn_post_conv));
+        x = lctx.cvec.apply_to(ctx0, x, il);
         cb(x, "l_out", il);
     }
 
