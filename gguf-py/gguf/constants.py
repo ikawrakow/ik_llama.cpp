@@ -229,6 +229,19 @@ class Keys:
         NUM_LOOPS            = "{arch}.num_loops"
         SKIP_LOOP_FINAL_NORM = "{arch}.skip_loop_final_norm"
 
+    class Loop:
+        START = "{arch}.loop.start"
+        END   = "{arch}.loop.end"
+        COUNT = "{arch}.loop.count"
+
+    class MHC:
+        START          = "{arch}.mhc.start"
+        END            = "{arch}.mhc.end"
+        STREAMS        = "{arch}.mhc.streams"
+        ITERATIONS     = "{arch}.mhc.iterations"
+        FIXED_IDENTITY = "{arch}.mhc.fixed_identity"
+        PRE_SCALE      = "{arch}.mhc.pre_scale"
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
@@ -242,6 +255,7 @@ class GGUFType:
 
 class MODEL_ARCH(IntEnum):
     QWEN35 = auto()
+    SENSENOVA_LOOP = auto()
     QWEN4EXP = auto()
 
     LLAMA        = auto()
@@ -547,6 +561,7 @@ class MODEL_TENSOR(IntEnum):
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.STEP5:          "step5",
     MODEL_ARCH.QWEN35: 'qwen35',
+    MODEL_ARCH.SENSENOVA_LOOP: 'sensenova_loop',
     MODEL_ARCH.QWEN4EXP: 'qwen4exp',
 
     MODEL_ARCH.LLAMA:          "llama",
@@ -951,6 +966,37 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_ENORM,
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.SENSENOVA_LOOP: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.HC_ATTN_FN,
+        MODEL_TENSOR.HC_FFN_FN,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
     MODEL_ARCH.LLAMA: [
