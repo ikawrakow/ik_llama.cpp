@@ -944,6 +944,9 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
 
 int llama_context::max_nodes(int n_tokens, int n_kv) const {
     int max_nodes = model.max_nodes(n_tokens);
+    if (model.arch == LLM_ARCH_INKLING2_LOOP && cparams.n_seq_max > 1) {
+        max_nodes += 8 * model.hparams.n_layer * (cparams.n_seq_max - 1);
+    }
     max_nodes += llama_openpangu_chunked_graph_nodes(model, cparams, n_tokens, n_kv);
     if (model.arch == LLM_ARCH_MINIMAX_M3 && !kv_self.kr_l.empty()) {
         // build_minimaxm3 scores each MINIMAXM3_MSA_SCORE_CHUNK query rows separately, 16 nodes per chunk and layer
@@ -1672,6 +1675,14 @@ static bool llama_kv_cache_init(
                     return false;
                 }
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
+            }
+
+            if (model.arch == LLM_ARCH_INKLING2_LOOP) {
+                const uint32_t state_width = hparams.inkling_state_width(i);
+                s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, state_width, qnext_state_slots);
+                ggml_format_name(s, "cache_s_l%d", i);
+                cache.s_l[i] = s;
+                cache.s_l_direct_seq_cp = true;
             }
 
             // a PLE layer that is not recurrent has no state row to extend, so it gets one
@@ -2897,7 +2908,7 @@ static void llama_kv_cache_seq_cp(
     }
 
     const bool has_qnext_state = llama_kv_has_qnext_state_storage(cache);
-    if (has_qnext_state &&
+    if (has_qnext_state && !cache.s_l_direct_seq_cp &&
             llama_kv_qnext_seq_id_in_range(cache, seq_id_dst) &&
             llama_kv_qnext_seq_id_in_range(cache, seq_id_src) &&
             (uint32_t) seq_id_dst < cache.size &&
@@ -3097,6 +3108,9 @@ static void llama_kv_cache_defrag(struct llama_kv_cache & cache) {
 void llm_load_arch(llama_model_loader & ml, llama_model & model) {
     model.arch = ml.get_arch();
     if (model.arch == LLM_ARCH_UNKNOWN) {
+        if (ml.get_arch_name() == "inkling2") {
+            throw std::runtime_error("non-loop inkling2 is unsupported: missing inkling2.loop.core_start for Inkling 2 Mini");
+        }
         throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "'");
     }
 }
@@ -4506,6 +4520,13 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     // looped models have one KV slot per logical layer
     const double kv_loops = model.hparams.n_layer_all > (uint32_t) n_layer
         ? double(model.hparams.n_layer_all) / n_layer : 1.0;
+    std::vector<int> inkling_visits;
+    if (model.arch == LLM_ARCH_INKLING2_LOOP) {
+        inkling_visits.resize(n_layer);
+        for (uint32_t il = 0; il < model.hparams.n_layer_all; ++il) {
+            ++inkling_visits[model.hparams.phys_layer(il)];
+        }
+    }
     std::vector<double> result(n_layer+1, 0);
     std::vector<double> compute(n_layer+1, 0);
     struct mla_tensors {
@@ -4592,6 +4613,11 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             output_misc_size += size;
             continue;
         }
+        if (model.arch == LLM_ARCH_INKLING2_LOOP && (name == "output_res_query.weight" ||
+                name == "loop_res_query.weight" || name == "loop_kv_res_query.weight")) {
+            output_misc_size += size;
+            continue;
+        }
         auto pos = name.find("blk.");
         if (pos != 0) {
             LLAMA_LOG_WARN("Oops: tensor with strange name %s\n", name.c_str());
@@ -4643,7 +4669,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         if (!is_mla) {
             auto ttype = llm_tensor_type(model.arch, name, il);
             if (ttype == LLM_TENSOR_UNKNOWN) {
-                LLAMA_LOG_WARN("Oops: got unknown for tensor %s\n", name.c_str());
+                if (model.arch != LLM_ARCH_INKLING2_LOOP || name.find(".loop_") == std::string::npos) {
+                    LLAMA_LOG_WARN("Oops: got unknown for tensor %s\n", name.c_str());
+                }
                 continue;
             }
             if (ttype == LLM_TENSOR_FFN_GATE_UP_EXPS || ttype == LLM_TENSOR_FFN_GATE_EXPS || ttype == LLM_TENSOR_FFN_UP_EXPS || ttype == LLM_TENSOR_FFN_DOWN_EXPS) {
@@ -4727,7 +4755,8 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
-        auto kv_size = kv_loops * model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn,
+        const double kv_visits = model.arch == LLM_ARCH_INKLING2_LOOP ? inkling_visits[il] : kv_loops;
+        auto kv_size = kv_visits * model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn,
                                         swa_compress, (uint32_t) n_ubatch);
         LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f   %9.2f  MiB\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024., compute[il]/1024./1024.);
         max_compute = std::max(max_compute, compute[il]);
@@ -6487,6 +6516,49 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 #endif
     }
 
+    if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP) {
+        const auto & cache = lctx.kv_self;
+        const int extent = hparams.inkling_relative_extent_max();
+        if (cparams.flash_attn) {
+            ggml_backend_tensor_set(lctx.inp_pos_q, batch.pos, 0, batch.n_tokens * sizeof(llama_pos));
+        }
+        auto fill_positions = [&](ggml_tensor * input, bool compact) {
+            if (!input) {
+                return;
+            }
+            const int width = input->ne[0];
+            auto * data = (int32_t *) input->data;
+            GGML_ASSERT(ggml_backend_buffer_is_host(input->buffer));
+            auto key_position = [&](int row) {
+                return compact ? cache.pos_base_swa + (llama_pos) lctx.swa_window_view.win_off + row - (llama_pos) cache.sink_rows
+                               : cache.cells[row].pos;
+            };
+            if (cparams.flash_attn) {
+                for (int c = 0; c < width; ++c) {
+                    data[c] = key_position(c);
+                }
+            } else {
+                for (int t = 0; t < batch.n_tokens; ++t) {
+                    for (int c = 0; c < width; ++c) {
+                        const llama_pos key_pos = key_position(c);
+                        const int distance = key_pos >= 0 ? batch.pos[t] - key_pos : extent;
+                        data[(size_t) t * width + c] = distance >= 0 && distance < extent ? distance : extent;
+                    }
+                }
+            }
+        };
+        fill_positions(cparams.flash_attn ? lctx.inp_pos_k : lctx.inp_rel_pos, false);
+        fill_positions(cparams.flash_attn ? lctx.inp_pos_k_swa : lctx.inp_rel_pos_swa, true);
+        if (lctx.inp_scale) {
+            lctx.scale_data.resize(batch.n_tokens);
+            for (int t = 0; t < batch.n_tokens; ++t) {
+                const float ratio = (batch.pos[t] + 1.0f) / hparams.n_log_scale_floor;
+                lctx.scale_data[t] = 1.0f + hparams.f_log_scale_alpha * std::log(std::max(ratio, 1.0f));
+            }
+            ggml_backend_tensor_set(lctx.inp_scale, lctx.scale_data.data(), 0, batch.n_tokens * sizeof(float));
+        }
+    }
+
     if (lctx.inp_mtp_carry) {
         const size_t n_floats = (size_t) ggml_nelements(lctx.inp_mtp_carry);
         if (lctx.mtp_carry_pending) {
@@ -7772,7 +7844,20 @@ static int llama_decode_internal(
         auto tim1 = ggml_time_us();
 #endif
         uint32_t n_tokens = std::min(n_ubatch, n_tokens_all - cur_token);
-        if (llm_arch_is_hybrid(model.arch) &&
+        if (model.arch == LLM_ARCH_INKLING2_LOOP && n_tokens > 1) {
+            const int first_count = batch_all.n_seq_id ? batch_all.n_seq_id[cur_token] : 1;
+            uint32_t grouped = 1;
+            while (grouped < n_tokens) {
+                const uint32_t i = cur_token + grouped;
+                const llama_pos pos_i = batch_all.pos ? batch_all.pos[i] : batch_all.all_pos_0 + (llama_pos) i * batch_all.all_pos_1;
+                if (pos_i == 0 || (batch_all.seq_id && (batch_all.n_seq_id[i] != first_count ||
+                            !std::equal(batch_all.seq_id[cur_token], batch_all.seq_id[cur_token] + first_count, batch_all.seq_id[i])))) {
+                    break;
+                }
+                ++grouped;
+            }
+            n_tokens = grouped;
+        } else if (llm_arch_is_hybrid(model.arch) &&
                 n_tokens > 1 &&
                 batch_all.n_seq_id != nullptr &&
                 batch_all.seq_id != nullptr) {
@@ -10745,6 +10830,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_GLM5NEXT_DASHED:
         case LLM_ARCH_RAON1_NANO:
         case LLM_ARCH_RAON1:
+        case LLM_ARCH_INKLING2_LOOP:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
@@ -11246,7 +11332,7 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
 static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, llama_ckpt_data ckpt_type, int max_tokens) {
     // openPangu carries only a conv state and LFM2 a short-conv state (no SSM
     // term); the per-step path would divide by zero (ssm_dt_rank == 0), decline
-    if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_LFM2 || model.arch == LLM_ARCH_LFM2MOE || model.arch == LLM_ARCH_LFM3) {
+    if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_LFM2 || model.arch == LLM_ARCH_LFM2MOE || model.arch == LLM_ARCH_LFM3 || model.arch == LLM_ARCH_INKLING2_LOOP) {
         kv.save_per_step_ssm = false;
         return false;
     }
@@ -11677,7 +11763,19 @@ void llama_kv_cache_seq_cp(struct llama_context * ctx, llama_seq_id seq_id_src, 
     if (seq_id_src == seq_id_dst) {
         return;
     }
-    llama_kv_cache_seq_cp(ctx->kv_self, seq_id_src, seq_id_dst, p0, p1);
+    auto & cache = ctx->kv_self;
+    if (cache.s_l_direct_seq_cp &&
+            llama_kv_qnext_seq_id_in_range(cache, seq_id_src) &&
+            llama_kv_qnext_seq_id_in_range(cache, seq_id_dst)) {
+        ggml_backend_sched_synchronize(ctx->sched);
+        std::vector<uint8_t> row;
+        for (auto * state : cache.s_l) {
+            row.resize(state->nb[1]);
+            ggml_backend_tensor_get(state, row.data(), seq_id_src * state->nb[1], row.size());
+            ggml_backend_tensor_set(state, row.data(), seq_id_dst * state->nb[1], row.size());
+        }
+    }
+    llama_kv_cache_seq_cp(cache, seq_id_src, seq_id_dst, p0, p1);
     if (auto it = ctx->ple_hist.find(seq_id_src); it != ctx->ple_hist.end()) {
         ctx->ple_hist[seq_id_dst] = it->second;
     }
@@ -12133,7 +12231,7 @@ struct llama_data_write {
                     if (seq_id == -1) {
                         s_rows = n_slots;
                     } else if (llama_kv_qnext_seq_id_in_range(kv_self, seq_id) && (uint32_t) seq_id < kv_self.size) {
-                        llama_seq_id src_seq_id = kv_self.cells[seq_id].src;
+                        llama_seq_id src_seq_id = kv_self.s_l_direct_seq_cp ? seq_id : kv_self.cells[seq_id].src;
                         if (llama_kv_qnext_seq_id_in_range(kv_self, src_seq_id)) {
                             s_rows = 1;
                             s_offset = (size_t) src_seq_id * s_size_row;
@@ -14205,7 +14303,7 @@ float * llama_get_logits_ith(struct llama_context * ctx, int32_t i) {
             throw std::runtime_error(format("corrupt output buffer (j=%d, n_outputs=%d)", j, ctx->n_outputs));
         }
 
-        return ctx->logits + j*ctx->model.hparams.n_vocab;
+        return ctx->logits + (size_t) j*ctx->model.hparams.n_vocab;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG

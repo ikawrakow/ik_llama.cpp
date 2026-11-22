@@ -45,6 +45,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_nanbeige_tensors(const LLM_TN & tn);
 
+    bool create_inkling2_loop_tensors(const LLM_TN & tn);
+
     bool create_k2horizon_tensors(const LLM_TN & tn);
 
     bool create_muse_glimmer_tensors(const LLM_TN & tn);
@@ -670,6 +672,155 @@ bool create_tensors_helper::create_nanbeige_tensors(const LLM_TN & tn) {
         hparams.n_layer = n_all;
     }
 
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_inkling2_loop_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"),
+            {n_embd, hparams.n_vocab_model});
+    model.tok_norm = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd});
+    model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+    model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"),
+            {n_embd, hparams.n_vocab_model});
+    if (hparams.n_vocab_model > hparams.n_vocab) {
+        model.output = ggml_view_2d(ctx_output, model.output, n_embd, hparams.n_vocab, model.output->nb[1], 0);
+    }
+    model.output_res_query = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_RES_QUERY, "weight"), {n_embd});
+
+    const bool unrolled = ml.get_arch_name() == "inkling2";
+    if (unrolled) {
+        const int32_t rows = 2 * (hparams.loop_end - hparams.loop_start);
+        auto ctx = ctx_for_layer(hparams.loop_start);
+        model.loop_res_query = create_tensor(ctx, "loop_res_query.weight", {n_embd, rows});
+        model.loop_kv_res_query = create_tensor(ctx, "loop_kv_res_query.weight", {n_embd, rows});
+    }
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context * ctx_layer = ctx_for_layer(i);
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+        auto & layer = model.layers[i];
+        const int n_head_i = hparams.n_head(i);
+        const int n_head_kv_i = hparams.n_head_kv(i);
+        const int n_embd_k_gqa_i = hparams.n_embd_k_gqa(i);
+        const int n_embd_v_gqa_i = hparams.n_embd_v_gqa(i);
+        const int n_head_dim_k = hparams.n_embd_head_k(i);
+        const int n_attn_out = n_head_i * hparams.n_embd_head_v(i);
+        const int n_ff_exp_i = hparams.n_ff_exp_layer(i);
+        const bool full = hparams.swa_layers[i] == 0;
+
+        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", i),
+                {n_embd, n_head_i * n_head_dim_k});
+        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i),
+                {n_embd, n_embd_k_gqa_i});
+        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i),
+                {n_embd, n_embd_v_gqa_i});
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i),
+                {n_attn_out, n_embd});
+        layer.wqkv_gate = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_attn_out});
+        layer.attn_rel = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_REL, "weight", i),
+                {n_embd, n_head_i * hparams.n_relative});
+        layer.attn_sink_proj = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_SINK_PROJ, "weight", i),
+                {n_embd, n_head_i});
+        layer.attn_rel_bias = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_REL_BIAS, "weight", i),
+                {hparams.n_relative, hparams.inkling_relative_extent(i)});
+        layer.attn_q_clip = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_CLIP, "weight", i),
+                {n_head_dim_k, n_head_i});
+        layer.attn_rel_clip = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_REL_CLIP, "weight", i),
+                {hparams.n_relative, n_head_i});
+        layer.attn_k_conv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_CONV, "weight", i),
+                {hparams.n_shortconv_l_cache, n_embd_k_gqa_i});
+        layer.attn_v_conv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V_CONV, "weight", i),
+                {hparams.n_shortconv_l_cache, n_embd_v_gqa_i});
+        layer.attn_post_conv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_CONV, "weight", i),
+                {hparams.n_shortconv_l_cache, n_embd});
+        layer.ffn_post_conv = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_POST_CONV, "weight", i),
+                {hparams.n_shortconv_l_cache, n_embd});
+
+        if (full) {
+            layer.attn_q_inp_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_INP_NORM, "weight", i), {n_embd});
+            layer.attn_k_inp_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_INP_NORM, "weight", i), {n_embd});
+            layer.attn_v_inp_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V_INP_NORM, "weight", i), {n_embd});
+            layer.attn_k_conv_proj = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_CONV_PROJ, "weight", i),
+                    {n_embd, hparams.n_shortconv_l_cache * n_head_kv_i});
+            layer.attn_v_conv_proj = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_CONV_PROJ, "weight", i),
+                    {n_embd, hparams.n_shortconv_l_cache * n_head_kv_i});
+        } else {
+            layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+        }
+        if (i > 0) {
+            layer.attn_res_query = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_RES_QUERY, "weight", i),
+                    {n_embd, full ? 3 : 1});
+        }
+
+        layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+        layer.ffn_res_query = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_RES_QUERY, "weight", i), {n_embd});
+        layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),
+                {n_embd, n_expert});
+        layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i),
+                {n_expert});
+        layer.ffn_up_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight", i),
+                {n_embd, 2 * n_ff_exp_i, n_expert});
+        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i),
+                {n_ff_exp_i, n_embd, n_expert});
+
+        if (i >= (int) hparams.loop_start && i < (int) hparams.loop_end) {
+            static constexpr llm_tensor controls[][3] = {
+                {LLM_TENSOR_LOOP_Q_CTRL_DOWN, LLM_TENSOR_LOOP_Q_CTRL_FORGET, LLM_TENSOR_LOOP_Q_CTRL_GAIN},
+                {LLM_TENSOR_LOOP_K_CTRL_DOWN, LLM_TENSOR_LOOP_K_CTRL_FORGET, LLM_TENSOR_LOOP_K_CTRL_GAIN},
+                {LLM_TENSOR_LOOP_V_CTRL_DOWN, LLM_TENSOR_LOOP_V_CTRL_FORGET, LLM_TENSOR_LOOP_V_CTRL_GAIN},
+                {LLM_TENSOR_LOOP_FFN_CTRL_DOWN, LLM_TENSOR_LOOP_FFN_CTRL_FORGET, LLM_TENSOR_LOOP_FFN_CTRL_GAIN},
+            };
+            for (int j = 0; j < 4; ++j) {
+                auto control_name = [&](int part) {
+                    static constexpr const char * streams[] = {"attn", "k", "v", "mlp"};
+                    static constexpr const char * parts[] = {"down", "forget", "gain"};
+                    return unrolled ? format("blk.%d.loop_%s_%s.weight", i, streams[j], parts[part])
+                                    : tn(controls[j][part], "weight", i);
+                };
+                layer.loop_ctrl_down[j] = create_tensor(ctx_layer, control_name(0), {2 * n_embd, hparams.loop_gate_rank});
+                layer.loop_ctrl_forget[j] = create_tensor(ctx_layer, control_name(1), {hparams.loop_gate_rank, n_embd});
+                layer.loop_ctrl_gain[j] = create_tensor(ctx_layer, control_name(2), {hparams.loop_gate_rank, n_embd});
+            }
+            if (!unrolled) {
+                layer.loop_msg_query = create_tensor(ctx_layer, tn(LLM_TENSOR_LOOP_MSG_QUERY, "weight", i), {n_embd, 4});
+            }
+        }
+    }
+
+    const uint32_t n_all = hparams.n_layer_all;
+    const int output_device = model.default_layer_device.back();
+    model.layers.resize(n_all);
+    model.buft_layer.resize(n_all);
+    model.default_layer_device.resize(n_all + 1);
+    model.default_layer_device[n_all] = output_device;
+    auto & hp = model.hparams;
+    for (uint32_t dst = n_all; dst-- > 0;) {
+        const uint32_t src = hp.phys_layer(dst);
+        model.layers[dst] = model.layers[src];
+        model.buft_layer[dst] = model.buft_layer[src];
+        model.default_layer_device[dst] = model.default_layer_device[src];
+        hp.n_head_arr[dst] = hp.n_head_arr[src];
+        hp.n_head_kv_arr[dst] = hp.n_head_kv_arr[src];
+        hp.n_ff_arr[dst] = hp.n_ff_arr[src];
+        hp.n_expert_used_arr[dst] = hp.n_expert_used_arr[src];
+        hp.n_ff_exp_arr[dst] = hp.n_ff_exp_arr[src];
+        hp.swa_layers[dst] = hp.swa_layers[src];
+        hp.rope_pattern[dst] = hp.rope_pattern[src];
+        hp.rope_dim_per_layer[dst] = hp.rope_dim_per_layer[src];
+        hp.rope_freq_base_per_layer[dst] = hp.rope_freq_base_per_layer[src];
+        hp.recurrent_layer_arr[dst] = hp.recurrent_layer_arr[src];
+        hp.indexer_is_full[dst] = hp.indexer_is_full[src];
+        hp.dsv4_compress_ratios[dst] = hp.dsv4_compress_ratios[src];
+        hp.dsv41_kv_source[dst] = hp.dsv41_kv_source[src];
+        hp.dsv41_index_key_source[dst] = hp.dsv41_index_key_source[src];
+        hp.dsv41_topk_source[dst] = hp.dsv41_topk_source[src];
+        hp.swiglu_limits[dst] = hp.swiglu_limits[src];
+        hp.swiglu_limits_shared[dst] = hp.swiglu_limits_shared[src];
+        hp.ple_layer_arr[dst] = hp.ple_layer_arr[src];
+    }
+    hp.n_layer = n_all;
     return use_mmap_buffer;
 }
 
@@ -6692,6 +6843,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_k2horizon_tensors(tn); break;
         case LLM_ARCH_NANBEIGE:
             use_mmap_buffer = create_nanbeige_tensors(tn); break;
+        case LLM_ARCH_INKLING2_LOOP:
+            use_mmap_buffer = create_inkling2_loop_tensors(tn); break;
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_REFACT:
         case LLM_ARCH_MINICPM:

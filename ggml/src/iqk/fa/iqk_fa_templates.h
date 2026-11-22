@@ -10,6 +10,7 @@
 #pragma once
 
 #include "iqk/iqk_config.h"
+#include "iqk/iqk_flash_impl.h"
 
 #if defined IQK_IMPLEMENT && defined GGML_IQK_FLASH_ATTENTION
 
@@ -738,8 +739,12 @@ struct HelperQ60 final : public BaseHelper {
 #endif
 };
 
-template <int q_step_in, int k_step_in>
-struct FlashMS {
+struct NoRelBias {
+    void advance_rows(int) {}
+};
+
+template <int q_step_in, int k_step_in, typename Bias>
+struct FlashMS : Bias {
     constexpr static int q_step = q_step_in;
     constexpr static int k_step = k_step_in;
 // Something goes wrong when storing and manipulating K*Q as fp16.
@@ -753,7 +758,21 @@ struct FlashMS {
 //#endif
     using cache_t = float;
 
-    FlashMS(float scale, float softcap) : vscale(F16::set1(scale)), softcap(softcap), h_inf(GGML_FP32_TO_FP16(-INFINITY)) {}
+    FlashMS(float scale, float softcap, Bias bias) : Bias(bias), vscale(F16::set1(scale)), softcap(softcap), h_inf(GGML_FP32_TO_FP16(-INFINITY)) {}
+
+    inline void load_bias(int j, float * values) const {
+        const float * row = this->table + j*this->row_stride;
+        const int32_t q = this->pos_q[j*this->pos_q_stride];
+        for (int i = 0; i < k_step; ++i) {
+            const int32_t k = this->pos_k[this->key_offset + i];
+            const int32_t distance = q >= k ? int32_t(std::min(uint32_t(q) - uint32_t(k), uint32_t(this->max_distance))) : this->max_distance;
+            values[i] = row[distance];
+        }
+    }
+
+    inline void set_key_block(int offset) {
+        if constexpr (!std::is_same_v<Bias, NoRelBias>) this->key_offset = offset;
+    }
 
     inline void init_qstep() {
         for (int j = 0; j < q_step; ++j) {
@@ -846,6 +865,18 @@ struct FlashMS {
         return vmaxvq_f32(vmax);
     }
     inline float load_apply_mask_and_scale(int j, float32x4_t * vk, const char * mask) {
+        if constexpr (!std::is_same_v<Bias, NoRelBias>) {
+            load_and_scale(j, vk);
+            float values[k_step];
+            load_bias(j, values);
+            auto vmax = vdupq_n_f32(-INFINITY);
+            for (int l = 0; l < k_step/4; ++l) {
+                auto visible = vceqzq_f32(vcvt_f32_f16(vld1_f16((const float16_t *)mask + 4*l)));
+                vk[l] = vbslq_f32(visible, vaddq_f32(vk[l], vld1q_f32(values + 4*l)), vdupq_n_f32(-INFINITY));
+                vmax = vmaxq_f32(vmax, vk[l]);
+            }
+            return vmaxvq_f32(vmax);
+        }
         auto vzero = vdupq_n_f16(0);
         auto vinf  = vdupq_n_f32(-INFINITY);
         for (int l = 0; l < k_step/8; ++l) {
@@ -906,6 +937,16 @@ struct FlashMS {
     }
 #endif
     inline float load_apply_mask_and_scale(int j, F16::Data * vk, const char * mask) {
+        if constexpr (!std::is_same_v<Bias, NoRelBias>) {
+            load_and_scale(j, vk);
+            float values[k_step];
+            load_bias(j, values);
+            for (int l = 0; l < k_step/F16::block_size; ++l) {
+                auto val = F16::add(vk[l], F16::load(values + F16::block_size*l));
+                vk[l] = apply_mask(l, mask, val, F16::set1(-INFINITY));
+            }
+            return F16::reduce_max<k_step>(vk);
+        }
 #ifdef HAVE_FANCY_SIMD
         auto vzero = _mm256_set1_epi16(0);
         auto vinf  = _mm512_set1_ps(-INFINITY);
@@ -1252,7 +1293,7 @@ struct FlashQKV {
     //qkv_cache_t * qkv_cache;
 };
 
-template <int D, int q_step, int k_step>
+template <int D, int q_step, int k_step, typename Bias>
 struct FlashQKfp32 {
     static_assert(D%F16::block_size == 0 && D <= 576);
     static_assert(k_step%F16::block_size == 0);
@@ -1260,7 +1301,7 @@ struct FlashQKfp32 {
 
     template <typename KHelper, typename q_float>
     static inline void multiply_mask_kq(const KHelper& kh, int stride_q, int stride_m, const q_float * q, const char * mask,
-            FlashMS<q_step, k_step>& fms) {
+            FlashMS<q_step, k_step, Bias>& fms) {
 #ifdef __AVX2__
         constexpr int nrc_k = 8;
         static_assert(k_step%nrc_k == 0);
@@ -1279,7 +1320,7 @@ struct FlashQKfp32 {
 
     template <typename KHelper, typename q_float>
     static inline void multiply_mask_kq(int nq, const KHelper& kh, int stride_q, int stride_m, const q_float * q, const char * mask,
-            FlashMS<q_step, k_step>& fms) {
+            FlashMS<q_step, k_step, Bias>& fms) {
 #ifdef __AVX2__
         constexpr int nrc_k = 8;
         static_assert(k_step%nrc_k == 0);
@@ -1313,7 +1354,7 @@ struct FlashQKfp32 {
 
     template <typename KHelper, typename block_q8>
     static inline void mul_mask_kq(const KHelper& kh, int stride_m,
-            const block_q8 * q, const char * mask, FlashMS<q_step, k_step>& fms) {
+            const block_q8 * q, const char * mask, FlashMS<q_step, k_step, Bias>& fms) {
         // As far as I can tell, this static assert is a remnant of the times where the matrix multiplications were done inline
         // here with bespoke kernels instead of just using the regular mat mul kernels. But, just in case, leaving it in place
         // but commented out.
@@ -1341,7 +1382,7 @@ struct FlashQKfp32 {
 
     template <typename KHelper, typename block_q8>
     static inline void mul_mask_kq(int nq, const KHelper& kh, int stride_m,
-            const block_q8 * q, const char * mask, FlashMS<q_step, k_step>& fms) {
+            const block_q8 * q, const char * mask, FlashMS<q_step, k_step, Bias>& fms) {
         GGML_ASSERT(nq < q_step);
         DataInfo info{fms.cache, (const char *)q, k_step, (D/KHelper::block_size_q)*sizeof(block_q8), 0, 1, nullptr};
         if constexpr (std::is_same_v<KHelper, HelperQ8KVR8<D>> ||
@@ -1364,9 +1405,9 @@ struct FlashQKfp32 {
     }
 };
 
-template <int Dk, int Dv, int q_step, int k_step, typename KHelper, typename VHelper, typename KQHelper>
+template <int Dk, int Dv, int q_step, int k_step, typename KHelper, typename VHelper, typename KQHelper, typename Bias>
 void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
-        FlashMS<q_step, k_step>& fms,
+        FlashMS<q_step, k_step, Bias>& fms,
         FlashQKV<Dv, q_step, k_step>& fqkv,
         const float * q, const char * mask, float * qkv,
         const float * sinkf, int sink_stride, float * M, float * S) {
@@ -1384,6 +1425,7 @@ void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, in
         auto mr = mask;
         int nk1_eff = mask_effective_nk1(mr, q_step, stride_m, nk1, k_step);
         for (int k1 = 0; k1 < nk1_eff/k_step; ++k1) {
+            fms.set_key_block(k1*k_step);
 #ifdef __aarch64__
             KQHelper::multiply_mask_kq(kh, Dk, stride_m, q_f16, mr, fms);
 #else
@@ -1397,6 +1439,7 @@ void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, in
         fqkv.normalize_and_store(fms, stride_qkv, qkv, sinkf, sink_stride, M, S);
 
         q    += q_step*stride_q;
+        fms.advance_rows(q_step);
         mask += q_step*stride_m;
         qkv  += q_step*stride_qkv;
         if (M && S) { M += q_step; S += q_step; }
@@ -1412,6 +1455,7 @@ void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, in
 #endif
         auto mr = mask;
         for (int k1 = 0; k1 < nk1/k_step; ++k1) {
+            fms.set_key_block(k1*k_step);
 #ifdef __aarch64__
             KQHelper::multiply_mask_kq(n_left, kh, Dk, stride_m, q_f16, mr, fms);
 #else
@@ -1426,9 +1470,9 @@ void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, in
     }
 }
 
-template <int Dk, int Dv, int q_step, int k_step, typename KHelper, typename VHelper, typename KQHelper>
+template <int Dk, int Dv, int q_step, int k_step, typename KHelper, typename VHelper, typename KQHelper, typename Bias>
 void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
-        FlashMS<q_step, k_step>& fms,
+        FlashMS<q_step, k_step, Bias>& fms,
         FlashQKV<Dv, q_step, k_step>& fqkv,
         const float * q, const char * mask, float * qkv,
         const float * sinkf, int sink_stride, float * M, float * S, char * qptr) {
@@ -1447,6 +1491,7 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
             auto mr = mask;
             int nk1_eff = mask_effective_nk1(mr, q_step, stride_m, nk1, k_step);
             for (int k1 = 0; k1 < nk1_eff/k_step; ++k1) {
+                fms.set_key_block(k1*k_step);
                 HelperQ80R8<Dk>::repack(k_step, kh.block, kh.stride, q8r8);
                 KQHelper::mul_mask_kq(khr8, stride_m, q8r, mr, fms);
                 fqkv.accumulate_qkv(vh, fms);
@@ -1475,6 +1520,7 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
         auto mr = mask;
         int nk1_eff = mask_effective_nk1(mr, q_step, stride_m, nk1, k_step);
         for (int k1 = 0; k1 < nk1_eff/k_step; ++k1) {
+            fms.set_key_block(k1*k_step);
 #if FA_TIMING
             t1 = Perf::cur_time();
             KQHelper::mul_mask_kq(kh, stride_m, q8, mr, fms);
@@ -1499,6 +1545,7 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
 #endif
 
         q    += q_step*stride_q;
+        fms.advance_rows(q_step);
         mask += q_step*stride_m;
         qkv  += q_step*stride_qkv;
         if (M && S) { M += q_step; S += q_step; }
@@ -1512,6 +1559,7 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
         HelperQ80::convert<Dk>(n_left, stride_q, q, q8);
         auto mr = mask;
         for (int k1 = 0; k1 < nk1/k_step; ++k1) {
+            fms.set_key_block(k1*k_step);
             KQHelper::mul_mask_kq(n_left, kh, stride_m, q8, mr, fms);
             fqkv.accumulate_qkv(n_left, vh, fms);
             kh.next_block(k_step);
@@ -1541,14 +1589,14 @@ char * get_q_storage(size_t size) {
 // rows (if Nq is not a multiple of q_step). One could have made the number of q^T rows to
 // process template parameter of such functions, but this would result in the compiler generating
 // q_step-1 versions of these functions for us, which I though was too much with q_step = 8.
-template <int Dk, int Dv, int q_step, int k_step>
+template <int Dk, int Dv, int q_step, int k_step, typename Bias = NoRelBias>
 struct FlashAttn {
     static_assert(Dk%F16::block_size == 0 && Dk <= 576);
     static_assert(Dv%F16::block_size == 0 && Dv <= 512);
     static_assert(k_step%F16::block_size == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
-    FlashAttn(float scale, float softcap, const float * sinkf, int sink_stride) : fms(scale, softcap),
+    FlashAttn(float scale, float softcap, const float * sinkf, int sink_stride, Bias bias = {}) : fms(scale, softcap, bias),
         sinkf(sinkf), sink_stride(sink_stride) {}
 
     template <typename KHelper, typename VHelper>
@@ -1577,7 +1625,7 @@ struct FlashAttn {
 #else
                         HelperQ80R8<Dk> khr4(nk1, kh);
 #endif
-                        compute_helper_q<Dk, Dv, q_step, k_step, HelperQ80R8<Dk>, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
+                        compute_helper_q<Dk, Dv, q_step, k_step, HelperQ80R8<Dk>, VHelper, FlashQKfp32<Dk, q_step, k_step, Bias>>(
                                 khr4, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, sink_stride, M, S, qptr);
                         return;
 
@@ -1591,29 +1639,29 @@ struct FlashAttn {
 #else
                         HelperQ8KVR8<Dk> khr4(nk1, kh);
 #endif
-                        compute_helper_q<Dk, Dv, q_step, k_step, HelperQ8KVR8<Dk>, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
+                        compute_helper_q<Dk, Dv, q_step, k_step, HelperQ8KVR8<Dk>, VHelper, FlashQKfp32<Dk, q_step, k_step, Bias>>(
                                 khr4, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, sink_stride, M, S, qptr);
                         return;
                     }
 #endif
                 }
-                compute_helper_q<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
+                compute_helper_q<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step, Bias>>(
                         kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, sink_stride, M, S, qptr);
 
             }
             else {
                 typename KHelper::block_q8 q8[q_step*(Dk/KHelper::block_size_q)];
-                compute_helper_q<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
+                compute_helper_q<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step, Bias>>(
                         kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, sink_stride, M, S, (char *)q8);
             }
         }
         else {
-            compute_helper<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
+            compute_helper<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step, Bias>>(
                     kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, sink_stride, M, S);
         }
     }
 
-    FlashMS<q_step, k_step>      fms;
+    FlashMS<q_step, k_step, Bias> fms;
     FlashQKV<Dv, q_step, k_step> fqkv;
     const float *                sinkf;
     int                          sink_stride;
@@ -1654,7 +1702,7 @@ struct HelperBF16 final : public BaseHelper {
     }
 };
 
-template <int D, int q_step, int k_step>
+template <int D, int q_step, int k_step, typename Bias>
 struct FlashQKbf16 {
     //static_assert(D%32 == 0 && D <= 256);
     static_assert(D%32 == 0 && D <= 576);
@@ -1662,7 +1710,7 @@ struct FlashQKbf16 {
     static_assert(q_step <= 4 || q_step%4 == 0);
 
     static inline void mult_mask_kq_one(int l1, int m1, int stride_q, int stride_m, const float * q, const char * mask,
-            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step>& fms) {
+            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step, Bias>& fms) {
         // q index is q_step*i1 + m1
         // k index is k_step*k1 + l1
         const ggml_half * mp = (const ggml_half *)(mask + stride_m*m1);
@@ -1689,7 +1737,7 @@ struct FlashQKbf16 {
     }
 
     static inline void mult_mask_kq_one(int l1, int m1, int stride_m, const ggml_bf16_t * q, const char * mask,
-            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step>& fms) {
+            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step, Bias>& fms) {
         // q index is q_step*i1 + m1
         // k index is k_step*k1 + l1
         const ggml_half * mp = (const ggml_half *)(mask + stride_m*m1);
@@ -1712,7 +1760,7 @@ struct FlashQKbf16 {
     }
 
     static inline void mult_mask_kq_4(int l1, int m1, int stride_q, int stride_m, const float * q, const char * mask,
-            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step>& fms) {
+            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step, Bias>& fms) {
         // q index is q_step*i1 + m1
         // k index is k_step*k1 + l1
         const ggml_half * mp = (const ggml_half *)(mask + stride_m*m1);
@@ -1736,7 +1784,7 @@ struct FlashQKbf16 {
     }
 
     static inline void mult_mask_kq_4(int l1, int m1, int stride_m, const ggml_bf16_t * q, const char * mask,
-            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step>& fms) {
+            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step, Bias>& fms) {
         // q index is q_step*i1 + m1
         // k index is k_step*k1 + l1
         const ggml_half * mp = (const ggml_half *)(mask + stride_m*m1);
@@ -1762,7 +1810,7 @@ struct FlashQKbf16 {
 
     template <typename KHelper>
     static inline void multiply_mask_kq(const KHelper& kh, int stride_q, int stride_m, const float * q,
-            const char * mask, FlashMS<q_step, k_step>& fms) {
+            const char * mask, FlashMS<q_step, k_step, Bias>& fms) {
         {
             __m512bh qv[D/32];
             if constexpr (D <= 128) {
@@ -1790,7 +1838,7 @@ struct FlashQKbf16 {
     }
 
     static inline void mult_mask_kq_4(int l1, int m1, const ggml_bf16_t * q,
-            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step>& fms) {
+            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step, Bias>& fms) {
         auto qr = q + m1*D;
         for (int i = 0; i < D/32; ++i) qv[i] = __m512bh(_mm512_loadu_si512((const __m512i *)qr + i));
         __m128 sum[4];
@@ -1816,7 +1864,7 @@ struct FlashQKbf16 {
     }
 
     static inline void mult_mask_kq_8(int l1, int m1, const ggml_bf16_t * q,
-            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step>& fms) {
+            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step, Bias>& fms) {
         auto qr = q + m1*D;
         for (int i = 0; i < D/32; ++i) qv[i] = __m512bh(_mm512_loadu_si512((const __m512i *)qr + i));
         __m256 sum[8];
@@ -1829,7 +1877,7 @@ struct FlashQKbf16 {
     }
 
     static inline void mult_mask_kq_one(int l1, int m1, const ggml_bf16_t * q,
-            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step>& fms) {
+            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step, Bias>& fms) {
         auto qr = q + m1*D;
         for (int i = 0; i < D/32; ++i) qv[i] = __m512bh(_mm512_loadu_si512((const __m512i*)qr + i));
         auto vsum = _mm512_setzero_ps();
@@ -1843,12 +1891,12 @@ struct FlashQKbf16 {
 #if FA_TIMING
     template <typename KHelper>
     static inline void multiply_mask_kq(const KHelper& kh, int stride_m, const ggml_bf16_t * q,
-            const char * mask, FlashMS<q_step, k_step>& fms, Perf& perf) {
+            const char * mask, FlashMS<q_step, k_step, Bias>& fms, Perf& perf) {
         auto t1 = Perf::cur_time();
 #else
     template <typename KHelper>
     static inline void multiply_mask_kq(const KHelper& kh, int stride_m, const ggml_bf16_t * q,
-            const char * mask, FlashMS<q_step, k_step>& fms) {
+            const char * mask, FlashMS<q_step, k_step, Bias>& fms) {
 #endif
         if constexpr (q_step == 1) {
             __m512bh vq[D/32];
@@ -1896,7 +1944,7 @@ struct FlashQKbf16 {
 
     template <typename KHelper>
     static inline void multiply_mask_kq(int nq, const KHelper& kh, int stride_m, const ggml_bf16_t * q,
-            const char * mask, FlashMS<q_step, k_step>& fms) {
+            const char * mask, FlashMS<q_step, k_step, Bias>& fms) {
         {
             __m512bh qv[D/32];
             if constexpr (D <= 128) {
@@ -1921,7 +1969,7 @@ struct FlashQKbf16 {
 
     template <typename KHelper>
     static inline void multiply_mask_kq(int nq, const KHelper& kh, int stride_q, int stride_m, const float * q,
-            const char * mask, FlashMS<q_step, k_step>& fms) {
+            const char * mask, FlashMS<q_step, k_step, Bias>& fms) {
         {
             __m512bh qv[D/32];
             __m512bh vkh[D/16];
@@ -1965,7 +2013,7 @@ struct FlashQKbf16 {
     }
 };
 
-template <int Dk, int Dv, int q_step, int k_step>
+template <int Dk, int Dv, int q_step, int k_step, typename Bias = NoRelBias>
 struct FlashAttnBF16 {
     //static_assert(Dk%32 == 0 && Dk <= 256);
     //static_assert(Dv%32 == 0 && Dv <= 256);
@@ -1974,7 +2022,7 @@ struct FlashAttnBF16 {
     static_assert(k_step%32 == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
-    FlashAttnBF16(float scale, float softcap, const float * sinkf, int sink_stride) : fms(scale, softcap), sinkf(sinkf), sink_stride(sink_stride) {}
+    FlashAttnBF16(float scale, float softcap, const float * sinkf, int sink_stride, Bias bias = {}) : fms(scale, softcap, bias), sinkf(sinkf), sink_stride(sink_stride) {}
 
     template <typename KHelper, typename VHelper>
     void compute(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
@@ -1990,22 +2038,23 @@ struct FlashAttnBF16 {
             fms.init_qstep();
             kh.reset_block();
             vh.reset_block();
-            FlashQKbf16<Dk, q_step, k_step>::convert(stride_q, q, q_bf16);
+            FlashQKbf16<Dk, q_step, k_step, Bias>::convert(stride_q, q, q_bf16);
 #if FA_TIMING
             perf.accum_nolock(0, t1);
 #endif
             auto mr = mask;
             int nk1_eff = mask_effective_nk1(mr, q_step, stride_m, nk1, k_step);
             for (int k1 = 0; k1 < nk1_eff/k_step; ++k1) {
+                fms.set_key_block(k1*k_step);
 #if FA_TIMING
                 //t1 = Perf::cur_time();
-                FlashQKbf16<Dk, q_step, k_step>::multiply_mask_kq(kh, stride_m, q_bf16, mr, fms, perf);
+                FlashQKbf16<Dk, q_step, k_step, Bias>::multiply_mask_kq(kh, stride_m, q_bf16, mr, fms, perf);
                 //perf.accum_nolock(1, t1);
                 t1 = Perf::cur_time();
                 fqkv.accumulate_qkv(vh, fms);
                 perf.accum_nolock(3, t1);
 #else
-                FlashQKbf16<Dk, q_step, k_step>::multiply_mask_kq(kh, stride_m, q_bf16, mr, fms);
+                FlashQKbf16<Dk, q_step, k_step, Bias>::multiply_mask_kq(kh, stride_m, q_bf16, mr, fms);
                 fqkv.accumulate_qkv(vh, fms);
 #endif
                 kh.next_block(k_step);
@@ -2021,6 +2070,7 @@ struct FlashAttnBF16 {
 #endif
 
             q    += q_step*stride_q;
+            fms.advance_rows(q_step);
             mask += q_step*stride_m;
             qkv  += q_step*stride_qkv;
             if (M && S) { M += q_step; S += q_step; }
@@ -2031,10 +2081,11 @@ struct FlashAttnBF16 {
             fms.init_qstep();
             kh.reset_block();
             vh.reset_block();
-            FlashQKbf16<Dk, q_step, k_step>::convert(n_left, stride_q, q, q_bf16);
+            FlashQKbf16<Dk, q_step, k_step, Bias>::convert(n_left, stride_q, q, q_bf16);
             auto mr = mask;
             for (int k1 = 0; k1 < nk1/k_step; ++k1) {
-                FlashQKbf16<Dk, q_step, k_step>::multiply_mask_kq(n_left, kh, stride_m, q_bf16, mr, fms);
+                fms.set_key_block(k1*k_step);
+                FlashQKbf16<Dk, q_step, k_step, Bias>::multiply_mask_kq(n_left, kh, stride_m, q_bf16, mr, fms);
                 fqkv.accumulate_qkv(n_left, vh, fms);
                 kh.next_block(k_step);
                 vh.next_block(k_step);
@@ -2047,21 +2098,22 @@ struct FlashAttnBF16 {
 #endif
     }
 
-    FlashMS<q_step, k_step>      fms;
+    FlashMS<q_step, k_step, Bias> fms;
     FlashQKV<Dv, q_step, k_step> fqkv;
     const float *                sinkf;
     int                          sink_stride;
 };
 #endif
 
-template <int Dk, int Dv, int k_step, typename KHelper, typename VHelper>
+template <int Dk, int Dv, int k_step, typename KHelper, typename VHelper, typename Bias = NoRelBias>
 inline void iqk_flash_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
                         const float * q, const char * mask, float scale, float softcap, float * qkv,
-                        const float * sinkf, int sink_stride, float * M, float * S) {
+                        const float * sinkf, int sink_stride, float * M, float * S, Bias bias = {}) {
 
-    auto update = [&nq1, &mask, &q, &qkv, &M, &S, stride_q, stride_m, stride_qkv, &sinkf, sink_stride] (int n) {
+    auto update = [&nq1, &mask, &q, &qkv, &M, &S, stride_q, stride_m, stride_qkv, &sinkf, sink_stride, &bias] (int n) {
         nq1 -= n;
         if (nq1 == 0) return true;
+        bias.advance_rows(n);
         q    += n*stride_q;
         mask += n*stride_m;
         qkv  += n*stride_qkv;
@@ -2072,127 +2124,127 @@ inline void iqk_flash_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int str
     if (nk1 >= 512) {
         if (nq1 >= 128) {
             int n_step = nq1/128;
-            FlashAttn<Dk, Dv, 64, k_step> fa(scale, softcap, sinkf, sink_stride);
+            FlashAttn<Dk, Dv, 64, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
             fa.compute(kh, vh, 128*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             if (update(128*n_step)) return;
         }
         if (nq1 >= 64) {
             int n_step = nq1/64;
-            FlashAttn<Dk, Dv, 64, k_step> fa(scale, softcap, sinkf, sink_stride);
+            FlashAttn<Dk, Dv, 64, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
             fa.compute(kh, vh, 64*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             if (update(64*n_step)) return;
         }
         if (nq1 >= 32) {
             int n_step = nq1/32;
-            FlashAttn<Dk, Dv, 32, k_step> fa(scale, softcap, sinkf, sink_stride);
+            FlashAttn<Dk, Dv, 32, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
             fa.compute(kh, vh, 32*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             if (update(32*n_step)) return;
         }
         if (nq1 >= 16) {
             int n_step = nq1/16;
-            FlashAttn<Dk, Dv, 16, k_step> fa(scale, softcap, sinkf, sink_stride);
+            FlashAttn<Dk, Dv, 16, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
             fa.compute(kh, vh, 16*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             if (update(16*n_step)) return;
         }
     }
     if (nq1 == 12) {
         // Special case: TG for GLM-4.5/4.6
-        FlashAttn<Dk, Dv, 12, k_step> fa(scale, softcap, sinkf, sink_stride);
+        FlashAttn<Dk, Dv, 12, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
         fa.compute(kh, vh, 12, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
         return;
     }
     if (nq1 >= 8) {
         int n_step = nq1/8;
-        FlashAttn<Dk, Dv, 8, k_step> fa(scale, softcap, sinkf, sink_stride);
+        FlashAttn<Dk, Dv, 8, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
         fa.compute(kh, vh, 8*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
         if (update(8*n_step)) return;
     }
     else if (nq1 >= 4) {
         int n_step = nq1/4;
-        FlashAttn<Dk, Dv, 4, k_step> fa(scale, softcap, sinkf, sink_stride);
+        FlashAttn<Dk, Dv, 4, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
         fa.compute(kh, vh, 4*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
         if (update(4*n_step)) return;
     }
     else if (nq1 >= 2) {
         int n_step = nq1/2;
-        FlashAttn<Dk, Dv, 2, k_step> fa(scale, softcap, sinkf, sink_stride);
+        FlashAttn<Dk, Dv, 2, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
         fa.compute(kh, vh, 2*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
         if (update(2*n_step)) return;
     }
-    FlashAttn<Dk, Dv, 1, k_step> fa(scale, softcap, sinkf, sink_stride);
+    FlashAttn<Dk, Dv, 1, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
     fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
 }
 
 #ifdef __AVX512BF16__
-template <int Dk, int Dv, int k_step>
+template <int Dk, int Dv, int k_step, typename Bias = NoRelBias>
 inline void iqk_flash_helper_T(int nq1, int nk1, int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * k, const char * v, const char * mask,
-                        float scale, float softcap, float * qkv, const float * sinkf, int sink_stride, float * M, float * S) {
+                        float scale, float softcap, float * qkv, const float * sinkf, int sink_stride, float * M, float * S, Bias bias = {}) {
     HelperBF16<Dk, k_step> kh(k, stride_k);
     HelperBF16<Dv, k_step> vh(v, stride_v);
     if (nk1 >= 4096) {
         if (nq1 >= 64) {
-            FlashAttnBF16<Dk, Dv, 64, k_step> fa(scale, softcap, sinkf, sink_stride);
+            FlashAttnBF16<Dk, Dv, 64, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
             fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             return;
         }
         else if (nq1 >= 16) {
-            FlashAttnBF16<Dk, Dv, 16, k_step> fa(scale, softcap, sinkf, sink_stride);
+            FlashAttnBF16<Dk, Dv, 16, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
             fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             return;
         }
     }
     if (nq1 >= 8) {
-        FlashAttnBF16<Dk, Dv, 8, k_step> fa(scale, softcap, sinkf, sink_stride);
+        FlashAttnBF16<Dk, Dv, 8, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
         fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
     } else {
-        FlashAttnBF16<Dk, Dv, 1, k_step> fa(scale, softcap, sinkf, sink_stride);
+        FlashAttnBF16<Dk, Dv, 1, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
         fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
     }
 }
 #endif
 
-template <int Dk, int Dv, int k_step, typename KHelper>
+template <int Dk, int Dv, int k_step, typename KHelper, typename Bias = NoRelBias>
 inline bool iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
                         int nq1, int nk1, int stride_q, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * v, const char * mask,
-                        float scale, float softcap, float * qkv, const float * sinkf, int sink_stride, float * M, float * S) {
+                        float scale, float softcap, float * qkv, const float * sinkf, int sink_stride, float * M, float * S, Bias bias = {}) {
 
     switch (type_v) {
         case GGML_TYPE_F16: {
             HelperF16 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
 #ifdef __AVX512BF16__
         case GGML_TYPE_BF16: {
             HelperBF16<Dv, k_step> vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
 #endif
         case GGML_TYPE_Q8_0: {
             HelperQ80 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_Q8_KV: {
             HelperQ8KV<Dv> vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_Q6_0: {
             HelperQ60 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
 #if GGML_IQK_FA_ALL_QUANTS
         case GGML_TYPE_Q4_0: {
             HelperQ40 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_Q4_1: {
             HelperQ41 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_IQ4_NL: {
             HelperIQ4nl vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
 #endif
         default: return false;
@@ -2200,46 +2252,46 @@ inline bool iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
     return true;
 }
 
-template <int Dk, int Dv, int k_step>
+template <int Dk, int Dv, int k_step, typename Bias = NoRelBias>
 inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
                         int nq1, int nk1, int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * k, const char * v, const char * mask,
-                        float scale, float softcap, float * qkv, const float * sinkf, int sink_stride, float * M, float * S) {
+                        float scale, float softcap, float * qkv, const float * sinkf, int sink_stride, float * M, float * S, Bias bias = {}) {
 
     bool result = false;
     switch (type_k) {
         case GGML_TYPE_F16: {
             HelperF16 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_Q8_0: {
             HelperQ80 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_Q8_0_R8: {
             HelperQ80R8<Dk> kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_Q6_0: {
             HelperQ60 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
 #if GGML_IQK_FA_ALL_QUANTS
         case GGML_TYPE_Q8_KV: {
             HelperQ8KV<Dk> kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_Q4_0: {
             HelperQ40 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_Q4_1: {
             HelperQ41 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
         case GGML_TYPE_IQ4_NL: {
             HelperIQ4nl kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, sink_stride, M, S, bias);
         } break;
 #endif
         default: break;
@@ -2250,11 +2302,15 @@ inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
 
 }
 
-#define IQK_FA_CASE(name) bool name(int int_type_k, int int_type_v,int nq,int nk,\
+#define IQK_FA_ARGS int int_type_k, int int_type_v,int nq,int nk,\
                          int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,\
                          const float * q, const void * k, const void * v, const void * mask,\
                          float scale, float softcap,\
-                         float       * qkv, const float * sinkf, int sink_stride, float * M, float * S)
+                         float       * qkv, const float * sinkf, int sink_stride, float * M, float * S
+
+#define IQK_FA_CASE(name) bool name(IQK_FA_ARGS)
+
+bool iqk_fa_128_128_bias(IQK_FA_ARGS, const IQKRelBias & bias);
 
 IQK_FA_CASE(iqk_fa_576_512);
 IQK_FA_CASE(iqk_fa_512_512);

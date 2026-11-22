@@ -86,6 +86,7 @@ add_library(llama
             graphs/build_starcoder2.cpp
             graphs/build_refact.cpp
             graphs/build_bert.cpp
+            graphs/build_inkling2.cpp
             graphs/build_bloom.cpp
             graphs/build_mpt.cpp
             graphs/build_stablelm.cpp

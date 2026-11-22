@@ -698,6 +698,15 @@ class GGUFWriter:
     def add_convnext_block_count(self, length: int) -> None:
         self.add_uint32(Keys.ConvNext.BLOCK_COUNT.format(arch=self.arch), length)
 
+    def add_loop_start(self, start: int) -> None:
+        self.add_uint32(Keys.Loop.START.format(arch=self.arch), start)
+
+    def add_loop_end(self, end: int) -> None:
+        self.add_uint32(Keys.Loop.END.format(arch=self.arch), end)
+
+    def add_loop_count(self, count: int) -> None:
+        self.add_uint32(Keys.Loop.COUNT.format(arch=self.arch), count)
+
     def add_shortconv_l_cache(self, length: int) -> None:
         self.add_uint32(Keys.ShortConv.L_CACHE.format(arch=self.arch), length)
 

@@ -173,6 +173,11 @@ class Keys:
         STATE_SIZE     = "{arch}.ssm.state_size"
         TIME_STEP_RANK = "{arch}.ssm.time_step_rank"
 
+    class Loop:
+        START = "{arch}.loop.start"
+        END   = "{arch}.loop.end"
+        COUNT = "{arch}.loop.count"
+
     class ShortConv:
         L_CACHE = "{arch}.shortconv.l_cache"
 
@@ -322,6 +327,7 @@ class MODEL_ARCH(IntEnum):
     SPARK2_5     = auto()
     HY_V3        = auto()
     STEP5        = auto()
+    INKLING2_LOOP = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -542,9 +548,40 @@ class MODEL_TENSOR(IntEnum):
     MHC_MERGE_GAMMA      = auto()
     # openPangu-2.0 (sandwich norm: extra whole-block post-norm on a layer subset)
     BLOCK_POST_NORM      = auto()
+    OUTPUT_RES_QUERY     = auto()
+    ATTN_REL             = auto()
+    ATTN_SINK_PROJ       = auto()
+    ATTN_REL_BIAS        = auto()
+    ATTN_Q_CLIP          = auto()
+    ATTN_REL_CLIP        = auto()
+    ATTN_K_CONV          = auto()
+    ATTN_V_CONV          = auto()
+    ATTN_K_CONV_PROJ     = auto()
+    ATTN_V_CONV_PROJ     = auto()
+    ATTN_POST_CONV       = auto()
+    FFN_POST_CONV        = auto()
+    ATTN_Q_INP_NORM      = auto()
+    ATTN_K_INP_NORM      = auto()
+    ATTN_V_INP_NORM      = auto()
+    LOOP_Q_CTRL_DOWN     = auto()
+    LOOP_Q_CTRL_FORGET   = auto()
+    LOOP_Q_CTRL_GAIN     = auto()
+    LOOP_K_CTRL_DOWN     = auto()
+    LOOP_K_CTRL_FORGET   = auto()
+    LOOP_K_CTRL_GAIN     = auto()
+    LOOP_V_CTRL_DOWN     = auto()
+    LOOP_V_CTRL_FORGET   = auto()
+    LOOP_V_CTRL_GAIN     = auto()
+    LOOP_FFN_CTRL_DOWN   = auto()
+    LOOP_FFN_CTRL_FORGET = auto()
+    LOOP_FFN_CTRL_GAIN   = auto()
+    ATTN_RES_QUERY       = auto()
+    FFN_RES_QUERY        = auto()
+    LOOP_MSG_QUERY       = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+    MODEL_ARCH.INKLING2_LOOP:  "inkling2_loop",
     MODEL_ARCH.STEP5:          "step5",
     MODEL_ARCH.QWEN35: 'qwen35',
     MODEL_ARCH.QWEN4EXP: 'qwen4exp',
@@ -655,6 +692,36 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_ALPHA: 'blk.{bid}.ssm_alpha',
     MODEL_TENSOR.SSM_BETA_ALPHA_CAT: 'blk.{bid}.ssm_beta_alpha',
 
+    MODEL_TENSOR.OUTPUT_RES_QUERY:        "output_res_query",
+    MODEL_TENSOR.ATTN_REL:                "blk.{bid}.attn_rel",
+    MODEL_TENSOR.ATTN_SINK_PROJ:          "blk.{bid}.attn_sink_proj",
+    MODEL_TENSOR.ATTN_REL_BIAS:           "blk.{bid}.attn_rel_bias",
+    MODEL_TENSOR.ATTN_Q_CLIP:             "blk.{bid}.attn_q_clip",
+    MODEL_TENSOR.ATTN_REL_CLIP:           "blk.{bid}.attn_rel_clip",
+    MODEL_TENSOR.ATTN_K_CONV:             "blk.{bid}.attn_k_conv",
+    MODEL_TENSOR.ATTN_V_CONV:             "blk.{bid}.attn_v_conv",
+    MODEL_TENSOR.ATTN_K_CONV_PROJ:        "blk.{bid}.attn_k_conv_proj",
+    MODEL_TENSOR.ATTN_V_CONV_PROJ:        "blk.{bid}.attn_v_conv_proj",
+    MODEL_TENSOR.ATTN_POST_CONV:          "blk.{bid}.attn_post_conv",
+    MODEL_TENSOR.FFN_POST_CONV:           "blk.{bid}.ffn_post_conv",
+    MODEL_TENSOR.ATTN_Q_INP_NORM:         "blk.{bid}.attn_q_inp_norm",
+    MODEL_TENSOR.ATTN_K_INP_NORM:         "blk.{bid}.attn_k_inp_norm",
+    MODEL_TENSOR.ATTN_V_INP_NORM:         "blk.{bid}.attn_v_inp_norm",
+    MODEL_TENSOR.LOOP_Q_CTRL_DOWN:        "blk.{bid}.loop_q_ctrl_down",
+    MODEL_TENSOR.LOOP_Q_CTRL_FORGET:      "blk.{bid}.loop_q_ctrl_forget",
+    MODEL_TENSOR.LOOP_Q_CTRL_GAIN:        "blk.{bid}.loop_q_ctrl_gain",
+    MODEL_TENSOR.LOOP_K_CTRL_DOWN:        "blk.{bid}.loop_k_ctrl_down",
+    MODEL_TENSOR.LOOP_K_CTRL_FORGET:      "blk.{bid}.loop_k_ctrl_forget",
+    MODEL_TENSOR.LOOP_K_CTRL_GAIN:        "blk.{bid}.loop_k_ctrl_gain",
+    MODEL_TENSOR.LOOP_V_CTRL_DOWN:        "blk.{bid}.loop_v_ctrl_down",
+    MODEL_TENSOR.LOOP_V_CTRL_FORGET:      "blk.{bid}.loop_v_ctrl_forget",
+    MODEL_TENSOR.LOOP_V_CTRL_GAIN:        "blk.{bid}.loop_v_ctrl_gain",
+    MODEL_TENSOR.LOOP_FFN_CTRL_DOWN:      "blk.{bid}.loop_ffn_ctrl_down",
+    MODEL_TENSOR.LOOP_FFN_CTRL_FORGET:    "blk.{bid}.loop_ffn_ctrl_forget",
+    MODEL_TENSOR.LOOP_FFN_CTRL_GAIN:      "blk.{bid}.loop_ffn_ctrl_gain",
+    MODEL_TENSOR.ATTN_RES_QUERY:          "blk.{bid}.attn_res_query",
+    MODEL_TENSOR.FFN_RES_QUERY:           "blk.{bid}.ffn_res_query",
+    MODEL_TENSOR.LOOP_MSG_QUERY:          "blk.{bid}.loop_msg_query",
     MODEL_TENSOR.TOKEN_EMBD:           "token_embd",
     MODEL_TENSOR.TOKEN_EMBD_NORM:      "token_embd_norm",
     MODEL_TENSOR.TOKEN_TYPES:          "token_types",
@@ -2334,6 +2401,54 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     ],
     # TODO
 }
+
+MODEL_TENSORS[MODEL_ARCH.INKLING2_LOOP] = [
+    MODEL_TENSOR.TOKEN_EMBD,
+    MODEL_TENSOR.TOKEN_EMBD_NORM,
+    MODEL_TENSOR.OUTPUT,
+    MODEL_TENSOR.OUTPUT_NORM,
+    MODEL_TENSOR.OUTPUT_RES_QUERY,
+    MODEL_TENSOR.ATTN_Q,
+    MODEL_TENSOR.ATTN_K,
+    MODEL_TENSOR.ATTN_V,
+    MODEL_TENSOR.ATTN_REL,
+    MODEL_TENSOR.ATTN_OUT,
+    MODEL_TENSOR.ATTN_GATE,
+    MODEL_TENSOR.ATTN_SINK_PROJ,
+    MODEL_TENSOR.ATTN_REL_BIAS,
+    MODEL_TENSOR.ATTN_Q_CLIP,
+    MODEL_TENSOR.ATTN_REL_CLIP,
+    MODEL_TENSOR.ATTN_NORM,
+    MODEL_TENSOR.FFN_NORM,
+    MODEL_TENSOR.ATTN_K_CONV,
+    MODEL_TENSOR.ATTN_V_CONV,
+    MODEL_TENSOR.ATTN_K_CONV_PROJ,
+    MODEL_TENSOR.ATTN_V_CONV_PROJ,
+    MODEL_TENSOR.ATTN_POST_CONV,
+    MODEL_TENSOR.FFN_POST_CONV,
+    MODEL_TENSOR.FFN_GATE_INP,
+    MODEL_TENSOR.FFN_EXP_PROBS_B,
+    MODEL_TENSOR.FFN_GATE_UP_EXP,
+    MODEL_TENSOR.FFN_DOWN_EXP,
+    MODEL_TENSOR.ATTN_Q_INP_NORM,
+    MODEL_TENSOR.ATTN_K_INP_NORM,
+    MODEL_TENSOR.ATTN_V_INP_NORM,
+    MODEL_TENSOR.LOOP_Q_CTRL_DOWN,
+    MODEL_TENSOR.LOOP_Q_CTRL_FORGET,
+    MODEL_TENSOR.LOOP_Q_CTRL_GAIN,
+    MODEL_TENSOR.LOOP_K_CTRL_DOWN,
+    MODEL_TENSOR.LOOP_K_CTRL_FORGET,
+    MODEL_TENSOR.LOOP_K_CTRL_GAIN,
+    MODEL_TENSOR.LOOP_V_CTRL_DOWN,
+    MODEL_TENSOR.LOOP_V_CTRL_FORGET,
+    MODEL_TENSOR.LOOP_V_CTRL_GAIN,
+    MODEL_TENSOR.LOOP_FFN_CTRL_DOWN,
+    MODEL_TENSOR.LOOP_FFN_CTRL_FORGET,
+    MODEL_TENSOR.LOOP_FFN_CTRL_GAIN,
+    MODEL_TENSOR.ATTN_RES_QUERY,
+    MODEL_TENSOR.FFN_RES_QUERY,
+    MODEL_TENSOR.LOOP_MSG_QUERY,
+]
 
 MODEL_TENSORS[MODEL_ARCH.RAON1] = [
     MODEL_TENSOR.TOKEN_EMBD,

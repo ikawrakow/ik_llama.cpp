@@ -24,6 +24,7 @@ struct llama_hparams {
     bool use_par_res;
 
     uint32_t n_vocab;
+    uint32_t n_vocab_model = 0;
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
     uint32_t n_embd_out = 0;
@@ -32,6 +33,10 @@ struct llama_hparams {
     uint32_t n_layer_all = 0;           // unrolled layer count; 0 => no loops
     uint32_t n_layer_phys = 0;          // physical layer count for looped models; 0 => not looped
     uint32_t n_loops = 1;               // number of times the physical layers are repeated
+    uint32_t loop_start = 0;
+    uint32_t loop_end = 0;
+    uint32_t loop_gate_rank = 0;
+    bool     loop_varying = false;
     bool     skip_loop_final_norm = false; // if true, do not apply output_norm between loops
     int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
     uint32_t n_rot;
@@ -54,6 +59,13 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_exp_arr      = {};
     uint32_t n_vocab_type = 0; // for BERT-style token types
     uint32_t n_rel_attn_bkts = 0;
+    uint32_t n_relative = 0;
+    uint32_t n_relative_extent = 0;
+    uint32_t attn_res_block_size = 0;
+    uint32_t n_log_scale_floor = 0;
+    float    f_qk_clip = 0.0f;
+    float    f_relative_clip = 0.0f;
+    float    f_log_scale_alpha = 0.0f;
 
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
@@ -383,6 +395,32 @@ struct llama_hparams {
 
     bool has_kv(uint32_t il) const {
         return n_layer_kv_from_start > 0 ? il < n_layer_kv_from_start : true;
+    }
+
+    uint32_t phys_layer(uint32_t il) const {
+        if (n_loops <= 1) {
+            return il;
+        }
+        const uint32_t region = loop_end - loop_start;
+        if (il < loop_start) {
+            return il;
+        }
+        if (il < loop_start + region * n_loops) {
+            return loop_start + (il - loop_start) % region;
+        }
+        return il - region * (n_loops - 1);
+    }
+
+    uint32_t inkling_state_width(uint32_t il) const {
+        return (n_shortconv_l_cache - 1) * (n_embd_k_gqa(il) + n_embd_v_gqa(il) + 2 * n_embd);
+    }
+
+    uint32_t inkling_relative_extent(uint32_t il) const {
+        return swa_layers[il] ? n_swa : n_relative_extent;
+    }
+
+    uint32_t inkling_relative_extent_max() const {
+        return n_relative_extent > n_swa ? n_relative_extent : n_swa;
     }
 
     uint32_t n_head(uint32_t il = 0) const {

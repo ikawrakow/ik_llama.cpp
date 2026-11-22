@@ -9,6 +9,7 @@
 #include "ggml-backend.h"
 
 #include <algorithm>
+#include <array>
 #include <vector>
 #include <unordered_map>
 #include <set>
@@ -210,6 +211,21 @@ struct llama_layer {
     struct ggml_tensor * wo_enc = nullptr;
     struct ggml_tensor * attn_sinks = nullptr;
 
+    struct ggml_tensor * attn_rel = nullptr;
+    struct ggml_tensor * attn_sink_proj = nullptr;
+    struct ggml_tensor * attn_rel_bias = nullptr;
+    struct ggml_tensor * attn_q_clip = nullptr;
+    struct ggml_tensor * attn_rel_clip = nullptr;
+    struct ggml_tensor * attn_k_conv = nullptr;
+    struct ggml_tensor * attn_v_conv = nullptr;
+    struct ggml_tensor * attn_k_conv_proj = nullptr;
+    struct ggml_tensor * attn_v_conv_proj = nullptr;
+    struct ggml_tensor * attn_post_conv = nullptr;
+    struct ggml_tensor * attn_q_inp_norm = nullptr;
+    struct ggml_tensor * attn_k_inp_norm = nullptr;
+    struct ggml_tensor * attn_v_inp_norm = nullptr;
+    struct ggml_tensor * attn_res_query = nullptr;
+
     // DFlash2 dynamic grouped-convolution parameters.
     struct ggml_tensor * dflash_attn_conv_base = nullptr;
     struct ggml_tensor * dflash_attn_conv_proj = nullptr;
@@ -287,6 +303,8 @@ struct llama_layer {
     struct ggml_tensor * layer_out_norm_b = nullptr;
     struct ggml_tensor * ffn_norm_exps = nullptr;
     struct ggml_tensor * ffn_norm_enc = nullptr;
+    struct ggml_tensor * ffn_res_query = nullptr;
+    struct ggml_tensor * ffn_post_conv = nullptr;
 
     // ff
     struct ggml_tensor * ffn_gate = nullptr; // w1
@@ -364,6 +382,11 @@ struct llama_layer {
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
     struct ggml_tensor * ffn_exp_probs_b_vl = nullptr;
     struct ggml_tensor * ffn_gate_tid2eid = nullptr;
+
+    struct ggml_tensor * loop_msg_query = nullptr;
+    std::array<struct ggml_tensor *, 4> loop_ctrl_down = {};
+    std::array<struct ggml_tensor *, 4> loop_ctrl_forget = {};
+    std::array<struct ggml_tensor *, 4> loop_ctrl_gain = {};
 
     llama_split_tensor split_ffn_gate_b;
     llama_split_tensor split_ffn_down_b;
@@ -577,6 +600,9 @@ struct llama_model {
     struct ggml_tensor * output_norm_b;
     struct ggml_tensor * output;
     struct ggml_tensor * output_b;
+    struct ggml_tensor * output_res_query = nullptr;
+    struct ggml_tensor * loop_res_query = nullptr;
+    struct ggml_tensor * loop_kv_res_query = nullptr;
     struct ggml_tensor * output_norm_enc;
     struct ggml_tensor * output_mtp = nullptr;
     struct ggml_tensor * hc_head_base = nullptr;
@@ -736,6 +762,7 @@ struct llama_model {
             || arch == LLM_ARCH_LFM3
             || arch == LLM_ARCH_MAPLE     || arch == LLM_ARCH_FLINT
             || arch == LLM_ARCH_RICURSIVE
+            || arch == LLM_ARCH_INKLING2_LOOP
             || supports_dflash_swa_compress() ;
     }
 

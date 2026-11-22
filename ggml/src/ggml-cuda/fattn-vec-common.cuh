@@ -8,6 +8,7 @@
 #pragma once
 
 #include "common.cuh"
+#include "fattn-rel-bias.cuh"
 #include "convert.cuh"
 #include "vecdotq.cuh"
 
@@ -23,6 +24,7 @@ typedef void (* fattn_kernel_t)(
         const char * __restrict__ V,
         const char * __restrict__ mask,
         const char * __restrict__ sinks,
+        const fattn_rel_bias rel_bias,
         const int2 * __restrict__ KV_max,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
@@ -1065,7 +1067,7 @@ void launch_fattn(
         K_data,
         V_data,
         mask ? ((const char *) mask->data) : nullptr,
-        sinks ? ((const char *) sinks->data) : nullptr,
+        sinks ? ((const char *) sinks->data) : nullptr, get_fattn_rel_bias(dst),
         KV_min_max.ptr,
         parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,

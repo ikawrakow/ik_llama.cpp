@@ -1145,7 +1145,7 @@ int main(int argc, char ** argv) {
             { "model_name",                  get_model_name(ctx_server.params_base.model)},
             { "chat_template",               tmpl_default },
             { "chat_template_caps",      ctx_server.chat_template_caps },
-            { "bos_token",                   common_token_to_piece(ctx_server.ctx, llama_token_bos(ctx_server.model), /* special= */ true)},
+            { "bos_token",                   llama_token_bos(ctx_server.model) == LLAMA_TOKEN_NULL ? std::string() : common_token_to_piece(ctx_server.ctx, llama_token_bos(ctx_server.model), /* special= */ true)},
             { "eos_token",                   common_token_to_piece(ctx_server.ctx, llama_token_eos(ctx_server.model), /* special= */ true)},
             { "model_path",                  ctx_server.params_base.model },
             { "modalities",                  json {

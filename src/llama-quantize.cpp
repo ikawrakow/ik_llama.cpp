@@ -1757,6 +1757,14 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             quantize &= name.find("hc_ffn_fn.weight")  == std::string::npos;
         }
 
+        if (model.arch == LLM_ARCH_INKLING2_LOOP) {
+            quantize &= name.find("_conv.weight")  == std::string::npos;
+            quantize &= name.find("_clip.weight")  == std::string::npos;
+            quantize &= name.find("attn_rel_bias") == std::string::npos;
+            quantize &= name.find("loop_")         == std::string::npos;
+            quantize &= name.find("_res_query.weight") == std::string::npos;
+        }
+
         // quantize the extra output tensor
         quantize = tensor == output_tensor || quantize;
 
@@ -2341,6 +2349,14 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
         if (model.arch == LLM_ARCH_XING4_0) {
             quantize &= name.find("hc_attn_fn.weight") == std::string::npos;
             quantize &= name.find("hc_ffn_fn.weight")  == std::string::npos;
+        }
+
+        if (model.arch == LLM_ARCH_INKLING2_LOOP) {
+            quantize &= name.find("_conv.weight")  == std::string::npos;
+            quantize &= name.find("_clip.weight")  == std::string::npos;
+            quantize &= name.find("attn_rel_bias") == std::string::npos;
+            quantize &= name.find("loop_")         == std::string::npos;
+            quantize &= name.find("_res_query.weight") == std::string::npos;
         }
 
         if (quantize) {

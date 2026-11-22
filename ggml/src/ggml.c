@@ -11594,6 +11594,20 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+void ggml_flash_attn_ext_add_rel_bias(
+        struct ggml_tensor * a,
+        struct ggml_tensor * table,
+        struct ggml_tensor * pos_q,
+        struct ggml_tensor * pos_k) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(a->src[0]->ne[2] == table->ne[1]);
+    GGML_ASSERT(table->type == GGML_TYPE_F32);
+
+    a->src[6] = table;
+    a->src[7] = pos_q;
+    a->src[8] = pos_k;
+}
+
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(
@@ -24073,9 +24087,24 @@ static void ggml_compute_forward_grouped_topk(
 
 // ggml_compute_forward_flash_attn_ext
 
-static void ggml_compute_forward_flash_attn_ext_f16(
+static inline const float * ggml_flash_attn_f32_row(
+        const struct ggml_tensor * tensor, const void * data, float * scratch, int width) {
+    if (tensor->type == GGML_TYPE_F32) {
+        return (const float *) data;
+    }
+    type_traits[tensor->type].to_float(data, scratch, width);
+    return scratch;
+}
+
+#ifdef _MSC_VER
+static __forceinline
+#else
+static inline __attribute__((always_inline))
+#endif
+void ggml_compute_forward_flash_attn_ext_f16(
         const struct ggml_compute_params * params,
-        struct ggml_tensor * dst) {
+        struct ggml_tensor * dst,
+        const struct ggml_tensor * table) {
 
     const struct ggml_tensor * q     = dst->src[0];
     const struct ggml_tensor * k     = dst->src[1];
@@ -24165,7 +24194,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                 q->data, k->data, v->data, mask ? mask->data : NULL, sinks ? sinks->data : NULL,
                 scale, softcap, (float *)dst->data,
                 params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, ith, nth, dst->op_params[4],
-                dst->src[5])) return;
+                dst)) return;
 
 //    if (max_bias <= 0.0f && q->type == GGML_TYPE_F32 && mask && mask->type == GGML_TYPE_F16) {
 //        //if (ith == 0) printf("k: %ld x %ld x %ld, q: %ld x %ld x %ld, v: %ld x %ld x %ld mask: %ld x %ld x %ld\n",
@@ -24220,7 +24249,13 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     ggml_vec_dot_t    const kq_vec_dot     = type_traits[k->type].vec_dot;
     ggml_to_float_t   const v_to_float     = type_traits[v->type].to_float;
 
-    GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
+    const bool f16_acc = !table && v->type == GGML_TYPE_F16;
+    if (table) {
+        GGML_ASSERT(q->type == GGML_TYPE_F32 || type_traits[q->type].to_float);
+        GGML_ASSERT(k->type == GGML_TYPE_F32 || type_traits[k->type].to_float);
+    } else {
+        GGML_ASSERT(q_to_vec_dot && "fattn: unsupported K-type");
+    }
     GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
 
     const int64_t Dkv = MAX(Dk, Dv);
@@ -24241,15 +24276,17 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         float       * VKQ32 = (float       *) params->wdata + ith*(3*Dkv + CACHE_LINE_SIZE_F32); // FP32 VKQ accumulator
         float       * V32   =                 (VKQ32 + 1*Dkv); // (temporary) FP32 V buffer
         ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*Dkv); // (temporary) FP16 VKQ accumulator
-        ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*Dkv); // (temporary) buffer for Q converted to quantized/FP16
+        float       * Q_q   =                 (VKQ32 + 2*Dkv); // (temporary) converted Q row
 
-        if (v->type == GGML_TYPE_F16) {
+        if (f16_acc) {
             memset(VKQ16, 0, Dkv*sizeof(ggml_fp16_t));
         } else {
             memset(VKQ32, 0, Dkv*sizeof(float));
         }
 
         const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1]) : NULL;
+        const char * bias = table ? (const char *) table->data + h*table->nb[1] + iq1*table->nb[2] : NULL;
+        const int32_t pos_q = table ? ggml_get_i32_1d(dst->src[7], iq1) : 0;
         // without a mask, src[5] lists the K rows of this query
         const int32_t * kv_idx = !mask && dst->src[5] ? (const int32_t *)((char *) dst->src[5]->data + iq1*dst->src[5]->nb[1]) : NULL;
         const int64_t n_kv = kv_idx ? dst->src[5]->ne[0] : nek1;
@@ -24263,7 +24300,11 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         const int iv2 = iq2 / rv2;
 
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
-        q_to_vec_dot(pq, Q_q, Dk);
+        if (table) {
+            pq = ggml_flash_attn_f32_row(q, pq, Q_q, Dk);
+        } else {
+            q_to_vec_dot(pq, Q_q, Dk);
+        }
 
         // online softmax / attention
         // loop over n_kv and n_head_kv
@@ -24281,9 +24322,21 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             float s; // KQ value
 
             const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
-            kq_vec_dot(Dk, &s, 0, k_data, 0, Q_q, 0, 1);
+            if (table) {
+                const float * key = ggml_flash_attn_f32_row(k, k_data, V32, Dk);
+                ggml_vec_dot_f32(Dk, &s, 0, key, 0, pq, 0, 1);
+            } else {
+                kq_vec_dot(Dk, &s, 0, k_data, 0, Q_q, 0, 1);
+            }
 
             s = softcap == 0.0f ? s*scale + mv : softcap*tanhf(s*scale) + mv; // scale KQ value and apply mask
+            if (table) {
+                const struct ggml_tensor * positions = dst->src[8];
+                const int32_t pos_k = *(const int32_t *)((const char *) positions->data + ic*positions->nb[0]);
+                const uint32_t last = table->ne[0] - 1;
+                const uint32_t distance = pos_q >= pos_k ? MIN((uint32_t) pos_q - (uint32_t) pos_k, last) : last;
+                s += *(const float *)(bias + distance*table->nb[0]);
+            }
 
             const float Mold = M;
 
@@ -24292,7 +24345,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
             const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
 
-            if (v->type == GGML_TYPE_F16) {
+            if (f16_acc) {
                 if (s > M) {
                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
                     M = s;
@@ -24320,16 +24373,21 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                     vs = expf(s - M);
                 }
 
-                v_to_float(v_data, V32, Dv);
+                const float * values = V32;
+                if (table) {
+                    values = ggml_flash_attn_f32_row(v, v_data, V32, Dv);
+                } else {
+                    v_to_float(v_data, V32, Dv);
+                }
 
                 // V += v*expf(s - M)
-                ggml_vec_mad_f32(Dv, VKQ32, V32, vs);
+                ggml_vec_mad_f32(Dv, VKQ32, values, vs);
             }
 
             S = S*ms + vs; // scale and increment sum with partial sum
         }
 
-        if (v->type == GGML_TYPE_F16) {
+        if (f16_acc) {
             for (int64_t d = 0; d < Dv; ++d) {
                 VKQ32[d] = GGML_FP16_TO_FP32(VKQ16[d]);
             }
@@ -24376,7 +24434,11 @@ static void ggml_compute_forward_flash_attn_ext(
         case GGML_PREC_F32:
             {
                 // uses F32 accumulators
-                ggml_compute_forward_flash_attn_ext_f16(params, dst);
+                if (dst->src[6]) {
+                    ggml_compute_forward_flash_attn_ext_f16(params, dst, dst->src[6]);
+                } else {
+                    ggml_compute_forward_flash_attn_ext_f16(params, dst, NULL);
+                }
             } break;
         default:
             {

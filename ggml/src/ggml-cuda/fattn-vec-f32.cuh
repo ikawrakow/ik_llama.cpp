@@ -14,7 +14,7 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpass-failed"
 #endif // __clang__
-template<int Dk, int Dv, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap> // Dk, Dv == K-, V-head size
+template<int Dk, int Dv, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool use_rel_bias> // Dk, Dv == K-, V-head size
 #ifndef GGML_USE_HIP
 __launch_bounds__(Dk, 1)
 #endif // GGML_USE_HIP
@@ -24,6 +24,7 @@ static __global__ void flash_attn_vec_ext_f32(
         const char * __restrict__ V,
         const char * __restrict__ mask,
         const char * __restrict__ sinks,
+        const fattn_rel_bias rel_bias,
         const int2 * __restrict__ KV_min_max,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
@@ -251,6 +252,11 @@ static __global__ void flash_attn_vec_ext_f32(
 
                 sum += maskf_shared[j*Dk + i_KQ];
 
+                if constexpr (use_rel_bias) {
+                    const int iq = ic0 + j < ne01 ? ic0 + j : ne01 - 1;
+                    sum += rel_bias.get(iq, head, k_VKQ_0 + i_KQ);
+                }
+
                 kqmax_new_arr[j] = fmaxf(kqmax_new_arr[j], sum);
 
                 if (threadIdx.x == 0) {
@@ -378,10 +384,10 @@ static __global__ void flash_attn_vec_ext_f32(
 #pragma clang diagnostic pop
 #endif // __clang__
 
-template <int Dk, int Dv, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap>
+template <int Dk, int Dv, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool use_rel_bias>
 void ggml_cuda_flash_attn_ext_vec_f32_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     constexpr int nwarps = Dk/WARP_SIZE;
-    fattn_kernel_t fattn_kernel = flash_attn_vec_ext_f32<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap>;
+    fattn_kernel_t fattn_kernel = flash_attn_vec_ext_f32<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap, use_rel_bias>;
     constexpr bool need_f16_K = (Dk != 128 && Dk != 256) && type_K == GGML_TYPE_F16;
     constexpr bool need_f16_V = (Dv != 64 && Dv != 128 && Dv != 256) && type_V == GGML_TYPE_F16;
     constexpr size_t nbytes_shared = 0;
@@ -389,6 +395,19 @@ void ggml_cuda_flash_attn_ext_vec_f32_case_impl(ggml_backend_cuda_context & ctx,
     // granularity. Passing Dv=512 asserts n_kv % 512 == 0, which fails for odd multiples of 256.
     constexpr int kq_row_granularity = (Dv == 512) ? FATTN_KQ_STRIDE : Dv;
     launch_fattn<Dv, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, nbytes_shared, kq_row_granularity, need_f16_K, need_f16_V);
+}
+
+template <int Dk, int Dv, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap>
+void ggml_cuda_flash_attn_ext_vec_f32_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    if constexpr (Dk == 128 && Dv == 128) {
+        if (dst->src[6]) {
+            ggml_cuda_flash_attn_ext_vec_f32_case_impl<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap, true>(ctx, dst);
+        } else {
+            ggml_cuda_flash_attn_ext_vec_f32_case_impl<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap, false>(ctx, dst);
+        }
+    } else {
+        ggml_cuda_flash_attn_ext_vec_f32_case_impl<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap, false>(ctx, dst);
+    }
 }
 
 template <int Dk, int Dv, ggml_type type_K, ggml_type type_V>

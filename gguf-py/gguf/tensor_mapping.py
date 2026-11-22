@@ -959,6 +959,51 @@ class TensorNameMap:
         },
     }
 
+    inkling2_loop_mappings = {
+        MODEL_TENSOR.TOKEN_EMBD: "embed",
+        MODEL_TENSOR.TOKEN_EMBD_NORM: "embed_norm",
+        MODEL_TENSOR.OUTPUT: "unembed",
+        MODEL_TENSOR.OUTPUT_NORM: "norm",
+        MODEL_TENSOR.OUTPUT_RES_QUERY: "attn_res.output_query",
+        MODEL_TENSOR.ATTN_Q: "attn.wq_du",
+        MODEL_TENSOR.ATTN_K: "attn.wk_dv",
+        MODEL_TENSOR.ATTN_V: "attn.wv_dv",
+        MODEL_TENSOR.ATTN_REL: "attn.wr_du",
+        MODEL_TENSOR.ATTN_OUT: "attn.wo_ud",
+        MODEL_TENSOR.ATTN_GATE: "attn.gate_attn",
+        MODEL_TENSOR.ATTN_SINK_PROJ: "attn.attn_sink_proj",
+        MODEL_TENSOR.ATTN_REL_BIAS: "attn.rel_logits_proj.proj",
+        MODEL_TENSOR.ATTN_Q_CLIP: "attn.q_l2_clip.scale",
+        MODEL_TENSOR.ATTN_REL_CLIP: "attn.rel_l2_clip.scale",
+        MODEL_TENSOR.ATTN_NORM: "attn_norm",
+        MODEL_TENSOR.FFN_NORM: "mlp_norm",
+        MODEL_TENSOR.ATTN_K_CONV: "attn.k_sconv",
+        MODEL_TENSOR.ATTN_V_CONV: "attn.v_sconv",
+        MODEL_TENSOR.ATTN_K_CONV_PROJ: "attn.k_sconv.weight_proj",
+        MODEL_TENSOR.ATTN_V_CONV_PROJ: "attn.v_sconv.weight_proj",
+        MODEL_TENSOR.ATTN_POST_CONV: "attn_sconv",
+        MODEL_TENSOR.FFN_POST_CONV: "mlp_sconv",
+        MODEL_TENSOR.FFN_GATE_INP: "mlp.gate",
+        MODEL_TENSOR.FFN_EXP_PROBS_B: "mlp.gate.bias",
+        MODEL_TENSOR.FFN_GATE_UP_EXP: "mlp.experts.w13_weight",
+        MODEL_TENSOR.FFN_DOWN_EXP: "mlp.experts.w2_weight",
+        MODEL_TENSOR.ATTN_Q_INP_NORM: "q_input_norm",
+        MODEL_TENSOR.ATTN_K_INP_NORM: "k_input_norm",
+        MODEL_TENSOR.ATTN_V_INP_NORM: "v_input_norm",
+        MODEL_TENSOR.LOOP_Q_CTRL_DOWN: "controllers.attn.down_weight",
+        MODEL_TENSOR.LOOP_Q_CTRL_FORGET: "controllers.attn.forget_weight",
+        MODEL_TENSOR.LOOP_Q_CTRL_GAIN: "controllers.attn.gain_weight",
+        MODEL_TENSOR.LOOP_K_CTRL_DOWN: "controllers.k.down_weight",
+        MODEL_TENSOR.LOOP_K_CTRL_FORGET: "controllers.k.forget_weight",
+        MODEL_TENSOR.LOOP_K_CTRL_GAIN: "controllers.k.gain_weight",
+        MODEL_TENSOR.LOOP_V_CTRL_DOWN: "controllers.v.down_weight",
+        MODEL_TENSOR.LOOP_V_CTRL_FORGET: "controllers.v.forget_weight",
+        MODEL_TENSOR.LOOP_V_CTRL_GAIN: "controllers.v.gain_weight",
+        MODEL_TENSOR.LOOP_FFN_CTRL_DOWN: "controllers.mlp.down_weight",
+        MODEL_TENSOR.LOOP_FFN_CTRL_FORGET: "controllers.mlp.forget_weight",
+        MODEL_TENSOR.LOOP_FFN_CTRL_GAIN: "controllers.mlp.gain_weight",
+    }
+
     mapping: dict[str, tuple[MODEL_TENSOR, str]]
 
     def __init__(self, arch: MODEL_ARCH, n_blocks: int):
@@ -982,6 +1027,20 @@ class TensorNameMap:
                 for key in keys:
                     key = key.format(bid = bid)
                     self.mapping[key] = (tensor, tensor_name)
+
+        if arch == MODEL_ARCH.INKLING2_LOOP:
+            for tensor in MODEL_TENSORS[arch]:
+                target = TENSOR_NAMES[tensor]
+                source = self.inkling2_loop_mappings.get(tensor)
+                if "{bid}" in target:
+                    for bid in range(n_blocks):
+                        name = target.format(bid=bid)
+                        self.mapping[name] = (tensor, name)
+                        if source is not None:
+                            self.mapping[f"model.llm.layers.{bid}.{source}"] = (tensor, name)
+                elif source is not None:
+                    self.mapping[f"model.llm.{source}"] = (tensor, target)
+                    self.mapping[target] = (tensor, target)
 
     def get_type_and_name(self, key: str, try_suffixes: Sequence[str] = ()) -> tuple[MODEL_TENSOR, str] | None:
         result = self.mapping.get(key)

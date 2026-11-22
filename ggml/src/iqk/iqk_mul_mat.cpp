@@ -1704,9 +1704,14 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
                          float         scale,    // scale applied before softmax
                          float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                          float       * qkv,      // v*softmax(scale*(k*q))
-                         float * M, float * S) {
+                         float * M, float * S, const IQKRelBias & bias) {
 
     if (!mask || nk1%32 != 0) return false; // the implementation assumes mask is not null and nk is a multiple of 32
+
+    if (bias.table) {
+        return iqk_fa_128_128_bias(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S, bias);
+    }
 
     if (Dk == 576 && Dv == 512) {
         return iqk_fa_576_512(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
