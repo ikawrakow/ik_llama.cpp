@@ -95,7 +95,7 @@ static ggml_tensor * inkling_conv(llm_build_context & llm, ggml_cgraph * gf, int
     if (batch.pos && batch.pos[0] == 0) {
         past = ggml_fill(ctx, past, 0.0f);
     }
-    auto window = ggml_concat(ctx, past, ggml_cont(ctx, ggml_transpose(ctx, x)), 0);
+    auto window = llm.build_conv_window(gf, past, x, il, channel_offset);
     auto tail = ggml_view_2d(ctx, window, history, channels, window->nb[1], tokens * window->nb[0]);
     const int sequences = batch.n_seq_id ? batch.n_seq_id[0] : 1;
     for (int i = 0; i < sequences; ++i) {

@@ -3688,7 +3688,7 @@ common_speculative_round_result common_speculative_run_round(
     }
 
     if (!ids.empty()) {
-        common_speculative_commit(
+        if (!common_speculative_commit(
             spec,
             ctx,
             sampler,
@@ -3697,7 +3697,12 @@ common_speculative_round_result common_speculative_run_round(
             ids,
             (int) draft.size(),
             n_past + 1,
-            accepted_output_indices);
+            accepted_output_indices)) {
+            llama_batch_free(verify_batch);
+            result.failed = true;
+            result.error = "speculative checkpoint commit failed";
+            return result;
+        }
         result.ids = std::move(ids);
         result.used_speculative = true;
     }
