@@ -23,5 +23,7 @@ struct mmvq_args {
     const uint64_t bias_nb1;
     ggml_unary_op  unary_op;
     float          limit;
+    float          beta;
+    float          beta_linear;
 };
 
