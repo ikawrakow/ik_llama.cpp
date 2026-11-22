@@ -2045,8 +2045,6 @@ static void * ggml_cuda_host_malloc(size_t size) {
     return ptr;
 }
 
-// Stage 2a NUMA band placement is Linux-only; the entry points exist so the
-// loader can call them unconditionally on CUDA builds.
 void ggml_host_pin_defer(bool /*enable*/) {
 }
 
