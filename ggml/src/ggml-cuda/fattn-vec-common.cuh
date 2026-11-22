@@ -7,7 +7,8 @@
 
 #pragma once
 
-#include "fattn.cuh"
+#include "common.cuh"
+#include "fattn-rel-bias.cuh"
 #include "convert.cuh"
 #include "vecdotq.cuh"
 
