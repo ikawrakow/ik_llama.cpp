@@ -706,8 +706,12 @@ int server_slot::get_n_draft_max() const {
 }
 
 void server_slot::release() {
-    if (state == SLOT_STATE_PROCESSING) {
-        t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
+    // Also release slots with a pending prompt (IDLE + LOAD_PROMPT), e.g. after
+    // a rejected request, so they cannot keep the slot busy until the KV is full.
+    if (is_processing()) {
+        if (state == SLOT_STATE_PROCESSING) {
+            t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
+        }
         command = SLOT_COMMAND_RELEASE;
         state = SLOT_STATE_IDLE;
         task.reset();
@@ -4251,8 +4255,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             {"id_task", slot.id_task}
                             });
 
-                        slot.state = SLOT_STATE_PROCESSING;
-                        slot.command = SLOT_COMMAND_NONE;
                         send_final_response(slot);
                         slot.release();
                         slot.print_timings();
@@ -4262,8 +4264,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     if (slot.embedding) {
                         // this prompt is too large to process - discard it
                         if (slot.n_prompt_tokens > n_ubatch) {
-                            slot.state = SLOT_STATE_PROCESSING;
-                            slot.command = SLOT_COMMAND_NONE;
                             slot.release();
                             send_error(slot, "input is too large to process. increase the physical batch size", ERROR_TYPE_SERVER);
                             continue;
