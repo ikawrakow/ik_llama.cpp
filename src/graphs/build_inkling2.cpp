@@ -181,16 +181,14 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
 
     auto table = ggml_mul_mat(ctx, layer.attn_rel_bias, r);
     table = ggml_pad(ctx, table, hp.inkling_relative_extent_max() + 1 - table->ne[0], 0, 0, 0);
-    table = ggml_cont(ctx, ggml_transpose(ctx, table));
-    auto sinks = ggml_reshape_3d(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_sink_proj, uq), heads, 1, tokens);
-    table = ggml_sub(ctx, table, sinks);
+    auto sinks = ggml_reshape_3d(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_sink_proj, uq), 1, heads, tokens);
+    table = ggml_add(ctx, table, ggml_scale(ctx, sinks, -1.0f));
     auto zero = ggml_fill(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, heads), 0.0f);
     ggml_tensor * result;
     if (llm.flash_attn) {
         auto v_cache = kv.v_l[il];
         const size_t row = ggml_row_size(v_cache->type, dv * kv_heads);
         auto values = ggml_view_3d(ctx, v_cache, dv, count, kv_heads, row, ggml_row_size(v_cache->type, dv), offset * row);
-        table = ggml_cont(ctx, ggml_transpose(ctx, table));
         auto pos_k = compact ? llm.lctx.inp_pos_k_swa : llm.lctx.inp_pos_k;
         result = ggml_flash_attn_ext(ctx, q, keys, values, mask, scale, 0.0f, 0.0f);
         ggml_flash_attn_ext_add_rel_bias(result, table, llm.lctx.inp_pos_q, pos_k);
@@ -205,7 +203,7 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
         ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
         kq = ggml_scale(ctx, kq, scale);
         auto indices = compact ? llm.lctx.inp_rel_pos_swa : llm.lctx.inp_rel_pos;
-        auto bias = ggml_get_rows(ctx, table, indices);
+        auto bias = ggml_get_rows(ctx, ggml_cont(ctx, ggml_transpose(ctx, table)), indices);
         bias = ggml_cont(ctx, ggml_permute(ctx, bias, 2, 0, 1, 3));
         auto probs = ggml_soft_max_ext(ctx, ggml_add(ctx, kq, bias), mask, 1.0f, 0.0f);
         ggml_soft_max_add_sinks(probs, zero);
