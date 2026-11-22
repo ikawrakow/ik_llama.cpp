@@ -139,11 +139,8 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
     const int dk = hp.n_embd_head_k(il);
     const int dv = hp.n_embd_head_v(il);
     const int tokens = llm.n_tokens;
-    auto project = [&](ggml_tensor * weight, ggml_tensor * x) {
-        return llm.llm_build_lora_mm(llm.lctx, ctx, weight, x);
-    };
-    auto q = ggml_reshape_3d(ctx, project(layer.wq, uq), dk, heads, tokens);
-    auto r = ggml_reshape_3d(ctx, project(layer.attn_rel, uq), hp.n_relative, heads, tokens);
+    auto q = ggml_reshape_3d(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.wq, uq), dk, heads, tokens);
+    auto r = ggml_reshape_3d(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_rel, uq), hp.n_relative, heads, tokens);
     q = inkling_clip(ctx, q, layer.attn_q_clip, hp.f_qk_clip);
     r = inkling_clip(ctx, r, layer.attn_rel_clip, hp.f_relative_clip);
     if (tau) {
@@ -151,11 +148,11 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
         r = ggml_mul(ctx, r, tau);
     }
 
-    auto k = inkling_conv(llm, gf, il, project(layer.wk, uk), 0, layer.attn_k_conv,
-            tau ? project(layer.attn_k_conv_proj, uk) : nullptr);
+    auto k = inkling_conv(llm, gf, il, llm.llm_build_lora_mm(llm.lctx, ctx, layer.wk, uk), 0, layer.attn_k_conv,
+            tau ? llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_k_conv_proj, uk) : nullptr);
     k = inkling_clip(ctx, ggml_reshape_3d(ctx, k, dk, kv_heads, tokens), nullptr, hp.f_qk_clip);
-    auto v = inkling_conv(llm, gf, il, project(layer.wv, uv), dk * kv_heads, layer.attn_v_conv,
-            tau ? project(layer.attn_v_conv_proj, uv) : nullptr);
+    auto v = inkling_conv(llm, gf, il, llm.llm_build_lora_mm(llm.lctx, ctx, layer.wv, uv), dk * kv_heads, layer.attn_v_conv,
+            tau ? llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_v_conv_proj, uv) : nullptr);
     v = ggml_rms_norm(ctx, ggml_reshape_3d(ctx, v, dv, kv_heads, tokens), llm.norm_rms_eps);
     if (llm.cparams.k_cache_hadamard) {
         if (int block_size = llm.model.hadamard_size_k(il); block_size > 0) {
@@ -185,7 +182,7 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
     auto table = ggml_mul_mat(ctx, layer.attn_rel_bias, r);
     table = ggml_pad(ctx, table, hp.inkling_relative_extent_max() + 1 - table->ne[0], 0, 0, 0);
     table = ggml_cont(ctx, ggml_transpose(ctx, table));
-    auto sinks = ggml_reshape_3d(ctx, project(layer.attn_sink_proj, uq), heads, 1, tokens);
+    auto sinks = ggml_reshape_3d(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_sink_proj, uq), heads, 1, tokens);
     table = ggml_sub(ctx, table, sinks);
     auto zero = ggml_fill(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, heads), 0.0f);
     ggml_tensor * result;
@@ -222,8 +219,8 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
     }
     result = ggml_reshape_2d(ctx, result, dv * heads, tokens);
     llm.cb(result, "kqv_merged_cont", il);
-    auto gated = ggml_fused_mul_unary(ctx, project(layer.wqkv_gate, uq), result, GGML_UNARY_OP_SIGMOID);
-    return inkling_conv(llm, gf, il, project(layer.wo, gated), (dk + dv) * kv_heads, layer.attn_post_conv);
+    auto gated = ggml_fused_mul_unary(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.wqkv_gate, uq), result, GGML_UNARY_OP_SIGMOID);
+    return inkling_conv(llm, gf, il, llm.llm_build_lora_mm(llm.lctx, ctx, layer.wo, gated), (dk + dv) * kv_heads, layer.attn_post_conv);
 }
 
 ggml_cgraph * llm_build_context::build_inkling2_loop() {
