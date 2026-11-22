@@ -4894,9 +4894,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DS4_COMP",
     "FMA",
     "MULTI_ADD_UNARY_SCALE",
+    "INKLING2_CLIP",
 };
 
-static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
+static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -5025,10 +5026,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "ds4_comp(state, score, idx)",
     "c + a*b",
     "c*sum(unary(x,y))",
+    "inkling2_clip(x)",
 
 };
 
-static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
+static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -7303,6 +7305,26 @@ struct ggml_tensor * ggml_fused_mul_unary_inplace(
         enum ggml_unary_op op) {
     return ggml_fused_mul_unary_impl(ctx, a, b, op, true);
 }
+
+struct ggml_tensor * ggml_inkling2_clip(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float scale, float bias,
+            float limit,
+            float clamp_min, float clamp_max) {
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    result->src[0] = a;
+    result->op = GGML_OP_INKLING2_CLIP;
+    memcpy(result->op_params+0, &scale, sizeof(float));
+    memcpy(result->op_params+1, &bias,  sizeof(float));
+    memcpy(result->op_params+2, &limit, sizeof(float));
+    memcpy(result->op_params+3, &clamp_min, sizeof(float));
+    memcpy(result->op_params+4, &clamp_max, sizeof(float));
+
+    return result;
+}
+
 
 // ggml_div
 
@@ -15497,6 +15519,62 @@ static void ggml_compute_forward_fma(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_fma_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+static void ggml_compute_forward_inkling2_clip_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    struct ggml_tensor * src0 = dst->src[0];
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->nb[0] == sizeof(float) && dst->nb[0] == sizeof(float));
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int nrows = ggml_nrows(src0);
+    int npt = (nrows + nth - 1)/nth;
+    int first = npt*ith;
+    int last  = MIN(first + npt, nrows);
+
+    int ne00  = src0->ne[0];
+
+    float scale, bias, limit, clamp_min, clamp_max;
+    memcpy(&scale, dst->op_params+0, sizeof(float));
+    memcpy(&bias,  dst->op_params+1, sizeof(float));
+    memcpy(&limit, dst->op_params+2, sizeof(float));
+    memcpy(&clamp_min,  dst->op_params+3, sizeof(float));
+    memcpy(&clamp_max,  dst->op_params+4, sizeof(float));
+
+    for (int ir = first; ir < last; ++ir) {
+        int i3 = ir/(src0->ne[1]*src0->ne[2]);
+        int i2 = (ir - i3*src0->ne[1]*src0->ne[2])/src0->ne[1];
+        int i1 = (ir - i3*src0->ne[1]*src0->ne[2] - i2*src0->ne[1]);
+        const float * x = (const float *)((const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]);
+        float * y = (float *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
+        float sum2 = 0;
+        for(int j = 0; j < ne00; ++j) sum2 += x[j]*x[j];
+        float norm = limit/(scale*sqrtf(sum2) + bias);
+        norm = MAX(clamp_min, MIN(clamp_max, norm));
+        for(int j = 0; j < ne00; ++j) y[j] = norm*x[j];
+    }
+}
+
+static void ggml_compute_forward_inkling2_clip(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_inkling2_clip_f32(params, dst);
             } break;
         default:
             {
@@ -28047,6 +28125,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_fma(params, tensor);
             } break;
+        case GGML_OP_INKLING2_CLIP:
+            {
+                ggml_compute_forward_inkling2_clip(params, tensor);
+            } break;
         case GGML_OP_FUSED_MUL_UNARY:
             {
                 ggml_compute_forward_fused_mul_unary(params, tensor);
@@ -28073,6 +28155,18 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_SQR:
             {
+                if (fusion && i + 9 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_SUM_ROWS &&
+                    cgraph->nodes[i+2]->op == GGML_OP_SQRT &&
+                    cgraph->nodes[i+3]->op == GGML_OP_SCALE &&
+                    cgraph->nodes[i+4]->op == GGML_OP_FILL &&
+                    cgraph->nodes[i+5]->op == GGML_OP_DIV &&
+                    cgraph->nodes[i+6]->op == GGML_OP_RESHAPE &&
+                    cgraph->nodes[i+7]->op == GGML_OP_CLAMP &&
+                    cgraph->nodes[i+8]->op == GGML_OP_RESHAPE &&
+                    cgraph->nodes[i+9]->op == GGML_OP_MUL) {
+                    if (params->ith == 0) printf("Could fuse %d...%d\n", i, i+9);
+                }
                 ggml_compute_forward_sqr(params, tensor);
             } break;
         case GGML_OP_SQRT:
@@ -28898,6 +28992,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 }
             } break;
         case GGML_OP_FMA:
+            {
+                GGML_ABORT("Fatal error");
+            } break;
+        case GGML_OP_INKLING2_CLIP:
             {
                 GGML_ABORT("Fatal error");
             } break;
@@ -30296,6 +30394,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SILU_BACK:
         case GGML_OP_MUL:
         case GGML_OP_FMA:
+        case GGML_OP_INKLING2_CLIP:
         case GGML_OP_FUSED_MUL_UNARY:
         case GGML_OP_MULTI_ADD_UNARY:
         case GGML_OP_DIV:

@@ -120,11 +120,13 @@ static ggml_tensor * inkling_clip(ggml_context * ctx, ggml_tensor * x, ggml_tens
     if (weight) {
         x = ggml_mul(ctx, x, weight);
     }
-    auto length = ggml_sqrt(ctx, ggml_sum_rows(ctx, ggml_sqr(ctx, x)));
-    length = ggml_scale_bias(ctx, length, 1.0f, 1e-6f);
-    auto factor = ggml_div(ctx, ggml_fill(ctx, length, limit), length);
-    auto flat = ggml_reshape_1d(ctx, factor, ggml_nelements(factor));
-    return ggml_mul(ctx, x, ggml_reshape(ctx, ggml_clamp(ctx, flat, 0.0f, 1.0f), factor));
+    float scale = 1.0f, eps = 1e-6f, min = 0.0f, max = 1.0f;
+    return ggml_inkling2_clip(ctx, x, scale, eps, limit, min, max);
+    //auto length = ggml_sqrt(ctx, ggml_sum_rows(ctx, ggml_sqr(ctx, x)));
+    //length = ggml_scale_bias(ctx, length, 1.0f, 1e-6f);
+    //auto factor = ggml_div(ctx, ggml_fill(ctx, length, limit), length);
+    //auto flat = ggml_reshape_1d(ctx, factor, ggml_nelements(factor));
+    //return ggml_mul(ctx, x, ggml_reshape(ctx, ggml_clamp(ctx, flat, 0.0f, 1.0f), factor));
 }
 
 static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf, int il,
@@ -139,8 +141,20 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
     const int dk = hp.n_embd_head_k(il);
     const int dv = hp.n_embd_head_v(il);
     const int tokens = llm.n_tokens;
-    auto q = ggml_reshape_3d(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.wq, uq), dk, heads, tokens);
-    auto r = ggml_reshape_3d(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_rel, uq), hp.n_relative, heads, tokens);
+    auto q = llm.llm_build_lora_mm(llm.lctx, ctx, layer.wq, uq);
+    llm.cb(q, "attn_q", il);
+    auto r = llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_rel, uq);
+    llm.cb(r, "attn_r", il);
+    auto sinks = llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_sink_proj, uq);
+    llm.cb(sinks, "attn_sinks", il);
+    auto gated = llm.llm_build_lora_mm(llm.lctx, ctx, layer.wqkv_gate, uq);
+    llm.cb(gated, "attn_gate", il);
+    ggml_build_forward_expand(gf, q);
+    ggml_build_forward_expand(gf, r);
+    ggml_build_forward_expand(gf, sinks);
+    ggml_build_forward_expand(gf, gated);
+    q = ggml_reshape_3d(ctx, q, dk, heads, tokens);
+    r = ggml_reshape_3d(ctx, r, hp.n_relative, heads, tokens);
     q = inkling_clip(ctx, q, layer.attn_q_clip, hp.f_qk_clip);
     r = inkling_clip(ctx, r, layer.attn_rel_clip, hp.f_relative_clip);
     if (tau) {
@@ -181,7 +195,7 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
 
     auto table = ggml_mul_mat(ctx, layer.attn_rel_bias, r);
     table = ggml_pad(ctx, table, hp.inkling_relative_extent_max() + 1 - table->ne[0], 0, 0, 0);
-    auto sinks = ggml_reshape_3d(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.attn_sink_proj, uq), 1, heads, tokens);
+    sinks = ggml_reshape_3d(ctx, sinks, 1, heads, tokens);
     table = ggml_add(ctx, table, ggml_scale(ctx, sinks, -1.0f));
     auto zero = ggml_fill(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, heads), 0.0f);
     ggml_tensor * result;
@@ -217,7 +231,7 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
     }
     result = ggml_reshape_2d(ctx, result, dv * heads, tokens);
     llm.cb(result, "kqv_merged_cont", il);
-    auto gated = ggml_fused_mul_unary(ctx, llm.llm_build_lora_mm(llm.lctx, ctx, layer.wqkv_gate, uq), result, GGML_UNARY_OP_SIGMOID);
+    gated = ggml_fused_mul_unary(ctx, gated, result, GGML_UNARY_OP_SIGMOID);
     return inkling_conv(llm, gf, il, llm.llm_build_lora_mm(llm.lctx, ctx, layer.wo, gated), (dk + dv) * kv_heads, layer.attn_post_conv);
 }
 
