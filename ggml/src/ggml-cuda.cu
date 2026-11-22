@@ -1814,16 +1814,13 @@ GGML_CALL static const char * ggml_backend_cuda_host_buffer_name(ggml_backend_bu
 }
 
 #ifdef __linux__
-// Stage 2a round 4: a deferred region that is freed before it was committed
-// (transient allocations made inside the defer window) must never be
+// transient allocations made inside the defer window must never be
 // registered later - commit would pin a virtual address the allocator has
 // already handed out again. The free path drops the pending entry here.
 static void ggml_host_pin_discard(void * ptr);
 
 GGML_CALL static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     // The region may be deferred-pinned memory that was never registered
-    // (NUMA band placement path, freed before or without a commit); tolerate
-    // both registered and never-registered regions here.
     ggml_host_pin_discard(buffer->context);
     if (cudaHostUnregister(buffer->context) != cudaSuccess) {
         cudaGetLastError(); // clear the error
@@ -1831,15 +1828,7 @@ GGML_CALL static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buf
     munmap(buffer->context, buffer->size);
 }
 
-// Stage 2a deferred pinning state (see ggml_cuda_host_malloc): the loader
-// enables it while weight buffers are created so it can mbind expert row
-// bands node-local before any page is faulted, then commits the pin right
-// after placement and before the loader runs (round 4; see src/llama.cpp).
 static bool g_host_pin_deferred_flag = false;
-// ptr -> size. A map, not a vector: transient allocations inside the defer
-// window (e.g. the loader's staging buffers) free their regions again, and a
-// freed region must never be committed; mmap also hands the same virtual
-// address out again, which a vector of stale entries would re-register.
 static std::map<void *, size_t> g_host_pin_pending;
 static std::mutex g_host_pin_mutex;
 
@@ -1882,14 +1871,11 @@ static void * ggml_cuda_host_malloc(size_t size) {
         madvise(ptr, size, MADV_HUGEPAGE);
     }
 
-    // Stage 2a NUMA band placement: when the loader has enabled deferred
-    // pinning, return the region as plain anonymous mmap - no prefault, no
-    // register. The loader then binds the MoE expert row bands to their NUMA
-    // nodes with mbind() while no page exists, weight loading faults every
-    // band onto its node, and ggml_host_pin_commit() prefaults whatever is
-    // left and registers the regions in place afterwards: pinned memory
-    // whose pages are node-local. GGML_CUDA_NO_NUMA_PIN=1 restores the
-    // stock allocate-and-pin-immediately behavior.
+    // when the loader has enabled deferred pinning, return the region as plain 
+    // anonymous mmap - no prefault, no register. The loader then binds the MoE 
+    // expert row bands to their NUMA nodes with mbind() while no page exists, 
+    // weight loading faults every band onto its node. ggml_host_pin_commit() 
+    // prefaults whatever is left and registers the regions in place afterwards
     if (ggml_cuda_host_pin_deferred() && getenv("GGML_CUDA_NO_NUMA_PIN") == nullptr) {
         std::lock_guard<std::mutex> lock(g_host_pin_mutex);
         g_host_pin_pending[ptr] = size;
@@ -1900,11 +1886,6 @@ static void * ggml_cuda_host_malloc(size_t size) {
         return ptr;
     }
 
-    // Stage 2b: the "Allocating pinned host memory" banner now prints only on
-    // the path that actually pins here; a deferred (NUMA band placement)
-    // allocation prints its own "deferring pin" line below instead, so the
-    // log no longer suggests killing the process for a pin that never
-    // happened.
     if (size_GiB > k_warn_limit) {
         GGML_CUDA_LOG_INFO("\n\nAllocating %.2f GiB of pinned host memory, this may take a while.\n", size_GiB);
         GGML_CUDA_LOG_INFO("Using pinned host memory improves PP performance by a significant margin.\n");
@@ -1941,9 +1922,6 @@ static void * ggml_cuda_host_malloc(size_t size) {
     return ptr;
 }
 
-// Stage 2a deferred pinning API (see ggml_cuda_host_malloc). Set
-// GGML_NUMA_NO_DEFER_PIN=1 to restore stock allocate-and-pin-immediately
-// behavior regardless of what the caller asks for.
 void ggml_host_pin_defer(bool enable) {
     static const bool no_defer = getenv("GGML_NUMA_NO_DEFER_PIN") != nullptr;
     std::lock_guard<std::mutex> lock(g_host_pin_mutex);
@@ -1952,12 +1930,7 @@ void ggml_host_pin_defer(bool enable) {
 
 // Prefault and pin (cudaHostRegister) every still-live region allocated while
 // deferred pinning was enabled. Regions freed in the meantime were discarded
-// at free time and do not appear here. When called after placement but before
-// weight loading (the round-4 order in src/llama.cpp), MADV_POPULATE_WRITE
-// faults every page through the band mbind policy, so the buffer comes up
-// pinned AND node-local before any weight byte is written. Returns the number
-// of bytes successfully registered. A region whose registration fails stays
-// unpinned (functional, just not pinned); the free path tolerates both states.
+// at free time and do not appear here.
 size_t ggml_host_pin_commit(void) {
     std::map<void *, size_t> pending;
     {
@@ -1970,9 +1943,7 @@ size_t ggml_host_pin_commit(void) {
         void * ptr = region.first;
         const size_t size = region.second;
 
-        // defense in depth: never pin a region that overlaps one we already
-        // pinned in this pass (a stale address the allocator handed out twice
-        // would otherwise corrupt the driver's pinned-page bookkeeping)
+        // never pin a region that overlaps one we already pinned
         bool overlap = false;
         for (const auto & r : registered) {
             if (ptr < (char *)r.first + r.second && (char *)ptr + size > r.first) {
