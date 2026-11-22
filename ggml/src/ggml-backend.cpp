@@ -1701,6 +1701,21 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             continue;
         }
         int * node_backend_id = &tensor_backend_id(node);
+
+        // An in-place result still aliases its base tensor after split inputs are copied.
+        int * storage_backend_id = NULL;
+        if (node->view_src != NULL && node->op != GGML_OP_REDUCE && node->op != GGML_OP_FAKE_CPY) {
+            storage_backend_id = &tensor_backend_id(node->view_src);
+            if (*storage_backend_id != -1) {
+                if (*node_backend_id != *storage_backend_id) {
+                    GGML_ASSERT(ggml_backend_supports_op(sched->backends[*storage_backend_id], node));
+                    *node_backend_id = *storage_backend_id;
+                    SET_CAUSE(node, "3.vsrc");
+                }
+                continue;
+            }
+        }
+
         if (*node_backend_id == -1) {
             // unassigned node: find the backend with the most supported inputs
             int n_supported_best = -1;
@@ -1747,6 +1762,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     }
                 }
             }
+        }
+        if (storage_backend_id != NULL) {
+            // No producer or buffer assigned this leaf to a backend.
+            *storage_backend_id = *node_backend_id;
         }
     }
 
