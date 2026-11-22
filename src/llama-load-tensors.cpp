@@ -684,6 +684,9 @@ bool create_tensors_helper::create_inkling2_loop_tensors(const LLM_TN & tn) {
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"),
             {n_embd, hparams.n_vocab_model});
+    if (hparams.n_vocab_model > hparams.n_vocab) {
+        model.output = ggml_view_2d(ctx_output, model.output, n_embd, hparams.n_vocab, model.output->nb[1], 0);
+    }
     model.output_res_query = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_RES_QUERY, "weight"), {n_embd});
 
     const bool unrolled = ml.get_arch_name() == "inkling2";

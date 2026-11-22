@@ -335,10 +335,6 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         x = ggml_get_rows(ctx0, x, inp_out_ids);
     }
     auto logits = build_output(lctx, ctx0, x, model.output, model.output_norm, cb, true);
-    logits = ggml_view_2d(ctx0, logits, hparams.n_vocab, logits->ne[1], logits->nb[1], 0);
-    if (!ggml_is_contiguous(logits)) {
-        logits = ggml_cont(ctx0, logits);
-    }
     const float cap = hparams.f_final_logit_softcapping;
     logits = ggml_softcap(ctx0, logits, 1.0f / cap, cap);
     cb(logits, "result_output", -1);
