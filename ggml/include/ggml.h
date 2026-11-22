@@ -752,6 +752,7 @@ extern "C" {
 
         GGML_OP_FMA,
         GGML_OP_MULTI_ADD_UNARY,
+        GGML_OP_INKLING2_CLIP,
 
         GGML_OP_COUNT,
     };
@@ -1500,6 +1501,13 @@ extern "C" {
             struct ggml_tensor  * c,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_inkling2_clip(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float scale, float bias,
+            float limit,
+            float clamp_min, float clamp_max);
 
     //
     // *** from mainline begin ***

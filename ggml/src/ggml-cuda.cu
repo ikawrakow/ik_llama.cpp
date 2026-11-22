@@ -71,6 +71,7 @@
 #include "ggml-cuda/blend.cuh"
 #include "ggml-cuda/indexer_topk.cuh"
 #include "ggml-cuda/ds4_comp.cuh"
+#include "ggml-cuda/inkling2.cuh"
 
 #include <algorithm>
 #include <array>
@@ -4424,6 +4425,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_FMA:
             ggml_cuda_op_fma(ctx, dst);
             break;
+        case GGML_OP_INKLING2_CLIP:
+            ggml_cuda_op_inkling2_clip(ctx, dst);
+            break;
         case GGML_OP_FUSED_MUL_UNARY:
             ggml_cuda_op_fused_mul_unary(ctx, dst);
             break;
@@ -5796,6 +5800,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_MUL_MULTI_ADD:
         case GGML_OP_MUL:
         case GGML_OP_FMA:
+        case GGML_OP_INKLING2_CLIP:
         case GGML_OP_DIV:
         case GGML_OP_SUB:
         case GGML_OP_FUSED_RMS_NORM:
