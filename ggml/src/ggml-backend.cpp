@@ -1935,6 +1935,15 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split->inputs[n_inputs] = src;
                         }
+                    } else if (((node->op == GGML_OP_MUL_MAT_ID && j == 0) || (node->op == GGML_OP_MOE_FUSED_UP_GATE && j < 2)) &&
+                               src->buffer && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                        // the copy holds only the experts selected in the split that made it
+                        int k = 0;
+                        while (k < split->n_inputs && split->inputs[k] != src) ++k;
+                        if (k == split->n_inputs) {
+                            GGML_ASSERT(split->n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
+                            split->inputs[split->n_inputs++] = src;
+                        }
                     }
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
