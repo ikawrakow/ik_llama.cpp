@@ -2834,6 +2834,8 @@ bool common_speculative_commit(
         }
     }
 
+    const llama_pos feature_pos_base = common_speculative_has_dflash_family(spec) ? pos_base - 1 : pos_base;
+
     if (any_rejected && ckpt.valid) {
         const bool restored = common_speculative_checkpoint_restore(
             ckpt,
@@ -2846,7 +2848,7 @@ bool common_speculative_commit(
             ids,
             n_draft,
             mtp_hidden_state_pre,
-            pos_base);
+            feature_pos_base);
         return restored;
     }
 
@@ -2856,7 +2858,7 @@ bool common_speculative_commit(
                 ctx,
                 spec_type_used,
                 seq_id,
-                pos_base,
+                feature_pos_base,
                 sampled_before,
                 ids,
                 accepted_output_indices)) {
