@@ -138,6 +138,7 @@ static ggml_tensor * inkling_clip(ggml_context * ctx, ggml_tensor * x, ggml_tens
 struct inkling_shared {
     std::map<const ggml_tensor *, ggml_tensor *> rel_bias;
     std::map<int, ggml_tensor *> zero;
+    ggml_tensor * sink_column = nullptr;
 };
 
 static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf, int il,
@@ -207,10 +208,17 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
     auto & rel_bias = shared.rel_bias[layer.attn_rel_bias];
     if (!rel_bias) {
         rel_bias = ggml_pad(ctx, layer.attn_rel_bias, 0, GGML_PAD(hp.inkling_relative_extent_max() + 1, 32) - layer.attn_rel_bias->ne[1], 0, 0);
+        auto & column = shared.sink_column;
+        if (!column) {
+            column = ggml_fill(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, rel_bias->ne[1]), -1.0f);
+            column = ggml_pad(ctx, column, GGML_PAD(rel_bias->ne[0] + 1, 4) - rel_bias->ne[0] - 1, 0, 0, 0);
+        }
+        rel_bias = ggml_concat(ctx, rel_bias, column, 0);
     }
-    auto table = ggml_mul_mat(ctx, rel_bias, r);
     sinks = ggml_reshape_3d(ctx, sinks, 1, heads, tokens);
-    table = ggml_add(ctx, table, ggml_scale(ctx, sinks, -1.0f));
+    auto rs = ggml_concat(ctx, r, sinks, 0);
+    rs = ggml_pad(ctx, rs, rel_bias->ne[0] - rs->ne[0], 0, 0, 0);
+    auto table = ggml_mul_mat(ctx, rel_bias, rs);
     auto & zero = shared.zero[heads];
     if (!zero) {
         zero = ggml_fill(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, heads), 0.0f);
