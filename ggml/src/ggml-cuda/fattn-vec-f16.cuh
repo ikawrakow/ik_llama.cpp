@@ -8,7 +8,7 @@
 #include "common.cuh"
 #include "fattn-vec-common.cuh"
 
-template<int Dk, int Dv, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap> // Dk, Dv == K, V head sizes
+template<int Dk, int Dv, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool use_rel_bias> // Dk, Dv == K, V head sizes
 #if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
 __launch_bounds__(Dk, 1)
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
@@ -18,6 +18,7 @@ static __global__ void flash_attn_vec_ext_f16(
         const char * __restrict__ V,
         const char * __restrict__ mask,
         const char * __restrict__ sinks,
+        const fattn_rel_bias rel_bias,
         const int2 * __restrict__ KV_min_max,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
@@ -238,6 +239,11 @@ static __global__ void flash_attn_vec_ext_f16(
 
                 sum += maskh_shared[j*Dk + i_KQ];
 
+                if constexpr (use_rel_bias) {
+                    const int iq = ic0 + j < ne01 ? ic0 + j : ne01 - 1;
+                    sum = __float2half(__half2float(sum) + rel_bias.get(iq, head, k_VKQ_0 + i_KQ));
+                }
+
                 if (ncols == 1) {
                     kqmax_new        = ggml_cuda_hmax(kqmax_new,        sum);
                 } else {
@@ -372,14 +378,27 @@ static __global__ void flash_attn_vec_ext_f16(
 #endif // FP16_AVAILABLE
 }
 
-template <int Dk, int Dv, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap>
+template <int Dk, int Dv, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool use_rel_bias>
 void ggml_cuda_flash_attn_ext_vec_f16_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     constexpr int nwarps = Dk/WARP_SIZE;
-    fattn_kernel_t fattn_kernel = flash_attn_vec_ext_f16<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap>;
+    fattn_kernel_t fattn_kernel = flash_attn_vec_ext_f16<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap, use_rel_bias>;
     constexpr bool need_f16_K = Dk != 128 && Dk != 192 && Dk != 256;
     constexpr bool need_f16_V = Dv != 64 && Dv != 128 && Dv != 256;
     constexpr size_t nbytes_shared = 0;
     launch_fattn<Dv, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, nbytes_shared, Dv, need_f16_K, need_f16_V);
+}
+
+template <int Dk, int Dv, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap>
+void ggml_cuda_flash_attn_ext_vec_f16_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    if constexpr (Dk == 128 && Dv == 128) {
+        if (dst->src[6]) {
+            ggml_cuda_flash_attn_ext_vec_f16_case_impl<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap, true>(ctx, dst);
+        } else {
+            ggml_cuda_flash_attn_ext_vec_f16_case_impl<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap, false>(ctx, dst);
+        }
+    } else {
+        ggml_cuda_flash_attn_ext_vec_f16_case_impl<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap, false>(ctx, dst);
+    }
 }
 
 template <int Dk, int Dv, ggml_type type_K, ggml_type type_V>

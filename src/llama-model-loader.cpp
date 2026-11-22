@@ -351,6 +351,10 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
 
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
+    if (arch_name == "inkling2" && gguf_find_key(meta, "inkling2.loop.core_start") >= 0) {
+        llm_kv.arch = LLM_ARCH_INKLING2_LOOP;
+        llm_kv.metadata_prefix = "inkling2";
+    }
 
     files.emplace_back(new llama_file(fname.c_str(), "rb"));
     contexts.emplace_back(ctx);
@@ -2036,6 +2040,7 @@ template bool llama_model_loader::get_key<uint32_t>   (enum llm_kv kid, uint32_t
 template bool llama_model_loader::get_key<std::string>(enum llm_kv kid, std::string & result, bool required);
 
 template bool llama_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv kid, std::array<int, 4> & result, uint32_t n, bool required);
+template bool llama_model_loader::get_key_or_arr<std::array<int32_t, 512>>(enum llm_kv kid, std::array<int32_t, 512> & result, uint32_t n, bool required);
 template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
 template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum llm_kv kid, std::array<float, 512> & result, uint32_t n, bool required);
 

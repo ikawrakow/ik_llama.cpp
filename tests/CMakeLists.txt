@@ -199,6 +199,7 @@ llama_build_and_test(test-chat-template.cpp )
 llama_build_and_test(test-json-partial.cpp )
 llama_build_and_test(test-cpu-affinity.cpp )
 llama_build_and_test(test-nanbeige-loop.cpp )
+llama_build_and_test(test-sensenova-loop.cpp )
 #llama_build_and_test(test-log.cpp)
 llama_build_and_test(
     test-peg-parser.cpp

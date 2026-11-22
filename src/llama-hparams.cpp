@@ -4,6 +4,7 @@
 #include "llama-model.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <map>
@@ -163,6 +164,17 @@ void llm_load_hparams(
 
     // get hparams kv
     ml.get_key(LLM_KV_VOCAB_SIZE, hparams.n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, hparams.n_vocab, !ignore_vocab);
+
+    if (model.arch == LLM_ARCH_INKLING2_LOOP) {
+        if (hparams.n_layer > LLAMA_MAX_LAYERS) {
+            throw std::runtime_error("Inkling block count exceeds the supported layer count");
+        }
+        hparams.n_vocab_model = hparams.n_vocab;
+        ml.get_key(LLM_KV_VOCAB_SIZE_UNPADDED, hparams.n_vocab);
+        if (!hparams.n_vocab || hparams.n_vocab > hparams.n_vocab_model) {
+            throw std::runtime_error("invalid Inkling unpadded vocabulary size");
+        }
+    }
 
     // everything past this point is not vocab-related
     if (hparams.vocab_only) {
@@ -355,23 +367,84 @@ void llm_load_hparams(
                     // size_t to avoid wrapping the product for a malformed file.
                     GGML_ASSERT((size_t) hparams.n_layer * (size_t) hparams.n_loops <= (size_t) LLAMA_MAX_LAYERS);
                     hparams.n_layer_phys = hparams.n_layer;
+                    hparams.loop_start   = 0;
+                    hparams.loop_end     = hparams.n_layer;
                     hparams.n_layer_all  = (uint32_t) ((size_t) hparams.n_layer * (size_t) hparams.n_loops);
-                    for (uint32_t il = hparams.n_layer_phys; il < hparams.n_layer_all; ++il) {
-                        const uint32_t ip = il % hparams.n_layer_phys;
-                        hparams.n_head_arr[il]    = hparams.n_head_arr[ip];
-                        hparams.n_head_kv_arr[il] = hparams.n_head_kv_arr[ip];
-                        hparams.n_ff_arr[il]      = hparams.n_ff_arr[ip];
-                        hparams.swa_layers[il]    = hparams.swa_layers[ip];
-                        hparams.recurrent_layer_arr[il] = hparams.recurrent_layer_arr[ip];
-                        hparams.rope_dim_per_layer[il]  = hparams.rope_dim_per_layer[ip];
-                        hparams.rope_freq_base_per_layer[il] = hparams.rope_freq_base_per_layer[ip];
-                    }
                 }
 
                 switch (hparams.n_layer) {
                     case 22: model.type = e_model::MODEL_3B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
+            } break;
+        case LLM_ARCH_INKLING2_LOOP:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
+                ml.get_key(LLM_KV_SHORTCONV_L_CACHE, hparams.n_shortconv_l_cache);
+                ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping);
+                ml.get_key(LLM_KV_ATTN_RES_BLOCK_SIZE, hparams.attn_res_block_size);
+                ml.get_key(LLM_KV_ATTENTION_RELATIVE_LENGTH, hparams.n_relative);
+                ml.get_key(LLM_KV_ATTENTION_RELATIVE_EXTENT, hparams.n_relative_extent);
+                ml.get_key(LLM_KV_ATTENTION_QK_CLIP, hparams.f_qk_clip);
+                ml.get_key(LLM_KV_ATTENTION_RELATIVE_CLIP, hparams.f_relative_clip);
+                ml.get_key(LLM_KV_ATTENTION_LOG_SCALE_FLOOR, hparams.n_log_scale_floor);
+                ml.get_key(LLM_KV_ATTENTION_LOG_SCALE_ALPHA, hparams.f_log_scale_alpha);
+                const bool unrolled = ml.get_arch_name() == "inkling2";
+                if (unrolled) {
+                    ml.get_key("inkling2.loop.core_start", hparams.loop_start);
+                    ml.get_key("inkling2.loop.core_end", hparams.loop_end);
+                } else {
+                    ml.get_key(LLM_KV_LOOP_DOT_START, hparams.loop_start);
+                    ml.get_key(LLM_KV_LOOP_DOT_END, hparams.loop_end);
+                }
+                ml.get_key(unrolled ? LLM_KV_NUM_LOOPS : LLM_KV_LOOP_COUNT, hparams.n_loops);
+                ml.get_key(LLM_KV_LOOP_GATE_RANK, hparams.loop_gate_rank);
+                ml.get_key(LLM_KV_LOOP_VARYING, hparams.loop_varying, !unrolled);
+
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE, hparams.expert_weights_scale);
+                ml.get_key(LLM_KV_ACTIVATION_SITU_BETA, hparams.situ_beta);
+                ml.get_key(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, hparams.situ_linear_beta);
+
+                if (hparams.loop_varying || hparams.n_loops == 0 || hparams.loop_start >= hparams.loop_end ||
+                        hparams.loop_end > hparams.n_layer) {
+                    throw std::runtime_error("unsupported Inkling loop configuration");
+                }
+                const uint32_t core = hparams.loop_end - hparams.loop_start;
+                const uint64_t repeats = uint64_t(hparams.n_loops - 1) * core;
+                if (unrolled && repeats > hparams.n_layer - hparams.loop_end) {
+                    throw std::runtime_error("Inkling block count does not cover the repeated core");
+                }
+                const uint64_t slots = unrolled ? hparams.n_layer : hparams.n_layer + repeats;
+                if (slots > LLAMA_MAX_LAYERS || !hparams.attn_res_block_size || !hparams.n_log_scale_floor ||
+                        !hparams.n_relative || !hparams.n_relative_extent || hparams.n_shortconv_l_cache < 2 ||
+                        hparams.situ_beta <= 0 || hparams.f_final_logit_softcapping <= 0) {
+                    throw std::runtime_error("invalid Inkling decoder dimensions or scales");
+                }
+                if (unrolled) {
+                    auto fold = [&](auto & values, llm_kv key) {
+                        for (uint32_t visit = hparams.loop_end; visit < slots; ++visit) {
+                            const uint32_t phys = hparams.phys_layer(visit);
+                            if (phys < hparams.loop_end && values[visit] != values[phys]) {
+                                throw std::runtime_error(format("%s: visit %u disagrees with physical block %u",
+                                            ml.llm_kv(key).c_str(), visit, phys));
+                            }
+                            values[phys] = values[visit];
+                        }
+                    };
+                    fold(hparams.n_head_arr, LLM_KV_ATTENTION_HEAD_COUNT);
+                    fold(hparams.n_head_kv_arr, LLM_KV_ATTENTION_HEAD_COUNT_KV);
+                    fold(hparams.n_ff_arr, LLM_KV_FEED_FORWARD_LENGTH);
+                    fold(hparams.n_expert_used_arr, LLM_KV_EXPERT_USED_COUNT);
+                    fold(hparams.swa_layers, LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN);
+                    hparams.n_layer -= repeats;
+                }
+                hparams.n_layer_phys = hparams.n_layer;
+                hparams.n_layer_all = slots;
+                hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
+                hparams.expert_weights_norm = true;
             } break;
         case LLM_ARCH_LLAMA4:
             {
@@ -1176,6 +1249,108 @@ void llm_load_hparams(
                         model.type = e_model::MODEL_27B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
+
+                uint32_t loops = 1;
+                ml.get_key(LLM_KV_NUM_LOOPS, loops, false);
+                if (loops > 1) {
+                    throw std::runtime_error("qwen35: looped GGUFs must use the sensenova_loop architecture");
+                }
+            } break;
+        case LLM_ARCH_SENSENOVA_LOOP:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, true);
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                std::array<int32_t, LLAMA_MAX_LAYERS> kinds{};
+                if (ml.get_key_or_arr(LLM_KV_MHC_LAYER_KINDS, kinds, hparams.n_layer, false)) {
+                    throw std::runtime_error("SenseNova-Loop: preview-layout GGUF (mhc.layer_kinds); reconvert it with the updated converter");
+                }
+                ml.get_key(LLM_KV_LOOP_DOT_START, hparams.loop_start);
+                ml.get_key(LLM_KV_LOOP_DOT_END,   hparams.loop_end);
+                ml.get_key(LLM_KV_LOOP_COUNT,     hparams.n_loops);
+                if (!ml.get_key(LLM_KV_MHC_START, hparams.mhc_start, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_START, hparams.mhc_start);
+                }
+                if (!ml.get_key(LLM_KV_MHC_END, hparams.mhc_end, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_END, hparams.mhc_end);
+                }
+                if (!ml.get_key(LLM_KV_MHC_STREAMS, hparams.mhc_num_stream, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT, hparams.mhc_num_stream, false);
+                }
+                if (!ml.get_key(LLM_KV_MHC_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters, false);
+                }
+                if (!ml.get_key(LLM_KV_MHC_FIXED_IDENTITY, hparams.mhc_fixed_identity, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_FIXED_IDENTITY, hparams.mhc_fixed_identity, false);
+                }
+                if (!ml.get_key(LLM_KV_MHC_PRE_SCALE, hparams.mhc_pre_scale, false)) {
+                    ml.get_key(LLM_KV_HYPER_CONNECTION_PRE_SCALE, hparams.mhc_pre_scale, false);
+                }
+
+                const uint32_t n_block = hparams.n_layer;
+                const uint32_t nextn   = hparams.nextn_predict_layers;
+                if (nextn > 1) {
+                    throw std::runtime_error("SenseNova-Loop: at most one MTP layer is supported");
+                }
+                if (hparams.loop_start >= hparams.loop_end || hparams.loop_end > n_block ||
+                        hparams.n_loops < 1 || nextn >= n_block) {
+                    throw std::runtime_error("SenseNova-Loop: invalid loop range or count");
+                }
+                const uint32_t extra = (hparams.n_loops - 1) * (hparams.loop_end - hparams.loop_start);
+                if (extra + nextn >= n_block) {
+                    throw std::runtime_error("SenseNova-Loop: execution plan exceeds the block count");
+                }
+                const uint32_t n_phys = n_block - extra - nextn;
+                if (hparams.mhc_start >= hparams.mhc_end || hparams.mhc_end > n_phys ||
+                        hparams.mhc_fixed_identity || hparams.mhc_num_stream < 1 || hparams.mhc_num_stream > 8 ||
+                        hparams.dsv4_hc_sinkhorn_iters < 1 ||
+                        !std::isfinite(hparams.mhc_pre_scale) || hparams.mhc_pre_scale <= 0.0f) {
+                    throw std::runtime_error("SenseNova-Loop: unsupported mHC configuration");
+                }
+                if (!(hparams.mhc_end <= hparams.loop_start ||
+                      (hparams.mhc_start >= hparams.loop_start && hparams.mhc_end <= hparams.loop_end) ||
+                      hparams.mhc_start >= hparams.loop_end)) {
+                    throw std::runtime_error("SenseNova-Loop: mHC range crosses a loop boundary");
+                }
+
+                hparams.n_layer_phys = n_phys;
+                hparams.n_layer_all  = n_block - nextn;
+                hparams.n_layer      = n_phys;
+                hparams.n_layer_kv_from_start = n_block - nextn;
+                hparams.nextn_predict_layers = model.mtp ? nextn : 0;
+                hparams.skip_loop_final_norm = true;
+                hparams.loop_tail_sparse = true;
+
+                std::array<int32_t, LLAMA_MAX_LAYERS> recr{};
+                const bool has_recr = ml.get_key_or_arr(LLM_KV_ATTENTION_RECURRENT_LAYERS, recr, n_block, false);
+                uint32_t full_attn_interval = 4;
+                if (!has_recr) {
+                    ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
+                }
+                for (uint32_t i = 0; i < n_phys; ++i) {
+                    const uint32_t s = hparams.stored_layer(i);
+                    hparams.recurrent_layer_arr[i] = has_recr ? recr[s] != 0
+                                                              : ((s + 1) % full_attn_interval != 0);
+                }
+                if (has_recr) {
+                    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+                        const uint32_t ip = hparams.phys_layer(il);
+                        if ((recr[il] != 0) != (recr[ip] != 0)) {
+                            throw std::runtime_error("SenseNova-Loop: visits have different attention types");
+                        }
+                    }
+                    if (nextn > 0 && recr[hparams.n_layer_all] != 0) {
+                        throw std::runtime_error("SenseNova-Loop: the MTP layer must be full attention");
+                    }
+                }
+                model.type = n_phys == 32 ? e_model::MODEL_9B : e_model::MODEL_UNKNOWN;
             } break;
         case LLM_ARCH_QWEN3VLMOE:
             {

@@ -87,7 +87,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         }
     }
 
-    ggml_tensor local_dst, Kl, Vl, Ml;
+    ggml_tensor local_dst, Kl, Vl, Ml, Pkl;
     if (n_swa > 0) {
         int ntokens = std::max(FATTN_KQ_STRIDE, int(Q->ne[1]));
         int nton = FATTN_KQ_STRIDE*((ntokens + n_swa + FATTN_KQ_STRIDE - 1)/FATTN_KQ_STRIDE);
@@ -102,6 +102,10 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             local_dst.src[1] = &Kl;
             local_dst.src[2] = &Vl;
             local_dst.src[3] = &Ml;
+            if (dst->src[8]) {
+                Pkl = *dst->src[8]; Pkl.ne[0] = nton; Pkl.data = (char *)Pkl.data + Pkl.nb[0]*first;
+                local_dst.src[8] = &Pkl;
+            }
             local_dst.op_params[4] = 0;
             dst = &local_dst;
         }
@@ -138,7 +142,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             return;
         }
         // With GQA the vec kernel reads every K/V row once per Q head. The tile kernel packs 4 or 8 Q heads per K/V head.
-        if (cc == CC_PASCAL && Q->ne[1] == 1 && (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) && V->type == K->type &&
+        if (!dst->src[6] && cc == CC_PASCAL && Q->ne[1] == 1 && (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) && V->type == K->type &&
             ggml_cuda_fattn_tile_new_is_supported(ctx, dst)) {
             ggml_cuda_flash_attn_ext_tile_new(ctx, dst);
             return;
@@ -172,12 +176,12 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
     int gqa_ratio = Q->ne[2] / K->ne[2];
 
-    if (new_mma_available(cc) && K->ne[0] == 128 && V->ne[0] == 128 && Q->ne[0] == 128 && Q->ne[1] == 1 &&
+    if (!dst->src[6] && new_mma_available(cc) && K->ne[0] == 128 && V->ne[0] == 128 && Q->ne[0] == 128 && Q->ne[1] == 1 &&
             (gqa_ratio == 12 || gqa_ratio == 6 || gqa_ratio == 10 || gqa_ratio == 5)) {
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
         return;
     }
-    if (new_mma_available(cc) && K->ne[0] == 128 && V->ne[0] == 128 && Q->ne[0] == 128 &&  gqa_ratio == 5) {
+    if (!dst->src[6] && new_mma_available(cc) && K->ne[0] == 128 && V->ne[0] == 128 && Q->ne[0] == 128 &&  gqa_ratio == 5) {
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
         return;
     }
@@ -237,6 +241,10 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * V    = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
+
+    if (dst->src[6] && (Q->ne[0] != 128 || V->ne[0] != 128)) {
+        return false;
+    }
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const int32_t precision = KQV->op_params[3];

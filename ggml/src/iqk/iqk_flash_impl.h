@@ -7,6 +7,22 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
+
+struct IQKRelBias {
+    const float * table;
+    const int32_t * pos_q;
+    const int32_t * pos_k;
+    size_t row_stride;
+    int pos_q_stride;
+    int32_t max_distance;
+    int key_offset = 0;
+
+    void advance_rows(int n) {
+        table += n*row_stride;
+        pos_q += n*pos_q_stride;
+    }
+};
 
 bool iqk_flash_attn_impl(int type_k,             // type of k
                          int type_v,             // type of v
@@ -29,7 +45,7 @@ bool iqk_flash_attn_impl(int type_k,             // type of k
                          float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                          float       * qkv,      // v*softmax(scale*(k*q))
                          float       * M,
-                         float       * S);
+                         float       * S, const IQKRelBias & bias = {});
 
 void * iqk_repack_k(int type_k, int nek0, int nek1, int nek2, int nek3, long nbk1, long nbk2, long nbk3,
         const void * k, void * work, int ith, int nth, int& repacked_type, uint64_t& row_size);

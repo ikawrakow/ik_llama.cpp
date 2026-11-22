@@ -177,7 +177,7 @@ protected:
 
 const func_builtins & global_builtins();
 
-std::string value_to_json(const value & val, int indent = -1, const std::string_view item_sep = ", ", const std::string_view key_sep = ": ");
+std::string value_to_json(const value & val, int indent = -1, const std::string_view item_sep = ", ", const std::string_view key_sep = ": ", bool sort_keys = false);
 
 // Note: only used for debugging purposes
 std::string value_to_string_repr(const value & val);

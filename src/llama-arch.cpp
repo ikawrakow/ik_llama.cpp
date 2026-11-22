@@ -7,6 +7,7 @@
 static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA,           "llama"        },
     { LLM_ARCH_NANBEIGE,        "nanbeige"     },
+    { LLM_ARCH_INKLING2_LOOP,   "inkling2_loop" },
     { LLM_ARCH_K2_HORIZON,      "k2-horizon"   },
     { LLM_ARCH_LLAMA4,          "llama4"       },
     { LLM_ARCH_DECI,            "deci"         },
@@ -36,6 +37,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN3VLMOE,      "qwen3vlmoe"   },
     { LLM_ARCH_QWEN35MOE,       "qwen35moe"    },
     { LLM_ARCH_QWEN35,          "qwen35"       },
+    { LLM_ARCH_SENSENOVA_LOOP,  "sensenova_loop" },
     { LLM_ARCH_QWEN4EXP,        "qwen4exp"     },
     { LLM_ARCH_MELLUM,          "mellum"       },
     { LLM_ARCH_PHI2,            "phi2"         },
@@ -248,9 +250,21 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_HYPER_CONNECTION_COUNT,               "%s.hyper_connection.count"               },
     { LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, "%s.hyper_connection.sinkhorn_iterations" },
+    { LLM_KV_HYPER_CONNECTION_START,            "%s.hyper_connection.start"            },
+    { LLM_KV_HYPER_CONNECTION_END,              "%s.hyper_connection.end"              },
+    { LLM_KV_HYPER_CONNECTION_PRE_SCALE,        "%s.hyper_connection.pre_scale"        },
+    { LLM_KV_HYPER_CONNECTION_FIXED_IDENTITY,   "%s.hyper_connection.fixed_identity"   },
     { LLM_KV_HYPER_CONNECTION_EPSILON,          "%s.hyper_connection.epsilon"          },
     { LLM_KV_HYPER_CONNECTION_MAGNITUDE,        "%s.hyper_connection.magnitude"        },
     { LLM_KV_HYPER_CONNECTION_LOW_RANK,         "%s.hyper_connection.low_rank"         },
+    { LLM_KV_MHC_START,                         "%s.mhc.start"                         },
+    { LLM_KV_MHC_END,                           "%s.mhc.end"                           },
+    { LLM_KV_MHC_STREAMS,                       "%s.mhc.streams"                       },
+    { LLM_KV_MHC_ITERATIONS,                    "%s.mhc.iterations"                    },
+    { LLM_KV_MHC_FIXED_IDENTITY,                "%s.mhc.fixed_identity"                },
+    { LLM_KV_MHC_PRE_SCALE,                     "%s.mhc.pre_scale"                     },
+    { LLM_KV_MHC_LAYER_KINDS,                   "%s.mhc.layer_kinds"                   },
+    { LLM_KV_ATTENTION_RECURRENT_LAYERS,        "%s.attention.recurrent_layers"        },
 
     { LLM_KV_PLE_LAYERS,                       "%s.ple.layers"                      },
     { LLM_KV_PLE_NGRAM_SIZE,                   "%s.ple.ngram_size"                  },
@@ -356,12 +370,26 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_OPENPANGU_MHC_NUM_STREAM,      "%s.mhc_num_stream"     },
     { LLM_KV_OPENPANGU_MHC_RECUR_NORM,      "%s.mhc_recur_norm"     },
     { LLM_KV_OPENPANGU_PARAM_SINK_NUMBER,   "%s.param_sink_number"  },
+
+    { LLM_KV_VOCAB_SIZE_UNPADDED,            "%s.vocab_size_unpadded"          },
+    { LLM_KV_ATTN_RES_BLOCK_SIZE,            "%s.attn_res.block_size"          },
+    { LLM_KV_ATTENTION_RELATIVE_LENGTH,      "%s.attention.relative_length"     },
+    { LLM_KV_ATTENTION_RELATIVE_EXTENT,      "%s.attention.relative_extent"     },
+    { LLM_KV_ATTENTION_QK_CLIP,              "%s.attention.qk_clip"             },
+    { LLM_KV_ATTENTION_RELATIVE_CLIP,        "%s.attention.relative_clip"       },
+    { LLM_KV_ATTENTION_LOG_SCALE_FLOOR,      "%s.attention.log_scale_floor"     },
+    { LLM_KV_ATTENTION_LOG_SCALE_ALPHA,      "%s.attention.log_scale_alpha"     },
+    { LLM_KV_LOOP_DOT_START,                 "%s.loop.start"                    },
+    { LLM_KV_LOOP_DOT_END,                   "%s.loop.end"                      },
+    { LLM_KV_LOOP_COUNT,                     "%s.loop.count"                    },
+    { LLM_KV_LOOP_GATE_RANK,                 "%s.loop.gate_rank"                },
+    { LLM_KV_LOOP_VARYING,                   "%s.loop.varying"                  },
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char* suffix) : arch(arch), suffix(suffix) {}
 
 std::string LLM_KV::operator()(llm_kv kv) const {
-    std::string name = ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
+    std::string name = ::format(LLM_KV_NAMES.at(kv), metadata_prefix ? metadata_prefix : LLM_ARCH_NAMES.at(arch));
 
     if (suffix != nullptr) {
         name += ".";
@@ -397,6 +425,7 @@ bool llm_arch_uses_qnext_state_layout(const llm_arch & arch) {
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_SENSENOVA_LOOP:
         case LLM_ARCH_GLM5NEXT:
         case LLM_ARCH_RAON1:
         case LLM_ARCH_RAON1_NANO:
@@ -412,6 +441,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_QWEN3NEXT:
     case LLM_ARCH_QWEN35MOE:
     case LLM_ARCH_QWEN35:
+    case LLM_ARCH_SENSENOVA_LOOP:
     case LLM_ARCH_QWEN4EXP:
     case LLM_ARCH_DEEPSEEK4:
     case LLM_ARCH_DEEPSEEK41:
@@ -425,6 +455,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_RAON1_NANO:
     case LLM_ARCH_NEMOTRON_H:
     case LLM_ARCH_NEMOTRON_H_MOE:
+    case LLM_ARCH_INKLING2_LOOP:
         return true;
     default:
         return false;

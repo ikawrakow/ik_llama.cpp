@@ -1208,7 +1208,7 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
             if (!ctx->support_simdgroup_mm) {
                 return false; // TODO: over-restricted for vec-kernels
             }
-            if (!op->src[3] && op->src[5]) {
+            if (op->src[6] || (!op->src[3] && op->src[5])) {
                 return false;
             }
             if (op->src[1]->type != op->src[2]->type ||

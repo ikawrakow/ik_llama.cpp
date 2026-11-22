@@ -771,6 +771,10 @@ static void foreach_parameter(const json &                                      
     }
 }
 
+static bool is_inkling2_template(const std::string & src) {
+    return src.find("<|content_invoke_tool_json|>") != std::string::npos && src.find("<|content_model_end_sampling|>") != std::string::npos;
+}
+
 static std::string common_chat_template_direct_apply_impl(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs,
@@ -791,6 +795,10 @@ static std::string common_chat_template_direct_apply_impl(
     // explicit `thinking` chat_template_kwarg still wins (merged via extra_context below).
     if (tmpl.source().find("<|pangu_text_start|>") != std::string::npos) {
         inp["thinking"] = inputs.enable_thinking;
+    }
+    // Inkling sets its thinking level from `reasoning_effort` and ignores `enable_thinking`.
+    if (!inputs.enable_thinking && is_inkling2_template(tmpl.source())) {
+        inp["reasoning_effort"] = "none";
     }
     if (tools_override.has_value() || !inputs.tools.empty()) {
         inp["tools"] = tools_override.has_value() ? *tools_override : inputs.tools;
@@ -2849,6 +2857,106 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     return data;
 }
 
+// Inkling 2: a model turn is a series of messages, each "<|message_model|>" + header + content type + body + "<|end_message|>":
+// thinking ("<|content_thinking|>"), text ("<|content_text|>") and tool calls ("<tool name><|content_invoke_tool_json|>{"name":...,"args":{...}}").
+static common_chat_params common_chat_params_init_inkling2(const common_chat_template &    tmpl,
+                                                          const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+
+    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs, std::nullopt,
+                                  has_tools || inputs.tools.empty() ? std::nullopt : std::optional<json>(json::array()));
+    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking  = true;
+    data.thinking_start_tag = "<|content_thinking|>";
+    data.thinking_end_tag   = "<|end_message|>";
+    data.preserved_tokens   = {
+        "<|message_model|>", "<|content_thinking|>", "<|content_text|>", "<|content_invoke_tool_json|>", "<|end_message|>",
+    };
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto header = p.literal("<|message_model|>");
+        auto sender = p.optional(p.chars("[^<]"));
+        auto body   = p.until("<|end_message|>");
+        auto end    = p.literal("<|end_message|>");
+
+        auto thinking_open = header + sender + p.literal("<|content_thinking|>");
+        auto text_open     = header + sender + p.literal("<|content_text|>");
+        auto thinking = p.rule("thinking", extract_reasoning ? thinking_open + p.reasoning(body) + end : p.atomic(p.content(thinking_open)) + p.content(body + end));
+        auto text     = p.rule("text", text_open + p.content(body) + end);
+
+        if (has_response_format) {
+            return p.zero_or_more(thinking) + text_open + p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)) + end;
+        }
+
+        if (!has_tools) {
+            auto unsolicited = p.rule("unsolicited", p.atomic(header + sender + p.literal("<|content_invoke_tool_json|>") + body + end));
+            return p.zero_or_more(thinking | text | unsolicited);
+        }
+        auto messages = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? p.optional(thinking) : p.zero_or_more(thinking | text);
+
+        auto tool_choice = p.choice();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            std::string  name     = function.at("name");
+            // the template writes the arguments in dictsort order
+            auto params = function.at("parameters");
+            if (params.contains("properties") && params.at("properties").is_object()) {
+                std::vector<std::string> keys;
+                for (const auto & item : params.at("properties").items()) {
+                    keys.push_back(item.key());
+                }
+                std::sort(keys.begin(), keys.end());
+                json props = json::object();
+                for (const auto & key : keys) {
+                    props[key] = params.at("properties").at(key);
+                }
+                params["properties"] = props;
+            }
+            auto args = p.tool_args(p.schema(p.json_object(), "tool-" + name + "-schema", params));
+            tool_choice |= p.rule("tool-" + name, p.tool(
+                p.tool_open(header + p.tool_name(p.literal(name)) + p.literal("<|content_invoke_tool_json|>")) +
+                p.literal("{") + p.space() + p.json_member("name", p.literal(json(name).dump())) + p.space() + p.literal(",") +
+                p.space() + p.json_member("args", args) + p.space() + p.literal("}") + end));
+        });
+
+        auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
+        auto max_calls = inputs.parallel_tool_calls ? -1 : 1;
+        return messages + p.trigger_rule("tool-call", p.repeat(tool_choice, min_calls, max_calls));
+    });
+
+    data.parser = parser.save();
+
+    if (has_tools || has_response_format) {
+        data.grammar_lazy = !has_response_format && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                auto schema = tool.at("function").at("parameters");
+                builder.resolve_refs(schema);
+            });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+    }
+    if (has_tools) {
+        std::string names;
+        foreach_function(inputs.tools, [&](const json & tool) {
+            names += (names.empty() ? "" : "|") + regex_escape(tool.at("function").at("name").get<std::string>());
+        });
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|message_model\\|>(?:" + names + ")<\\|content_invoke_tool_json\\|>" },
+        };
+    }
+
+    return data;
+}
+
 std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
@@ -2859,6 +2967,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         src.find("[ARGS]") != std::string::npos && src.find("[CALL_ID]") == std::string::npos) {
         LOG_DBG("Using specialized template: Ministral/Magistral Large 3\n");
         return common_chat_params_init_ministral_3(tmpl, params);
+    }
+
+    // Inkling 2
+    if (is_inkling2_template(src)) {
+        LOG_DBG("Using specialized template: Inkling 2\n");
+        return common_chat_params_init_inkling2(tmpl, params);
     }
 
     // GPT-OSS - has unique channel-based structure that needs dedicated handler
