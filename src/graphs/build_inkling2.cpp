@@ -6,25 +6,44 @@
 #include <cmath>
 #include <vector>
 
-static ggml_tensor * inkling_sources(ggml_context * ctx, const std::vector<ggml_tensor *> & blocks, ggml_tensor * partial, int first = 0) {
-    auto column = [&](ggml_tensor * value) {
-        return ggml_reshape_3d(ctx, value, value->ne[0], 1, value->ne[1]);
-    };
-    ggml_tensor * stack = nullptr;
-    for (int i = first; i < (int) blocks.size(); ++i) {
-        auto block = column(blocks[i]);
-        stack = stack ? ggml_concat(ctx, stack, block, 1) : block;
-    }
-    auto tail = column(partial);
-    return ggml_rms_norm(ctx, stack ? ggml_concat(ctx, stack, tail, 1) : tail, 1e-6f);
+// Saved sources, each RMS-normalized once: keys [n_embd, n, n_tokens]; values, their transpose, for the loop bank.
+struct inkling_stack {
+    std::vector<ggml_tensor *> rows;
+    ggml_tensor * keys = nullptr;
+    ggml_tensor * values = nullptr;
+};
+
+static ggml_tensor * inkling_norm(ggml_context * ctx, ggml_tensor * value) {
+    return ggml_rms_norm(ctx, ggml_reshape_3d(ctx, value, value->ne[0], 1, value->ne[1]), 1e-6f);
 }
 
-static ggml_tensor * inkling_mix(ggml_context * ctx, ggml_tensor * stack, ggml_tensor * query) {
-    auto scores = ggml_mul_mat(ctx, query, stack);
+static ggml_tensor * inkling_append(ggml_context * ctx, ggml_tensor * keys, ggml_tensor * row) {
+    return keys ? ggml_concat(ctx, keys, row, 1) : row;
+}
+
+static void inkling_push(ggml_context * ctx, inkling_stack & stack, ggml_tensor * value) {
+    stack.rows.push_back(inkling_norm(ctx, value));
+    stack.keys = inkling_append(ctx, stack.keys, stack.rows.back());
+}
+
+static inkling_stack inkling_sources(ggml_context * ctx, const inkling_stack & blocks, ggml_tensor * partial, int first) {
+    inkling_stack stack;
+    for (int i = first; i < (int) blocks.rows.size(); ++i) {
+        stack.rows.push_back(blocks.rows[i]);
+        stack.keys = inkling_append(ctx, stack.keys, blocks.rows[i]);
+    }
+    inkling_push(ctx, stack, partial);
+    stack.values = ggml_cont(ctx, ggml_transpose(ctx, stack.keys));
+    return stack;
+}
+
+static ggml_tensor * inkling_mix(ggml_context * ctx, const inkling_stack & stack, ggml_tensor * partial, ggml_tensor * query) {
+    auto keys = partial ? inkling_append(ctx, stack.keys, inkling_norm(ctx, partial)) : stack.keys;
+    auto scores = ggml_mul_mat(ctx, query, keys);
     ggml_mul_mat_set_prec(scores, GGML_PREC_F32);
     scores = ggml_cont(ctx, ggml_transpose(ctx, scores));
-    auto probs = ggml_soft_max_ext(ctx, scores, nullptr, 1.0f / std::sqrt(float(stack->ne[0])), 0.0f);
-    auto values = ggml_cont(ctx, ggml_transpose(ctx, stack));
+    auto probs = ggml_soft_max_ext(ctx, scores, nullptr, 1.0f / std::sqrt(float(keys->ne[0])), 0.0f);
+    auto values = partial || !stack.values ? ggml_cont(ctx, ggml_transpose(ctx, keys)) : stack.values;
     auto result = ggml_mul_mat(ctx, values, probs);
     ggml_mul_mat_set_prec(result, GGML_PREC_F32);
     return result;
@@ -242,15 +261,14 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
     if (batch.token) {
         x = ggml_fused_rms_norm(ctx0, x, model.tok_norm, norm_rms_eps);
     }
-    std::vector<ggml_tensor *> blocks, pre_blocks;
+    inkling_stack blocks, pre_blocks, bank;
     ggml_tensor * pre = nullptr;
-    ggml_tensor * bank = nullptr;
     for (int il = 0; il < n_layer; ++il) {
         const uint32_t ip = hparams.phys_layer(il);
         const auto & layer = model.layers[il];
         if (ip == hparams.loop_start) {
             if (pre) {
-                bank = inkling_sources(ctx0, blocks, x, (int) pre_blocks.size() + 1);
+                bank = inkling_sources(ctx0, blocks, x, (int) pre_blocks.rows.size() + 1);
                 blocks = pre_blocks;
                 x = pre;
             } else {
@@ -259,7 +277,7 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
             }
         }
         ggml_tensor * messages = nullptr;
-        if (bank && ip < hparams.loop_end) {
+        if (bank.keys && ip < hparams.loop_end) {
             auto query = layer.loop_msg_query;
             if (model.loop_res_query) {
                 const auto row = 2 * (ip - hparams.loop_start);
@@ -270,7 +288,7 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
                 auto mlp = ggml_view_1d(ctx0, c, n_embd, (row + 1) * c->nb[1]);
                 query = ggml_concat(ctx0, ggml_concat(ctx0, q, kv, 1), mlp, 1);
             }
-            messages = inkling_mix(ctx0, bank, query);
+            messages = inkling_mix(ctx0, bank, nullptr, query);
         }
         auto blend = [&](ggml_tensor * dest, int stream) {
             return messages ? inkling_control(ctx0, dest, inkling_row(ctx0, messages, stream), layer.loop_ctrl_down[stream],
@@ -282,7 +300,7 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         ggml_tensor * k = x;
         ggml_tensor * v = x;
         if (ip != 0) {
-            auto mixed = inkling_mix(ctx0, inkling_sources(ctx0, blocks, x), layer.attn_res_query);
+            auto mixed = inkling_mix(ctx0, blocks, x, layer.attn_res_query);
             q = inkling_row(ctx0, mixed, 0);
             k = full ? inkling_row(ctx0, mixed, 1) : q;
             v = full ? inkling_row(ctx0, mixed, 2) : q;
@@ -296,12 +314,12 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         }
         auto residual = inkling_attention(*this, gf, il, q, k, v, full ? mask : swa_mask, full ? lctx.inp_scale : nullptr);
         if (ip % hparams.attn_res_block_size == 0) {
-            blocks.push_back(x);
+            inkling_push(ctx0, blocks, x);
         } else {
             residual = ggml_add(ctx0, x, residual);
         }
 
-        auto ffn_input = inkling_row(ctx0, inkling_mix(ctx0, inkling_sources(ctx0, blocks, residual), layer.ffn_res_query), 0);
+        auto ffn_input = inkling_row(ctx0, inkling_mix(ctx0, blocks, residual, layer.ffn_res_query), 0);
         ffn_input = ggml_fused_rms_norm(ctx0, blend(ffn_input, 3), layer.ffn_norm, norm_rms_eps);
         auto ffn = llm_build_moe_ffn(ctx0, lctx, ffn_input, layer.ffn_gate_inp,
                 nullptr, nullptr, layer.ffn_down_exps, layer.ffn_exp_probs_b,
@@ -317,7 +335,7 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         ggml_build_forward_expand(gf, x);
         return gf;
     }
-    x = inkling_row(ctx0, inkling_mix(ctx0, inkling_sources(ctx0, blocks, x), model.output_res_query), 0);
+    x = inkling_row(ctx0, inkling_mix(ctx0, blocks, x, model.output_res_query), 0);
     if (inp_out_ids) {
         x = ggml_get_rows(ctx0, x, inp_out_ids);
     }
