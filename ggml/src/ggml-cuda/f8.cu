@@ -634,6 +634,8 @@ int ggml_cuda_moe_up_gate_f8(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
         }
         return ggml_cuda_moe_up_gate_f8(ctx, &local_dst, graph, i, next, hada);
     }
+    const float beta = *(const float *)(dst->op_params + 2);
+    const float beta_linear = *(const float *)(dst->op_params + 3);
     if (src1->ne[2] > 8) {
         const auto unary = (ggml_unary_op)dst->op_params[0];
         ggml_tensor * fused = nullptr;
@@ -688,6 +690,9 @@ int ggml_cuda_moe_up_gate_f8(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
             if (unary == GGML_UNARY_OP_SWIGLU_OAI) {
                 ggml_swiglu_oai_cuda_f32((const float *)dst->data, up.get(), (float *)dst->data,
                         ggml_nelements(dst), dst->ne[0], dst->ne[0], dst->ne[0], 1.702f, 7.0f, ctx.stream());
+            } else if (unary == GGML_UNARY_OP_SITU_GLU) {
+                ggml_situ_glu_cuda_f32((const float *)dst->data, up.get(), (float *)dst->data,
+                        ggml_nelements(dst), dst->ne[0], dst->ne[0], dst->ne[0], beta, beta_linear, ctx.stream());
             } else {
                 ggml_fused_mul_unary(ctx, unary, ggml_nelements(dst), (const float *)dst->data, up.get(),
                         (float *)dst->data, *(const float *)(dst->op_params + 1));
@@ -713,7 +718,8 @@ int ggml_cuda_moe_up_gate_f8(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
                 kernel<<<grid, 256, 0, ctx.stream()>>>(src1->ne[0], dst->ne[0], src1->ne[1],
                         (const char *)src0_1->data, (const char *)src0_2->data, (const char *)src1->data,
                         (const char *)ids->data, bu ? (const char *)bu->data : nullptr, bg ? (const char *)bg->data : nullptr,
-                        (float *)dst->data, unary, *(const float *)(dst->op_params + 1), src0_1->nb[1], src0_1->nb[2], src0_2->nb[1], src0_2->nb[2],
+                        (float *)dst->data, unary, *(const float *)(dst->op_params + 1), beta, beta_linear,
+                        src0_1->nb[1], src0_1->nb[2], src0_2->nb[1], src0_2->nb[2],
                         src1->nb[1], src1->nb[2], ids->nb[0], ids->nb[1], bu ? bu->nb[1] : 0, bg ? bg->nb[1] : 0);
             };
             if (src0_1->type == GGML_TYPE_F8_E4M3_B128 && aligned) launch(mul_mat_vec_f8_e4m3_up_gate_id<true, true>);
