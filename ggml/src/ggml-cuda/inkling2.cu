@@ -1,6 +1,6 @@
 #include "inkling2.cuh"
 
-static __global__ void k_ingking2_clip(const int ne0, const float * __restrict__ src, float * __restrict__ dst,
+static __global__ void k_ingkling2_clip(const int ne0, const float * __restrict__ src, float * __restrict__ dst,
                                        size_t nb01, size_t nb02, size_t nb03,
                                        size_t nb1,  size_t nb2,  size_t nb3,
                                        float scale, float eps, float limit, float clip_min, float clip_max) {
@@ -25,7 +25,7 @@ void ggml_cuda_op_inkling2_clip(ggml_backend_cuda_context & ctx, ggml_tensor * d
     const float * params = (const float *)dst->op_params;
 
     dim3 grid(src0->ne[2], src0->ne[1], src0->ne[3]);
-    k_ingking2_clip<<<grid, WARP_SIZE, 0, ctx.stream()>>>(src0->ne[0], (const float *)src0->data, (float *)dst->data,
+    k_ingkling2_clip<<<grid, WARP_SIZE, 0, ctx.stream()>>>(src0->ne[0], (const float *)src0->data, (float *)dst->data,
             src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float), src0->nb[3]/sizeof(float),
              dst->nb[1]/sizeof(float),  dst->nb[2]/sizeof(float),  dst->nb[3]/sizeof(float),
              params[0], params[1], params[2], params[3], params[4]);
