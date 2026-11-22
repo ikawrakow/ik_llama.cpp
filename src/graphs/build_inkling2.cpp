@@ -198,8 +198,8 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
     q = ggml_permute(ctx, q, 0, 2, 1, 3);
     const float scale = 1.0f / std::sqrt(float(dk));
 
-    auto table = ggml_mul_mat(ctx, layer.attn_rel_bias, r);
-    table = ggml_pad(ctx, table, hp.inkling_relative_extent_max() + 1 - table->ne[0], 0, 0, 0);
+    auto rel_bias = ggml_pad(ctx, layer.attn_rel_bias, 0, GGML_PAD(hp.inkling_relative_extent_max() + 1, 32) - layer.attn_rel_bias->ne[1], 0, 0);
+    auto table = ggml_mul_mat(ctx, rel_bias, r);
     sinks = ggml_reshape_3d(ctx, sinks, 1, heads, tokens);
     table = ggml_add(ctx, table, ggml_scale(ctx, sinks, -1.0f));
     auto zero = ggml_fill(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, heads), 0.0f);
