@@ -4795,14 +4795,8 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
 }
 
 #if defined(__gnu_linux__)
-// Stage 3a: row-band placement for plain (non-expert) 2D matmul weights -
-// attention projections, dense FFN, shared experts, lm_head. Same binding
-// rule as the expert stacks: output-row band k goes to the k-th active node,
-// matching the band rank the dense dispatch (ggml_numa_dense_split_rows in
-// ggml.c) derives at compute time. Splitting a tensor that was never placed
-// is still correct (a band is just a work partition), so this gate only
-// decides locality, never results. GGML_NUMA_DENSE_SPLIT=0 keeps dense
-// weights on the default page policy.
+// row-band placement for plain (non-expert) 2D matmul weights attention projections, dense FFN, shared experts, lm_head. Same binding
+// rule as the expert stacks: output-row band k goes to the k-th active node, matching the band rank the dense dispatch
 static bool llama_numa_dense_place(ggml_tensor * t, int n_band, long pg_size, uintptr_t pg_mask) {
     if (t->ne[2] != 1 || t->ne[3] != 1) return false;
     if (t->ne[1] < 2*n_band) return false;
@@ -4849,7 +4843,7 @@ static bool llama_numa_dense_place(ggml_tensor * t, int n_band, long pg_size, ui
     return true;
 }
 
-// Stage 2a: NUMA expert-weight band placement. Requires --no-mmap (the weight
+// NUMA expert-weight band placement. Requires --no-mmap (the weight
 // buffer must be fresh host memory whose pages have not been faulted in yet)
 // and ggml_numa_init() having detected more than one node with CPUs from the
 // process affinity mask. For every MoE expert-weight stack we bind the page
@@ -4858,10 +4852,6 @@ static bool llama_numa_dense_place(ggml_tensor * t, int n_band, long pg_size, ui
 // (ggml_numa_moe_band_split_set). Returns true if at least one expert tensor
 // was placed; on any mbind failure the caller keeps the feature disarmed.
 static bool llama_numa_bandsplit_place(ggml_context * ctx) {
-    // Stage 2a fix: the placement hook runs during model loading, which is
-    // BEFORE the caller's ggml_numa_init() (that happens in context creation,
-    // e.g. llama_init_from_model). Parse the topology here if nobody did,
-    // otherwise ggml_numa_band_count() returns 0 and the feature never arms.
     ggml_numa_ensure_topology();
 
     // Respect an explicit numactl --membind: do not override a page policy
@@ -4909,8 +4899,7 @@ static bool llama_numa_bandsplit_place(ggml_context * ctx) {
             }
         }
         if (!match) {
-            // Stage 3a: dense weights ride the same placement pass; only
-            // host-resident plain 2D matmul weights qualify
+            // dense weights ride the same placement pass; only host-resident plain 2D matmul weights qualify
             if (dense_split && llama_numa_dense_place(t, n_band, pg_size, pg_mask)) {
                 ++n_dense;
             }
@@ -4940,7 +4929,7 @@ static bool llama_numa_bandsplit_place(ggml_context * ctx) {
             if (r1 <= r0) { ok = false; break; }
             const int node = ggml_numa_band_node(k);
             if (node < 0) { ok = false; break; }
-            // Stage 2e fix: the band scheduler routes the chunk range
+            // the band scheduler routes the chunk range
             // [k*C/N, (k+1)*C/N) of EVERY expert's ne01 rows, and expert e's
             // slab starts at e*nb[2]. The pre-2e loop omitted the e*nb[2]
             // stride and bound only expert 0's slab (1/n_expert of the
@@ -4957,7 +4946,7 @@ static bool llama_numa_bandsplit_place(ggml_context * ctx) {
                 if (!ggml_numa_mbind_range((void *)ps, pe - ps, node)) {
                     ok = false;
                 } else if (madvise((void *)ps, pe - ps, MADV_HUGEPAGE) != 0) {
-                    // Stage 2d, non-fatal: with THP=[always] pages collapse anyway;
+                    // with THP=[always] pages collapse anyway;
                     // with [madvise] this is what enables 2 MiB band pages, with
                     // [never] the bands stay 4 KiB and the verify report shows it
                     // in the hp: field.
@@ -4976,9 +4965,6 @@ static bool llama_numa_bandsplit_place(ggml_context * ctx) {
         ++n_placed;
     }
 
-    // Stage 3a: arm the dense dispatch side only if dense tensors actually
-    // got placed. The compute side additionally requires the MoE split to be
-    // armed, so a failed expert placement leaves this flag inert.
     if (n_dense > 0) {
         ggml_numa_dense_band_split_set(true);
         LLAMA_LOG_INFO("%s: [numa] dense band split armed: %d dense weight tensor(s) row-banded node-local (GGML_NUMA_DENSE_SPLIT=0 disables)\n",
@@ -4988,7 +4974,7 @@ static bool llama_numa_bandsplit_place(ggml_context * ctx) {
     return n_placed > 0;
 }
 
-// Stage 2a verification: run after all tensor data has been loaded, when every
+// verification: run after all tensor data has been loaded, when every
 // band page is resident. Samples pages per band and reports where they
 // actually landed. Pinned host buffers (cudaHostAlloc without
 // GGML_CUDA_NO_PINNED=1) cannot migrate, so mbind silently leaves those pages
@@ -5081,7 +5067,7 @@ static void llama_numa_bandsplit_verify(const llama_model & model) {
         if (band_slab*(size_t)t->ne[2] < (size_t)1*1024*1024 ||
             band_slab < (size_t)64*1024) continue;
 
-        // Stage 2a round 3: sample host-resident stacks only. Device-resident
+        // sample host-resident stacks only. Device-resident
         // stacks (expert layers whose weights fit in VRAM) cannot be
         // page-placed; counting them dilutes the report until a fully
         // successful host placement reads as a miss (e.g. 17 host layers
@@ -5098,7 +5084,7 @@ static void llama_numa_bandsplit_verify(const llama_model & model) {
             const int64_t r0 =  t->ne[1] * k        / n_band;
             const int64_t r1 = (t->ne[1] * (k + 1)) / n_band;
             if (r1 <= r0) continue;
-            // Stage 2e fix: the scheduler reads band-k rows of EVERY expert,
+            // the scheduler reads band-k rows of EVERY expert,
             // so sweep (expert, row) sample points across the whole stack;
             // expert 0's slab alone proves nothing about the other ne[2]-1
             // slabs. Expert e's slab starts at e*nb[2].
@@ -5135,7 +5121,7 @@ static void llama_numa_bandsplit_verify(const llama_model & model) {
         }
     }
 
-    // Stage 3a: sweep the dense row-banded tensors the same way. Eligibility
+    // sweep the dense row-banded tensors the same way. Eligibility
     // mirrors llama_numa_dense_place(), including the host-buffer check.
     int n_dense_stacks = 0;
     for (const auto & kv : model.tensors_by_name) {
@@ -5839,20 +5825,9 @@ static bool llm_load_tensors(
 
     model.mappings.reserve(ml.mappings.size());
 
-    // Stage 2a: the band-split placement hooks below need the NUMA topology,
-    // but some tool paths call ggml_numa_init() only when the context is
-    // created - i.e. after model loading. Parse the topology here if nobody
-    // did (no-op when already initialized, no strategy side effects).
     ggml_numa_ensure_topology();
 
 #if defined(__gnu_linux__) && defined(GGML_USE_CUDA)
-    // Stage 2a: on a multi-node box with --no-mmap, bring CUDA_Host weight
-    // buffers up unpinned and unfaulted so the placement hook below can
-    // mbind the expert row bands node-local before any page exists. The
-    // buffers are prefaulted and pinned in place (cudaHostRegister) right
-    // after placement - pinned speed with node-local pages. Stock behavior
-    // (pinned at allocation, pages immovable by mbind) returns with
-    // GGML_CUDA_NO_NUMA_PIN=1 or GGML_NUMA_NO_DEFER_PIN=1.
     const bool numa_no_defer_pin = getenv("GGML_NUMA_NO_DEFER_PIN") != nullptr;
     const bool numa_defer_pin = !numa_no_defer_pin && !ml.use_mmap && hparams.n_expert > 0 && ggml_numa_band_count() > 1 && !ggml_numa_mem_policy_explicit_bind();
     ggml_host_pin_defer(numa_defer_pin);
@@ -5949,7 +5924,7 @@ static bool llm_load_tensors(
                 }
                 model.bufs.push_back(buf);
 #if defined(__gnu_linux__)
-                // Stage 2a: bind MoE expert-weight row bands node-local. Only
+                // bind MoE expert-weight row bands node-local. Only
                 // meaningful for fresh host memory (--no-mmap); must run before
                 // the loader (or mlock) touches the buffer pages.
                 if (!ml.use_mmap && (ggml_backend_buffer_is_host(buf) || strcmp(ggml_backend_buffer_name(buf), "CUDA_Host") == 0) && llama_numa_bandsplit_place(ctx)) {
@@ -5985,10 +5960,6 @@ static bool llm_load_tensors(
         ctx_bufs.emplace_back(ctx, bufs);
     }
 
-    // Stage 2a diagnostic: make a silent no-arm visible. The placement hook
-    // above only runs in the !use_mmap branch, so use_mmap still true here
-    // means the band split is off; say why, once, and only on multi-node
-    // boxes running expert models.
     static bool numa_band_hint_done = false;
     if (!numa_band_hint_done && hparams.n_expert > 0 && ggml_numa_band_count() > 1 && ml.use_mmap) {
         numa_band_hint_done = true;
@@ -6000,16 +5971,7 @@ static bool llm_load_tensors(
     }
 
 #if defined(__gnu_linux__) && defined(GGML_USE_CUDA)
-    // Stage 2a round 4: commit the deferred pin BEFORE any loader allocation
-    // runs. load_all_data() allocates transient 16 MiB pinned staging buffers
-    // through the same CUDA_Host buffer type; with the defer window still open
-    // they used to land in the pending list and got cudaHostRegister'd after
-    // they were freed, on virtual addresses later allocations hand out again -
-    // the driver then held registrations that overlapped live buffers, which
-    // is what crashed round 3. Committing here means: pages fault through the
-    // band mbind policy (node-local placement, exactly as before), the buffer
-    // is pinned before the first weight byte is written, and the loader's
-    // staging buffers are allocated stock-pinned with the defer window closed.
+    // commit the deferred pin BEFORE any loader allocation runs. 
     if (numa_defer_pin && !dry_run) {
         const size_t numa_pinned_bytes = ggml_host_pin_commit();
         ggml_host_pin_defer(false);
@@ -6127,16 +6089,11 @@ static bool llm_load_tensors(
         }
 
 #if defined(__gnu_linux__) && defined(GGML_USE_CUDA)
-        // Stage 2a round 4: the deferred buffers were already prefaulted and
-        // pinned right after placement (before any loader allocation ran), so
-        // there is nothing left to commit here - the pending list is empty.
-        // Keep the ordering guarantee explicit: the commit below is a no-op
-        // and exists only as a safety net if a future change reopens the
-        // defer window past this point.
+        // the commit below is a no-op and exists only as a safety net
         ggml_host_pin_defer(false);
 #endif
 
-        // Stage 2a: all expert band pages are resident now - check where they
+        // all expert band pages are resident now - check where they
         // actually landed and disarm (with a hint) if the binding did not take.
         llama_numa_bandsplit_verify(model);
 
@@ -6215,10 +6172,7 @@ static bool llm_load_tensors(
     }
 
 #if defined(__gnu_linux__) && defined(GGML_USE_CUDA)
-    // Stage 2a safety flush: dry runs never reach the commit inside the
-    // !dry_run block; never leak the defer flag into runtime allocations
-    // (compute/KV buffers must be pinned at allocation). No-op when nothing
-    // is pending.
+    // safety flush: dry runs never reach the commit inside the  !dry_run block; No-op when nothing is pending.
     ggml_host_pin_commit();
     ggml_host_pin_defer(false);
 #endif
