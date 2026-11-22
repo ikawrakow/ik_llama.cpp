@@ -2597,7 +2597,13 @@ class ModelOptModel(Model):
 
     def _index_modelopt_tensors(self):
         from safetensors import safe_open
-        for part in self.part_names:
+        parts = list(self.part_names)
+        sidecar = "mtp.safetensors"
+        if (self.hparams.get("mtp_num_hidden_layers", 0) and sidecar not in parts
+                and (self.dir_model / sidecar).is_file()):
+            logger.info(f"gguf: loading the MTP sidecar {sidecar}")
+            parts.append(sidecar)
+        for part in parts:
             with safe_open(self.dir_model / part, framework="pt", device="cpu") as f:
                 for source in f.keys():
                     name = self._filter_modelopt_name(source)
@@ -2991,6 +2997,118 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
 @Model.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5TextModel")
 class Qwen3_5TextModel(_LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
+
+
+@Model.register("SenseNovaLoopForConditionalGeneration", "SenseNovaLoopModel", "Qwen3_5LoopForConditionalGeneration")
+class SenseNovaLoopModel(Qwen3_5TextModel):
+    model_arch = gguf.MODEL_ARCH.SENSENOVA_LOOP
+
+    @staticmethod
+    def load_hparams(dir_model):
+        hparams = Model.load_text_hparams(dir_model)
+        for key, value in (hparams.get("rope_parameters") or {}).items():
+            hparams.setdefault(key, value)
+        return hparams
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hparams = self.hparams
+        loop = hparams.get("loop_settings")
+        mhc  = hparams.get("mhc")
+        if not isinstance(loop, dict) or not isinstance(mhc, dict):
+            raise ValueError("SenseNova-Loop: loop_settings and mhc are required")
+
+        start, end = int(loop["start"]), int(loop["end"])
+        count = int(loop["eval_count"])
+        n_layer = int(hparams["num_hidden_layers"])
+        if loop.get("use_gate", False):
+            raise ValueError("SenseNova-Loop: loop gate is not supported")
+        if loop.get("counts") != [count] or not 0 <= start < end <= n_layer:
+            raise ValueError("SenseNova-Loop: unsupported loop schedule")
+        if n_layer + (end - start) * (count - 1) > 512:
+            raise ValueError("SenseNova-Loop: execution plan exceeds the layer limit")
+        mhc_start, mhc_end = int(mhc["start"]), int(mhc["end"])
+        if not 0 <= mhc_start < mhc_end <= n_layer:
+            raise ValueError("SenseNova-Loop: invalid mHC range")
+        if not (mhc_end <= start or (mhc_start >= start and mhc_end <= end) or mhc_start >= end):
+            raise ValueError("SenseNova-Loop: mHC range crosses a loop boundary")
+        if not 2 <= int(mhc["streams"]) <= 8 or int(mhc["iterations"]) < 1:
+            raise ValueError("SenseNova-Loop: invalid mHC streams or iterations")
+        if mhc.get("fixed_identity"):
+            raise ValueError("SenseNova-Loop: fixed_identity mHC is not supported")
+
+        n_mtp = self.block_count - n_layer
+        if not 0 <= n_mtp <= 1:
+            raise ValueError("SenseNova-Loop: at most one MTP layer is supported")
+
+        self.loop = loop
+        self.mhc  = mhc
+        self.mhc_start = mhc_start
+        self.mhc_end   = mhc_end
+        self.n_mtp = n_mtp
+        self.plan = list(range(start)) + list(range(start, end)) * count + list(range(end, n_layer))
+        self.first_visit = {p: self.plan.index(p) for p in range(n_layer)}
+
+        self.block_count = len(self.plan) + n_mtp
+        self.hparams = {**hparams, "num_hidden_layers": len(self.plan)}
+        if isinstance(hparams.get("layer_types"), list):
+            types = hparams["layer_types"]
+            if len(types) != n_layer:
+                raise ValueError("SenseNova-Loop: layer_types must describe every physical layer")
+            self.hparams["layer_types"] = [types[p] for p in self.plan]
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        rope = self.rope_parameters
+        rope_type = rope.get("rope_type", rope.get("type"))
+        rope_factor = rope.get("factor")
+        if rope_type == "yarn" and rope_factor is not None:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_factor)
+            if (orig := rope.get("original_max_position_embeddings")) is not None:
+                self.gguf_writer.add_rope_scaling_orig_ctx_len(int(orig))
+            if (ext := rope.get("extrapolation_factor")) is not None:
+                self.gguf_writer.add_rope_scaling_yarn_ext_factor(ext)
+            if (attn := rope.get("attention_factor", rope.get("attn_factor"))) is not None:
+                self.gguf_writer.add_rope_scaling_yarn_attn_factor(attn)
+            if (bf := rope.get("beta_fast")) is not None:
+                self.gguf_writer.add_rope_scaling_yarn_beta_fast(bf)
+            if (bs := rope.get("beta_slow")) is not None:
+                self.gguf_writer.add_rope_scaling_yarn_beta_slow(bs)
+        elif rope_type == "linear" and rope_factor is not None:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_factor)
+        self.gguf_writer.add_loop_start(int(self.loop["start"]))
+        self.gguf_writer.add_loop_end(int(self.loop["end"]))
+        self.gguf_writer.add_loop_count(int(self.loop["eval_count"]))
+        self.gguf_writer.add_mhc_start(self.mhc_start)
+        self.gguf_writer.add_mhc_end(self.mhc_end)
+        self.gguf_writer.add_mhc_streams(int(self.mhc["streams"]))
+        self.gguf_writer.add_mhc_iterations(int(self.mhc["iterations"]))
+        self.gguf_writer.add_mhc_fixed_identity(bool(self.mhc.get("fixed_identity", False)))
+        self.gguf_writer.add_mhc_pre_scale(float(self.mhc.get("pre_scale", 1.0)))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        name = name.replace("model.language_model.", "model.", 1)
+        if name.startswith("model.visual.") or "loop_gate." in name:
+            return  # text-only export; loop_gate is unused
+        match = re.match(r"model\.layers\.(\d+)\.(.+)", name)
+        if match:
+            physical = int(match[1])
+            if physical < len(self.first_visit):
+                bid = self.first_visit[physical]
+            elif self.n_mtp:
+                bid = len(self.plan) + physical - len(self.first_visit)
+            else:
+                return
+            name = f"model.layers.{bid}.{match[2]}"
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".mhc_" in name or ".ssm_conv1d." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
 @Model.register("Qwen4ExpForConditionalGeneration", "Qwen4ExpForCausalLM")

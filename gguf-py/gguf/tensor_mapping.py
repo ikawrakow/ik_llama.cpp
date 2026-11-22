@@ -254,6 +254,9 @@ class TensorNameMap:
             'layers.{bid}.linear_attn.in_proj_z',
         ),
 
+        MODEL_TENSOR.HC_ATTN_FN: ("model.layers.{bid}.mhc_attn",),
+        MODEL_TENSOR.HC_FFN_FN:  ("model.layers.{bid}.mhc_ffn",),
+
         # Rotary embeddings
         MODEL_TENSOR.ATTN_ROT_EMBD: (
             "model.layers.{bid}.self_attn.rotary_emb.inv_freq",        # llama-hf

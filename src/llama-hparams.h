@@ -37,7 +37,13 @@ struct llama_hparams {
     uint32_t loop_end = 0;
     uint32_t loop_gate_rank = 0;
     bool     loop_varying = false;
+    bool     loop_tail_sparse = false;  // tail layers keep their unrolled index in the file
     bool     skip_loop_final_norm = false; // if true, do not apply output_norm between loops
+    // mHC (SenseNova-Loop); mhc_num_stream and dsv4_hc_sinkhorn_iters are shared
+    uint32_t mhc_start = 0;             // first physical layer using mHC
+    uint32_t mhc_end = 0;               // one past the last mHC physical layer
+    float    mhc_pre_scale = 1.0f;      // scale applied to the branch output before the post gate
+    bool     mhc_fixed_identity = false;
     int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
     uint32_t n_rot;
     uint32_t n_rot_swa;
@@ -421,6 +427,14 @@ struct llama_hparams {
 
     uint32_t inkling_relative_extent_max() const {
         return n_relative_extent > n_swa ? n_relative_extent : n_swa;
+    }
+
+    // block index of a stored layer in a file that keeps the unrolled numbering
+    uint32_t stored_layer(uint32_t il) const {
+        if (!loop_tail_sparse || loop_end <= loop_start || n_loops <= 1) {
+            return il;
+        }
+        return il >= loop_end ? il + (loop_end - loop_start) * (n_loops - 1) : il;
     }
 
     uint32_t n_head(uint32_t il = 0) const {

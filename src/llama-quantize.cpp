@@ -1751,8 +1751,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         // do not quantize relative position bias (T5)
         quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
-        // Xing4.0: do not quantize the mHC projection weights
-        if (model.arch == LLM_ARCH_XING4_0) {
+        // do not quantize the mHC projection weights
+        if (model.arch == LLM_ARCH_XING4_0 || model.arch == LLM_ARCH_SENSENOVA_LOOP) {
             quantize &= name.find("hc_attn_fn.weight") == std::string::npos;
             quantize &= name.find("hc_ffn_fn.weight")  == std::string::npos;
         }
@@ -2345,8 +2345,8 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
         // do not quantize relative position bias (T5)
         quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
-        // Xing4.0: do not quantize the mHC projection weights
-        if (model.arch == LLM_ARCH_XING4_0) {
+        // do not quantize the mHC projection weights
+        if (model.arch == LLM_ARCH_XING4_0 || model.arch == LLM_ARCH_SENSENOVA_LOOP) {
             quantize &= name.find("hc_attn_fn.weight") == std::string::npos;
             quantize &= name.find("hc_ffn_fn.weight")  == std::string::npos;
         }
