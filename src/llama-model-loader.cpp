@@ -483,6 +483,9 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     if (import_nvfp4(nvfp4_precision)) {
         use_mmap = false;
     }
+    if (import_expert_scales()) {
+        use_mmap = false;
+    }
   
     if (gguf_ngram) {
         LLAMA_LOG_INFO("%s: n-gram file %s: %d tensors, added to the model\n", __func__,
@@ -1369,6 +1372,71 @@ bool llama_model_loader::import_f8_e4m3() {
     return true;
 }
 
+bool llama_model_loader::import_expert_scales() {
+    const std::string arch = get_arch_name();
+    if (arch != "inkling2" && arch != "inkling2_loop") {
+        return false;
+    }
+
+    // Types whose block delta is a plain fp16 value at offset 0. Folding the
+    // per-expert factor into it is exact up to fp16 rounding.
+    auto has_fp16_delta = [](ggml_type type) {
+        switch (type) {
+            case GGML_TYPE_IQ1_S:
+            case GGML_TYPE_IQ2_XXS:
+            case GGML_TYPE_IQ2_XS:
+            case GGML_TYPE_IQ2_S:
+            case GGML_TYPE_IQ3_XXS:
+            case GGML_TYPE_Q2_0:
+            case GGML_TYPE_IQ4_NL:
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    std::set<const ggml_tensor *> consumed;
+    int n_fold = 0;
+    for (auto & w : weights) {
+        if (!has_fp16_delta(w.tensor->type)) {
+            continue;
+        }
+        const std::string name(w.tensor->name);
+        const auto * s = get_weight((name.substr(0, name.rfind('.')) + ".scale").c_str());
+        if (!s || !valid_scale_shape(s->tensor, w.tensor)) {
+            continue;
+        }
+        const int n_scale = (int) s->tensor->ne[0];
+        std::vector<float> scales(n_scale);
+        read_scale(*s, scales.data());
+        bool valid = true;
+        for (float v : scales) {
+            if (!(v > 0.0f) || !std::isfinite(v)) {
+                valid = false;
+                break;
+            }
+        }
+        if (!valid) {
+            LLAMA_LOG_WARN("%s: ignoring invalid per-expert scale for '%s'\n", __func__, name.c_str());
+            continue;
+        }
+        w.expert_scale = std::move(scales);
+        consumed.insert(s->tensor);
+        ++n_fold;
+    }
+
+    auto it = std::stable_partition(weights.begin(), weights.end(), [&consumed](const llama_tensor_weight & w) {
+        return consumed.count(w.tensor) == 0;
+    });
+    scale_weights.insert(scale_weights.end(), it, weights.end());
+    weights.erase(it, weights.end());
+
+    if (n_fold) {
+        LLAMA_LOG_INFO("%s: folding per-expert scales into %d quantized tensors\n", __func__, n_fold);
+    }
+    return n_fold > 0;
+}
+
 bool llama_model_loader::import_nvfp4(llama_nvfp4_precision precision) {
     auto is_mxfp4 = [](const ggml_tensor * t) {
 #ifdef GGML_USE_METAL
@@ -1520,6 +1588,37 @@ bool llama_model_loader::import_nvfp4(llama_nvfp4_precision precision) {
     return n_import + n_repack != 0;
 }
 
+static void fold_expert_scale(uint8_t * data, const ggml_tensor * cur, const std::vector<float> & scales) {
+    const int64_t ne0 = cur->ne[0];
+    const int64_t ne1 = cur->ne[1];
+    const int64_t ne2 = cur->ne[2];
+    const int64_t block = ggml_blck_size(cur->type);
+    const int64_t nblock = ne0 / block;
+    const size_t block_size = ggml_type_size(cur->type);
+    const size_t row_size = ggml_row_size(cur->type, ne0);
+    GGML_ASSERT(ne0 % block == 0);
+    GGML_ASSERT((size_t) nblock * block_size == row_size);
+
+    const int n_scale = (int) scales.size();
+    for (int64_t e = 0; e < ne2; ++e) {
+        const float s = scales[n_scale == 1 ? 0 : e];
+        if (s == 1.0f) {
+            continue;
+        }
+        uint8_t * pe = data + (size_t) e * ne1 * row_size;
+        for (int64_t r = 0; r < ne1; ++r) {
+            uint8_t * pr = pe + (size_t) r * row_size;
+            for (int64_t b = 0; b < nblock; ++b) {
+                uint8_t * pb = pr + (size_t) b * block_size;
+                ggml_fp16_t d;
+                memcpy(&d, pb, sizeof(d));
+                d = ggml_fp32_to_fp16(ggml_fp16_to_fp32(d) * s);
+                memcpy(pb, &d, sizeof(d));
+            }
+        }
+    }
+}
+
 static void read_nvfp4_rows(const llama_model_loader::llama_tensor_weight & w, const llama_file & file, const ggml_tensor * cur, uint8_t * dst, int r0, int nrows) {
     const int    ne1     = cur->ne[1];
     const auto & scales = w.f8_scale.empty() ? w.nvfp4_scale : w.f8_scale;
@@ -1608,6 +1707,11 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         const auto & file = files.at(w.idx);
         file->seek(w.offs, SEEK_SET);
         file->read_raw(cur->data, ggml_nbytes(cur));
+    }
+
+    if (!w.expert_scale.empty()) {
+        GGML_ASSERT(!use_mmap);
+        fold_expert_scale((uint8_t *) cur->data, cur, w.expert_scale);
     }
 
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
@@ -1998,6 +2102,25 @@ bool llama_model_loader::load_all_data(
     }
     if (validation_failed) {
         throw std::runtime_error("found tensors with invalid data");
+    }
+
+    // Fold per-expert scales into the fp16 block deltas after the data has
+    // reached its final buffer. Guard against a second call for split experts.
+    for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
+        const auto * w = get_weight(ggml_get_name(cur));
+        if (!w || w->expert_scale.empty() || folded_expert_scales.count(cur)) {
+            continue;
+        }
+        if (!cur->buffer || ggml_backend_buffer_is_host(cur->buffer)) {
+            GGML_ASSERT(cur->data);
+            fold_expert_scale((uint8_t *) cur->data, cur, w->expert_scale);
+        } else {
+            std::vector<uint8_t> buf(ggml_nbytes(cur));
+            ggml_backend_tensor_get(cur, buf.data(), 0, buf.size());
+            fold_expert_scale(buf.data(), cur, w->expert_scale);
+            ggml_backend_tensor_set(cur, buf.data(), 0, buf.size());
+        }
+        folded_expert_scales.insert(cur);
     }
 
     // check if this is the last call and do final cleanup
