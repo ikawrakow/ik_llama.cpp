@@ -21697,6 +21697,57 @@ static void ggml_compute_forward_soft_max(
     }
 }
 
+static void ggml_compute_forward_fused_softmax_small_gemm_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    struct ggml_tensor * src0 = dst->src[0];
+    struct ggml_tensor * src1 = dst->src[1];
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->op == GGML_OP_SOFT_MAX);
+    GGML_ASSERT(src0->ne[0] == src1->ne[0] && src0->ne[2] == src1->ne[2] && src0->ne[3] == 1 && src1->ne[3] == 1);
+    GGML_ASSERT(src1->src[1] == NULL);
+
+    const float * fparams = (const float *)src1->op_params;
+    float scale = fparams[0];
+    float bias  = fparams[1];
+    GGML_ASSERT(bias == 0.0f);
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int nr = src0->ne[2] * src0->ne[1] * src1->ne[1];
+    int npt = (nr + nth - 1)/nth;
+    int ir0 = ith*npt;
+    int ir1 = MIN(ir0 + npt, nr);
+
+    int ne00 = src0->ne[0];
+    int ne01 = src0->ne[1];
+    int ne11 = src1->ne[1];
+    GGML_ASSERT(ne00 >= 2);
+
+    for (int ir = ir0; ir < ir1; ++ir) {
+        int i2 = ir/(ne01*ne11);
+        int i11 = (ir - i2*ne01*ne11)/ne01;
+        int i01 = ir - i2*ne01*ne11 - i11*ne01;
+
+        const float * x0 = (const float *)((const char *)src0->data + i01*src0->nb[1] + i2*src0->nb[2]);
+        const float * x1 = (const float *)((const char *)src1->data + i11*src1->nb[1] + i2*src1->nb[2]);
+        float * y = (float *)dst->data + i11*ne01 + i2*ne01*ne11;
+
+        float max = fmaxf(x1[0], x1[1]);
+        for (int j = 2; j < ne00; ++j) max = fmaxf(max, x1[j]);
+        GGML_ASSERT(max > -INFINITY);
+        float sum_n = 0;
+        float sum_d = 0;
+        for (int j = 0; j < ne00; ++j) {
+            float p = expf(scale*(x1[j] - max));
+            sum_n += p*x0[j];
+            sum_d += p;
+        }
+        y[i01] = sum_n / sum_d;
+    }
+}
+
 // ggml_compute_forward_soft_max_back
 
 static void ggml_compute_forward_soft_max_back_f32(
@@ -28374,6 +28425,14 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                             (const float *)cgraph->nodes[i]->data, (float *)cgraph->nodes[i+4]->data, (int32_t *)cgraph->nodes[i+3]->data,
                             params->ith, params->nth);
                     i += 4;
+                } else if (fusion && i + 1 < cgraph->n_nodes &&
+                        cgraph->nodes[i+1]->op == GGML_OP_MUL_MAT &&
+                        cgraph->nodes[i+1]->src[1] == tensor &&
+                        tensor->ne[0] < 8 &&
+                        tensor->type == GGML_TYPE_F32 &&
+                        cgraph->nodes[i+1]->src[0]->type == GGML_TYPE_F32) {
+                    ggml_compute_forward_fused_softmax_small_gemm_f32(params, cgraph->nodes[i+1]);
+                    ++i;
                 } else {
                     ggml_compute_forward_soft_max(params, tensor);
                 }

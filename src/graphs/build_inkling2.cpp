@@ -39,11 +39,16 @@ static inkling_stack inkling_sources(ggml_context * ctx, const inkling_stack & b
 
 static ggml_tensor * inkling_mix(ggml_context * ctx, const inkling_stack & stack, ggml_tensor * partial, ggml_tensor * query) {
     auto keys = partial ? inkling_append(ctx, stack.keys, inkling_norm(ctx, partial)) : stack.keys;
-    auto scores = ggml_mul_mat(ctx, query, keys);
-    ggml_mul_mat_set_prec(scores, GGML_PREC_F32);
-    scores = ggml_cont(ctx, ggml_transpose(ctx, scores));
-    auto probs = ggml_soft_max_ext(ctx, scores, nullptr, 1.0f / std::sqrt(float(keys->ne[0])), 0.0f);
     auto values = partial || !stack.values ? ggml_cont(ctx, ggml_transpose(ctx, keys)) : stack.values;
+    ggml_tensor * scores;
+    if (keys->ne[2] == 1) {
+        // avoid permute and contiguous by simply swapping the order of the GEMM operands
+        scores = ggml_mul_mat(ctx, keys, query);
+    } else {
+        scores = ggml_mul_mat(ctx, query, keys);
+        scores = ggml_cont(ctx, ggml_transpose(ctx, scores));
+    }
+    auto probs = ggml_soft_max_ext(ctx, scores, nullptr, 1.0f / std::sqrt(float(keys->ne[0])), 0.0f);
     auto result = ggml_mul_mat(ctx, values, probs);
     ggml_mul_mat_set_prec(result, GGML_PREC_F32);
     return result;

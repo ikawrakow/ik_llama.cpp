@@ -2159,13 +2159,19 @@ inline void iqk_flash_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int str
         fa.compute(kh, vh, 8*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
         if (update(8*n_step)) return;
     }
-    else if (nq1 >= 4) {
+    if (nq1 >= 4) {
         int n_step = nq1/4;
         FlashAttn<Dk, Dv, 4, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
         fa.compute(kh, vh, 4*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
         if (update(4*n_step)) return;
     }
-    else if (nq1 >= 2) {
+    if (nq1 >= 3) {
+        int n_step = nq1/3;
+        FlashAttn<Dk, Dv, 3, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
+        fa.compute(kh, vh, 3*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
+        if (update(3*n_step)) return;
+    }
+    if (nq1 >= 2) {
         int n_step = nq1/2;
         FlashAttn<Dk, Dv, 2, k_step, Bias> fa(scale, softcap, sinkf, sink_stride, bias);
         fa.compute(kh, vh, 2*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
