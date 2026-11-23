@@ -1600,6 +1600,7 @@ static void fold_expert_scale(uint8_t * data, const ggml_tensor * cur, const std
     GGML_ASSERT((size_t) nblock * block_size == row_size);
 
     const int n_scale = (int) scales.size();
+    GGML_ASSERT(n_scale == 1 || n_scale == ne2);
     for (int64_t e = 0; e < ne2; ++e) {
         const float s = scales[n_scale == 1 ? 0 : e];
         if (s == 1.0f) {
@@ -1709,9 +1710,10 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         file->read_raw(cur->data, ggml_nbytes(cur));
     }
 
-    if (!w.expert_scale.empty()) {
+    if (!w.expert_scale.empty() && !folded_expert_scales.count(cur)) {
         GGML_ASSERT(!use_mmap);
         fold_expert_scale((uint8_t *) cur->data, cur, w.expert_scale);
+        folded_expert_scales.insert(cur);
     }
 
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {

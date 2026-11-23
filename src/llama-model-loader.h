@@ -59,7 +59,9 @@ struct llama_model_loader {
     // Explicit --no-mmap with deferred tables: copy dense weights out, alias deferred only.
     bool defer_copy_dense = false;
     std::vector<ggml_backend_buffer_type_t> integrated_bufts;
-    std::set<const ggml_tensor *> folded_expert_scales;
+    // Lazy-loader bookkeeping: mutable so const load_data_for can skip a
+    // tensor already folded by a previous load_all_data/load_data_for call.
+    mutable std::set<const ggml_tensor *> folded_expert_scales;
 
     llama_files files;
     llama_ftype ftype;
