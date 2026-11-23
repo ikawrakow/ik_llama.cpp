@@ -639,7 +639,7 @@ static uint64_t llama_ubatch_seq_fingerprint(const llama_batch & b, const llm_ar
 static inline uint64_t model_state_hash(const llama_context & lctx) {
     uint64_t h = 1469598103934665603ull;
     auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
-    if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP) {
+    if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP || lctx.model.arch == LLM_ARCH_LFM2) {
         const auto & ckpt = lctx.kv_self.ckpt;
         mix(lctx.dflash.capture != nullptr);
         mix((uint32_t) ckpt.conv_offset);
@@ -11399,13 +11399,13 @@ static bool alloc_conv_windows(llama_kv_cache & kv, int history, int max_tokens)
 }
 
 static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, llama_ckpt_data ckpt_type, int max_tokens) {
-    if (model.arch == LLM_ARCH_INKLING2_LOOP) {
+    if (model.arch == LLM_ARCH_INKLING2_LOOP || model.arch == LLM_ARCH_LFM2) {
         return ckpt_type.type == LLAMA_CHECKPOINT_SPEC && kv.checkpoint_alloc_shadows(ckpt_type) &&
             alloc_conv_windows(kv, model.hparams.n_shortconv_l_cache - 1, max_tokens);
     }
-    // openPangu carries only a conv state and LFM2 a short-conv state (no SSM
+    // openPangu carries only a conv state and LFM2MOE and LFM3 a short-conv state (no SSM
     // term); the per-step path would divide by zero (ssm_dt_rank == 0), decline
-    if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_LFM2 || model.arch == LLM_ARCH_LFM2MOE || model.arch == LLM_ARCH_LFM3) {
+    if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_LFM2MOE || model.arch == LLM_ARCH_LFM3) {
         kv.save_per_step_ssm = false;
         return false;
     }
