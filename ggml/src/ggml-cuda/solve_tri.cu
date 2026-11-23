@@ -234,7 +234,7 @@ static __global__ void solve_tri_f32_64x64_opt(const float * __restrict__ A,
         }
 
         // Sync within warp to ensure writes are visible before next row reads
-        __syncwarp();
+        ggml_cuda_syncwarp();
     }
 
     __syncthreads();
@@ -349,7 +349,7 @@ static __global__ void solve_tri_f32_128x128_opt(const float * __restrict__ A,
             }
         }
 
-        __syncwarp();
+        ggml_cuda_syncwarp();
     }
 
     __syncthreads();
@@ -485,7 +485,7 @@ static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
                             sXt_tile[col1 * (TILE_SIZE+1) + row] -= sum1;
                         }
                     }
-                    __syncwarp();
+                    ggml_cuda_syncwarp();
                 }
                 __syncthreads();
             }
@@ -525,7 +525,7 @@ static __global__ void solve_tri_f32_256x256_tiled(const float * __restrict__ A,
                             (sXt_tile[col1 * (TILE_SIZE+1) + row] - sum1) * inv_diag;
                     }
                 }
-                __syncwarp();
+                ggml_cuda_syncwarp();
             }
             __syncthreads();
 
@@ -650,7 +650,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 
         // Sync between columns to ensure writes are visible
         if (c + 1 < cols_per_thread) {
-            __syncwarp();
+            ggml_cuda_syncwarp();
         }
     }
 
