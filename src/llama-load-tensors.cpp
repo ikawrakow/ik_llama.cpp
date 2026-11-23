@@ -527,6 +527,12 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
     bool split_requested = ctx == split_ctx;
     ctx = get_context_for_tensor(ctx, name);
     if (actual_context) *actual_context = ctx;
+    // Do not duplicate the token_embd tensor when running CPU-only
+    if ((flags & llama_model_loader::TENSOR_DUPLICATED) && model.tok_embd && ctx_input == ctx_output &&
+        name == ggml_get_name(model.tok_embd) && ggml_get_tensor(ctx, name.c_str()) == model.tok_embd &&
+        ne.size() == 2 && ne[0] == model.tok_embd->ne[0] && ne[1] == model.tok_embd->ne[1]) {
+        return model.tok_embd;
+    }
     auto tensor = ml.create_tensor(ctx, name, ne, flags);
     if (tensor && ctx == split_ctx) {
         split_tensors.insert(tensor);
@@ -3229,13 +3235,12 @@ bool create_tensors_helper::create_gemma4_tensors(const LLM_TN & tn) {
         throw std::runtime_error("Gemma 4 requires n_embd_head_k_swa == n_embd_head_v_swa");
     }
 
+    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
     model.output = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     // if output is NULL, init from the input tok embed
     if (!model.output) {
         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
     }
-
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
     if (n_embd_per_layer > 0) {
         model.tok_embd_per_layer   = create_tensor(ctx_input, tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"), {n_embd_per_layer * n_layer, n_vocab}, 0);
