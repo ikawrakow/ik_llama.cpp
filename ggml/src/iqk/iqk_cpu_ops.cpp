@@ -1314,3 +1314,106 @@ void iqk_op_multiadd_unary_scale(struct ggml_tensor * dst, int ith, int nth) {
         multi_add_unary_64(ne0, nused, x + row*ne0*nused + i0, y + row*ne0*nused + i0, z + i, scale);
     }
 }
+
+namespace {
+inline void compute_inkling2_control(int n, float * y, const float * x0l, const float * x1l, const float * x0r, const float * x1r) {
+    int i = 0;
+#ifdef __AVX2__
+    auto two = _mm256_set1_ps(2.0f);
+    auto one = _mm256_set1_ps(1.0f);
+    //for (; i < n; i += 8) {
+    //    auto v0l = _mm256_loadu_ps(x0l + i);
+    //    auto v1l = _mm256_loadu_ps(x1l + i);
+    //    auto v0r = _mm256_loadu_ps(x0r + i);
+    //    auto v1r = _mm256_loadu_ps(x1r + i);
+    //    auto exp_l = v_expf(_mm256_mul_ps(two, v0l));
+    //    auto exp_r = v_expf(_mm256_mul_ps(two, v0r));
+    //    auto exp_l_p1 = _mm256_add_ps(exp_l, one);
+    //    auto exp_r_p1 = _mm256_add_ps(exp_r, one);
+    //    auto v1 = _mm256_mul_ps(_mm256_mul_ps(two, v1l), exp_r_p1);
+    //    auto v2 = _mm256_mul_ps(_mm256_mul_ps(v1r, _mm256_sub_ps(exp_r, one)), exp_l_p1);
+    //    auto vf = _mm256_div_ps(_mm256_add_ps(v1, v2), _mm256_mul_ps(exp_l_p1, exp_r_p1));
+    //    _mm256_storeu_ps(y + i, vf);
+    //}
+    __m256 v0l[4], v0r[4];
+    for (; i < n; i += 32) {
+        for (int k = 0; k < 4; ++k) {
+            v0l[k] = _mm256_loadu_ps(x0l + i + 8*k);
+            v0l[k] = v_expf(_mm256_mul_ps(two, v0l[k]));
+            v0r[k] = _mm256_loadu_ps(x0r + i + 8*k);
+            v0r[k] = v_expf(_mm256_mul_ps(two, v0r[k]));
+        }
+        for (int k = 0; k < 4; ++k) {
+            auto v1 = _mm256_mul_ps(two, _mm256_loadu_ps(x1l + i + 8*k));
+            v0l[k]  = _mm256_div_ps(v1, _mm256_add_ps(v0l[k], one));
+        }
+        for (int k = 0; k < 4; ++k) {
+            auto v1 = _mm256_loadu_ps(x1r + i + 8*k);
+            auto v2 = _mm256_mul_ps(v1, _mm256_sub_ps(v0r[k], one));
+            v0r[k] = _mm256_div_ps(v2, _mm256_add_ps(v0r[k], one));
+        }
+        for (int k = 0; k < 4; ++k) {
+            auto v = _mm256_add_ps(v0l[k], v0r[k]);
+            _mm256_storeu_ps(y + i + 8*k, v);
+        }
+    }
+    return;
+#endif
+    for (; i < n; ++i) {
+        float exp_l = expf(2*x0l[i]);
+        float exp_r = expf(2*x0r[i]);
+        y[i] = 2.0f*x1l[i]/(1.0f + exp_l) + x1r[i]*(exp_r - 1)/(exp_r + 1);
+    }
+}
+}
+
+bool iqk_inkling2_control(struct ggml_tensor * dst, int ith, int nth) {
+    if (!dst || dst->type != GGML_TYPE_F32 || dst->op != GGML_OP_ADD) return false;
+    auto add0 = dst->src[0];
+    auto add1 = dst->src[1];
+    if (add0->type != GGML_TYPE_F32 || add0->op != GGML_OP_MUL) return false;
+    if (add1->type != GGML_TYPE_F32 || add1->op != GGML_OP_MUL) return false;
+    auto src1l = add0->src[1];
+    auto src1r = add1->src[1];
+    if (src1l->type != GGML_TYPE_F32 || src1r->type != GGML_TYPE_F32) return false;
+    auto scale = add0->src[0];
+    if (scale->op != GGML_OP_SCALE) return false;
+    auto fparams = (const float *)scale->op_params;
+    if (fparams[0] != -1.0f || fparams[1] != 1.0f) return false;
+    auto tanh0 = scale->src[0];
+    if (tanh0->op != GGML_OP_UNARY || ggml_unary_op(tanh0->op_params[0]) != GGML_UNARY_OP_TANH) return false;
+    auto tanh1 = add1->src[0];
+    if (tanh1->op != GGML_OP_UNARY || ggml_unary_op(tanh1->op_params[0]) != GGML_UNARY_OP_TANH) return false;
+    auto src0l = tanh0->src[0];
+    auto src0r = tanh1->src[0];
+    if (src0l->type != GGML_TYPE_F32 || src0r->type != GGML_TYPE_F32) return false;
+    if (!ggml_are_same_shape(src0l, src0r)) return false;
+    if (!ggml_are_same_shape(src0l, dst)) return false;
+    if (!ggml_are_same_shape(src0l, src1l)) return false;
+    if (!ggml_are_same_shape(src0r, src1r)) return false;
+    // strictly speaking not necessary, just lazy to deal with non-contiguous variants
+    if (!ggml_is_contiguous(src0l) || !ggml_is_contiguous(src0r) ||
+        !ggml_is_contiguous(src1l) || !ggml_is_contiguous(src1r)) return false;
+    int64_t nelem = ggml_nelements(dst);
+    // strictly speaking not necessary, just lazy to deal with strange tensor sizes
+    if (nelem % 32 != 0) return false;
+    int nb32 = nelem/32;
+    int npt  = (nb32 + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = std::min(nb32, first + npt);
+    first *= 32;
+    last  *= 32;
+
+    compute_inkling2_control(last - first, (float *)dst->data + first,
+            (const float *)src0l->data + first, (const float *)src1l->data + first,
+            (const float *)src0r->data + first, (const float *)src1r->data + first);
+
+    return true;
+
+    //if (ith == 0) {
+    //    printf("%s: src0l: %ld x %ld x %ld x %ld, src0r: %ld x %ld x %ld x %ld, src1l: %ld x %ld x %ld x %ld, src1r: %ld x %ld x %ld x %ld\n", __func__,
+    //            src0l->ne[0], src0l->ne[1], src0l->ne[2], src0l->ne[3], src0r->ne[0], src0r->ne[1], src0r->ne[2], src0r->ne[3],
+    //            src1l->ne[0], src1l->ne[1], src1l->ne[2], src1l->ne[3], src1r->ne[0], src1r->ne[1], src1r->ne[2], src1r->ne[3]);
+    //}
+    //return false;
+}
