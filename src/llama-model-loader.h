@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <vector>
 #include <map>
+#include <set>
 
 enum llama_fver {
     GGUF_FILE_VERSION_V1 = 1,
@@ -58,6 +59,9 @@ struct llama_model_loader {
     // Explicit --no-mmap with deferred tables: copy dense weights out, alias deferred only.
     bool defer_copy_dense = false;
     std::vector<ggml_backend_buffer_type_t> integrated_bufts;
+    // Lazy-loader bookkeeping: mutable so const load_data_for can skip a
+    // tensor already folded by a previous load_all_data/load_data_for call.
+    mutable std::set<const ggml_tensor *> folded_expert_scales;
 
     llama_files files;
     llama_ftype ftype;
@@ -73,6 +77,7 @@ struct llama_model_loader {
         ggml_tensor * tensor;
         std::vector<float> nvfp4_scale;
         std::vector<float> f8_scale;
+        std::vector<float> expert_scale; // folded into the fp16 block deltas at load
         bool mxfp4_repack = false;
 
         llama_tensor_weight(const llama_file * file, uint16_t idx, const char * name, const struct gguf_context * gguf_ctx, ggml_tensor * tensor, const std::vector<size_t> & tensor_ends) : idx(idx), tensor(tensor) {
@@ -128,6 +133,7 @@ struct llama_model_loader {
     void read_scale(const llama_tensor_weight & scale, float * dst);
     bool import_nvfp4(llama_nvfp4_precision precision);
     bool import_f8_e4m3();
+    bool import_expert_scales();
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
