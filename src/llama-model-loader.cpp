@@ -5,6 +5,7 @@
 #include "ggml.h"
 #include <memory>
 #include "ggml-backend.h"
+#include "ggml-quants.h"
 #include "iqk/iqk_quantize.h"
 
 #ifdef GGML_USE_CUDA
@@ -1378,33 +1379,18 @@ bool llama_model_loader::import_expert_scales() {
         return false;
     }
 
-    // Types whose block delta is a plain fp16 value at offset 0. Folding the
-    // per-expert factor into it is exact up to fp16 rounding.
-    auto has_fp16_delta = [](ggml_type type) {
-        switch (type) {
-            case GGML_TYPE_IQ1_S:
-            case GGML_TYPE_IQ2_XXS:
-            case GGML_TYPE_IQ2_XS:
-            case GGML_TYPE_IQ2_S:
-            case GGML_TYPE_IQ3_XXS:
-            case GGML_TYPE_Q2_0:
-            case GGML_TYPE_IQ4_NL:
-                return true;
-            default:
-                return false;
-        }
-    };
-
+    // Exact block folding or requantize fallback; reject unsupported types.
     std::set<const ggml_tensor *> consumed;
     int n_fold = 0;
     for (auto & w : weights) {
-        if (!has_fp16_delta(w.tensor->type)) {
-            continue;
-        }
         const std::string name(w.tensor->name);
         const auto * s = get_weight((name.substr(0, name.rfind('.')) + ".scale").c_str());
         if (!s || !valid_scale_shape(s->tensor, w.tensor)) {
             continue;
+        }
+        if (!ggml_type_can_scale_row(w.tensor->type)) {
+            throw std::runtime_error(format("%s: tensor '%s' has a per-expert .scale but type %s cannot be scaled at load",
+                        __func__, name.c_str(), ggml_type_name(w.tensor->type)));
         }
         const int n_scale = (int) s->tensor->ne[0];
         std::vector<float> scales(n_scale);
@@ -1592,12 +1578,7 @@ static void fold_expert_scale(uint8_t * data, const ggml_tensor * cur, const std
     const int64_t ne0 = cur->ne[0];
     const int64_t ne1 = cur->ne[1];
     const int64_t ne2 = cur->ne[2];
-    const int64_t block = ggml_blck_size(cur->type);
-    const int64_t nblock = ne0 / block;
-    const size_t block_size = ggml_type_size(cur->type);
     const size_t row_size = ggml_row_size(cur->type, ne0);
-    GGML_ASSERT(ne0 % block == 0);
-    GGML_ASSERT((size_t) nblock * block_size == row_size);
 
     const int n_scale = (int) scales.size();
     GGML_ASSERT(n_scale == 1 || n_scale == ne2);
@@ -1608,13 +1589,9 @@ static void fold_expert_scale(uint8_t * data, const ggml_tensor * cur, const std
         }
         uint8_t * pe = data + (size_t) e * ne1 * row_size;
         for (int64_t r = 0; r < ne1; ++r) {
-            uint8_t * pr = pe + (size_t) r * row_size;
-            for (int64_t b = 0; b < nblock; ++b) {
-                uint8_t * pb = pr + (size_t) b * block_size;
-                ggml_fp16_t d;
-                memcpy(&d, pb, sizeof(d));
-                d = ggml_fp32_to_fp16(ggml_fp16_to_fp32(d) * s);
-                memcpy(pb, &d, sizeof(d));
+            if (!ggml_scale_row_inplace(cur->type, pe + (size_t) r * row_size, ne0, s)) {
+                throw std::runtime_error(format("cannot apply per-expert scale to '%s' rows of type %s",
+                            ggml_get_name(cur), ggml_type_name(cur->type)));
             }
         }
     }

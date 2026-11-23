@@ -16862,3 +16862,173 @@ void ggml_vec_dot_tqp7_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     UNUSED(by);
     ggml_vec_dot_tqp_q8_0_impl(n, s, vx, vy, 7);
 }
+
+// Scalar block-scale layouts; other types use the requantize fallback.
+enum block_scale_kind {
+    BLOCK_SCALE_NONE = 0,
+    BLOCK_SCALE_F16_D,
+    BLOCK_SCALE_F16_DM,
+    BLOCK_SCALE_F32_D,
+};
+
+struct block_scale_layout {
+    uint16_t d;
+    uint16_t dm;
+    uint8_t  kind;
+};
+
+static const struct block_scale_layout block_scale_layouts[GGML_TYPE_COUNT] = {
+    [GGML_TYPE_Q4_0]      = { offsetof(block_q4_0,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_Q4_1]      = { offsetof(block_q4_1,      d), offsetof(block_q4_1,      m), BLOCK_SCALE_F16_DM },
+    [GGML_TYPE_Q5_0]      = { offsetof(block_q5_0,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_Q5_1]      = { offsetof(block_q5_1,      d), offsetof(block_q5_1,      m), BLOCK_SCALE_F16_DM },
+    [GGML_TYPE_Q6_0]      = { offsetof(block_q6_0,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_Q8_0]      = { offsetof(block_q8_0,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_Q2_K]      = { offsetof(block_q2_K,      d), offsetof(block_q2_K,      dmin), BLOCK_SCALE_F16_DM },
+    [GGML_TYPE_Q3_K]      = { offsetof(block_q3_K,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_Q4_K]      = { offsetof(block_q4_K,      d), offsetof(block_q4_K,      dmin), BLOCK_SCALE_F16_DM },
+    [GGML_TYPE_Q5_K]      = { offsetof(block_q5_K,      d), offsetof(block_q5_K,      dmin), BLOCK_SCALE_F16_DM },
+    [GGML_TYPE_Q6_K]      = { offsetof(block_q6_K,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_Q8_K]      = { offsetof(block_q8_K,      d), 0, BLOCK_SCALE_F32_D },
+    [GGML_TYPE_Q8_K64]    = { offsetof(block_q8_K64,    d), 0, BLOCK_SCALE_F32_D },
+    [GGML_TYPE_Q8_K128]   = { offsetof(block_q8_K128,   d), 0, BLOCK_SCALE_F32_D },
+    [GGML_TYPE_IQ2_XXS]   = { offsetof(block_iq2_xxs,   d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ2_XS]    = { offsetof(block_iq2_xs,    d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ3_XXS]   = { offsetof(block_iq3_xxs,   d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ1_S]     = { offsetof(block_iq1_s,     d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ4_NL]    = { offsetof(block_iq4_nl,    d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ3_S]     = { offsetof(block_iq3_s,     d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ2_S]     = { offsetof(block_iq2_s,     d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ4_XS]    = { offsetof(block_iq4_xs,    d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_Q1_0_G128] = { offsetof(block_q1_0_g128, d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_Q2_0]      = { offsetof(block_q2_0,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_PQ2_0]     = { offsetof(block_pq2_0,     d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_PTQ1_0]    = { offsetof(block_ptq1_0,    d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_TQK6]      = { offsetof(block_tqk6,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_TQK7]      = { offsetof(block_tqk7,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_TQ2_T]     = { offsetof(block_tq2_t,     d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_TQP5]      = { offsetof(block_tqp5,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_TQP6]      = { offsetof(block_tqp6,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_TQP7]      = { offsetof(block_tqp7,      d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ2_K]     = { offsetof(block_iq2_k,     d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ3_K]     = { offsetof(block_iq3_k,     d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ4_K]     = { offsetof(block_iq4_k,     d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ5_K]     = { offsetof(block_iq5_k,     d), 0, BLOCK_SCALE_F16_D },
+    [GGML_TYPE_IQ6_K]     = { offsetof(block_iq6_k,     d), 0, BLOCK_SCALE_F16_D },
+};
+
+static void scale_f16_at(uint8_t * block, uint16_t off, float scale) {
+    ggml_fp16_t h;
+    memcpy(&h, block + off, sizeof(h));
+    h = ggml_fp32_to_fp16(ggml_fp16_to_fp32(h) * scale);
+    memcpy(block + off, &h, sizeof(h));
+}
+
+static void scale_f32_at(uint8_t * block, uint16_t off, float scale) {
+    float f;
+    memcpy(&f, block + off, sizeof(f));
+    f *= scale;
+    memcpy(block + off, &f, sizeof(f));
+}
+
+static void scale_block(uint8_t * block, const struct block_scale_layout * layout, float scale) {
+    switch (layout->kind) {
+        case BLOCK_SCALE_F16_D:  scale_f16_at(block, layout->d, scale); break;
+        case BLOCK_SCALE_F16_DM: scale_f16_at(block, layout->d, scale);
+                                 scale_f16_at(block, layout->dm, scale); break;
+        case BLOCK_SCALE_F32_D:  scale_f32_at(block, layout->d, scale); break;
+        case BLOCK_SCALE_NONE:
+        default: break;
+    }
+}
+
+bool ggml_type_can_scale_row(enum ggml_type type) {
+    if (type < 0 || type >= GGML_TYPE_COUNT) {
+        return false;
+    }
+    // BitNet/TriLM and MXFP4 have implicit/E8M0 scales; requantizing is lossy.
+    if (type == GGML_TYPE_IQ1_BN || type == GGML_TYPE_IQ2_BN || type == GGML_TYPE_MXFP4) {
+        return false;
+    }
+    // Repacked layouts are folded before repack.
+    const char * name = ggml_type_name(type);
+    if (name && (strstr(name, "_r4") || strstr(name, "_r8") || strstr(name, "_r16") ||
+                 strstr(name, "_x4") || strstr(name, "_x8"))) {
+        return false;
+    }
+    if (ggml_type_scales_exactly(type)) {
+        return true;
+    }
+    const ggml_type_traits_t tr = ggml_internal_get_type_traits(type);
+    return tr.to_float != NULL && tr.from_float != NULL;
+}
+
+bool ggml_type_scales_exactly(enum ggml_type type) {
+    if (type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16) {
+        return true;
+    }
+    if (type < 0 || type >= GGML_TYPE_COUNT) {
+        return false;
+    }
+    return block_scale_layouts[type].kind != BLOCK_SCALE_NONE;
+}
+
+bool ggml_scale_row_inplace(enum ggml_type type, void * row, int64_t ne0, float scale) {
+    if (row == NULL || ne0 <= 0 || !(scale > 0.0f) || !isfinite(scale)) {
+        return false;
+    }
+    if (scale == 1.0f) {
+        return true;
+    }
+    if (type == GGML_TYPE_F32) {
+        float * p = (float *) row;
+        for (int64_t i = 0; i < ne0; ++i) {
+            p[i] *= scale;
+        }
+        return true;
+    }
+    if (type == GGML_TYPE_F16) {
+        ggml_fp16_t * p = (ggml_fp16_t *) row;
+        for (int64_t i = 0; i < ne0; ++i) {
+            p[i] = ggml_fp32_to_fp16(ggml_fp16_to_fp32(p[i]) * scale);
+        }
+        return true;
+    }
+    if (type == GGML_TYPE_BF16) {
+        ggml_bf16_t * p = (ggml_bf16_t *) row;
+        for (int64_t i = 0; i < ne0; ++i) {
+            p[i] = ggml_fp32_to_bf16(ggml_bf16_to_fp32(p[i]) * scale);
+        }
+        return true;
+    }
+
+    const ggml_type_traits_t tr = ggml_internal_get_type_traits(type);
+    if (tr.blck_size <= 0 || tr.type_size == 0 || ne0 % tr.blck_size != 0) {
+        return false;
+    }
+
+    if (block_scale_layouts[type].kind != BLOCK_SCALE_NONE) {
+        const int64_t nblock = ne0 / tr.blck_size;
+        uint8_t * p = (uint8_t *) row;
+        for (int64_t b = 0; b < nblock; ++b) {
+            scale_block(p + b*tr.type_size, &block_scale_layouts[type], scale);
+        }
+        return true;
+    }
+
+    if (tr.to_float == NULL || tr.from_float == NULL) {
+        return false;
+    }
+    ggml_quantize_init(type);
+    float * tmp = (float *) malloc((size_t) ne0 * sizeof(float));
+    if (tmp == NULL) {
+        return false;
+    }
+    tr.to_float(row, tmp, ne0);
+    for (int64_t i = 0; i < ne0; ++i) {
+        tmp[i] *= scale;
+    }
+    tr.from_float(tmp, row, ne0);
+    free(tmp);
+    return true;
+}
