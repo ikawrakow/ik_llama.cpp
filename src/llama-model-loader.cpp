@@ -1253,11 +1253,82 @@ void llama_model_loader::done_getting_tensors() const {
     }
 }
 
+#if defined(__linux__)
+// Decide (before the mappings exist) whether mmap-mode NUMA band placement
+// will be armed later in llm_load_tensors(). If so, the whole-file
+// MADV_POPULATE_READ / MAP_POPULATE must be skipped so that model pages stay
+// unfaulted until each band is first-touched from its own node - file-backed
+// pages ignore mbind policy at allocation time, so a bulk prefault would weld
+// every page to whatever node the loader thread ran on.
+// GGML_NUMA_MMAP_SPLIT=0 forces this off (restores the bulk prefault).
+static bool llama_numa_mmap_split_planned(const llama_model_loader & ml) {
+    const char * env = getenv("GGML_NUMA_MMAP_SPLIT");
+    if (env != nullptr && env[0] == '0') {
+        return false;
+    }
+    if (ggml_numa_mem_policy_explicit_bind()) {
+        return false;
+    }
+    ggml_numa_ensure_topology();
+    const int n_band = ggml_numa_band_count();
+    if (n_band <= 1) {
+        return false;
+    }
+    if (ml.should_defer_expert_mmaps() || ml.should_defer_ple_mmaps()) {
+        // deferred tables keep file mappings around after loading; leave them alone
+        return false;
+    }
+    static const char * k_exp_suffix[] = {
+        "ffn_gate_exps.weight",
+        "ffn_up_exps.weight",
+        "ffn_down_exps.weight",
+    };
+    for (const auto & w : ml.weights) {
+        ggml_tensor * t = w.tensor;
+        if (t == nullptr || !w.f8_scale.empty() || !w.nvfp4_scale.empty() || w.mxfp4_repack) {
+            continue; // repackables are copied, not aliased
+        }
+        const char * name = ggml_get_name(t);
+        const size_t nl   = strlen(name);
+        bool match = false;
+        for (size_t s = 0; s < sizeof(k_exp_suffix)/sizeof(k_exp_suffix[0]); ++s) {
+            const size_t sl = strlen(k_exp_suffix[s]);
+            if (nl > sl && strcmp(name + nl - sl, k_exp_suffix[s]) == 0) {
+                match = true;
+                break;
+            }
+        }
+        if (!match) {
+            continue;
+        }
+        if (t->ne[2] < 2 || t->ne[1] < 2*n_band) continue;
+        if (t->nb[1] != ggml_row_size(t->type, t->ne[0])) continue;
+        if (t->nb[2] != t->ne[1]*t->nb[1]) continue;
+        const size_t band_slab = (size_t)(t->ne[1]/n_band)*t->nb[1];
+        if (band_slab*(size_t)t->ne[2] < (size_t)1*1024*1024 || band_slab < (size_t)64*1024) continue;
+        return true;
+    }
+    return false;
+}
+#endif
+
 void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps, bool use_thp) {
     if (use_mmap) {
         mappings.reserve(files.size());
         mmaps_used.reserve(files.size());
         size_t n_deferred = 0;
+#if defined(__linux__)
+        numa_mmap_bandsplit = llama_numa_mmap_split_planned(*this);
+        // with band placement pending, keep model pages unfaulted (see above)
+        const bool numa_advice = ggml_is_numa() && !numa_mmap_bandsplit;
+        const bool skip_prefetch = numa_mmap_bandsplit;
+#else
+        const bool numa_advice = ggml_is_numa();
+        const bool skip_prefetch = false;
+#endif
+        if (numa_mmap_bandsplit) {
+            LLAMA_LOG_INFO("%s: [numa] mmap band placement planned: skipping bulk prefault, bands will be first-touched node-local\n", __func__);
+        }
         for (size_t fi = 0; fi < files.size(); ++fi) {
             const auto & file = files[fi];
             // Deferred sparse tables (PLE, engram) stay cold; faulting GBs upfront wastes IO.
@@ -1265,8 +1336,8 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
             if (deferred_file) {
                 ++n_deferred;
             }
-            const size_t file_prefetch = (prefetch && !deferred_file) ? (size_t) -1 : 0;
-            std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), file_prefetch, ggml_is_numa(), use_thp));
+            const size_t file_prefetch = (prefetch && !deferred_file && !skip_prefetch) ? (size_t) -1 : 0;
+            std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), file_prefetch, numa_advice, use_thp));
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());

@@ -5472,6 +5472,54 @@ int ggml_numa_band_node(int band) {
     return -1;
 }
 
+// CPUs of the band-th active node that are also inside the process affinity
+// mask, in ascending order. Used by the caller to pin a first-touch worker to
+// the node that owns a weight band (mmap alias mode cannot use mbind for
+// file-backed pages, so placement is done by faulting each band from its node).
+int ggml_numa_band_cpu_count(int band) {
+#if defined(__gnu_linux__)
+    const int node = ggml_numa_band_node(band);
+    if (node < 0) {
+        return 0;
+    }
+    const struct ggml_numa_node * n = &g_state.numa.nodes[node];
+    int count = 0;
+    for (uint32_t i = 0; i < n->n_cpus; ++i) {
+        if (n->cpus[i] < CPU_SETSIZE && CPU_ISSET(n->cpus[i], &g_state.numa.cpuset)) {
+            ++count;
+        }
+    }
+    return count;
+#else
+    UNUSED(band);
+    return 0;
+#endif
+}
+
+int ggml_numa_band_cpu(int band, int i) {
+#if defined(__gnu_linux__)
+    const int node = ggml_numa_band_node(band);
+    if (node < 0 || i < 0) {
+        return -1;
+    }
+    const struct ggml_numa_node * n = &g_state.numa.nodes[node];
+    int count = 0;
+    for (uint32_t j = 0; j < n->n_cpus; ++j) {
+        if (n->cpus[j] < CPU_SETSIZE && CPU_ISSET(n->cpus[j], &g_state.numa.cpuset)) {
+            if (count == i) {
+                return (int)n->cpus[j];
+            }
+            ++count;
+        }
+    }
+    return -1;
+#else
+    UNUSED(band);
+    UNUSED(i);
+    return -1;
+#endif
+}
+
 bool ggml_numa_mbind_range(void * start, size_t size, int node) {
 #if defined(__gnu_linux__)
     if (node < 0 || (uint32_t)node >= g_state.numa.n_nodes || size == 0 || start == NULL) {

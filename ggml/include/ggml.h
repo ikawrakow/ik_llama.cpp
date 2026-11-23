@@ -974,6 +974,8 @@ extern "C" {
 
     GGML_API int  ggml_numa_band_count(void); // number of NUMA nodes holding at least one CPU from
     GGML_API int  ggml_numa_band_node(int band); // system node id of the band-th active node
+    GGML_API int  ggml_numa_band_cpu_count(int band); // CPUs of the band-th active node inside the process affinity mask
+    GGML_API int  ggml_numa_band_cpu(int band, int i); // the i-th such CPU, or -1 when exhausted
     GGML_API bool ggml_numa_mbind_range(void * start, size_t size, int node); 
     GGML_API void ggml_numa_moe_band_split_set(bool on); // arm/disarm the node-partitioned MoE chunk
 

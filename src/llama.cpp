@@ -8,6 +8,10 @@
 #include "llama-impl.h"
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/mman.h>
+#if defined(__gnu_linux__)
+#include <pthread.h>
+#include <sched.h>
+#endif
 #include <unistd.h>
 #include <cerrno>
 #include <cstdio>
@@ -118,6 +122,7 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 #include <fstream>
 #include <functional>
 #include <future>
+#include <atomic>
 #include <initializer_list>
 #include <locale>
 #include <map>
@@ -4974,6 +4979,194 @@ static bool llama_numa_bandsplit_place(ggml_context * ctx) {
     return n_placed > 0;
 }
 
+// mmap alias mode (--mmap): file-backed pages ignore mbind policy at
+// allocation time, so instead of mbind we first-touch every band from a
+// worker pinned to the band's node. The kernel then allocates the page-cache
+// pages on that node, and every later access - from any thread - maps the
+// same page locally. No copy, no extra RAM: the weights stay aliases of the
+// mapping exactly like stock --mmap. Must run before load_all_data() so that
+// mapping mlock and CUDA host-buffer registration pin already-placed pages.
+static void llama_numa_node_prefault(const std::vector<std::pair<uintptr_t, size_t>> & ranges,
+        const std::atomic<bool> * go, const long pg_size) {
+    while (!go->load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    for (const auto & r : ranges) {
+#ifdef MADV_POPULATE_READ
+        if (madvise((void *)r.first, r.second, MADV_POPULATE_READ) == 0) {
+            continue;
+        }
+#endif
+        // kernel without MADV_POPULATE_READ: fault every page by touching it
+        for (uintptr_t a = r.first; a < r.first + r.second; a += (size_t)pg_size) {
+            volatile const char * p = (const volatile char *)a;
+            (void)(*p);
+        }
+    }
+}
+
+static bool llama_numa_mmap_bandsplit_place(llama_model_loader & ml) {
+    ggml_numa_ensure_topology();
+
+    const int n_band = ggml_numa_band_count();
+    if (n_band <= 1) {
+        return false;
+    }
+    const long pg_size = sysconf(_SC_PAGESIZE);
+    if (pg_size <= 0) {
+        return false;
+    }
+    const uintptr_t pg_mask = ~((uintptr_t)pg_size - 1);
+
+    static const char * k_exp_suffix[] = {
+        "ffn_gate_exps.weight",
+        "ffn_up_exps.weight",
+        "ffn_down_exps.weight",
+    };
+    const char * dense_env = getenv("GGML_NUMA_DENSE_SPLIT");
+    const bool dense_split = (dense_env == nullptr || dense_env[0] != '0');
+
+    int n_placed = 0;
+    int n_dense  = 0;
+    std::vector<std::vector<std::pair<uintptr_t, size_t>>> band_ranges(n_band);
+
+    for (const auto & w : ml.weights) {
+        ggml_tensor * t = w.tensor;
+        if (t == nullptr || !w.f8_scale.empty() || !w.nvfp4_scale.empty() || w.mxfp4_repack) {
+            continue; // repackables are copied, not aliased
+        }
+        const char * name = ggml_get_name(t);
+        const size_t nl   = strlen(name);
+        bool match = false;
+        for (size_t s = 0; s < sizeof(k_exp_suffix)/sizeof(k_exp_suffix[0]); ++s) {
+            const size_t sl = strlen(k_exp_suffix[s]);
+            if (nl > sl && strcmp(name + nl - sl, k_exp_suffix[s]) == 0) {
+                match = true;
+                break;
+            }
+        }
+
+        if (match) {
+            // same eligibility rules as the anonymous-buffer path
+            if (t->ne[2] < 2 || t->ne[1] < 2*n_band) continue;
+            if (t->nb[1] != ggml_row_size(t->type, t->ne[0])) continue;
+            if (t->nb[2] != t->ne[1]*t->nb[1]) continue;
+            const size_t band_slab = (size_t)(t->ne[1]/n_band)*t->nb[1];
+            if (band_slab*(size_t)t->ne[2] < (size_t)1*1024*1024 || band_slab < (size_t)64*1024) continue;
+            // expert stacks of device-offloaded layers are uploaded from the
+            // same pages later (pread), so faulting them now does no harm -
+            // it just warms the page cache for that upload
+            const char * base = (const char *)ml.mappings.at(w.idx)->addr() + w.offs;
+            bool ok = true;
+            for (int64_t e = 0; e < t->ne[2]; ++e) {
+                for (int k = 0; k < n_band; ++k) {
+                    const int64_t r0 =  t->ne[1] * k        / n_band;
+                    const int64_t r1 = (t->ne[1] * (k + 1)) / n_band;
+                    if (r1 <= r0) { ok = false; break; }
+                    const int node = ggml_numa_band_node(k);
+                    if (node < 0) { ok = false; break; }
+                    // round inward, exactly like the expert bands: a page shared
+                    // by two bands keeps the default policy
+                    const uintptr_t s  = (uintptr_t)base + (size_t)(e*t->nb[2] + r0*t->nb[1]);
+                    const uintptr_t wd = (uintptr_t)base + (size_t)(e*t->nb[2] + r1*t->nb[1]);
+                    const uintptr_t ps = (s + pg_size - 1) & pg_mask;
+                    const uintptr_t pe = wd & pg_mask;
+                    if (pe <= ps) continue;
+                    band_ranges[k].push_back({ps, pe - ps});
+
+                }
+                if (!ok) break;
+            }
+            if (ok) ++n_placed;
+            continue;
+        }
+
+        // dense weights: same rule set as llama_numa_dense_place
+        if (!dense_split || t->ne[2] != 1 || t->ne[3] != 1) continue;
+        if (t->ne[1] < 2*n_band) continue;
+        if (t->nb[0] != ggml_type_size(t->type)) continue;
+        if (t->nb[1] != ggml_row_size(t->type, t->ne[0])) continue;
+        if ((size_t)(t->ne[1]/n_band)*t->nb[1] < (size_t)1*1024*1024) continue;
+        static const char * k_skip[] = {
+            "embd", "cls", "exp_probs", "gate_inp", "position", "conv", "alt", "ssm", "shortcon",
+        };
+        bool skip = false;
+        for (size_t i = 0; i < sizeof(k_skip)/sizeof(k_skip[0]); ++i) {
+            if (strstr(name, k_skip[i]) != nullptr) { skip = true; break; }
+        }
+        if (skip) continue;
+        const char * base = (const char *)ml.mappings.at(w.idx)->addr() + w.offs;
+        bool ok = true;
+        for (int k = 0; k < n_band; ++k) {
+            const int64_t r0 =  t->ne[1] * k        / n_band;
+            const int64_t r1 = (t->ne[1] * (k + 1)) / n_band;
+            if (r1 <= r0) { ok = false; break; }
+            const int node = ggml_numa_band_node(k);
+            if (node < 0) { ok = false; break; }
+            const uintptr_t s  = (uintptr_t)base + (size_t)r0*t->nb[1];
+            const uintptr_t wd = (uintptr_t)base + (size_t)r1*t->nb[1];
+            const uintptr_t ps = (s + pg_size - 1) & pg_mask;
+            const uintptr_t pe = wd & pg_mask;
+            if (pe <= ps) continue;
+            band_ranges[k].push_back({ps, pe - ps});
+
+        }
+        if (ok) ++n_dense;
+    }
+
+    if (n_placed == 0 && n_dense == 0) {
+        return false;
+    }
+
+    // spawn one pinned worker per band and let it fault the whole band
+    std::atomic<bool> go{false};
+    std::vector<std::thread> ths;
+    ths.reserve(n_band);
+    for (int k = 0; k < n_band; ++k) {
+        if (band_ranges[k].empty()) {
+            continue;
+        }
+        ths.emplace_back(llama_numa_node_prefault, std::cref(band_ranges[k]), &go, pg_size);
+        // THP hint before the first touch (opportunistic, same as the mbind path)
+        for (const auto & r : band_ranges[k]) {
+            madvise((void *)r.first, r.second, MADV_HUGEPAGE);
+        }
+        cpu_set_t mask;
+        CPU_ZERO(&mask);
+        bool any = false;
+        const int n_cpu = ggml_numa_band_cpu_count(k);
+        for (int i = 0; i < n_cpu; ++i) {
+            const int c = ggml_numa_band_cpu(k, i);
+            if (c >= 0 && c < CPU_SETSIZE) {
+                CPU_SET(c, &mask);
+                any = true;
+            }
+        }
+        if (any && pthread_setaffinity_np(ths.back().native_handle(), sizeof(mask), &mask) != 0) {
+            LLAMA_LOG_WARN("%s: [numa] failed to pin mmap first-touch worker of band %d: %s\n",
+                    __func__, k, strerror(errno));
+        }
+    }
+    go.store(true, std::memory_order_release);
+    for (auto & th : ths) {
+        th.join();
+    }
+
+    // arm the same split state as the anonymous path so dispatch and verify
+    // behave identically
+    if (n_placed > 0) {
+        ggml_numa_moe_band_split_set(true);
+        LLAMA_LOG_INFO("%s: [numa] expert band split armed (mmap first-touch): %d node(s), %d expert stack(s)\n",
+                __func__, n_band, n_placed);
+    }
+    if (n_dense > 0) {
+        ggml_numa_dense_band_split_set(true);
+        LLAMA_LOG_INFO("%s: [numa] dense weight band split armed (mmap first-touch): %d weight(s)\n",
+                __func__, n_dense);
+    }
+    return n_placed > 0;
+}
+
 // verification: run after all tensor data has been loaded, when every
 // band page is resident. Samples pages per band and reports where they
 // actually landed. Pinned host buffers (cudaHostAlloc without
@@ -5025,6 +5218,14 @@ static void llama_numa_bandsplit_verify(const llama_model & model) {
             } else if (have_vma && line.compare(0, 14, "AnonHugePages:") == 0) {
                 long kb = 0;
                 if (sscanf(line.c_str(), "AnonHugePages:%ld kB", &kb) == 1 && kb > 0) {
+                    huge_kb += (size_t)kb;
+                }
+            }
+            // file-backed mappings (mmap alias mode) report their THP
+            // coverage in FileHugePages instead; anon mappings never have it
+            else if (have_vma && line.compare(0, 14, "FileHugePages:") == 0) {
+                long kb = 0;
+                if (sscanf(line.c_str(), "FileHugePages:%ld kB", &kb) == 1 && kb > 0) {
                     huge_kb += (size_t)kb;
                 }
             }
@@ -5823,6 +6024,17 @@ static bool llm_load_tensors(
                 ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
+    // mmap-mode NUMA band placement: file-backed pages ignore mbind policy,
+    // so each band is first-touched from a worker pinned to its node instead.
+    // Runs before buffer creation and load_all_data() so that CUDA host
+    // registration and mapping mlock pin pages that are already placed.
+#if defined(__gnu_linux__)
+    bool numa_mmap_split_armed = false;
+    if (!dry_run && ml.numa_mmap_bandsplit && !ml.has_anonymous_mapping()) {
+        numa_mmap_split_armed = llama_numa_mmap_bandsplit_place(ml);
+    }
+#endif
+
     model.mappings.reserve(ml.mappings.size());
 
     ggml_numa_ensure_topology();
@@ -5963,6 +6175,11 @@ static bool llm_load_tensors(
     static bool numa_band_hint_done = false;
     if (!numa_band_hint_done && hparams.n_expert > 0 && ggml_numa_band_count() > 1 && ml.use_mmap) {
         numa_band_hint_done = true;
+#if defined(__gnu_linux__)
+        if (numa_mmap_split_armed) {
+            // armed via node-pinned first-touch, nothing to hint
+        } else
+#endif
         if (use_mmap_buffer) {
             LLAMA_LOG_INFO("%s: [numa] expert band split not armed: weights alias mmap'd file pages; run with --no-mmap to bind expert bands node-local\n", __func__);
         } else {
