@@ -21725,25 +21725,32 @@ static void ggml_compute_forward_fused_softmax_small_gemm_f32(const struct ggml_
     int ne11 = src1->ne[1];
     GGML_ASSERT(ne00 >= 2);
 
+    float p[8];
+    float sum_d = 0;
+    int last_row = -1;
     for (int ir = ir0; ir < ir1; ++ir) {
         int i2 = ir/(ne01*ne11);
         int i11 = (ir - i2*ne01*ne11)/ne01;
         int i01 = ir - i2*ne01*ne11 - i11*ne01;
 
         const float * x0 = (const float *)((const char *)src0->data + i01*src0->nb[1] + i2*src0->nb[2]);
-        const float * x1 = (const float *)((const char *)src1->data + i11*src1->nb[1] + i2*src1->nb[2]);
         float * y = (float *)dst->data + i11*ne01 + i2*ne01*ne11;
 
-        float max = fmaxf(x1[0], x1[1]);
-        for (int j = 2; j < ne00; ++j) max = fmaxf(max, x1[j]);
-        GGML_ASSERT(max > -INFINITY);
-        float sum_n = 0;
-        float sum_d = 0;
-        for (int j = 0; j < ne00; ++j) {
-            float p = expf(scale*(x1[j] - max));
-            sum_n += p*x0[j];
-            sum_d += p;
+        int row = i11 + i2*ne11;
+        if (row != last_row) {
+            const float * x1 = (const float *)((const char *)src1->data + i11*src1->nb[1] + i2*src1->nb[2]);
+            float max = fmaxf(x1[0], x1[1]);
+            for (int j = 2; j < ne00; ++j) max = fmaxf(max, x1[j]);
+            GGML_ASSERT(max > -INFINITY);
+            sum_d = 0;
+            for (int j = 0; j < ne00; ++j) {
+                p[j] = expf(scale*(x1[j] - max));
+                sum_d += p[j];
+            }
+            last_row = row;
         }
+        float sum_n = 0;
+        for (int j = 0; j < ne00; ++j) sum_n += p[j]*x0[j];
         y[i01] = sum_n / sum_d;
     }
 }
