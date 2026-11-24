@@ -14102,7 +14102,15 @@ static size_t llama_state_seq_load_file_internal(struct llama_context * ctx, con
             LLAMA_LOG_ERROR("%s: failed to restore sequence state\n", __func__);
             return 0;
         }
-        GGML_ASSERT(nread <= state_size);
+        if (nread != state_size) {
+            LLAMA_LOG_ERROR("%s: did not read all of the sequence state file data! size %zu, got %zu\n", __func__, state_size, nread);
+            if (dest_seq_id == -1) {
+                llama_kv_cache_clear(ctx);
+            } else {
+                llama_kv_cache_seq_rm(ctx, dest_seq_id, -1, -1);
+            }
+            return 0;
+        }
         GGML_ASSERT(nread + sizeof(uint32_t) * 3 + sizeof(llama_token) * *n_token_count_out == file.tell());
     }
 
