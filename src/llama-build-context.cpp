@@ -13,7 +13,7 @@
 
 ggml_tensor * llm_build_context::build_conv_window(ggml_cgraph * gf, ggml_tensor * past, ggml_tensor * x,
         int il, int channel_offset) {
-    auto window = ggml_concat(ctx0, past, ggml_cont(ctx0, ggml_transpose(ctx0, x)), 0);
+    auto window = ggml_concat(ctx0, past, ggml_transpose(ctx0, x), 0);
     const auto & ckpt = kv_self.ckpt;
     if (ckpt.conv_offset >= 0) {
         auto snapshot = ckpt.conv_windows[il];
