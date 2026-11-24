@@ -1037,8 +1037,10 @@ int main(int argc, char ** argv) {
             { "filepath", filepath }
         };
 
-        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        task.id = ctx_server.queue_tasks.get_new_id();
+        const int id_task = task.id;
         ctx_server.queue_results.add_waiting_task_id(id_task);
+        ctx_server.queue_tasks.post(std::move(task));
 
         server_task_result result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
@@ -1067,8 +1069,10 @@ int main(int argc, char ** argv) {
             { "filepath", filepath }
         };
 
-        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        task.id = ctx_server.queue_tasks.get_new_id();
+        const int id_task = task.id;
         ctx_server.queue_results.add_waiting_task_id(id_task);
+        ctx_server.queue_tasks.post(std::move(task));
 
         server_task_result result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
@@ -1087,8 +1091,10 @@ int main(int argc, char ** argv) {
             { "id_slot", id_slot },
         };
 
-        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        task.id = ctx_server.queue_tasks.get_new_id();
+        const int id_task = task.id;
         ctx_server.queue_results.add_waiting_task_id(id_task);
+        ctx_server.queue_tasks.post(std::move(task));
 
         server_task_result result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
@@ -1808,8 +1814,10 @@ int main(int argc, char ** argv) {
 
         server_task task;
         task.type = SERVER_TASK_TYPE_SET_LORA;
-        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        task.id = ctx_server.queue_tasks.get_new_id();
+        const int id_task = task.id;
         ctx_server.queue_results.add_waiting_task_id(id_task);
+        ctx_server.queue_tasks.post(std::move(task));
 
         server_task_result result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
@@ -1843,8 +1851,10 @@ int main(int argc, char ** argv) {
         task.type = SERVER_TASK_TYPE_LOAD_CONTROL_VECTOR;
         task.data = body;
 
-        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        task.id = ctx_server.queue_tasks.get_new_id();
+        const int id_task = task.id;
         ctx_server.queue_results.add_waiting_task_id(id_task);
+        ctx_server.queue_tasks.post(std::move(task));
 
         server_task_result result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
@@ -1860,8 +1870,10 @@ int main(int argc, char ** argv) {
         task.type = SERVER_TASK_TYPE_UNLOAD_CONTROL_VECTOR;
         task.data = body;
 
-        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        task.id = ctx_server.queue_tasks.get_new_id();
+        const int id_task = task.id;
         ctx_server.queue_results.add_waiting_task_id(id_task);
+        ctx_server.queue_tasks.post(std::move(task));
 
         server_task_result result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
@@ -1903,8 +1915,10 @@ int main(int argc, char ** argv) {
         server_task task;
         task.type = SERVER_TASK_TYPE_SET_CONTROL_VECTOR;
 
-        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        task.id = ctx_server.queue_tasks.get_new_id();
+        const int id_task = task.id;
         ctx_server.queue_results.add_waiting_task_id(id_task);
+        ctx_server.queue_tasks.post(std::move(task));
 
         server_task_result result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
