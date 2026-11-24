@@ -3201,6 +3201,156 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 #endif
 
 //
+//========================================== Hierarchical barrier
+//
+static inline void cpu_relax(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+    _mm_pause();
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__APPLE__)
+    __asm__ __volatile__("isb\n" ::: "memory");
+#else
+    __asm__ __volatile__("yield" ::: "memory");
+#endif
+#else
+    sched_yield();
+    //__asm__ __volatile__("" ::: "memory");
+#endif
+}
+
+static size_t choose_barrier_group_size(size_t num_threads, int batch_size) {
+    if (num_threads <= 8) {
+        return num_threads;
+    }
+    size_t target = (num_threads <= 32 || batch_size > 32) ? 4 : 8;
+    if (target > num_threads) {
+        target = num_threads;
+    }
+    size_t rem = num_threads % target;
+    if (rem == 1 && target > 2) {
+        --target;
+    }
+    return target > 0 ? target : 1;
+}
+
+typedef struct {
+    size_t size;
+    _Alignas(CACHE_LINE_SIZE) _Atomic size_t count;
+    _Alignas(CACHE_LINE_SIZE) _Atomic bool   sense;
+} barrier_group_node_t;
+
+typedef struct {
+    size_t num_threads;
+    size_t group_size;
+    size_t num_groups;
+    uint64_t instance_id;
+    int spin_iters;
+    barrier_group_node_t* groups;
+    _Alignas(CACHE_LINE_SIZE) _Atomic size_t root_count;
+    _Alignas(CACHE_LINE_SIZE) _Atomic bool   root_sense;
+} hierarchical_barrier_t;
+
+static int hierarchical_barrier_init(hierarchical_barrier_t * b, size_t num_threads, int batch_size,
+                             size_t group_size, int spin_iters) {
+    static _Atomic uint64_t counter = 1;
+    if (!b || num_threads == 0) {
+        return -1;
+    }
+    if (group_size == 0) {
+        group_size = choose_barrier_group_size(num_threads, batch_size);
+    }
+    if (spin_iters <= 0) {
+        spin_iters = batch_size > 32 ? 1 << 17 : 1 << 15;
+    }
+
+    size_t num_groups = (num_threads + group_size - 1) / group_size;
+    barrier_group_node_t* groups = NULL;
+    if (posix_memalign((void**)&groups, CACHE_LINE_SIZE, num_groups * sizeof(barrier_group_node_t)) != 0) {
+        return -1;
+    }
+
+    b->num_threads = num_threads;
+    b->group_size  = group_size;
+    b->num_groups  = num_groups;
+    b->instance_id = atomic_fetch_add_explicit(&counter, 1, memory_order_relaxed);
+    b->spin_iters  = spin_iters;
+    b->groups      = groups;
+
+    for (size_t g = 0; g < num_groups; ++g) {
+        size_t start = g * group_size;
+        size_t count_in_group = num_threads - start;
+        if (count_in_group > group_size) {
+            count_in_group = group_size;
+        }
+        groups[g].size = count_in_group;
+        atomic_init(&groups[g].count, count_in_group);
+        atomic_init(&groups[g].sense, false);
+    }
+
+    atomic_init(&b->root_count, num_groups);
+    atomic_init(&b->root_sense, false);
+    return 0;
+}
+
+static void hierarchical_barrier_destroy(hierarchical_barrier_t * b) {
+    if (!b) {
+        return;
+    }
+    free(b->groups);
+    b->groups = NULL;
+}
+
+static void barrier_wait_for_sense(_Atomic bool * sense, bool expected, int spin_iters) {
+    for (int i = 0; i < spin_iters; ++i) {
+        if (atomic_load_explicit(sense, memory_order_acquire) == expected) {
+            return;
+        }
+        cpu_relax();
+    }
+    while (atomic_load_explicit(sense, memory_order_acquire) != expected) {
+        sched_yield();
+        cpu_relax();
+    }
+}
+
+static void hierarchical_barrier_arrive_and_wait(hierarchical_barrier_t * b, size_t tid) {
+    //GGML_ASSERT(b);
+    //GGML_ASSERT(tid >= 0 && tid < b->num_threads);
+    static _Thread_local const hierarchical_barrier_t * last_b = NULL;
+    static _Thread_local uint64_t last_instance_id = 0;
+    static _Thread_local bool local_sense = false;
+
+    if (last_b != b || last_instance_id != b->instance_id) {
+        last_b = b;
+        last_instance_id = b->instance_id;
+        local_sense = false;
+    }
+
+    local_sense = !local_sense;
+
+    size_t g = tid / b->group_size;
+    barrier_group_node_t * group = &b->groups[g];
+
+    size_t prev = atomic_fetch_sub_explicit(&group->count, 1, memory_order_acq_rel);
+    if (prev == 1) {
+        atomic_store_explicit(&group->count, group->size, memory_order_relaxed);
+
+        size_t root_prev = atomic_fetch_sub_explicit(&b->root_count, 1, memory_order_acq_rel);
+        if (root_prev == 1) {
+            atomic_store_explicit(&b->root_count, b->num_groups, memory_order_relaxed);
+            atomic_store_explicit(&b->root_sense, local_sense, memory_order_release);
+        } else {
+            barrier_wait_for_sense(&b->root_sense, local_sense, b->spin_iters);
+        }
+
+        atomic_store_explicit(&group->sense, local_sense, memory_order_release);
+    } else {
+        barrier_wait_for_sense(&group->sense, local_sense, b->spin_iters);
+    }
+}
+// ====================================== end Hierarchical barrier
+
+//
 // ggml context
 //
 
@@ -3227,8 +3377,9 @@ struct ggml_compute_state_shared {
     int n_batch;
 
     // synchronization primitives
-    atomic_int n_barrier;
-    atomic_int n_barrier_passed;
+    //atomic_int n_barrier;
+    //atomic_int n_barrier_passed;
+    hierarchical_barrier_t * hbt;
 
     ggml_abort_callback abort_callback; // abort ggml_graph_compute when true
     void * abort_callback_data;
@@ -5109,56 +5260,61 @@ inline static void ggml_critical_section_start(void) {
     }
 }
 
-static inline void ggml_barrier_impl(struct ggml_compute_state_shared * shared) {
-    if (shared->n_threads == 1) {
+static inline void ggml_barrier_impl(struct ggml_compute_state_shared * shared, int ith) {
+    if (shared->n_threads == 1 || !shared->hbt) {
         return;
     }
-
-    atomic_int * n_barrier = &shared->n_barrier;
-    atomic_int * n_barrier_passed = &shared->n_barrier_passed;
-
-    int n_threads = shared->n_threads;
-    int passed_old = atomic_load(n_barrier_passed);
-
-    if (atomic_fetch_add(n_barrier, 1) == n_threads - 1) {
-        // last thread
-        atomic_store(n_barrier, 0);
-        atomic_fetch_add(n_barrier_passed, 1);
-    } else {
-        // wait for other threads
-        const int n_spin_before_sleep = 100000;
-        while (true) {
-            for (int i = 0; i < n_spin_before_sleep; i++) {
-                if (atomic_load(n_barrier_passed) != passed_old) {
-                    return;
-                }
-            #if defined(__SSE3__)
-                _mm_pause();
-            #elif defined __ARM_NEON
-                __asm__ __volatile__("isb\n");
-            #endif
-            }
-            sched_yield();
-        }
-    }
+    hierarchical_barrier_arrive_and_wait(shared->hbt, ith);
+//
+//    atomic_int * n_barrier = &shared->n_barrier;
+//    atomic_int * n_barrier_passed = &shared->n_barrier_passed;
+//
+//    int n_threads = shared->n_threads;
+//    int passed_old = atomic_load(n_barrier_passed);
+//
+//    if (atomic_fetch_add(n_barrier, 1) == n_threads - 1) {
+//        // last thread
+//        atomic_store(n_barrier, 0);
+//        atomic_fetch_add(n_barrier_passed, 1);
+//    } else {
+//        // wait for other threads
+//        const int n_spin_before_sleep = 100000;
+//        while (true) {
+//            for (int i = 0; i < n_spin_before_sleep; i++) {
+//                if (atomic_load(n_barrier_passed) != passed_old) {
+//                    return;
+//                }
+//            #if defined(__SSE3__)
+//                _mm_pause();
+//            #elif defined __ARM_NEON
+//                __asm__ __volatile__("isb\n");
+//            #endif
+//            }
+//            sched_yield();
+//        }
+//    }
+}
+static void ggml_barrier(const struct ggml_compute_params * params) {
+    if (!params || !params->shared) return;
+    ggml_barrier_impl(params->shared, params->ith);
 }
 
-#ifdef GGML_USE_OPENMP
-static void ggml_barrier(struct ggml_compute_state_shared * shared) {
-    if (shared->n_threads == 1) {
-        return;
-    }
-    if (shared && shared->n_batch > 32) {
-        ggml_barrier_impl(shared);
-        return;
-    }
-    #pragma omp barrier
-}
-#else
-static void ggml_barrier(struct ggml_compute_state_shared * shared) {
-    ggml_barrier_impl(shared);
-}
-#endif
+//#ifdef GGML_USE_OPENMP
+//static void ggml_barrier(struct ggml_compute_state_shared * shared, int ith) {
+//    if (shared->n_threads == 1) {
+//        return;
+//    }
+//    if (shared && shared->n_batch > 32) {
+//        ggml_barrier_impl(shared);
+//        return;
+//    }
+//    #pragma omp barrier
+//}
+//#else
+//static void ggml_barrier(struct ggml_compute_state_shared * shared) {
+//    ggml_barrier_impl(shared);
+//}
+//#endif
 
 // TODO: make this somehow automatically executed
 //       some sort of "sentry" mechanism
@@ -15089,7 +15245,7 @@ static void ggml_compute_forward_acc_f32(
                 ((char *) src0->data),
                 ggml_nbytes(dst));
         }
-        ggml_barrier(params->shared);
+        ggml_barrier(params);
     }
 
     const int ith = params->ith;
@@ -19182,7 +19338,7 @@ static int ggml_compute_forward_mul_mat(
             }
         }
 
-        ggml_barrier(params->shared);
+        ggml_barrier(params);
 
 #if IK_PRINT_TIMING
         int64_t t2 = ggml_time_us();
@@ -19228,7 +19384,7 @@ static int ggml_compute_forward_mul_mat(
     if (ith == 0) {
         atomic_store(&params->shared->current_chunk, nth);
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     // This is the size of the first dimension of the result, so we can iterate that way. (see the ASSERT above, these are the same numbers)
     const int64_t nr0 = ne0;
@@ -19435,7 +19591,7 @@ static void ggml_compute_forward_mul_mat_id(
         atomic_store(&params->shared->current_chunk, nth);
     }
 
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
 #if GGML_USE_IQK_MULMAT
 #if defined GGML_EXPERT_CHUNKING
@@ -19482,7 +19638,7 @@ IQK_MulMat_Not_Available0:;
     if (ith == 0) {
         atomic_store(&params->shared->current_chunk, 0);
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 #endif
 #endif
 
@@ -19770,7 +19926,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         atomic_store(&params->shared->current_chunk, nth);
     }
 
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     const float limit = *(const float *)(dst->op_params + 1);
     const float situ_beta = *(const float *)(dst->op_params + 2);
@@ -19835,7 +19991,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
 #else
 
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     const float limit = *(const float *)(dst->op_params + 1);
     const float situ_beta = *(const float *)(dst->op_params + 2);
@@ -19945,7 +20101,7 @@ static void ggml_compute_forward_mul_mat_up_gate(
                    ne10);
     }
 
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     float limit = *(const float *)(dst->op_params + 1);
     const float situ_beta = *(const float *)(dst->op_params + 2);
@@ -20059,7 +20215,7 @@ static void ggml_compute_forward_out_prod_f32(
     if (ith == 0) {
         ggml_vec_set_f32(ne0*ne1*ne2*ne3, dst->data, 0);
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     // dst[:,:,:,:] = 0
     // for i2,i3:
@@ -20177,7 +20333,7 @@ static void ggml_compute_forward_out_prod_q_f32(
     if (ith == 0) {
         ggml_vec_set_f32(ne0*ne1*ne2*ne3, dst->data, 0);
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     // parallelize by last three dimensions
 
@@ -20602,7 +20758,7 @@ static void ggml_compute_forward_set_f32(
                 ((char *) src0->data),
                 ggml_nbytes(dst));
         }
-        ggml_barrier(params->shared);
+        ggml_barrier(params);
     }
 
     const int ith = params->ith;
@@ -21498,7 +21654,7 @@ static void ggml_compute_forward_diag_mask_f32(
                 ((char *) src0->data),
                 ggml_nbytes(dst));
         }
-        ggml_barrier(params->shared);
+        ggml_barrier(params);
     }
 
     // TODO: handle transposed/permuted matrices
@@ -22827,7 +22983,7 @@ static void ggml_compute_forward_conv_transpose_1d_f16_f32(
         // need to zero dst since we are accumulating into it
         memset(dst->data, 0, ggml_nbytes(dst));
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     const int32_t s0 = ((const int32_t*)(dst->op_params))[0];
 
@@ -22915,7 +23071,7 @@ static void ggml_compute_forward_conv_transpose_1d_f32(
         // need to zero dst since we are accumulating into it
         memset(dst->data, 0, ggml_nbytes(dst));
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     const int32_t s0 = ((const int32_t*)(dst->op_params))[0];
 
@@ -23277,7 +23433,7 @@ static void ggml_compute_forward_conv_2d_impl(const struct ggml_compute_params *
             }
         }   // patches handled by this thread
 
-        ggml_barrier(params->shared);
+        ggml_barrier(params);
 
         float * gemm_output = (float *) ((char *) tmp + patches_per_batch * knl_n * traits->type_size);
 
@@ -23286,7 +23442,7 @@ static void ggml_compute_forward_conv_2d_impl(const struct ggml_compute_params *
         // GEMM: patches[patch_n, knl_n] × kernel[knl_n, c_out] = output[patch_n, c_out]
         ggml_call_mul_mat(kernel_type, params, patch_n, c_out, knl_n, tmp, knl_data, gemm_output);
 
-        ggml_barrier(params->shared);
+        ggml_barrier(params);
 
         //permute back [OC, N, OH, OW] to [N, OC, OH, OW]
         const int64_t permute_per_thread = (patch_n + params->nth - 1) / params->nth;
@@ -23550,7 +23706,7 @@ static void ggml_compute_forward_conv_transpose_2d(
 
         memset(dst->data, 0, ggml_nbytes(dst));
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     const int32_t stride = ggml_get_op_params_i32(dst, 0);
 
@@ -24325,7 +24481,7 @@ void ggml_compute_forward_flash_attn_ext_f16(
                 Dk, Dv, neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask ? mask->nb[1] : 0,
                 q->data, k->data, v->data, mask ? mask->data : NULL, sinks ? sinks->data : NULL,
                 scale, softcap, (float *)dst->data,
-                params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, ith, nth, dst->op_params[4],
+                params->wdata, (barrier_t)ggml_barrier, (void *)params, ith, nth, dst->op_params[4],
                 dst)) return;
 
 //    if (max_bias <= 0.0f && q->type == GGML_TYPE_F32 && mask && mask->type == GGML_TYPE_F16) {
@@ -24640,7 +24796,7 @@ static void ggml_compute_forward_flash_attn_back_f32(
     if (ith == 0) {
         memset(dst->data, 0, nb0*ne0*ne1*ne2*ne3);
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     const int64_t elem_q = ggml_nelements(q);
     const int64_t elem_k = ggml_nelements(k);
@@ -27662,7 +27818,7 @@ static void ggml_compute_forward_add_rel_pos_f32(
         if (params->ith == 0) {
             memcpy((char *) dst->data, (char *) src0->data, ggml_nbytes(dst));
         }
-        ggml_barrier(params->shared);
+        ggml_barrier(params);
     }
     // ref: https://github.com/facebookresearch/segment-anything/blob/main/segment_anything/modeling/image_encoder.py#L357-L359
 
@@ -27947,7 +28103,7 @@ static void ggml_compute_forward_cross_entropy_loss_f32(
     if (ith == 0) {
         memset(sums, 0, sizeof(float) * (nth + nth * nc));
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     const double eps = 1e-9;
 
@@ -27995,7 +28151,7 @@ static void ggml_compute_forward_cross_entropy_loss_f32(
         }
 #endif
     }
-    ggml_barrier(params->shared);
+    ggml_barrier(params);
 
     if (ith == 0) {
         float * dp = (float *) dst->data;
@@ -28607,7 +28763,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_INDEXER_TOPK:
             {
-                if (!iqk_indexer_topk(tensor, params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, params->ith, params->nth)) {
+                if (!iqk_indexer_topk(tensor, params->wdata, (barrier_t)ggml_barrier, (void *)params, params->ith, params->nth)) {
                     GGML_ABORT("Fatal error");
                 }
             } break;
@@ -30919,7 +31075,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             state->shared->ec = GGML_STATUS_ABORTED;
         }
 
-        ggml_barrier(state->shared);
+        ggml_barrier(&params);
 
         if (state->shared->ec != GGML_STATUS_SUCCESS) {
             break;
@@ -30948,13 +31104,16 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         pthread_getaffinity_np(pthread_self(), sizeof(saved_affinity), &saved_affinity) == 0;
 #endif
 
+    hierarchical_barrier_t hbt;
+
     struct ggml_compute_state_shared state_shared = {
         /*.cgraph                  =*/ cgraph,
         /*.cgraph_plan             =*/ cplan,
         /*.n_threads               =*/ n_threads,
         /*.n_batch                 =*/ cgraph->n_batch,
-        /*.n_barrier               =*/ 0,
-        /*.n_barrier_passed        =*/ 0,
+        /*.hbt                     =*/ NULL,
+        ///*.n_barrier               =*/ 0,
+        ///*.n_barrier_passed        =*/ 0,
         /*.abort_callback          =*/ NULL,
         /*.abort_callback_data     =*/ NULL,
         /*.current_chunk           =*/ 0,
@@ -30972,6 +31131,10 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
             {
                 // update the number of threads from the actual number of threads that we got from OpenMP
                 n_threads = omp_get_num_threads();
+                if (hierarchical_barrier_init(&hbt, n_threads, cgraph->n_batch, 0, -1)) {
+                    GGML_ABORT("Fatal error");
+                }
+                state_shared.hbt = &hbt;
                 state_shared.n_threads = n_threads;
             }
 
@@ -31004,6 +31167,12 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
             .shared = &state_shared,
         };
     }
+    if (n_threads > 1) {
+        if (hierarchical_barrier_init(&hbt, n_threads, cgraph->n_batch, 0, -1)) {
+            GGML_ABORT("Fatal error");
+        }
+        state_shared.hbt = &hbt;
+    }
 
     // create thread pool
     for (int j = 1; j < n_threads; ++j) {
@@ -31024,6 +31193,10 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         }
     }
 #endif
+
+    if (n_threads > 1) {
+        hierarchical_barrier_destroy(state_shared.hbt);
+    }
 
     // don't leave affinity set on the main thread
     clear_numa_thread_affinity();
