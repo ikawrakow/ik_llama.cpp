@@ -61,13 +61,17 @@ static ggml_tensor * inkling_row(ggml_context * ctx, ggml_tensor * mixed, int in
 }
 
 static ggml_tensor * inkling_control(ggml_context * ctx, ggml_tensor * dest, ggml_tensor * message, ggml_tensor * down,
-        ggml_tensor * forget, ggml_tensor * gain, float eps) {
+        ggml_tensor * forget, ggml_tensor * gain, float eps, ggml_cgraph * gf) {
     auto d = ggml_rms_norm(ctx, dest, eps);
     auto m = ggml_rms_norm(ctx, message, eps);
     auto h = ggml_mul_mat(ctx, down, ggml_concat(ctx, d, m, 0));
     ggml_mul_mat_set_prec(h, GGML_PREC_F32);
     auto f = ggml_mul_mat(ctx, forget, h);
     auto g = ggml_mul_mat(ctx, gain, h);
+    if (gf) {
+        ggml_build_forward_expand(gf, f);
+        ggml_build_forward_expand(gf, g);
+    }
     ggml_mul_mat_set_prec(f, GGML_PREC_F32);
     ggml_mul_mat_set_prec(g, GGML_PREC_F32);
     auto keep = ggml_scale_bias(ctx, ggml_tanh(ctx, f), -1.0f, 1.0f);
@@ -327,7 +331,7 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         }
         auto blend = [&](ggml_tensor * dest, int stream) {
             return messages ? inkling_control(ctx0, dest, inkling_row(ctx0, messages, stream), layer.loop_ctrl_down[stream],
-                    layer.loop_ctrl_forget[stream], layer.loop_ctrl_gain[stream], norm_rms_eps) : dest;
+                    layer.loop_ctrl_forget[stream], layer.loop_ctrl_gain[stream], norm_rms_eps, gf) : dest;
         };
 
         const bool full = !hparams.swa_layers[il];

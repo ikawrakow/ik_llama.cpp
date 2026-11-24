@@ -4509,8 +4509,24 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_sub(ctx, dst);
             break;
         case GGML_OP_UNARY:
-            //printf("unary(%s, %s)\n", dst->name, ggml_unary_op_name((ggml_unary_op)dst->op_params[0]));
-            switch (ggml_get_unary_op(dst)) {
+            {
+            auto unary_op = ggml_get_unary_op(dst);
+            if (fusion && unary_op == GGML_UNARY_OP_TANH && i + 5 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_SCALE &&
+                cgraph->nodes[i+2]->op == GGML_OP_MUL &&
+                cgraph->nodes[i+3]->op == GGML_OP_UNARY && ggml_get_unary_op(cgraph->nodes[i+3]) == GGML_UNARY_OP_TANH &&
+                cgraph->nodes[i+4]->op == GGML_OP_MUL &&
+                cgraph->nodes[i+5]->op == GGML_OP_ADD &&
+                cgraph->nodes[i+5]->src[0] == cgraph->nodes[i+2] &&
+                cgraph->nodes[i+5]->src[1] == cgraph->nodes[i+4] &&
+                cgraph->nodes[i+1]->src[0] == dst &&
+                cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
+                cgraph->nodes[i+4]->src[0] == cgraph->nodes[i+3] &&
+                ggml_cuda_op_inkling2_control(ctx, cgraph->nodes[i+5])) {
+                i += 5;
+                break;
+            }
+            switch (unary_op) {
                 case GGML_UNARY_OP_GELU:
                     ggml_cuda_op_gelu(ctx, dst);
                     break;
@@ -4588,7 +4604,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 default:
                     return -1;
             }
-            break;
+            } break;
         case GGML_OP_GLU:
             switch (ggml_get_glu_op(dst)) {
                 case GGML_GLU_OP_REGLU:

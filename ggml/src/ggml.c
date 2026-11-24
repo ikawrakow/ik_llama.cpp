@@ -28646,6 +28646,19 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                     cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS) {
                     iqk_bailingmoev2_experts(cgraph->nodes[i+4], cgraph->nodes[i+3], params->ith, params->nth);
                     i += 4;
+                } else if (fusion && unary_op == GGML_UNARY_OP_TANH && i + 5 < cgraph->n_nodes &&
+                        cgraph->nodes[i+1]->op == GGML_OP_SCALE &&
+                        cgraph->nodes[i+2]->op == GGML_OP_MUL &&
+                        cgraph->nodes[i+3]->op == GGML_OP_UNARY && ggml_get_unary_op(cgraph->nodes[i+3]) == GGML_UNARY_OP_TANH &&
+                        cgraph->nodes[i+4]->op == GGML_OP_MUL &&
+                        cgraph->nodes[i+5]->op == GGML_OP_ADD &&
+                        cgraph->nodes[i+5]->src[0] == cgraph->nodes[i+2] &&
+                        cgraph->nodes[i+5]->src[1] == cgraph->nodes[i+4] &&
+                        cgraph->nodes[i+1]->src[0] == tensor &&
+                        cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
+                        cgraph->nodes[i+4]->src[0] == cgraph->nodes[i+3] &&
+                        iqk_inkling2_control(cgraph->nodes[i+5], params->ith, params->nth)) {
+                    i += 5;
                 } else {
                     ggml_compute_forward_unary(params, tensor);
                 }
