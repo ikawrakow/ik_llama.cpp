@@ -636,6 +636,9 @@ static uint64_t llama_ubatch_seq_fingerprint(const llama_batch & b, const llm_ar
 }
 
 static inline uint64_t model_state_hash(const llama_context & lctx) {
+    if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP) {
+        return lctx.dflash.capture != nullptr;
+    }
     if (!llm_arch_is_dsv4(lctx.model.arch)) {
         return 0ull;
     }
