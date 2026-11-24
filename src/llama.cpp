@@ -2753,6 +2753,7 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     }
     cache.head = 0;
     cache.used = 0;
+    llama_kv_cache_used_max(cache);
     cache.cells_disordered = false;
     cache.head_swa     = cache.sink_rows;
     cache.pos_base_swa = 0;
@@ -2851,6 +2852,8 @@ static bool llama_kv_cache_seq_rm(
     // If we freed up a slot, set head to it so searching can start there.
     if (new_head != cache.size && new_head < cache.head) cache.head = new_head;
 
+    llama_kv_cache_used_max(cache);
+
     if (compact_apply) {
         cache.head_swa     = compact_head;
         cache.pos_base_swa = compact_base;
@@ -2938,6 +2941,8 @@ static void llama_kv_cache_seq_keep(struct llama_kv_cache & cache, llama_seq_id 
 
     // If we freed up a slot, set head to it so searching can start there.
     if (new_head != cache.size && new_head < cache.head) cache.head = new_head;
+
+    llama_kv_cache_used_max(cache);
 }
 
 static void llama_kv_cache_seq_add(
@@ -3000,6 +3005,8 @@ static void llama_kv_cache_seq_add(
     // If we freed up a slot, set head to it so searching can start there.
     // Otherwise we just start the next search from the beginning.
     cache.head = new_head != cache.size ? new_head : 0;
+
+    llama_kv_cache_used_max(cache);
 }
 
 static void llama_kv_cache_seq_div(
