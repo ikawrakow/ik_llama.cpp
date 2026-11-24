@@ -2589,12 +2589,16 @@ bool ggml_cuda_flash_attn_ext_mma_new_rel_bias(ggml_backend_cuda_context & ctx, 
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
+    bool is_good_to_use = K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0 || (K->type == GGML_TYPE_F16 && K->ne[1] >= 8192);
     if (!cp_async_available(ggml_cuda_info().devices[ggml_cuda_get_device()].cc) || Q->ne[1] != 1 ||
-            K->type != V->type || (K->type != GGML_TYPE_Q8_0 && K->type != GGML_TYPE_Q4_0)) {
+         K->type != V->type || !is_good_to_use) {
         return false;
     }
 
-    if (K->type == GGML_TYPE_Q8_0) {
+    if (K->type == GGML_TYPE_F16) {
+        launch_fattn_mma_f16_case<128, 128, 2, 8, false, false, false, GGML_TYPE_F16,  true>(ctx, dst);
+    }
+    else if (K->type == GGML_TYPE_Q8_0) {
         launch_fattn_mma_f16_case<128, 128, 1, 8, false, false, false, GGML_TYPE_Q8_0, true>(ctx, dst);
     } else {
         launch_fattn_mma_f16_case<128, 128, 1, 8, false, false, false, GGML_TYPE_Q4_0, true>(ctx, dst);
