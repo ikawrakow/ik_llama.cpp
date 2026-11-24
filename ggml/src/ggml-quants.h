@@ -217,6 +217,15 @@ void iq1s_process_1block(int block_size, const float * xb, const float * weight,
 void iq1m_process_1block(const float * xb, const float * weight, int8_t * L,
         float * the_scale, uint16_t * the_index, int * the_shift, float * pairs);
 
+// True if a row can be scaled exactly or via requantization.
+GGML_API bool ggml_type_can_scale_row(enum ggml_type type);
+
+// True if ggml_scale_row_inplace() scales the block scale directly.
+GGML_API bool ggml_type_scales_exactly(enum ggml_type type);
+
+// Scales one quantized row in place. Returns false if unsupported.
+GGML_API bool ggml_scale_row_inplace(enum ggml_type type, void * row, int64_t ne0, float scale);
+
 #if defined(__ARM_FEATURE_SVE)
 extern int ggml_sve_cnt_b;
 #endif
