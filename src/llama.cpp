@@ -7854,6 +7854,7 @@ static int llama_decode_internal(
     }
 
     bool warned_qnext_mixed_repeat = false;
+    bool replayed = false;
     for (uint32_t cur_token = 0; cur_token < n_tokens_all; ) {
 #if IK_PRINT_TIMING
         auto tim1 = ggml_time_us();
@@ -8183,7 +8184,8 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
-        if (lctx.dflash.capture) {
+        replayed = replayed || lctx.dsv41_replay.active;
+        if (lctx.dflash.capture && replayed) {
             llama_begin_dflash_capture_batch(&lctx, lctx.dsv41_replay.active
                     ? (int32_t) lctx.dsv41_replay.keep : (int32_t) n_tokens, false);
         }
