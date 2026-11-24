@@ -16637,6 +16637,20 @@ static bool ggml_compute_forward_concat_any_opt(
             }
             return true;
         }
+        if (dst->type == GGML_TYPE_F32 && src0->nb[0] == sizeof(float) && src1->nb[1] == sizeof(float) &&
+            dst->nb[0] == sizeof(float) && dst->ne[2]*dst->ne[3] == 1) {
+            const int nrows = dst->ne[1];
+            const int npt = (nrows + nth - 1)/nth;
+            for (int i1 = ith*npt; i1 < MIN((ith + 1)*npt, nrows); ++i1) {
+                float * y = (float *)((char *)dst->data + i1*dst->nb[1]);
+                memcpy(y, (const char *)src0->data + i1*src0->nb[1], src0->ne[0]*sizeof(float));
+                const char * c1 = (const char *)src1->data + i1*src1->nb[1];
+                for (int i0 = 0; i0 < src1->ne[0]; ++i0) {
+                    y[src0->ne[0] + i0] = *(const float *)(c1 + i0*src1->nb[0]);
+                }
+            }
+            return true;
+        }
     }
     if (dim != 0) {
         GGML_ASSERT(dst->ne[dim] == src0->ne[dim] + src1->ne[dim]);
