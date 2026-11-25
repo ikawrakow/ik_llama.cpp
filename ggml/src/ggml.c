@@ -25193,7 +25193,10 @@ static int ggml_compute_forward_ssm_conv(const struct ggml_compute_params * para
     switch (dst->src[0]->type) {
         case GGML_TYPE_F32:
             {
-                if (dst->src[4] == NULL) {
+                // Mamba-2 / Inkling2 layout (ggml_ssm_conv with sq == NULL) never sets src[3].
+                // src[4] (per-step saved conv states) is optional on the Qwen3-Next path, so
+                // it cannot tell the two layouts apart.
+                if (dst->src[3] == NULL) {
                     ggml_compute_forward_ssm_conv_m2_f32(params, dst);
                     return node;
                 }
