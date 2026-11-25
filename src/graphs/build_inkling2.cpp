@@ -62,9 +62,11 @@ static ggml_tensor * inkling_row(ggml_context * ctx, ggml_tensor * mixed, int in
 
 static ggml_tensor * inkling_control(ggml_context * ctx, ggml_tensor * dest, ggml_tensor * message, ggml_tensor * down,
         ggml_tensor * forget, ggml_tensor * gain, float eps, ggml_cgraph * gf) {
-    auto d = ggml_rms_norm(ctx, dest, eps);
-    auto m = ggml_rms_norm(ctx, message, eps);
-    auto h = ggml_mul_mat(ctx, down, ggml_concat(ctx, d, m, 0));
+    auto dm = ggml_concat(ctx, dest, message, 0);
+    dm = ggml_reshape_2d(ctx, dm, dest->ne[0], 2*dest->ne[1]);
+    dm = ggml_rms_norm(ctx, dm, eps);
+    dm = ggml_reshape_2d(ctx, dm, 2*dest->ne[0], dest->ne[1]);
+    auto h = ggml_mul_mat(ctx, down, dm);
     ggml_mul_mat_set_prec(h, GGML_PREC_F32);
     auto f = ggml_mul_mat(ctx, forget, h);
     auto g = ggml_mul_mat(ctx, gain, h);
@@ -106,22 +108,10 @@ static ggml_tensor * inkling_conv(llm_build_context & llm, ggml_cgraph * gf, int
     ggml_tensor * sum = nullptr;
     if (!delta) {
         sum = ggml_ssm_conv_m2(ctx, window, weight);
+        llm.cb(sum, "ssm_conv", il);
     } else {
-        const int heads = llm.hparams.n_head_kv(il);
-        const int width = channels / heads;
-        delta = ggml_reshape_3d(ctx, delta, kernel, heads, tokens);
-        auto columns = ggml_cont(ctx, ggml_transpose(ctx, window));
-        for (int lag = 0; lag < kernel; ++lag) {
-            const int tap = history - lag;
-            auto samples = ggml_view_3d(ctx, columns, width, heads, tokens, columns->nb[0] * width, columns->nb[1], tap * columns->nb[1]);
-            auto base = ggml_view_2d(ctx, weight, 1, channels, weight->nb[1], tap * weight->nb[0]);
-            base = ggml_reshape_2d(ctx, ggml_cont(ctx, base), width, heads);
-            auto changes = ggml_view_3d(ctx, delta, 1, heads, tokens, delta->nb[1], delta->nb[2], lag * delta->nb[0]);
-            auto taps = ggml_add(ctx, ggml_repeat(ctx, base, samples), changes);
-            auto product = ggml_mul(ctx, taps, samples);
-            sum = sum ? ggml_add(ctx, sum, product) : product;
-        }
-        sum = ggml_reshape_2d(ctx, sum, channels, tokens);
+        sum = ggml_ssm_conv(ctx, window, delta, weight, nullptr, nullptr);
+        llm.cb(sum, "ssm_conv_delta", il);
     }
     return ggml_scale(ctx, ggml_add(ctx, sum, x), 1.0f / std::sqrt(float((delta ? 2 : 1) * kernel + 1)));
 }
@@ -132,11 +122,6 @@ static ggml_tensor * inkling_clip(ggml_context * ctx, ggml_tensor * x, ggml_tens
     }
     float scale = 1.0f, eps = 1e-6f, min = 0.0f, max = 1.0f;
     return ggml_inkling2_clip(ctx, x, scale, eps, limit, min, max);
-    //auto length = ggml_sqrt(ctx, ggml_sum_rows(ctx, ggml_sqr(ctx, x)));
-    //length = ggml_scale_bias(ctx, length, 1.0f, 1e-6f);
-    //auto factor = ggml_div(ctx, ggml_fill(ctx, length, limit), length);
-    //auto flat = ggml_reshape_1d(ctx, factor, ggml_nelements(factor));
-    //return ggml_mul(ctx, x, ggml_reshape(ctx, ggml_clamp(ctx, flat, 0.0f, 1.0f), factor));
 }
 
 struct inkling_shared {

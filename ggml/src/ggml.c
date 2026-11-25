@@ -11757,13 +11757,13 @@ struct ggml_tensor * ggml_ssm_conv(
         struct ggml_tensor  * c,
         struct ggml_tensor  * sq,
         struct ggml_tensor  * saved_steps) {
-    if (x == NULL) {
+    if (sq == NULL) {
         // Mamba-2 layout (Nemotron-H etc.): s = conv_x {d_conv - 1 + n_t, d_inner, n_s},
         // c = conv1d.weight; returns the conv result only (caller slides the state window
         // in the graph). Mirrors upstream llama.cpp.
         GGML_ASSERT(ggml_is_3d(s));
         GGML_ASSERT(ggml_is_matrix(c));
-        GGML_ASSERT(sq == NULL);
+        //GGML_ASSERT(sq == NULL);
 
         const int64_t d_conv  = c->ne[0];
         const int64_t d_inner = c->ne[1];
@@ -11780,6 +11780,7 @@ struct ggml_tensor * ggml_ssm_conv(
         result->op     = GGML_OP_SSM_CONV;
         result->src[0] = s;
         result->src[1] = c;
+        result->src[2] = x;
 
         return result;
     }
@@ -25062,11 +25063,13 @@ static int ggml_compute_forward_ssm_conv_f32(
 
 // Mamba-2 layout: s = conv_x {d_conv - 1 + n_t, d_inner, n_s}, c = conv1d.weight.
 // Ported from upstream llama.cpp (ggml/src/ggml-cpu/ops.cpp).
+// Now also used for the Inkling2 convolutiuon with delta
 static void ggml_compute_forward_ssm_conv_m2_f32(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0]; // conv_x
     const struct ggml_tensor * src1 = dst->src[1]; // conv1d.weight
+    const struct ggml_tensor * src2 = dst->src[2]; // delta
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -25088,6 +25091,48 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
 
+    int head_size = 0;
+    if (src2) {
+        GGML_ASSERT(src2->ne[0] % nc == 0);
+        int n_head = src2->ne[0] / nc;
+        GGML_ASSERT(nr % n_head == 0);
+        head_size = nr / n_head;
+    }
+
+    if (n_s == 1 && n_t == 1 && nr % 16 == 0) {
+        // Make sure threads are not writing into the same cache line
+        int nr16  = nr/16;
+        int npt   = (nr16 + nth - 1)/nth;
+        int first = 16*npt*ith;
+        int last  = MIN(nr, first + 16*npt);
+        int ir0   = first;
+        int ir    = last - first;
+        const float * s = (const float *) ((const char *) src0->data + ir0*(src0->nb[1])); // {d_conv, d_inner, n_s}
+        const float * c = (const float *) ((const char *) src1->data + ir0*(src1->nb[1])); // {d_conv, d_inner}
+        float * x = (float *) ((char *) dst->data + ir0*(dst->nb[0])); // {d_inner, n_t, n_s}
+
+        if (src2 == NULL) {
+            for (int i1 = 0; i1 < ir; ++i1) {
+                float sumf = 0.0f;
+                for (int i0 = 0; i0 < nc; ++i0) {
+                    sumf += s[i0 + i1*ncs] * c[i0 + i1*nc];
+                }
+                x[i1] = sumf;
+            }
+        } else {
+            const float * a = (const float *)src2->data;
+            for (int i1 = 0; i1 < ir; ++i1) {
+                int ia = (ir0 + i1)/head_size;
+                float sumf = 0.0f;
+                for (int i0 = 0; i0 < nc; ++i0) {
+                    sumf += s[i0 + i1*ncs] * (c[i0 + i1*nc] + a[nc - 1 - i0 + ia*nc]);
+                }
+                x[i1] = sumf;
+            }
+        }
+        return;
+    }
+
     // row range for this thread
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
@@ -25101,17 +25146,29 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
             const float * c = (const float *) ((const char *) src1->data + ir0*(src1->nb[1])); // {d_conv, d_inner}
             float * x = (float *) ((char *) dst->data + ir0*(dst->nb[0]) + i2*(dst->nb[1]) + i3*(dst->nb[2])); // {d_inner, n_t, n_s}
 
-            // d_inner
-            for (int i1 = 0; i1 < ir; ++i1) {
-                // rowwise dot product
-                // NOTE: not using ggml_vec_dot_f32, because its sum is in double precision
-                float sumf = 0.0f;
+            if (src2 == NULL) {
+                // d_inner
+                for (int i1 = 0; i1 < ir; ++i1) {
+                    // rowwise dot product
+                    // NOTE: not using ggml_vec_dot_f32, because its sum is in double precision
+                    float sumf = 0.0f;
 
-                // d_conv
-                for (int i0 = 0; i0 < nc; ++i0) {
-                    sumf += s[i0 + i1*ncs] * c[i0 + i1*nc];
+                    // d_conv
+                    for (int i0 = 0; i0 < nc; ++i0) {
+                        sumf += s[i0 + i1*ncs] * c[i0 + i1*nc];
+                    }
+                    x[i1] = sumf;
                 }
-                x[i1] = sumf;
+            } else {
+                const float * a = (const float *) ((const char *) src2->data + i2*src2->nb[1]);
+                for (int i1 = 0; i1 < ir; ++i1) {
+                    int ia = (ir0 + i1)/head_size;
+                    float sumf = 0.0f;
+                    for (int i0 = 0; i0 < nc; ++i0) {
+                        sumf += s[i0 + i1*ncs] * (c[i0 + i1*nc] + a[nc - 1 - i0 + ia*nc]);
+                    }
+                    x[i1] = sumf;
+                }
             }
         }
     }
@@ -25122,9 +25179,7 @@ static int ggml_compute_forward_ssm_conv(const struct ggml_compute_params * para
     switch (dst->src[0]->type) {
         case GGML_TYPE_F32:
             {
-                if (dst->src[3] == NULL) {
-                    // Mamba-2 layout (Nemotron-H etc.): no per-token state tracking,
-                    // the caller slides the state window in the graph.
+                if (dst->src[4] == NULL) {
                     ggml_compute_forward_ssm_conv_m2_f32(params, dst);
                     return node;
                 }

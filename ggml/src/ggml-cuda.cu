@@ -4982,8 +4982,8 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_grouped_topk(ctx, dst);
             break;
         case GGML_OP_SSM_CONV:
-            if (dst->src[3] == nullptr) {
-                // Mamba-2 layout (Nemotron-H etc.)
+            if (dst->src[4] == nullptr) {
+                // Mamba-2 layout (Nemotron-H, Inkling2, etc.)
                 ggml_cuda_op_ssm_conv_m2(ctx, dst);
             } else {
                 ggml_cuda_op_ssm_conv(ctx, dst);
