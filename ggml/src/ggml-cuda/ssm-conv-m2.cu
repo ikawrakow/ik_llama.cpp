@@ -60,15 +60,16 @@ static __global__ void ssm_conv_m2_f32(const float * src0_ptr, const float * src
         }
 
         if constexpr (has_delta) {
-            auto d = (const float *)delta_ptr + i * stride_d + (tid / head_size) * d_conv;
+            auto d = (const float *)delta_ptr + i * stride_d + ((bidy * split_d_inner + tid) / head_size) * d_conv;
+#pragma unroll
             for (size_t j = 0; j < d_conv; j++) {
                 sumf += x[(i + j) % d_conv] * (w[j] + d[d_conv - 1 - j]);
             }
         } else {
 #pragma unroll
-        for (size_t j = 0; j < d_conv; j++) {
-            sumf += x[(i + j) % d_conv] * w[j];
-        }
+            for (size_t j = 0; j < d_conv; j++) {
+                sumf += x[(i + j) % d_conv] * w[j];
+            }
         }
         //sumf += b;
         y_block[i * stride_y + tid] = sumf;
@@ -165,10 +166,10 @@ static void ssm_conv_m2_f32_cuda(const float * src0, const float * src1, const f
             const dim3 blocks(n_s, (nr + threads - 1) / threads, 1);
             if (delta && head_size > 0) {
                 ssm_conv_m2_f32<threads, kNC, true><<<blocks, threads, 0, stream>>>(src0, src1, delta, src0_nb0, src0_nb1,
-                        src0_nb2, src1_nb1, src1_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t, head_size);
+                        src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t, head_size);
             } else {
                 ssm_conv_m2_f32<threads, kNC, false><<<blocks, threads, 0, stream>>>(src0, src1, delta, src0_nb0, src0_nb1,
-                        src0_nb2, src1_nb1, src1_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t, head_size);
+                        src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t, head_size);
             }
 
         } else {
