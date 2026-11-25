@@ -655,12 +655,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         const float slope,
         const float logit_softcap,
         const float fa_offset,
-        const int ne01,
         const int ne02,
         const int stride_K,
         const int stride_V,
         const int stride_mask,
-        const int jt,
         half2        * const __restrict__ tile_Q,
         half2        * const __restrict__ tile_K,
         half2        * const __restrict__ tile_V,
@@ -671,7 +669,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         float        * const __restrict__ KQ_rowsum,
         const int kb0,
         const fattn_rel_bias rel_bias,
-        const int rel_bias_heads) {
+        const int rel_bias_heads, const fattn_rel_bias_head & bias_head, const float * bias_tail, float * bias_tile) {
 #ifdef INT8_MMA_AVAILABLE
     typedef fattn_mma_f16_config<DKQ, DV> c;
 
@@ -707,10 +705,21 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     tile_C_VKQ_16 * VKQ_C_16 = (tile_C_VKQ_16 *) VKQ_C;
     tile_C_KQ_16  * KQ_C_16  = (tile_C_KQ_16  *) KQ_C;
 
+    bool tail = false;
+    auto fill_bias = [&]() {
+        if constexpr (use_rel_bias) {
+            tail = fattn_rel_bias_tail_tile<c::nbatch_fa>(rel_bias, bias_head.col.q, k_VKQ_0);
+            if (!tail) {
+                fattn_rel_bias_fill_heads<ncols2, c::nbatch_fa>(rel_bias, bias_head, k_VKQ_0, bias_tile);
+            }
+        }
+    };
+
     if constexpr (nstages > 1) {
         static_assert(!mla, "multi-stage loading not implemented for MLA");
         static_assert(nbatch_K2 == DKQ/2, "batching not implemented for multi stage loading");
         constexpr bool use_cp_async = true;
+        fill_bias();
         cp_async_wait_all();
         __syncthreads();
         if constexpr (type_KV != GGML_TYPE_F16) {
@@ -735,6 +744,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         const int k0_diff = k0_stop - k0_start;
 
         if constexpr (nstages <= 1) {
+            if (k0_start == 0) {
+                fill_bias();
+            }
             if constexpr (nstages == 1 && type_KV != GGML_TYPE_F16) {
                 flash_attn_ext_f16_load_inplace<DKQ, type_KV>(K_h2, kv_row, stride_K, tile_K);
             } else {
@@ -826,31 +838,17 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             }
         }
         if constexpr (use_rel_bias) {
-            fattn_rel_bias_column rb_col[tile_C_KQ::ne];
 #pragma unroll
-            for (int l = 0; l < tile_C_KQ::ne; ++l) {
-                const int jc = (threadIdx.y / np)*tile_C_KQ::J + tile_C_KQ::get_j(l);
-                rb_col[l] = fattn_rel_bias_col(rel_bias, min(jt*ncols1 + jc / ncols2, ne01 - 1), min(jc % ncols2, rel_bias_heads - 1));
-            }
-            int32_t q_min = rb_col[0].q;
+            for (int i00 = 0; i00 < c::nbatch_fa; i00 += np*tile_C_KQ::I) {
+                const int i0 = i00 + (threadIdx.y % np)*tile_C_KQ::I;
 #pragma unroll
-            for (int l = 1; l < tile_C_KQ::ne; ++l) {
-                q_min = min(q_min, rb_col[l].q);
-            }
-            auto add_bias = [&](auto value) {
-#pragma unroll
-                for (int i00 = 0; i00 < c::nbatch_fa; i00 += np*tile_C_KQ::I) {
-                    const int i0 = i00 + (threadIdx.y % np)*tile_C_KQ::I;
-#pragma unroll
-                    for (int l = 0; l < tile_C_KQ::ne; ++l) {
-                        KQ_C[i00/(np*tile_C_KQ::I)].x[l] += value(l, k_VKQ_0 + i0 + tile_C_KQ::get_i(l));
+                for (int l = 0; l < tile_C_KQ::ne; ++l) {
+                    const int i = i0 + tile_C_KQ::get_i(l);
+                    const int j = (threadIdx.y / np)*tile_C_KQ::J + tile_C_KQ::get_j(l);
+                    if (j < rel_bias_heads) {
+                        KQ_C[i00/(np*tile_C_KQ::I)].x[l] += tail ? bias_tail[l % 2] : bias_tile[i*ncols2 + j];
                     }
                 }
-            };
-            if (fattn_rel_bias_tail_tile<c::nbatch_fa>(rel_bias, q_min, k_VKQ_0)) {
-                add_bias([&](int l, int) { return rb_col[l].tail; });
-            } else {
-                add_bias([&](int l, int ik) { return fattn_rel_bias_get(rel_bias, rb_col[l], ik); });
             }
         }
 
@@ -903,46 +901,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                     }
                 }
             }
-            if constexpr (use_rel_bias) {
-                fattn_rel_bias_column rb_col[ntiles/2 > 0 ? ntiles/2 : 1][tile_C_KQ_16::ne/2];
-#pragma unroll
-                for (int t = 0; t < ntiles/2; ++t) {
-#pragma unroll
-                    for (int l0 = 0; l0 < tile_C_KQ_16::ne; l0 += 2) {
-                        const int jh = (threadIdx.y / np)*cols_per_warp + t*tile_C_KQ_16::I + tile_C_KQ_16::get_i(l0);
-                        rb_col[t][l0/2] = fattn_rel_bias_col(rel_bias, min(jt*ncols1 + jh / ncols2, ne01 - 1), min(jh % ncols2, rel_bias_heads - 1));
-                    }
-                }
-                int32_t q_min = rb_col[0][0].q;
-#pragma unroll
-                for (int t = 0; t < ntiles/2; ++t) {
-#pragma unroll
-                    for (int l0 = 0; l0 < tile_C_KQ_16::ne; l0 += 2) {
-                        q_min = min(q_min, rb_col[t][l0/2].q);
-                    }
-                }
-                auto add_bias = [&](auto value) {
-#pragma unroll
-                    for (int i00 = 0; i00 < c::nbatch_fa; i00 += np*tile_C_KQ_16::J) {
-                        const int i0 = i00 + (threadIdx.y % np)*tile_C_KQ_16::J;
-#pragma unroll
-                        for (int t = 0; t < ntiles/2; ++t) {
-#pragma unroll
-                            for (int l0 = 0; l0 < tile_C_KQ_16::ne; l0 += 2) {
-                                const int ik0 = i0 + tile_C_KQ_16::get_j(l0);
-                                const int KQ_index = i00/(np*tile_C_KQ_16::J) * ntiles/2 + t;
-                                KQ_C_16[KQ_index].x[l0 + 0] += value(t, l0/2, k_VKQ_0 + ik0 + 0);
-                                KQ_C_16[KQ_index].x[l0 + 1] += value(t, l0/2, k_VKQ_0 + ik0 + 1);
-                            }
-                        }
-                    }
-                };
-                if (fattn_rel_bias_tail_tile<c::nbatch_fa>(rel_bias, q_min, k_VKQ_0)) {
-                    add_bias([&](int t, int c, int) { return rb_col[t][c].tail; });
-                } else {
-                    add_bias([&](int t, int c, int ik) { return fattn_rel_bias_get(rel_bias, rb_col[t][c], ik); });
-                }
-            }
         }
 
         // Calculate softmax for each KQ column using the current max. value.
@@ -955,6 +913,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 #pragma unroll
                 for (int l = 0; l < tile_C_KQ_16::ne; ++l) {
                     const int KQ_index = 2*t + (l/2) % 2;
+                    if constexpr (use_rel_bias) {
+                        const int jc = (threadIdx.y / np)*cols_per_warp + t*tile_C_KQ_16::I + tile_C_KQ_16::get_i(l);
+                        if (jc < rel_bias_heads) {
+                            const int i = (k*np + threadIdx.y % np)*tile_C_KQ_16::J + tile_C_KQ_16::get_j(l);
+                            KQ_C_16[k*ntiles/2 + t].x[l] += tail ? bias_tail[KQ_index] : bias_tile[i*ncols2 + jc];
+                        }
+                    }
                     KQ_max_new[KQ_index] = fmaxf(KQ_max_new[KQ_index], KQ_C_16[k*ntiles/2 + t].x[l] + fa_offset);
                 }
             }
@@ -1116,9 +1081,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     GGML_UNUSED(Q_f2); GGML_UNUSED(K_h2); GGML_UNUSED(V_h2);
     GGML_UNUSED(mask_h2); GGML_UNUSED(dstk); GGML_UNUSED(dstk_fixup);
     GGML_UNUSED(scale); GGML_UNUSED(slope); GGML_UNUSED(logit_softcap);
-    GGML_UNUSED(ne01); GGML_UNUSED(ne02); GGML_UNUSED(stride_K); GGML_UNUSED(stride_V);
-    GGML_UNUSED(stride_mask); GGML_UNUSED(jt); GGML_UNUSED(tile_K);
-    GGML_UNUSED(stride_mask); GGML_UNUSED(jt); GGML_UNUSED(tile_K);
+    GGML_UNUSED(ne02); GGML_UNUSED(stride_K); GGML_UNUSED(stride_V);
+    GGML_UNUSED(stride_mask); GGML_UNUSED(tile_K);
     GGML_UNUSED(tile_V); GGML_UNUSED(tile_mask); GGML_UNUSED(Q_B);
     GGML_UNUSED(VKQ_C); GGML_UNUSED(KQ_max); GGML_UNUSED(KQ_rowsum);
     GGML_UNUSED(kb0);
@@ -1189,6 +1153,21 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     half2 * tile_K    = c::Q_in_reg ? tile_Q                                : tile_Q + ncols        * stride_tile_Q;
     half2 * tile_V    = nstages > 1 ? tile_K + c::nbatch_fa * stride_tile_K : tile_K;
     half2 * tile_mask = nstages > 1 ? tile_V + c::nbatch_fa * stride_tile_V : tile_V + c::nbatch_fa * stride_tile_KV_max;
+
+    float * bias_tile = nullptr;
+    fattn_rel_bias_head bias_head;
+    const int rel_bias_heads = min(ncols2, gqa_ratio - zt*ncols2);
+    if constexpr (use_rel_bias) {
+        bias_tile = (float *)(tile_mask + ncols1*(c::nbatch_fa/2 + 4));
+        const int tid = threadIdx.y*WARP_SIZE + threadIdx.x;
+        bias_head.head = tid % rel_bias_heads;
+        bias_head.key0 = tid / rel_bias_heads;
+        bias_head.key_step = 1 + (nwarps*WARP_SIZE - 1 - bias_head.head)/rel_bias_heads;
+        bias_head.col = fattn_rel_bias_col(rel_bias, jt, bias_head.head, tid < rel_bias_heads);
+        if (tid < ncols2) {
+            bias_tile[ncols2*c::nbatch_fa + tid] = tid < rel_bias_heads ? bias_head.col.tail : 0.0f;
+        }
+    }
 
     tile_B       Q_B[(c::Q_in_reg ? DKQ/(2*tile_B::J) : 1) * ntiles];
     tile_C_VKQ VKQ_C[DV/tile_C_VKQ::I  * ntiles];
@@ -1284,20 +1263,32 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         }
     }
 
+    float bias_tail[cols_per_thread];
+    if constexpr (use_rel_bias) {
+        const float * tails = bias_tile + ncols2*c::nbatch_fa;
+        bias_head.col.tail = tails[bias_head.head];
+#pragma unroll
+        for (int col = 0; col < cols_per_thread; ++col) {
+            const int j = ntiles == 1 ? (threadIdx.y / np)*tile_C_KQ::J + tile_C_KQ::get_j(col) :
+                    ((threadIdx.y / np)*cols_per_warp + (col/2)*tile_C_KQ_16::I + tile_C_KQ_16::get_i(2*col)) % ncols2;
+            bias_tail[col] = tails[j];
+        }
+    }
+
     // Iterate over ne11 == previous tokens:
     for (int kb0 = kb0_start; kb0 < kb0_stop-1; ++kb0) {
         constexpr bool last_iter = false;
         flash_attn_ext_f16_iter<DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla, needs_fixup, is_fixup, last_iter, use_sparse, type_KV, use_rel_bias>
             (Q_f2, K_h2, V_h2, mask_h2, dstk, dstk_fixup, scale, slope, logit_softcap, fa_offset,
-             ne01, ne02, stride_K, stride_V, stride_mask, jt, tile_Q, tile_K, tile_V, tile_mask, Q_B, VKQ_C, KQ_max, KQ_rowsum, kb0,
-             rel_bias, gqa_ratio - zt*ncols2);
+             ne02, stride_K, stride_V, stride_mask, tile_Q, tile_K, tile_V, tile_mask, Q_B, VKQ_C, KQ_max, KQ_rowsum, kb0,
+             rel_bias, rel_bias_heads, bias_head, bias_tail, bias_tile);
     }
     { // KV_max can leave this fragment empty
         constexpr bool last_iter = true;
         flash_attn_ext_f16_iter<DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla, needs_fixup, is_fixup, last_iter, use_sparse, type_KV, use_rel_bias>
             (Q_f2, K_h2, V_h2, mask_h2, dstk, dstk_fixup, scale, slope, logit_softcap, fa_offset,
-             ne01, ne02, stride_K, stride_V, stride_mask, jt, tile_Q, tile_K, tile_V, tile_mask, Q_B, VKQ_C, KQ_max, KQ_rowsum, max(kb0_start, kb0_stop-1),
-             rel_bias, gqa_ratio - zt*ncols2);
+             ne02, stride_K, stride_V, stride_mask, tile_Q, tile_K, tile_V, tile_mask, Q_B, VKQ_C, KQ_max, KQ_rowsum, max(kb0_start, kb0_stop-1),
+             rel_bias, rel_bias_heads, bias_head, bias_tail, bias_tile);
     }
 
     // With multi-stage loading there is no __syncthreads at the end of the iter,
@@ -1700,7 +1691,7 @@ static __global__ void flash_attn_ext_f16(
         const float * sinks_f = sinks ? (const float *) sinks + zt_Q : nullptr;
         fattn_rel_bias rel_bias_z = rel_bias;
         if constexpr (use_rel_bias) {
-            rel_bias_z.table += zt_Q*rel_bias.nb1;
+            rel_bias_z.rs += zt_Q*rel_bias.nb1;
         }
 
         const float slope = ncols2 == 1 ? get_alibi_slope(max_bias, zt_Q, n_head_log2, m0, m1) : 1.0f;
@@ -1751,7 +1742,7 @@ static __global__ void flash_attn_ext_f16(
     const float * sinks_f = sinks ? (const float *) sinks + zt_Q : nullptr;
     fattn_rel_bias rel_bias_z = rel_bias;
     if constexpr (use_rel_bias) {
-        rel_bias_z.table += zt_Q*rel_bias.nb1;
+        rel_bias_z.rs += zt_Q*rel_bias.nb1;
     }
 
     const float slope = ncols2 == 1 ? get_alibi_slope(max_bias, zt_Q, n_head_log2, m0, m1) : 1.0f;
@@ -2288,9 +2279,10 @@ static void launch_fattn_mma_f16_case(ggml_backend_cuda_context & ctx, ggml_tens
     const size_t nbytes_shared_combine   = nwarps*cols_per_warp * (nbatch_combine + 4)                    * sizeof(half2);
 
     const size_t nbytes_shared_KV = nstages <= 1 ? nbytes_shared_KV_1stage : nbytes_shared_KV_2stage;
+    constexpr size_t nbytes_shared_bias = use_rel_bias ? (c::nbatch_fa + 1)*ncols2*sizeof(float) : 0;
     const size_t nbytes_shared_total = std::max(nbytes_shared_combine, c::Q_in_reg ?
-        std::max(nbytes_shared_Q,  nbytes_shared_KV + nbytes_shared_mask) :
-                 nbytes_shared_Q + nbytes_shared_KV + nbytes_shared_mask);
+        std::max(nbytes_shared_Q,  nbytes_shared_KV + nbytes_shared_mask + nbytes_shared_bias) :
+                 nbytes_shared_Q + nbytes_shared_KV + nbytes_shared_mask + nbytes_shared_bias);
 
     fattn_new_mma_kernel_t fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, is_mla, use_sparse, type_KV, use_rel_bias>;
     fattn_new_mma_kernel_t f16_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, is_mla, use_sparse, GGML_TYPE_F16, use_rel_bias>;

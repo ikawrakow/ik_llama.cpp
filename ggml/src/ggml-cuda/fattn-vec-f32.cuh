@@ -6,6 +6,7 @@
 //
 
 #include "common.cuh"
+#include "fattn-rel-bias-col.cuh"
 #include "fattn-vec-common.cuh"
 
 // Currently llvm with the amdgcn target does not support unrolling loops
@@ -210,6 +211,12 @@ static __global__ void flash_attn_vec_ext_f32(
     const int k_VKQ_max = KV_min_max ? KV_min_max[sequence*gridDim.x + blockIdx.x].y : ne11;
     const int first_y = KV_min_max ? KV_min_max[sequence*gridDim.x + blockIdx.x].x : 0;
 
+    __shared__ float bias_shared[use_rel_bias ? ncols*Dk : 1];
+    fattn_rel_bias_column rb_col[ncols];
+    if constexpr (use_rel_bias) {
+        fattn_rel_bias_cols(rel_bias, rb_col, ic0, 1, ne01, head);
+    }
+
     K     += (first_y + blockIdx.y*Dk) * nb11;
     V     += (first_y + blockIdx.y*Dk) * nb21;
     maskh += (first_y + blockIdx.y*Dk);
@@ -224,6 +231,11 @@ static __global__ void flash_attn_vec_ext_f32(
             for (int j = 0; j < ncols; ++j) {
                 maskf_shared[j*Dk + tid] = slope*__half2float(maskh[j*ne11 + tid]);
             }
+        }
+        if constexpr (use_rel_bias) {
+            fattn_rel_bias_fill_tile(rel_bias, rb_col, k_VKQ_0, Dk, bias_shared, Dk, tid, Dk);
+        }
+        if (use_rel_bias || mask) {
             __syncthreads();
         }
 
@@ -253,8 +265,7 @@ static __global__ void flash_attn_vec_ext_f32(
                 sum += maskf_shared[j*Dk + i_KQ];
 
                 if constexpr (use_rel_bias) {
-                    const int iq = ic0 + j < ne01 ? ic0 + j : ne01 - 1;
-                    sum += rel_bias.get(iq, head, k_VKQ_0 + i_KQ);
+                    sum += bias_shared[j*Dk + i_KQ];
                 }
 
                 kqmax_new_arr[j] = fmaxf(kqmax_new_arr[j], sum);
