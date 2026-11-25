@@ -903,6 +903,46 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                     }
                 }
             }
+            if constexpr (use_rel_bias) {
+                fattn_rel_bias_column rb_col[ntiles/2 > 0 ? ntiles/2 : 1][tile_C_KQ_16::ne/2];
+#pragma unroll
+                for (int t = 0; t < ntiles/2; ++t) {
+#pragma unroll
+                    for (int l0 = 0; l0 < tile_C_KQ_16::ne; l0 += 2) {
+                        const int jh = (threadIdx.y / np)*cols_per_warp + t*tile_C_KQ_16::I + tile_C_KQ_16::get_i(l0);
+                        rb_col[t][l0/2] = fattn_rel_bias_col(rel_bias, min(jt*ncols1 + jh / ncols2, ne01 - 1), min(jh % ncols2, rel_bias_heads - 1));
+                    }
+                }
+                int32_t q_min = rb_col[0][0].q;
+#pragma unroll
+                for (int t = 0; t < ntiles/2; ++t) {
+#pragma unroll
+                    for (int l0 = 0; l0 < tile_C_KQ_16::ne; l0 += 2) {
+                        q_min = min(q_min, rb_col[t][l0/2].q);
+                    }
+                }
+                auto add_bias = [&](auto value) {
+#pragma unroll
+                    for (int i00 = 0; i00 < c::nbatch_fa; i00 += np*tile_C_KQ_16::J) {
+                        const int i0 = i00 + (threadIdx.y % np)*tile_C_KQ_16::J;
+#pragma unroll
+                        for (int t = 0; t < ntiles/2; ++t) {
+#pragma unroll
+                            for (int l0 = 0; l0 < tile_C_KQ_16::ne; l0 += 2) {
+                                const int ik0 = i0 + tile_C_KQ_16::get_j(l0);
+                                const int KQ_index = i00/(np*tile_C_KQ_16::J) * ntiles/2 + t;
+                                KQ_C_16[KQ_index].x[l0 + 0] += value(t, l0/2, k_VKQ_0 + ik0 + 0);
+                                KQ_C_16[KQ_index].x[l0 + 1] += value(t, l0/2, k_VKQ_0 + ik0 + 1);
+                            }
+                        }
+                    }
+                };
+                if (fattn_rel_bias_tail_tile<c::nbatch_fa>(rel_bias, q_min, k_VKQ_0)) {
+                    add_bias([&](int t, int c, int) { return rb_col[t][c].tail; });
+                } else {
+                    add_bias([&](int t, int c, int ik) { return fattn_rel_bias_get(rel_bias, rb_col[t][c], ik); });
+                }
+            }
         }
 
         // Calculate softmax for each KQ column using the current max. value.
@@ -2589,12 +2629,16 @@ bool ggml_cuda_flash_attn_ext_mma_new_rel_bias(ggml_backend_cuda_context & ctx, 
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
+    bool is_good_to_use = K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0 || (K->type == GGML_TYPE_F16 && K->ne[1] >= 8192);
     if (!cp_async_available(ggml_cuda_info().devices[ggml_cuda_get_device()].cc) || Q->ne[1] != 1 ||
-            K->type != V->type || (K->type != GGML_TYPE_Q8_0 && K->type != GGML_TYPE_Q4_0)) {
+         K->type != V->type || !is_good_to_use) {
         return false;
     }
 
-    if (K->type == GGML_TYPE_Q8_0) {
+    if (K->type == GGML_TYPE_F16) {
+        launch_fattn_mma_f16_case<128, 128, 2, 8, false, false, false, GGML_TYPE_F16,  true>(ctx, dst);
+    }
+    else if (K->type == GGML_TYPE_Q8_0) {
         launch_fattn_mma_f16_case<128, 128, 1, 8, false, false, false, GGML_TYPE_Q8_0, true>(ctx, dst);
     } else {
         launch_fattn_mma_f16_case<128, 128, 1, 8, false, false, false, GGML_TYPE_Q4_0, true>(ctx, dst);
