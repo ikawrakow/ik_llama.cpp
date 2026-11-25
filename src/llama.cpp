@@ -4380,6 +4380,100 @@ static void llm_scale_gate_inp_s(llama_model & model, bool uses_mmap) {
     }
 }
 
+// Dory (nGPT): fold the constant rescale into the sqk / s_gate vectors once at
+// load — (attn_qk_scale * sqrt(head_dim)/init_std)^2 and
+// (attn_gate_scale * n_embd^0.25/init_std)^2 — instead of recomputing it on every
+// graph pass (the looped stack visits each physical module n_loops times).
+// Stored as F32 and computed with the same two float multiplies the runtime
+// ggml_scale + ggml_sqr used, so logits are bit-identical. build_dory then just
+// multiplies by the folded weight.
+static void llm_fold_dory_scales(llama_model & model) {
+    const auto & hparams = model.hparams;
+    const float init_std     = hparams.f_norm_eps;
+    // same constants build_dory used: the context scalar is n_embd_head_k(0)
+    const float sqk_scale    = std::sqrt((float) hparams.n_embd_head_k(0)) / init_std;
+    const float s_gate_scale = std::pow((float) hparams.n_embd, 0.25f) / init_std;
+
+    // loop slots alias the physical tensors — fold each distinct tensor once
+    std::unordered_set<const ggml_tensor *> seen;
+    std::vector<std::pair<ggml_tensor *, float>> todo;
+    for (auto & l : model.layers) {
+        for (const auto & tc : {std::make_pair(l.attn_qk_scale,   sqk_scale),
+                                std::make_pair(l.attn_gate_scale, s_gate_scale)}) {
+            if (tc.first && !seen.count(tc.first)) {
+                seen.insert(tc.first);
+                todo.push_back(tc);
+            }
+        }
+    }
+    if (todo.empty()) {
+        return;
+    }
+
+    // folded F32 vectors live in aux_buffer: mmap pages are read-only and
+    // BF16 -> F32 grows, so host tensors are never rewritten in place
+    size_t n_floats = 0;
+    for (const auto & tc : todo) {
+        GGML_ASSERT(tc.first->extra == nullptr); // Dory does not support -sm graph splits
+        n_floats += ggml_nelements(tc.first);
+    }
+    const size_t host_begin = model.aux_buffer.size();
+    model.aux_buffer.resize(host_begin + n_floats);
+    float * host_ptr = model.aux_buffer.data() + host_begin;
+
+    for (const auto & tc : todo) {
+        ggml_tensor * t = tc.first;
+        const float c = tc.second;
+        const int64_t n = ggml_nelements(t);
+        const auto tt = ggml_internal_get_type_traits(t->type);
+
+        std::vector<float> vals(n);
+        const void * src = t->data;
+        std::vector<uint8_t> raw;
+        if (!ggml_backend_buffer_is_host(t->buffer)) {
+            raw.resize(ggml_nbytes(t));
+            ggml_backend_tensor_get(t, raw.data(), 0, raw.size());
+            src = raw.data();
+        }
+        if (t->type == GGML_TYPE_F32) {
+            std::memcpy(vals.data(), src, n*sizeof(float)); // F32 has no to_float
+        } else {
+            GGML_ASSERT(tt.to_float != nullptr);
+            tt.to_float(src, vals.data(), n);
+        }
+        for (int64_t i = 0; i < n; ++i) {
+            vals[i] *= c;
+            vals[i] *= vals[i];
+        }
+
+        if (ggml_backend_buffer_is_host(t->buffer)) {
+            std::memcpy(host_ptr, vals.data(), n*sizeof(float));
+            t->data = host_ptr;
+            host_ptr += n;
+        } else {
+            // the old device buffer is sized for the original (possibly BF16)
+            // type; allocate a fresh F32 one of the same buft, owned via model.bufs
+            ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(
+                    ggml_backend_buffer_get_type(t->buffer), n*sizeof(float));
+            if (!buf) {
+                throw std::runtime_error("dory: failed to allocate folded scale buffer");
+            }
+            ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            model.bufs.push_back(buf);
+            t->buffer = buf;
+            t->data   = ggml_backend_buffer_get_base(buf);
+            ggml_backend_tensor_set(t, vals.data(), 0, n*sizeof(float));
+        }
+        t->type  = GGML_TYPE_F32;
+        t->nb[0] = sizeof(float);
+        for (int j = 1; j < GGML_MAX_DIMS; ++j) {
+            t->nb[j] = t->nb[j-1]*t->ne[j-1];
+        }
+    }
+    LLAMA_LOG_INFO("============ %s: folded constant nGPT rescale into %zu sqk/s_gate vectors (now F32)\n",
+            __func__, todo.size());
+}
+
 // Mainline GGUFs store the MiniMax-M3 indexer projections as F32, although their values are usually exact in BF16.
 static void llm_minimaxm3_indexer_to_bf16(llama_model & model, bool uses_mmap) {
     std::vector<ggml_tensor *> exact;
@@ -5706,6 +5800,9 @@ static bool llm_load_tensors(
     }
     if (model.arch == LLM_ARCH_GEMMA4) {
         llm_scale_gate_inp_s(model, use_mmap_buffer);
+    }
+    if (!dry_run && model.arch == LLM_ARCH_DORY) {
+        llm_fold_dory_scales(model);
     }
     if (!dry_run && model.arch == LLM_ARCH_MINIMAX_M3 && model.dsa) {
         llm_minimaxm3_indexer_to_bf16(model, ml.use_mmap);

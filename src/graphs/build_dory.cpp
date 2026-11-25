@@ -48,13 +48,13 @@ ggml_cgraph * llm_build_context::build_dory() {
     const float init_std = norm_eps;
     const float alpha    = norm_rms_eps;
 
-    const float sqk_scale    = std::sqrt((float) n_embd_head_k) / init_std;
-    const float s_gate_scale = std::pow((float) n_embd, 0.25f) / init_std;
+    // sqk_scale and s_gate_scale are already folded into the F32 attn_qk_scale /
+    // attn_gate_scale weights at load (llm_fold_dory_scales).
     const float suv_scale    = std::sqrt((float) n_embd);
     const float lambda_scale = alpha / init_std;
     const float logit_factor = 1.0f / init_std;
 
-    // Attention uses head_dim^-0.5 after q was scaled by (sqk * sqk_scale)^2.
+    // Attention uses head_dim^-0.5 after q was scaled by the folded sqk'.
     const float kq_scale = 1.0f / std::sqrt((float) n_embd_head_k);
 
     const int region = (int) (hparams.loop_end - hparams.loop_start);
@@ -120,10 +120,9 @@ ggml_cgraph * llm_build_context::build_dory() {
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            // q = q * (sqk * sqk_scale)^2, per (head, channel)
-            ggml_tensor * qk_scale = ggml_scale(ctx0, dory_f32(ctx0, layer.attn_qk_scale), sqk_scale);
-            qk_scale = ggml_reshape_2d(ctx0, qk_scale, n_embd_head_k, n_head);
-            qk_scale = ggml_sqr(ctx0, qk_scale);
+            // q = q * sqk', per (head, channel); sqk' = (sqk * sqk_scale)^2 was
+            // folded into the F32 weight at load (llm_fold_dory_scales)
+            ggml_tensor * qk_scale = ggml_reshape_2d(ctx0, layer.attn_qk_scale, n_embd_head_k, n_head);
             Qcur = ggml_mul(ctx0, Qcur, qk_scale);
             cb(Qcur, "Qcur_scaled", il);
 
@@ -133,10 +132,9 @@ ggml_cgraph * llm_build_context::build_dory() {
                     mask, n_tokens, kv_head, n_kv, kq_scale, cb, il, nullptr, n_swa);
             cb(cur, "attn_out", il);
 
-            // gate = sigmoid(g_proj(x) * (s_gate * s_gate_scale)^2)
-            ggml_tensor * gate_scale = ggml_scale(ctx0, dory_f32(ctx0, layer.attn_gate_scale), s_gate_scale);
-            gate_scale = ggml_sqr(ctx0, gate_scale);
-            ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_mul(ctx0, Gcur, gate_scale));
+            // gate = sigmoid(g_proj(x) * s_gate'); s_gate' = (s_gate * s_gate_scale)^2
+            // was folded into the F32 weight at load (llm_fold_dory_scales)
+            ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_mul(ctx0, Gcur, layer.attn_gate_scale));
             cb(gate, "attn_gate", il);
             cur = ggml_mul(ctx0, cur, gate);
             cb(cur, "attn_gated", il);

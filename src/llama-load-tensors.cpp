@@ -751,7 +751,8 @@ bool create_tensors_helper::create_dory_tensors(const LLM_TN & tn) {
             // g_proj of the output gate, [n_embd -> n_embd_q]
             layer.wqkv_gate = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_embd_q});
 
-            // sqk and s_gate: raw per-channel scales, applied squared in the graph
+            // sqk and s_gate: raw per-channel scales in the file; llm_fold_dory_scales
+            // folds the constant nGPT rescale into them (F32) at load
             layer.attn_qk_scale   = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_QK_SCALE,   "weight", i), {n_embd_q});
             layer.attn_gate_scale = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_GATE_SCALE, "weight", i), {n_embd_q});
 

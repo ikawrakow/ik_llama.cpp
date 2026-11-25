@@ -652,8 +652,8 @@ enum llm_tensor {
 
     // Dory (looped nGPT): raw learned per-channel scale parameters and residual rates
     LLM_TENSOR_OUTPUT_SCALE,      // per-vocab logit scale
-    LLM_TENSOR_ATTN_QK_SCALE,     // sqk: rescales q after RoPE, applied squared
-    LLM_TENSOR_ATTN_GATE_SCALE,   // s_gate: inside the output-gate sigmoid, applied squared
+    LLM_TENSOR_ATTN_QK_SCALE,     // sqk: rescales q after RoPE; constant rescale folded in at load (F32)
+    LLM_TENSOR_ATTN_GATE_SCALE,   // s_gate: inside the output-gate sigmoid; constant rescale folded in at load (F32)
     LLM_TENSOR_FFN_GATE_SCALE,    // suv_gate
     LLM_TENSOR_FFN_UP_SCALE,      // suv_up
     LLM_TENSOR_RESIDUAL_ALPHA,    // lambda: per-channel residual interpolation rate
