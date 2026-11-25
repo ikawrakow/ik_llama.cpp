@@ -108,10 +108,11 @@ static ggml_tensor * inkling_conv(llm_build_context & llm, ggml_cgraph * gf, int
     ggml_tensor * sum = nullptr;
     if (!delta) {
         sum = ggml_ssm_conv_m2(ctx, window, weight);
+        llm.cb(sum, "ssm_conv", il);
     } else {
         sum = ggml_ssm_conv(ctx, window, delta, weight, nullptr, nullptr);
+        llm.cb(sum, "ssm_conv_delta", il);
     }
-    llm.cb(sum, "ssm_conv", il);
     return ggml_scale(ctx, ggml_add(ctx, sum, x), 1.0f / std::sqrt(float((delta ? 2 : 1) * kernel + 1)));
 }
 

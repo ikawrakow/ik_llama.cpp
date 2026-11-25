@@ -25099,6 +25099,40 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
         head_size = nr / n_head;
     }
 
+    if (n_s == 1 && n_t == 1 && nr % 16 == 0) {
+        // Make sure threads are not writing into the same cache line
+        int nr16  = nr/16;
+        int npt   = (nr16 + nth - 1)/nth;
+        int first = 16*npt*ith;
+        int last  = MIN(nr, first + 16*npt);
+        int ir0   = first;
+        int ir    = last - first;
+        const float * s = (const float *) ((const char *) src0->data + ir0*(src0->nb[1])); // {d_conv, d_inner, n_s}
+        const float * c = (const float *) ((const char *) src1->data + ir0*(src1->nb[1])); // {d_conv, d_inner}
+        float * x = (float *) ((char *) dst->data + ir0*(dst->nb[0])); // {d_inner, n_t, n_s}
+
+        if (src2 == NULL) {
+            for (int i1 = 0; i1 < ir; ++i1) {
+                float sumf = 0.0f;
+                for (int i0 = 0; i0 < nc; ++i0) {
+                    sumf += s[i0 + i1*ncs] * c[i0 + i1*nc];
+                }
+                x[i1] = sumf;
+            }
+        } else {
+            const float * a = (const float *)src2->data;
+            for (int i1 = 0; i1 < ir; ++i1) {
+                int ia = (ir0 + i1)/head_size;
+                float sumf = 0.0f;
+                for (int i0 = 0; i0 < nc; ++i0) {
+                    sumf += s[i0 + i1*ncs] * (c[i0 + i1*nc] + a[nc - 1 - i0 + ia*nc]);
+                }
+                x[i1] = sumf;
+            }
+        }
+        return;
+    }
+
     // row range for this thread
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
