@@ -409,6 +409,7 @@ class MODEL_TENSOR(IntEnum):
     FFN_GATE_SHEXP       = auto()
     FFN_DOWN_SHEXP       = auto()
     FFN_UP_SHEXP         = auto()
+    FFN_EFFORT_STEER     = auto()
     FFN_EXP_PROBS_B      = auto()
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()
@@ -772,6 +773,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE_SHEXP:       "blk.{bid}.ffn_gate_shexp",
     MODEL_TENSOR.FFN_DOWN_SHEXP:       "blk.{bid}.ffn_down_shexp",
     MODEL_TENSOR.FFN_UP_SHEXP:         "blk.{bid}.ffn_up_shexp",
+    MODEL_TENSOR.FFN_EFFORT_STEER:     "blk.{bid}.ffn_effort_steer",
     MODEL_TENSOR.FFN_ACT:              "blk.{bid}.ffn",
     MODEL_TENSOR.FFN_NORM_EXP:         "blk.{bid}.ffn_norm_exps",
     MODEL_TENSOR.FFN_GATE_EXP:         "blk.{bid}.ffn_gate_exps",
@@ -2537,6 +2539,7 @@ MODEL_TENSORS[MODEL_ARCH.RAON1] = [
     MODEL_TENSOR.FFN_GATE_SHEXP,
     MODEL_TENSOR.FFN_DOWN_SHEXP,
     MODEL_TENSOR.FFN_UP_SHEXP,
+    MODEL_TENSOR.FFN_EFFORT_STEER,
 ]
 
 MODEL_TENSORS[MODEL_ARCH.RAON1_NANO] = [

@@ -1071,6 +1071,13 @@ class GGUFWriter:
     def add_hyper_connection_magnitude(self, value: float) -> None:
         self.add_float32(f"{self.arch}.hyper_connection.magnitude", value)
 
+    def add_reasoning_effort(self, layers: Sequence[int], names: Sequence[str], alpha: Sequence[float],
+                             default: str) -> None:
+        self.add_array(f"{self.arch}.reasoning_effort.layers", layers)
+        self.add_array(f"{self.arch}.reasoning_effort.names", names)
+        self.add_array(f"{self.arch}.reasoning_effort.alpha", alpha)
+        self.add_string(f"{self.arch}.reasoning_effort.default", default)
+
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
 

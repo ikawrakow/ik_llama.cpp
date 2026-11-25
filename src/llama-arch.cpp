@@ -136,6 +136,10 @@ const char * llama_model_arch_string(const struct llama_model * model) {
     return unknown;
 }
 
+bool llama_model_supports_reasoning_effort(const struct llama_model * model) {
+    return model && model->has_reasoning_effort_steering();
+}
+
 static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_GENERAL_TYPE,                  "general.type"                          },
     { LLM_KV_GENERAL_ARCHITECTURE,          "general.architecture"                  },
@@ -257,6 +261,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_HYPER_CONNECTION_EPSILON,          "%s.hyper_connection.epsilon"          },
     { LLM_KV_HYPER_CONNECTION_MAGNITUDE,        "%s.hyper_connection.magnitude"        },
     { LLM_KV_HYPER_CONNECTION_LOW_RANK,         "%s.hyper_connection.low_rank"         },
+    { LLM_KV_REASONING_EFFORT_LAYERS,           "%s.reasoning_effort.layers"           },
+    { LLM_KV_REASONING_EFFORT_NAMES,            "%s.reasoning_effort.names"            },
+    { LLM_KV_REASONING_EFFORT_ALPHA,            "%s.reasoning_effort.alpha"            },
+    { LLM_KV_REASONING_EFFORT_DEFAULT,          "%s.reasoning_effort.default"          },
     { LLM_KV_MHC_START,                         "%s.mhc.start"                         },
     { LLM_KV_MHC_END,                           "%s.mhc.end"                           },
     { LLM_KV_MHC_STREAMS,                       "%s.mhc.streams"                       },

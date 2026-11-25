@@ -740,6 +740,9 @@ struct llama_context {
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
+    struct ggml_tensor * inp_reasoning_effort = nullptr; // F32 [n_tokens], steering alpha per token
+    std::map<llama_seq_id, float> reasoning_effort_by_seq; // per-sequence alpha
+    std::vector<float> reasoning_effort_data;              // host staging for the input above
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k

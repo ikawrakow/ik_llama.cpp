@@ -146,6 +146,8 @@ struct llama_model_loader {
     template<typename T>
     bool get_arr(const std::string & key, std::vector<T> & result, const bool required = true);
 
+    bool get_arr(const std::string & key, std::vector<std::string> & result, const bool required = true);
+
     template<typename T, size_t N_MAX>
     bool get_arr(const std::string & key, std::array<T, N_MAX> & result, const bool required = true);
 

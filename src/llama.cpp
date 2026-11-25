@@ -6621,6 +6621,25 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 #endif
     }
 
+    if (lctx.inp_reasoning_effort) {
+        GGML_ASSERT(ggml_nelements(lctx.inp_reasoning_effort) >= batch.n_tokens);
+        auto & data = lctx.reasoning_effort_data;
+        data.resize(batch.n_tokens);
+
+        for (int64_t j = 0; j < batch.n_tokens; ++j) {
+            float alpha = lctx.model.reasoning_effort_default_alpha;
+            if (batch.seq_id && batch.seq_id[j]) {
+                auto it = lctx.reasoning_effort_by_seq.find(batch.seq_id[j][0]);
+                if (it != lctx.reasoning_effort_by_seq.end()) {
+                    alpha = it->second;
+                }
+            }
+            data[j] = alpha;
+        }
+        ggml_backend_tensor_set(lctx.inp_reasoning_effort, data.data(), 0,
+                data.size() * sizeof(float));
+    }
+
     if (hparams.causal_attn || cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
 #if IK_PRINT_TIMING == 2
         auto tim1 = ggml_time_us();
@@ -14288,6 +14307,35 @@ void llama_set_abort_callback(struct llama_context * ctx, bool (*abort_callback)
 
 void llama_set_embeddings(struct llama_context * ctx, bool embeddings) {
     ctx->cparams.embeddings = embeddings;
+}
+
+bool llama_set_reasoning_effort(struct llama_context * ctx, llama_seq_id seq_id, const char * level) {
+    const auto & model = ctx->model;
+    if (!model.has_reasoning_effort_steering()) {
+        return true; // model does not steer: nothing to do
+    }
+
+    float alpha = model.reasoning_effort_default_alpha;
+    if (level != nullptr && level[0] != '\0' && strcmp(level, "default") != 0) {
+        if (strcmp(level, "none") == 0) {
+            alpha = 0.0f;
+        } else {
+            bool found = false;
+            for (size_t i = 0; i < model.reasoning_effort_names.size(); ++i) {
+                if (model.reasoning_effort_names[i] == level) {
+                    alpha = model.reasoning_effort_alphas[i];
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                return false;
+            }
+        }
+    }
+
+    ctx->reasoning_effort_by_seq[seq_id] = alpha;
+    return true;
 }
 
 void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn) {

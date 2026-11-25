@@ -827,6 +827,10 @@ json oaicompat_chat_params_parse(
     auto chat_template_kwargs_object = json_value(body, "chat_template_kwargs", json::object());
     inputs.chat_template_kwargs = opt.chat_template_kwargs;
     for (const auto& item : chat_template_kwargs_object.items()) {
+        // "default" is a llama.cpp sentinel, not a template level.
+        if (item.key() == "reasoning_effort" && item.value() == "default") {
+            continue;
+        }
         inputs.chat_template_kwargs[item.key()] = item.value().dump();
     }
 
@@ -840,6 +844,15 @@ json oaicompat_chat_params_parse(
     }
     else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
         throw std::runtime_error("invalid type for \"enable_thinking\" (expected boolean, got string)");
+    }
+
+    // Top-level reasoning_effort also sets model steering; "none" also closes thinking.
+    const std::string reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
+    if (!reasoning_effort.empty() && reasoning_effort != "default") {
+        inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
+        if (reasoning_effort == "none") {
+            inputs.enable_thinking = false;
+        }
     }
 
     /*"whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
