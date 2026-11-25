@@ -11,6 +11,19 @@
 #include <unordered_set>
 #include <algorithm>
 
+ggml_tensor * llm_build_context::build_conv_window(ggml_cgraph * gf, ggml_tensor * past, ggml_tensor * x,
+        int il, int channel_offset) {
+    auto window = ggml_concat(ctx0, past, ggml_transpose(ctx0, x), 0);
+    const auto & ckpt = kv_self.ckpt;
+    if (ckpt.conv_offset >= 0) {
+        auto snapshot = ckpt.conv_windows[il];
+        auto dest = ggml_view_2d(ctx0, snapshot, window->ne[0], window->ne[1], snapshot->nb[1],
+                ckpt.conv_slot * snapshot->nb[2] + channel_offset * snapshot->nb[1] + ckpt.conv_offset * window->nb[0]);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, window, dest));
+    }
+    return window;
+}
+
 uint32_t llm_build_context::llama_kv_qnext_state_slots(const llama_kv_cache & kv_self) {
     uint32_t n_slots = 0;
 
@@ -1441,6 +1454,12 @@ static ggml_tensor * llm_do_split_post_norm(ggml_context * ctx, ggml_tensor * cu
     return cur;
 }
 
+#if defined(GGML_USE_METAL) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL) || defined(GGML_USE_CANN)
+static constexpr bool fused_situ_on_gpu = false;
+#else
+static constexpr bool fused_situ_on_gpu = true;
+#endif
+
 ggml_tensor * llm_build_context::llm_build_ffn(
         ggml_context * ctx,
        llama_context & lctx,
@@ -1568,7 +1587,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         up && gate && can_fuse_up_gate(up, gate) && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
-        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0) || (type_op == LLM_FFN_GELU && !act_scales))) {
+        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_SWIGLU_OAI || (type_op == LLM_FFN_SITU && (fused_situ_on_gpu || lctx.model.n_gpu_layers == 0) && lctx.lora_adapters.empty()) || (type_op == LLM_FFN_GELU && !act_scales))) {
 
         auto hadamard_u = lctx.model.hadamard_rotation(up);
         auto hadamard_g = lctx.model.hadamard_rotation(gate);
@@ -2024,7 +2043,8 @@ llm_expert_gating_func_type   gating_op,
     //bool can_use_fmoe = !up_exps_b && !gate_exps_b && (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU);
     bool can_use_fmoe = (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU ||
                          type_op == LLM_FFN_SWIGLU_OAI ||
-                         (type_op == LLM_FFN_SITU && lctx.model.n_gpu_layers == 0));
+                         (type_op == LLM_FFN_SITU && (fused_situ_on_gpu || lctx.model.n_gpu_layers == 0) &&
+                          lctx.lora_adapters.empty() && lctx.cparams.fused_moe_up_gate));
 
     bool share_offload_eligible = false;
     if (share_ids_ready && n_tokens <= 32) {
@@ -2259,28 +2279,7 @@ llm_expert_gating_func_type   gating_op,
     }
 
     ggml_tensor * par;
-    if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP) {
-        if (!cache_ids) {
-            cached_up_gate = cached_down = nullptr;
-        }
-        auto both = llm_build_lora_mm_id(lctx, ctx, up_gate_exps, cur, selected_experts, cached_up_gate, cache_ids);
-        if (lctx.cparams.force_experts_offload_device) {
-            both->op_params[11] = lctx.model.default_layer_device[il] + 1;
-        }
-        const int width = both->ne[0] / 2;
-        auto half = [&](int index) {
-            return ggml_cont(ctx, ggml_view_3d(ctx, both, width, both->ne[1], both->ne[2],
-                        both->nb[1], both->nb[2], index * width * both->nb[0]));
-        };
-        const auto & hp = lctx.model.hparams;
-        auto gate = half(0);
-        auto capped_gate = ggml_softcap(ctx, gate, 1.0f / hp.situ_beta, hp.situ_beta);
-        auto up = half(1);
-        if (hp.situ_linear_beta > 0) {
-            up = ggml_softcap(ctx, up, 1.0f / hp.situ_linear_beta, hp.situ_linear_beta);
-        }
-        par = ggml_mul(ctx, ggml_mul(ctx, capped_gate, ggml_sigmoid(ctx, gate)), up);
-    } else if (can_use_fmoe && up_gate_exps && (!cache_ids || !up_gate_exps_b)) {
+    if (can_use_fmoe && up_gate_exps && (!cache_ids || !up_gate_exps_b)) {
         auto hadamard_u = lctx.model.hadamard_rotation(up_exps);
         auto hadamard_g = lctx.model.hadamard_rotation(gate_exps);
         GGML_ASSERT((!hadamard_u && !hadamard_g) || (hadamard_u == hadamard_g) ||
@@ -2308,7 +2307,7 @@ llm_expert_gating_func_type   gating_op,
         }
     } else {
     if (up_gate_exps) {
-        GGML_ASSERT(cache_ids && cached_up_gate);
+        GGML_ASSERT(!cache_ids || cached_up_gate);
         ggml_tensor * gate_up = llm_build_lora_mm_id(lctx, ctx, up_gate_exps, cur,
                 selected_experts, cached_up_gate, cache_ids, true);
         if (lctx.cparams.force_experts_offload_device) {
@@ -2330,6 +2329,8 @@ llm_expert_gating_func_type   gating_op,
             par = ggml_swiglu_oai(ctx, gate, up, 1.702f, 7.0f);
         } else if (type_op == LLM_FFN_SITU) {
             const auto & hp = lctx.model.hparams;
+            gate = ggml_cont(ctx, gate);
+            up = ggml_cont(ctx, up);
             auto situ_gate = [&](ggml_tensor * x, float beta) {
                 return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
             };

@@ -286,6 +286,7 @@ struct llama_hparams {
     uint32_t dflash_selector_top_k = 0;
     float    dflash_backbone_rotary_base = 0.0f;
     bool     dflash_laguna = false;
+    bool     dflash_softcap_after_correction = false;
     bool     dflash_dsv4 = false;
     bool     dflash_dsv41 = false;  // DSV4 draft with V4.1 rules: lagged hyper-connections, no output head
     // DSpark proposal blocks attend bidirectionally within the block and to one fixed window
@@ -322,6 +323,7 @@ struct llama_hparams {
         if (this->dflash_selector_rank != other.dflash_selector_rank) return true;
         if (this->dflash_selector_top_k != other.dflash_selector_top_k) return true;
         if (this->dflash_laguna != other.dflash_laguna) return true;
+        if (this->dflash_softcap_after_correction != other.dflash_softcap_after_correction) return true;
         if (this->dflash_dsv4   != other.dflash_dsv4)   return true;
         if (this->dflash_dsv41  != other.dflash_dsv41)  return true;
         if (this->dflash_block_bidir != other.dflash_block_bidir) return true;

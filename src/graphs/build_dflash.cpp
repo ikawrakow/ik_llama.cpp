@@ -427,6 +427,10 @@ ggml_cgraph * llm_build_context::build_dflash() {
     GGML_ASSERT(tok_embd != nullptr);
 
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, tok_embd, cb);
+    if (batch.token && model.tok_norm) {
+        inpL = ggml_fused_rms_norm(ctx0, inpL, model.tok_norm, norm_rms_eps);
+        cb(inpL, "norm", 0);
+    }
     ggml_tensor * inp_pos = build_inp_pos();
     ggml_tensor * inp_out_ids = (!llm_arch_requires_all_graph_output_rows(model.arch) &&
             n_tokens > 1 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
@@ -621,7 +625,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
         if (hparams.f_logit_scale != 0.0f) {
             result = ggml_scale(ctx0, result, hparams.f_logit_scale);
         }
-        if (hparams.f_final_logit_softcapping > 0.0f) {
+        if (!hparams.dflash_softcap_after_correction && hparams.f_final_logit_softcapping > 0.0f) {
             result = ggml_softcap(ctx0, result,
                     1.0f / hparams.f_final_logit_softcapping,
                     hparams.f_final_logit_softcapping);
@@ -687,6 +691,10 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
             ggml_tensor * row = ggml_reshape_2d(ctx0, scores, lattice_width, 1);
             packed = ggml_concat(ctx0, packed, row, 1);
+        }
+        if (hparams.dflash_softcap_after_correction && hparams.f_final_logit_softcapping > 0.0f) {
+            packed = ggml_softcap(ctx0, packed, 1.0f / hparams.f_final_logit_softcapping,
+                    hparams.f_final_logit_softcapping);
         }
 
         cb(packed, "dflash2_lattice", -1);

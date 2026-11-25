@@ -766,6 +766,21 @@ void ggml_cuda_op_swiglu_oai(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
             src0_o / sizeof(float), src1_o / sizeof(float), alpha, limit, stream);
 }
 
+static __global__ void situ_glu_kernel(const float * gate, const float * up, float * dst, int64_t k, int64_t n,
+        int64_t o0, int64_t o1, float beta, float beta_linear) {
+    const int64_t i = int64_t(blockDim.x)*blockIdx.x + threadIdx.x;
+    if (i >= k) return;
+    const int64_t j0 = (i / n) * o0 + (i % n);
+    const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+    dst[i] = situ_glu(gate[j0], up[j1], beta, beta_linear);
+}
+
+void ggml_situ_glu_cuda_f32(const float * gate, const float * up, float * dst, int64_t k, int64_t n,
+        int64_t o0, int64_t o1, float beta, float beta_linear, cudaStream_t stream) {
+    const int64_t num_blocks = (k + CUDA_GLU_BLOCK_SIZE - 1) / CUDA_GLU_BLOCK_SIZE;
+    situ_glu_kernel<<<num_blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>(gate, up, dst, k, n, o0, o1, beta, beta_linear);
+}
+
 void ggml_swiglu_oai_cuda_f32(const float * x, const float * g, float * dst, const int64_t k, const int64_t n,
         const int64_t o0, const int64_t o1, const float alpha, const float limit, cudaStream_t stream) {
     swiglu_oai_cuda(x, g, dst, k, n, o0, o1, alpha, limit, stream);

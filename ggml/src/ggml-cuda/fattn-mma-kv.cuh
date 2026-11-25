@@ -37,7 +37,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_stage_inplace(
     char * raw = (char *)(warp_tile + rows*tile_stride) - rows*row_bytes;
     const char * src = (const char *)kv + int64_t(row0 + threadIdx.y*rows)*stride;
     const unsigned int dst = __cvta_generic_to_shared(raw);
-    if constexpr (row_bytes % 16 != 0) {
+    if constexpr (row_bytes % 16 != 0 && row_bytes % 8 == 0) {
+        constexpr int units = row_bytes/8;
+#pragma unroll
+        for (int i = threadIdx.x; i < rows*units; i += WARP_SIZE) {
+            cp_async_ca_8(dst + 8*i, src + int64_t(i/units)*stride + 8*(i%units));
+        }
+    } else if constexpr (row_bytes % 16 != 0) {
 #pragma unroll
         for (int i = threadIdx.x; i < rows*row_bytes/16; i += WARP_SIZE) {
             cp_async_cg_16<0>(dst + 16*i, src + 16*i);

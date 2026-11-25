@@ -10,6 +10,7 @@
 #include "iqk_mmvq.cuh"
 #include "vecdotq.cuh"
 #include "mmvq-args.h"
+#include "unary.cuh"
 #include "tq.cuh"
 
 static constexpr __host__ __device__ int mmvq_rows_per_cuda_block(const ggml_type type, const int ncols_y, const int arch) {
@@ -176,7 +177,7 @@ static __device__ void k_fused_mul_mat_vec_q(
     const void * __restrict__ vup, const void * __restrict__ vgate,
     const float * __restrict__ bias_u, const float * __restrict__ bias_g,
     const void * __restrict__ vy, float * __restrict__ dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst, ggml_unary_op unary_op, float limit) {
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst, ggml_unary_op unary_op, float limit, float beta, float beta_linear) {
 
     constexpr int qk  = ggml_cuda_type_traits<type>::qk;
     constexpr int qi  = ggml_cuda_type_traits<type>::qi;
@@ -294,6 +295,9 @@ static __device__ void k_fused_mul_mat_vec_q(
                     constexpr float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
                     r = 0.5f*g*u*(1.0f + tanhf(SQRT_2_OVER_PI*g*(1.0f + GELU_COEF_A*g*g)));
                 } break;
+                case GGML_UNARY_OP_SITU_GLU:
+                    r = situ_glu(g + local_bias_g, u + local_bias_u, beta, beta_linear);
+                    break;
                 // we assume that the supported ops have been checked by the caller
                 default: {
                   constexpr float alpha = 1.702f;
@@ -352,7 +356,7 @@ static __global__ void fused_mul_mat_vec_q(
     const void * __restrict__ vy, float * __restrict__ dst, const char * __restrict__ ids_data,
     const void * __restrict__ bias_u, const void * __restrict__ bias_g, const uint64_t bias_nb1,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst,
-    const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, ggml_unary_op unary_op, float limit) {
+    const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, ggml_unary_op unary_op, float limit, float beta, float beta_linear) {
 
     int i2 = blockIdx.y;
     char * cdst = (char *)dst + i2*nb2;
@@ -366,7 +370,7 @@ static __global__ void fused_mul_mat_vec_q(
     const float * cx_g_b = bias_g ? (const float *)((const char *)bias_g + i02*bias_nb1) : nullptr;
     const char * cy = (const char *)vy + i2*nb12;
     k_fused_mul_mat_vec_q<type, ncols_y, nwarps>(cx_u, cx_g, cx_u_b, cx_g_b, cy, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst,
-            unary_op, limit);
+            unary_op, limit, beta, beta_linear);
 }
 
 template <ggml_type type, int nwarps>
@@ -395,49 +399,49 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
             fused_mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
                     args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
-                    args.unary_op, args.limit);
+                    args.unary_op, args.limit, args.beta, args.beta_linear);
             break;
         case 2:
             fused_mul_mat_vec_q<type, 2, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
                     args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
-                    args.unary_op, args.limit);
+                    args.unary_op, args.limit, args.beta, args.beta_linear);
             break;
         case 3:
             fused_mul_mat_vec_q<type, 3, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
                     args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
-                    args.unary_op, args.limit);
+                    args.unary_op, args.limit, args.beta, args.beta_linear);
             break;
         case 4:
             fused_mul_mat_vec_q<type, 4, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
                     args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
-                    args.unary_op, args.limit);
+                    args.unary_op, args.limit, args.beta, args.beta_linear);
             break;
         case 5:
             fused_mul_mat_vec_q<type, 5, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
                     args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
-                    args.unary_op, args.limit);
+                    args.unary_op, args.limit, args.beta, args.beta_linear);
             break;
         case 6:
             fused_mul_mat_vec_q<type, 6, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
                     args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
-                    args.unary_op, args.limit);
+                    args.unary_op, args.limit, args.beta, args.beta_linear);
             break;
         case 7:
             fused_mul_mat_vec_q<type, 7, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
                     args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
-                    args.unary_op, args.limit);
+                    args.unary_op, args.limit, args.beta, args.beta_linear);
             break;
         case 8:
             fused_mul_mat_vec_q<type, 8, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
                     args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0,
-                    args.unary_op, args.limit);
+                    args.unary_op, args.limit, args.beta, args.beta_linear);
             break;
         default:
             GGML_ABORT("fatal error");

@@ -42,6 +42,7 @@
 
 #include "ggml.h"
 #include "ggml-alloc.h"
+#include "ggml-cpp.h"
 #include "ggml-backend.h"
 
 #include <cmath>
@@ -644,11 +645,20 @@ static uint64_t llama_ubatch_seq_fingerprint(const llama_batch & b, const llm_ar
 }
 
 static inline uint64_t model_state_hash(const llama_context & lctx) {
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
+    if (lctx.model.arch == LLM_ARCH_INKLING2_LOOP || lctx.model.arch == LLM_ARCH_LFM2) {
+        const auto & ckpt = lctx.kv_self.ckpt;
+        mix(lctx.dflash.capture != nullptr);
+        mix((uint32_t) ckpt.conv_offset);
+        if (ckpt.conv_offset >= 0) {
+            mix(ckpt.conv_slot);
+        }
+        return h;
+    }
     if (!llm_arch_is_dsv4(lctx.model.arch)) {
         return 0ull;
     }
-    uint64_t h = 1469598103934665603ull;
-    auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
     auto mix_plan = [&mix] (const llama_context::dsv4_runtime::comp_plan & plan) {
         mix(plan.state_pos.size());
         mix(plan.state_persist_src_idxs.size());
@@ -1955,6 +1965,7 @@ static bool llama_kv_cache_find_slot(
     }
 
     cache.used += n_tokens;
+    cache.used_max = std::max(cache.used_max, cache.head + n_tokens);
 
     return true;
 }
@@ -2117,22 +2128,14 @@ static uint32_t llama_kv_cache_cell_max(const struct llama_kv_cache & cache) {
     return 0;
 }
 
-static uint32_t llama_kv_cache_cell_max(const struct llama_kv_cache & cache, uint32_t pad) {
-    uint32_t last = cache.size;
-    for (uint32_t i = cache.size; i > 0; i -= pad) {
+static uint32_t llama_kv_cache_used_max(struct llama_kv_cache & cache) {
+    for (uint32_t i = cache.used_max; i > 0; --i) {
         const llama_kv_cell & cell = cache.cells[i - 1];
-
         if (cell.pos >= 0 && !cell.is_empty()) {
-            for (uint32_t j = last; j > i; --j) {
-                auto & cell_j = cache.cells[j - 1];
-                if (cell_j.pos >= 0 && !cell_j.is_empty()) return j;
-            }
-            return i;
+            return cache.used_max = i;
         }
-        last = i;
     }
-
-    return 0;
+    return cache.used_max = 0;
 }
 
 bool llama_kv_cache::checkpoint_supported() const {
@@ -2299,6 +2302,7 @@ bool llama_kv_cache::checkpoint_save(ggml_backend_sched_t sched, llama_ckpt_data
     ckpt.cells_snapshot = cells;
     ckpt.head_snapshot  = head;
     ckpt.used_snapshot  = used;
+    ckpt.used_max_snapshot = used_max;
 
     std::unordered_set<ggml_backend_t> backends_to_sync;
     // a row with no resolvable backend is copied generically, outside any stream;
@@ -2383,6 +2387,7 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched, llama_ckpt_d
     cells = ckpt.cells_snapshot;
     head  = ckpt.head_snapshot;
     used  = ckpt.used_snapshot;
+    used_max = ckpt.used_max_snapshot;
 
     std::unordered_set<ggml_backend_t> backends_to_sync;
     // a row with no resolvable backend is copied generically, outside any stream;
@@ -2777,6 +2782,7 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     }
     cache.head = 0;
     cache.used = 0;
+    llama_kv_cache_used_max(cache);
     cache.cells_disordered = false;
     cache.head_swa     = cache.sink_rows;
     cache.pos_base_swa = 0;
@@ -2875,6 +2881,8 @@ static bool llama_kv_cache_seq_rm(
     // If we freed up a slot, set head to it so searching can start there.
     if (new_head != cache.size && new_head < cache.head) cache.head = new_head;
 
+    llama_kv_cache_used_max(cache);
+
     if (compact_apply) {
         cache.head_swa     = compact_head;
         cache.pos_base_swa = compact_base;
@@ -2962,6 +2970,8 @@ static void llama_kv_cache_seq_keep(struct llama_kv_cache & cache, llama_seq_id 
 
     // If we freed up a slot, set head to it so searching can start there.
     if (new_head != cache.size && new_head < cache.head) cache.head = new_head;
+
+    llama_kv_cache_used_max(cache);
 }
 
 static void llama_kv_cache_seq_add(
@@ -3024,6 +3034,8 @@ static void llama_kv_cache_seq_add(
     // If we freed up a slot, set head to it so searching can start there.
     // Otherwise we just start the next search from the beginning.
     cache.head = new_head != cache.size ? new_head : 0;
+
+    llama_kv_cache_used_max(cache);
 }
 
 static void llama_kv_cache_seq_div(
@@ -8557,7 +8569,15 @@ static int llama_decode_internal(
         }
     }
 
+    auto & ckpt = kv_self.ckpt;
+    bool capture_conv = ckpt.conv_slot >= 0 && ckpt.saved;
+    if (capture_conv) {
+        capture_conv = ckpt.per_step_n_tokens == 0 && n_tokens_all > 1 && batch_all.n_tokens <= ckpt.per_step_max_allocated;
+        ckpt.per_step_n_tokens = capture_conv ? batch_all.n_tokens : -1;
+    }
+
     bool warned_qnext_mixed_repeat = false;
+    bool replayed = false;
     for (uint32_t cur_token = 0; cur_token < n_tokens_all; ) {
 #if IK_PRINT_TIMING
         auto tim1 = ggml_time_us();
@@ -8744,7 +8764,7 @@ static int llama_decode_internal(
                 // after enough generations, the benefit from this heuristic disappears
                 // if we start defragmenting the cache, the benefit from this will be more important
                 const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
-                auto max_cell = llama_kv_cache_cell_max(kv_self, pad);
+                auto max_cell = llama_kv_cache_used_max(kv_self);
                 kv_self.n = std::min(kv_self.size, std::max(pad, GGML_PAD(max_cell, pad)));
             }
 
@@ -8765,6 +8785,7 @@ static int llama_decode_internal(
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
         const uint64_t seq_fingerprint = llama_ubatch_seq_fingerprint(u_batch, lctx.model.arch);
+        ckpt.conv_offset = capture_conv ? (int) cur_token : -1;
         const uint64_t state_hash      = model_state_hash(lctx);
         if (!lctx.can_reuse_graph(u_batch, seq_fingerprint, state_hash)) {
             lctx.reset_scheduler();
@@ -8779,6 +8800,7 @@ static int llama_decode_internal(
 #endif
 
             gf = llm_build_context::llama_build_graph(lctx, u_batch, false);
+            ckpt.conv_offset = -1;
             if (gf == nullptr) {
                 return GGML_STATUS_FAILED;
             }
@@ -8814,6 +8836,7 @@ static int llama_decode_internal(
         } else {
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
             gf = prev->graph;
+            ckpt.conv_offset = -1;
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
@@ -8887,7 +8910,8 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
-        if (lctx.dflash.capture) {
+        replayed = replayed || lctx.dsv41_replay.active;
+        if (lctx.dflash.capture && replayed) {
             llama_begin_dflash_capture_batch(&lctx, lctx.dsv41_replay.active
                     ? (int32_t) lctx.dsv41_replay.keep : (int32_t) n_tokens, false);
         }
@@ -12050,10 +12074,44 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
 }
 
 // Unified speculative-checkpoint
+static bool alloc_conv_windows(llama_kv_cache & kv, int history, int max_tokens) {
+    auto & ckpt = kv.ckpt;
+    std::map<ggml_backend_buffer_type_t, std::vector<int>> layers;
+    for (int il = 0; il < (int) kv.s_l.size(); ++il) {
+        if (auto state = kv.s_l[il]) {
+            layers[ggml_backend_buffer_get_type(state->buffer)].push_back(il);
+        }
+    }
+
+    ckpt.conv_windows.resize(kv.s_l.size());
+    for (const auto & [buft, visits] : layers) {
+        ggml_context_ptr ctx(ggml_init({visits.size() * ggml_tensor_overhead(), nullptr, true}));
+        for (int il : visits) {
+            auto state = kv.s_l[il];
+            auto window = ggml_new_tensor_3d(ctx.get(), state->type, history + max_tokens, state->ne[0] / history, state->ne[1]);
+            ggml_format_name(window, "conv_window_l%d", il);
+            ckpt.conv_windows[il] = window;
+        }
+        auto buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
+        if (!buf) {
+            ckpt.release_per_step();
+            return false;
+        }
+        ckpt.per_step_bufs.push_back(buf);
+        ckpt.per_step_ctxs.push_back(ctx.release());
+    }
+    ckpt.per_step_max_allocated = max_tokens;
+    return true;
+}
+
 static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, llama_ckpt_data ckpt_type, int max_tokens) {
-    // openPangu carries only a conv state and LFM2 a short-conv state (no SSM
+    if (model.arch == LLM_ARCH_INKLING2_LOOP || model.arch == LLM_ARCH_LFM2) {
+        return ckpt_type.type == LLAMA_CHECKPOINT_SPEC && kv.checkpoint_alloc_shadows(ckpt_type) &&
+            alloc_conv_windows(kv, model.hparams.n_shortconv_l_cache - 1, max_tokens);
+    }
+    // openPangu carries only a conv state and LFM2MOE and LFM3 a short-conv state (no SSM
     // term); the per-step path would divide by zero (ssm_dt_rank == 0), decline
-    if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_LFM2 || model.arch == LLM_ARCH_LFM2MOE || model.arch == LLM_ARCH_LFM3 || model.arch == LLM_ARCH_INKLING2_LOOP) {
+    if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_LFM2MOE || model.arch == LLM_ARCH_LFM3) {
         kv.save_per_step_ssm = false;
         return false;
     }
@@ -12295,6 +12353,11 @@ bool llama_spec_ckpt_save(struct llama_context * ctx, llama_ckpt_data ckpt_type,
             if (llm_arch_is_dsv4(ctx->model.arch)) {
                 return llama_dsv4_spec_ckpt_save(ctx, ckpt_type, true);
             }
+            if (!ckpt.conv_windows.empty()) {
+                ckpt.conv_slot = seq_id;
+                ckpt.per_step_n_tokens = 0;
+                return kv.checkpoint_save(ctx->sched, ckpt_type);
+            }
             kv.save_per_step_ssm = true;
             return true;
 
@@ -12384,6 +12447,57 @@ llama_pos llama_rewind_ckpt_pos(struct llama_context * ctx, llama_ckpt_data ckpt
 }
 
 
+static bool restore_conv_windows(llama_context & lctx, int step, llama_seq_id slot) {
+    const auto & kv = lctx.kv_self;
+    auto & ckpt = lctx.kv_self.ckpt;
+    const auto key = std::make_pair(slot, step);
+    auto it = ckpt.conv_restore_graphs.find(key);
+    if (it == ckpt.conv_restore_graphs.end()) {
+        std::map<ggml_backend_t, std::vector<int>> layers;
+        for (int il = 0; il < (int) ckpt.conv_windows.size(); ++il) {
+            if (auto window = ckpt.conv_windows[il]) {
+                auto backend = ggml_backend_sched_get_backend_from_buffer(lctx.sched, window->buffer);
+                if (!backend && ggml_backend_buffer_is_host(window->buffer)) {
+                    backend = lctx.backend_cpu;
+                }
+                layers[backend].push_back(il);
+            }
+        }
+
+        std::vector<std::pair<ggml_backend_t, ggml_cgraph *>> graphs;
+        for (const auto & [backend, visits] : layers) {
+            const size_t nodes = 3 * visits.size();
+            auto ctx = ggml_init({nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(nodes, false), nullptr, true});
+            ckpt.per_step_ctxs.push_back(ctx);
+            auto graph = ggml_new_graph_custom(ctx, nodes, false);
+            for (int il : visits) {
+                auto window = ckpt.conv_windows[il];
+                auto state = kv.s_l[il];
+                const int history = window->ne[0] - ckpt.per_step_max_allocated;
+                auto src = ggml_view_2d(ctx, window, history, window->ne[1],
+                        window->nb[1], slot * window->nb[2] + (step + 1) * window->nb[0]);
+                auto dst = ggml_view_2d(ctx, state, history, window->ne[1],
+                        history * state->nb[0], slot * state->nb[1]);
+                auto copy = ggml_cpy(ctx, src, dst);
+                ggml_backend_view_init(src);
+                ggml_backend_view_init(dst);
+                ggml_backend_view_init(copy);
+                ggml_build_forward_expand(graph, copy);
+            }
+            graphs.emplace_back(backend, graph);
+        }
+        it = ckpt.conv_restore_graphs.emplace(key, std::move(graphs)).first;
+    }
+
+    ggml_backend_sched_synchronize(lctx.sched);
+    for (const auto & [backend, graph] : it->second) {
+        if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
+            return false;
+        }
+    }
+    return true;
+}
+
 enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
         struct llama_context * ctx, llama_ckpt_data ckpt_type, llama_seq_id seq_id,
         llama_pos n_past, int accepted_step) {
@@ -12396,6 +12510,23 @@ enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
                 const llama_pos accepted_pos = n_past + accepted_step;
                 llama_kv_cache_seq_rm(kv, seq_id, accepted_pos + 1, -1);
                 return llama_dsv4_spec_ckpt_restore(ctx, ckpt_type, true, accepted_step);
+            }
+            if (!ckpt.conv_windows.empty()) {
+                if (!ckpt.saved) {
+                    LLAMA_LOG_ERROR("%s: no conv checkpoint for sequence %d\n", __func__, seq_id);
+                    return LLAMA_SPEC_CKPT_RESTORE_FAILED;
+                }
+                ckpt.conv_slot = -1;
+                if (accepted_step >= 0 && accepted_step < ckpt.per_step_n_tokens &&
+                        llama_kv_cache_seq_rm(kv, seq_id, n_past + accepted_step + 1, -1) &&
+                        restore_conv_windows(*ctx, accepted_step, seq_id)) {
+                    return LLAMA_SPEC_CKPT_RESTORE_DIRECT;
+                }
+                if (!kv.checkpoint_restore(ctx->sched, ckpt_type) || !llama_kv_cache_seq_rm(kv, seq_id, n_past, -1)) {
+                    LLAMA_LOG_ERROR("%s: cannot restore conv checkpoint at position %d for replay\n", __func__, n_past);
+                    return LLAMA_SPEC_CKPT_RESTORE_FAILED;
+                }
+                return LLAMA_SPEC_CKPT_RESTORE_BASE_REPLAY_REQUIRED;
             }
             if (seq_id < 0 || !kv.per_step_restore(ctx->sched, ckpt_type, accepted_step, (uint32_t) seq_id)) {
                 return LLAMA_SPEC_CKPT_RESTORE_FAILED;
@@ -12460,6 +12591,7 @@ void llama_spec_ckpt_discard(struct llama_context * ctx, llama_ckpt_data ckpt_ty
     auto & ckpt = kv.llama_get_ckpt(ckpt_type);
 
     if (ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_PER_STEP) {
+        ckpt.conv_slot = -1;
         kv.save_per_step_ssm = false;
         kv.checkpoint_delete(ckpt_type);
     } else if (ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_GPU_FALLBACK &&
@@ -13473,6 +13605,7 @@ struct llama_data_read {
 
             kv_self.head = 0;
             kv_self.used = cell_count;
+            kv_self.used_max = cell_count;
         }
 
         return true;

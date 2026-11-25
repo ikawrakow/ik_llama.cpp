@@ -1,6 +1,7 @@
 #pragma once
 
 #include "f8.cuh"
+#include "unary.cuh"
 
 #if !defined(GGML_USE_HIPBLAS) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
 #include <cuda_fp8.h>
@@ -193,7 +194,7 @@ static __global__ void mul_mat_vec_f8_e4m3_id(int n, int channels,
 template <bool blocked, bool aligned = false>
 static __global__ void mul_mat_vec_f8_e4m3_up_gate_id(int n, int rows, int channels,
         const char * up, const char * gate, const char * y, const char * ids,
-        const char * bias_up, const char * bias_gate, float * dst, ggml_unary_op unary, float limit,
+        const char * bias_up, const char * bias_gate, float * dst, ggml_unary_op unary, float limit, float beta, float beta_linear,
         size_t nbu1, size_t nbu2, size_t nbg1, size_t nbg2, size_t nb11, size_t nb12,
         size_t nbi0, size_t nbi1, size_t nbbu1, size_t nbbg1) {
     const int slot = blockIdx.y;
@@ -231,6 +232,9 @@ static __global__ void mul_mat_vec_f8_e4m3_up_gate_id(int n, int rows, int chann
                 break;
             case GGML_UNARY_OP_SIGMOID:
                 dst[out] = su / (1.0f + expf(-sg));
+                break;
+            case GGML_UNARY_OP_SITU_GLU:
+                dst[out] = situ_glu(sg, su, beta, beta_linear);
                 break;
             case GGML_UNARY_OP_SWIGLU_OAI:
                 sg = fminf(sg, 7.0f);

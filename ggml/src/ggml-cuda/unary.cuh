@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: MIT
 //
 
+#pragma once
+
 #include "common.cuh"
 
 #define CUDA_NEG_BLOCK_SIZE 256
@@ -89,6 +91,14 @@ void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
 void ggml_swiglu_oai_cuda_f32(const float * x, const float * g, float * dst, const int64_t k, const int64_t n,
         const int64_t o0, const int64_t o1, const float alpha, const float limit, cudaStream_t stream);
+
+static __device__ __forceinline__ float situ_glu(float gate, float up, float beta, float beta_linear) {
+    const float g = beta*tanhf(gate/beta)/(1.0f + expf(-gate));
+    return g * (beta_linear > 0.0f ? beta_linear*tanhf(up/beta_linear) : up);
+}
+
+void ggml_situ_glu_cuda_f32(const float * gate, const float * up, float * dst, int64_t k, int64_t n,
+        int64_t o0, int64_t o1, float beta, float beta_linear, cudaStream_t stream);
 
 void ggml_cuda_op_fused_mul_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 

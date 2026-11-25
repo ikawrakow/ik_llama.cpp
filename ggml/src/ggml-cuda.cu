@@ -71,6 +71,7 @@
 #include "ggml-cuda/blend.cuh"
 #include "ggml-cuda/indexer_topk.cuh"
 #include "ggml-cuda/ds4_comp.cuh"
+#include "ggml-cuda/inkling2.cuh"
 
 #include <algorithm>
 #include <array>
@@ -3703,6 +3704,8 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     const ggml_tensor * src0 = src0_1;
     const ggml_tensor * src1 = dst->src[2];
     const ggml_tensor * ids  = dst->src[3];
+    const float beta = *(const float *)(dst->op_params + 2);
+    const float beta_linear = *(const float *)(dst->op_params + 3);
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
     const bool f8 = src0_1->type == GGML_TYPE_F8_E4M3_KS || src0_1->type == GGML_TYPE_F8_E4M3_B128;
     if (f8) {
@@ -3776,7 +3779,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                             dst->src[4], dst->src[5],
                             (const char *)src0_1->data, (const char *)src0_2->data,
                             (const float *)src1->data, (const char *)local_src1.data,
-                            (float *)local_dst.data, 0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, limit, stream);
+                            (float *)local_dst.data, 0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, limit, beta, beta_linear, stream);
                 } else {
                     auto local_src0_1 = *src0_1;
                     local_src0_1.ne[1] /= 2;
@@ -3787,7 +3790,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                                 nullptr, nullptr,
                                 (const char *)local_src0_2.data, (const char *)local_src0_1.data,
                                 (const float *)src1->data, (const char *)local_src1.data,
-                                (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, limit, stream);
+                                (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, limit, beta, beta_linear, stream);
                     } else {
                         GGML_ASSERT(!dst->src[5]);
                         auto local_bias_1 = *dst->src[4];
@@ -3798,7 +3801,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                                 &local_bias_2, &local_bias_1,
                                 (const char *)local_src0_2.data, (const char *)local_src0_1.data,
                                 (const float *)src1->data, (const char *)local_src1.data,
-                                (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, limit, stream);
+                                (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, limit, beta, beta_linear, stream);
                     }
                 }
                 CUDA_CHECK(cudaGetLastError());
@@ -3956,6 +3959,10 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             ggml_swiglu_oai_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
                         (float *)dst->data, ggml_nelements(dst), dst_row.ne[0],  dst_row.ne[0],  dst_row.ne[0],
                         1.702f, 7.0f, stream);
+        } else if (unary_op == GGML_UNARY_OP_SITU_GLU) {
+            ggml_situ_glu_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
+                        (float *)dst->data, ggml_nelements(dst), dst_row.ne[0], dst_row.ne[0], dst_row.ne[0],
+                        beta, beta_linear, stream);
         } else {
             float limit = *((const float *)(dst->op_params + 1));
             //printf("%s: using limit = %g\n", __func__, limit);
@@ -3986,6 +3993,10 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 ggml_swiglu_oai_cuda_f32((const float *)dst_up_gate_contiguous.get(), (const float *)dst_up_gate_contiguous.get() + dst->ne[0],
                         (float *)dst->data, ggml_nelements(dst), dst->ne[0], src0_1->ne[1], src0_1->ne[1],
                         1.702f, 7.0f, stream);
+            } else if (unary_op == GGML_UNARY_OP_SITU_GLU) {
+                ggml_situ_glu_cuda_f32((const float *)dst_up_gate_contiguous.get(), (const float *)dst_up_gate_contiguous.get() + dst->ne[0],
+                        (float *)dst->data, ggml_nelements(dst), dst->ne[0], src0_1->ne[1], src0_1->ne[1],
+                        beta, beta_linear, stream);
             } else {
                 float limit = *((const float *)(dst->op_params + 1));
                 //printf("%s: using limit = %g\n", __func__, limit);
@@ -4186,6 +4197,10 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 ggml_swiglu_oai_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
                         (float *)dst_gate_contiguous.get(), ggml_nelements(&dst_row), dst_row.ne[0],  dst_row.ne[0],  dst_row.ne[0],
                         1.702f, 7.0f, stream);
+            } else if (unary_op == GGML_UNARY_OP_SITU_GLU) {
+                ggml_situ_glu_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
+                        (float *)dst_gate_contiguous.get(), ggml_nelements(&dst_row), dst_row.ne[0], dst_row.ne[0], dst_row.ne[0],
+                        beta, beta_linear, stream);
             } else {
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
                         (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
@@ -4196,6 +4211,10 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 ggml_swiglu_oai_cuda_f32((const float *)dst_up_contiguous.get(), (const float *)dst_up_contiguous.get() + dst->ne[0],
                         (float *)dst_gate_contiguous.get(), ggml_nelements(&dst_row)/2, dst->ne[0], src0_1->ne[1], src0_1->ne[1],
                         1.702f, 7.0f, stream);
+            } else if (unary_op == GGML_UNARY_OP_SITU_GLU) {
+                ggml_situ_glu_cuda_f32((const float *)dst_up_contiguous.get(), (const float *)dst_up_contiguous.get() + dst->ne[0],
+                        (float *)dst_gate_contiguous.get(), ggml_nelements(&dst_row)/2, dst->ne[0], src0_1->ne[1], src0_1->ne[1],
+                        beta, beta_linear, stream);
             } else {
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row)/2, dst->ne[0],
                         (const float *)dst_up_contiguous.get(), (float *)dst_gate_contiguous.get(), limit);
@@ -4262,6 +4281,8 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     auto stream = ctx.stream();
 
     float limit = *(const float *)(dst->op_params + 1);
+    const float beta = *(const float *)(dst->op_params + 2);
+    const float beta_linear = *(const float *)(dst->op_params + 3);
 
     auto ne10_padded = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
     auto nb10_padded = ne10_padded*sizeof(block_q8_1)/QK8_1;
@@ -4293,7 +4314,7 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                     dst->src[4], dst->src[5],
                     (const char *)src0_1->data, (const char *)src0_2->data, (const float *)src1->data, src1_quantized.get(),
                     (float *)dst->data, 0, src0_1->ne[1], 1, ne10_padded,
-                    (ggml_unary_op)dst->op_params[0], limit, stream);
+                    (ggml_unary_op)dst->op_params[0], limit, beta, beta_linear, stream);
             return;
         }
 
@@ -4335,6 +4356,10 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         ggml_swiglu_oai_cuda_f32((const float *)dst->data, (const float *)dst_up.get(),
                 (float *)dst->data, ggml_nelements(dst), dst->ne[0],  dst->ne[0],  dst->ne[0],
                 1.702f, 7.0f, stream);
+    } else if (unary_op == GGML_UNARY_OP_SITU_GLU) {
+        ggml_situ_glu_cuda_f32((const float *)dst->data, (const float *)dst_up.get(),
+                (float *)dst->data, ggml_nelements(dst), dst->ne[0], dst->ne[0], dst->ne[0],
+                beta, beta_linear, stream);
     } else {
         //printf("%s: using limit = %g\n", __func__, limit);
         ggml_fused_mul_unary(ctx, unary_op, ggml_nelements(dst),
@@ -4355,6 +4380,74 @@ static inline bool ops_are_same_device(const ggml_cgraph * cgraph, int first, in
             if (((const ggml_backend_cuda_buffer_context *)node->src[j]->buffer->context)->device != device) return false;
         }
     }
+    return true;
+}
+
+static __global__ void k_softmax_gemm_f32(int ne00, int ne01, int ne11, int nelem,
+        size_t nb01, size_t nb02, size_t nb11, size_t nb12,
+        const float * __restrict__ x0, const float * __restrict__ x1, float * __restrict__ y, float scale) {
+
+    int ir = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ir >= nelem) {
+        return;
+    }
+    int i2 = ir/(ne01*ne11);
+    int i11 = (ir - i2*ne01*ne11)/ne01;
+    int i01 = ir - i2*ne01*ne11 - i11*ne01;
+
+    x0 += i01*nb01 + i2*nb02;
+    x1 += i11*nb11 + i2*nb12;
+    y  += i11*ne01 + i2*ne01*ne11;
+
+    float max = fmaxf(x1[0], x1[1]);
+    for (int j = 2; j < ne00; ++j) max = fmaxf(max, x1[j]);
+    float sum_n = 0, sum_d = 0;
+    for (int j = 0; j < ne00; ++j) {
+        float p = expf(scale*(x1[j] - max));
+        sum_n += p*x0[j];
+        sum_d += p;
+    }
+    y[i01] = sum_n / sum_d;
+}
+
+static bool ggml_cuda_op_fused_softmax_small_gemm_f32(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    if (dst->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst)) return false;
+    auto src0 = dst->src[0];
+    auto src1 = dst->src[1];
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32) return false;
+    if (src1->op != GGML_OP_SOFT_MAX) return false;
+    if (src0->ne[0] != src1->ne[0] || src0->ne[2] != src1->ne[2] || src0->ne[3] != 1 || src1->ne[3] != 1) return false;
+    if (src1->src[1] != NULL) return false;
+    if (src0->ne[0] >= 16) return false;
+
+    const float * fparams = (const float *)src1->op_params;
+    float scale = fparams[0];
+    float bias  = fparams[1];
+    if (bias != 0.0f) return false;
+
+    int nr = src0->ne[2] * src0->ne[1] * src1->ne[1];
+    int nsm = ggml_cuda_info().devices[ctx.device].nsm;
+    if (nsm*WARP_SIZE >= nr) {
+        int nblock = (nr + WARP_SIZE - 1)/WARP_SIZE;
+        k_softmax_gemm_f32<<<nblock, WARP_SIZE, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], src1->ne[1], ggml_nelements(dst),
+                src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float),
+                src1->nb[1]/sizeof(float), src1->nb[2]/sizeof(float),
+                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, scale);
+    }
+    else if (2*nsm*WARP_SIZE >= nr) {
+        int nblock = (nr + 2*WARP_SIZE - 1)/(2*WARP_SIZE);
+        k_softmax_gemm_f32<<<nblock, 2*WARP_SIZE, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], src1->ne[1], ggml_nelements(dst),
+                src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float),
+                src1->nb[1]/sizeof(float), src1->nb[2]/sizeof(float),
+                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, scale);
+    } else {
+        int nblock = (nr + 4*WARP_SIZE - 1)/(4*WARP_SIZE);
+        k_softmax_gemm_f32<<<nblock, 4*WARP_SIZE, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], src1->ne[1], ggml_nelements(dst),
+                src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float),
+                src1->nb[1]/sizeof(float), src1->nb[2]/sizeof(float),
+                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, scale);
+    }
+
     return true;
 }
 
@@ -4508,6 +4601,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_FMA:
             ggml_cuda_op_fma(ctx, dst);
             break;
+        case GGML_OP_INKLING2_CLIP:
+            ggml_cuda_op_inkling2_clip(ctx, dst);
+            break;
         case GGML_OP_FUSED_MUL_UNARY:
             ggml_cuda_op_fused_mul_unary(ctx, dst);
             break;
@@ -4521,8 +4617,24 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_sub(ctx, dst);
             break;
         case GGML_OP_UNARY:
-            //printf("unary(%s, %s)\n", dst->name, ggml_unary_op_name((ggml_unary_op)dst->op_params[0]));
-            switch (ggml_get_unary_op(dst)) {
+            {
+            auto unary_op = ggml_get_unary_op(dst);
+            if (fusion && unary_op == GGML_UNARY_OP_TANH && i + 5 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_SCALE &&
+                cgraph->nodes[i+2]->op == GGML_OP_MUL &&
+                cgraph->nodes[i+3]->op == GGML_OP_UNARY && ggml_get_unary_op(cgraph->nodes[i+3]) == GGML_UNARY_OP_TANH &&
+                cgraph->nodes[i+4]->op == GGML_OP_MUL &&
+                cgraph->nodes[i+5]->op == GGML_OP_ADD &&
+                cgraph->nodes[i+5]->src[0] == cgraph->nodes[i+2] &&
+                cgraph->nodes[i+5]->src[1] == cgraph->nodes[i+4] &&
+                cgraph->nodes[i+1]->src[0] == dst &&
+                cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
+                cgraph->nodes[i+4]->src[0] == cgraph->nodes[i+3] &&
+                ggml_cuda_op_inkling2_control(ctx, cgraph->nodes[i+5])) {
+                i += 5;
+                break;
+            }
+            switch (unary_op) {
                 case GGML_UNARY_OP_GELU:
                     ggml_cuda_op_gelu(ctx, dst);
                     break;
@@ -4600,7 +4712,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 default:
                     return -1;
             }
-            break;
+            } break;
         case GGML_OP_GLU:
             switch (ggml_get_glu_op(dst)) {
                 case GGML_GLU_OP_REGLU:
@@ -4846,6 +4958,14 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     ggml_cuda_op_topk_moe(ctx, cgraph->nodes[i], cgraph->nodes[i+4], cgraph->nodes[i+3]);
                     i += 4;
                 }
+            } else if (fusion && i + 1 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_MUL_MAT &&
+                    cgraph->nodes[i+1]->src[1] == dst &&
+                    dst->ne[0] < 8 &&
+                    dst->type == GGML_TYPE_F32 &&
+                    cgraph->nodes[i+1]->src[0]->type == GGML_TYPE_F32 &&
+                    ggml_cuda_op_fused_softmax_small_gemm_f32(ctx, cgraph->nodes[i+1])) {
+                ++i;
             } else {
                 ggml_cuda_op_soft_max(ctx, dst);
             }
@@ -4970,8 +5090,8 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_grouped_topk(ctx, dst);
             break;
         case GGML_OP_SSM_CONV:
-            if (dst->src[3] == nullptr) {
-                // Mamba-2 layout (Nemotron-H etc.)
+            if (dst->src[4] == nullptr) {
+                // Mamba-2 layout (Nemotron-H, Inkling2, etc.)
                 ggml_cuda_op_ssm_conv_m2(ctx, dst);
             } else {
                 ggml_cuda_op_ssm_conv(ctx, dst);
@@ -5880,6 +6000,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_MUL_MULTI_ADD:
         case GGML_OP_MUL:
         case GGML_OP_FMA:
+        case GGML_OP_INKLING2_CLIP:
         case GGML_OP_DIV:
         case GGML_OP_SUB:
         case GGML_OP_FUSED_RMS_NORM:

@@ -575,10 +575,10 @@ struct llama_model {
     std::unordered_map<std::string, llama_hadamard_transform> hadamard_map;
     const llama_hadamard_transform * hadamard_rotation(const struct ggml_tensor * t) const;
 
-    struct ggml_tensor * tok_embd;
+    struct ggml_tensor * tok_embd = nullptr;
     struct ggml_tensor * type_embd;
     struct ggml_tensor * pos_embd;
-    struct ggml_tensor * tok_norm;
+    struct ggml_tensor * tok_norm = nullptr;
     struct ggml_tensor * tok_norm_b;
 
     struct ggml_tensor * tok_embd_per_layer = nullptr;

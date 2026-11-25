@@ -2,6 +2,7 @@
 #include "cp-async.cuh"
 #include "mma_new.cuh"
 #include "fattn-common.cuh"
+#include "fattn-rel-bias-col.cuh"
 
 using namespace ggml_cuda_mma;
 
@@ -328,13 +329,34 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 
                     KQ_C[i00/(np*tile_C_KQ::I)].x[l] += slope *
                         __half2float(((const half *) tile_mask)[j*(KQ_per_iter + 8) + i]);
-
-                    if constexpr (use_rel_bias) {
-                        const int iq = jt*ncols1 + j;
-                        if (iq < ne01) {
-                            KQ_C[i00/(np*tile_C_KQ::I)].x[l] += rel_bias.get(iq, h0 + jh % ncols2, k_VKQ_0 + i);
+                }
+            }
+            if constexpr (use_rel_bias) {
+                fattn_rel_bias_column rb_col[tile_C_KQ::ne];
+#pragma unroll
+                for (int l = 0; l < tile_C_KQ::ne; ++l) {
+                    const int jh = (threadIdx.y / np)*tile_C_KQ::J + tile_C_KQ::get_j(l);
+                    rb_col[l] = fattn_rel_bias_col(rel_bias, min(jt*ncols1 + jh / ncols2, ne01 - 1), h0 + jh % ncols2);
+                }
+                int32_t q_min = rb_col[0].q;
+#pragma unroll
+                for (int l = 1; l < tile_C_KQ::ne; ++l) {
+                    q_min = min(q_min, rb_col[l].q);
+                }
+                auto add_bias = [&](auto value) {
+#pragma unroll
+                    for (int i00 = 0; i00 < KQ_per_iter; i00 += np*tile_C_KQ::I) {
+                        const int i0 = i00 + (threadIdx.y % np)*tile_C_KQ::I;
+#pragma unroll
+                        for (int l = 0; l < tile_C_KQ::ne; ++l) {
+                            KQ_C[i00/(np*tile_C_KQ::I)].x[l] += value(l, k_VKQ_0 + i0 + tile_C_KQ::get_i(l));
                         }
                     }
+                };
+                if (fattn_rel_bias_tail_tile<KQ_per_iter>(rel_bias, q_min, k_VKQ_0)) {
+                    add_bias([&](int l, int) { return rb_col[l].tail; });
+                } else {
+                    add_bias([&](int l, int ik) { return fattn_rel_bias_get(rel_bias, rb_col[l], ik); });
                 }
             }
         }
@@ -388,14 +410,47 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                         const int KQ_index = i00/(np*tile_C_KQ_16::J) * ntiles/2 + t;
                         KQ_C_16[KQ_index].x[l0 + 0] += slope*tmp.x;
                         KQ_C_16[KQ_index].x[l0 + 1] += slope*tmp.y;
-                        if constexpr (use_rel_bias) {
-                            const int iq = jt*ncols1 + j;
-                            if (iq < ne01) {
-                                KQ_C_16[KQ_index].x[l0 + 0] += rel_bias.get(iq, h0 + jh % ncols2, k_VKQ_0 + ik0 + 0);
-                                KQ_C_16[KQ_index].x[l0 + 1] += rel_bias.get(iq, h0 + jh % ncols2, k_VKQ_0 + ik0 + 1);
+                    }
+                }
+            }
+            if constexpr (use_rel_bias) {
+                fattn_rel_bias_column rb_col[ntiles/2 > 0 ? ntiles/2 : 1][tile_C_KQ_16::ne/2];
+#pragma unroll
+                for (int t = 0; t < ntiles/2; ++t) {
+#pragma unroll
+                    for (int l0 = 0; l0 < tile_C_KQ_16::ne; l0 += 2) {
+                        const int jh = (threadIdx.y / np)*cols_per_warp + t*tile_C_KQ_16::I + tile_C_KQ_16::get_i(l0);
+                        rb_col[t][l0/2] = fattn_rel_bias_col(rel_bias, min(jt*ncols1 + jh / ncols2, ne01 - 1), h0 + jh % ncols2);
+                    }
+                }
+                int32_t q_min = rb_col[0][0].q;
+#pragma unroll
+                for (int t = 0; t < ntiles/2; ++t) {
+#pragma unroll
+                    for (int l0 = 0; l0 < tile_C_KQ_16::ne; l0 += 2) {
+                        q_min = min(q_min, rb_col[t][l0/2].q);
+                    }
+                }
+                auto add_bias = [&](auto value) {
+#pragma unroll
+                    for (int i00 = 0; i00 < KQ_per_iter; i00 += np*tile_C_KQ_16::J) {
+                        const int i0 = i00 + (threadIdx.y % np)*tile_C_KQ_16::J;
+#pragma unroll
+                        for (int t = 0; t < ntiles/2; ++t) {
+#pragma unroll
+                            for (int l0 = 0; l0 < tile_C_KQ_16::ne; l0 += 2) {
+                                const int ik0 = i0 + tile_C_KQ_16::get_j(l0);
+                                const int KQ_index = i00/(np*tile_C_KQ_16::J) * ntiles/2 + t;
+                                KQ_C_16[KQ_index].x[l0 + 0] += value(t, l0/2, k_VKQ_0 + ik0 + 0);
+                                KQ_C_16[KQ_index].x[l0 + 1] += value(t, l0/2, k_VKQ_0 + ik0 + 1);
                             }
                         }
                     }
+                };
+                if (fattn_rel_bias_tail_tile<KQ_per_iter>(rel_bias, q_min, k_VKQ_0)) {
+                    add_bias([&](int t, int c, int) { return rb_col[t][c].tail; });
+                } else {
+                    add_bias([&](int t, int c, int ik) { return fattn_rel_bias_get(rel_bias, rb_col[t][c], ik); });
                 }
             }
         }

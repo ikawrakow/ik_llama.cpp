@@ -57,6 +57,8 @@ bool iqk_op_scale_unary_scale(struct ggml_tensor * dst, int ith, int nth);
 
 void iqk_op_multiadd_unary_scale(struct ggml_tensor * dst, int ith, int nth);
 
+bool iqk_inkling2_control(struct ggml_tensor * dst, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif
