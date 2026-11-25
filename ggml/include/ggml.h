@@ -3059,6 +3059,16 @@ extern "C" {
     // when plan.work_size > 0, caller must allocate memory for plan.work_data
     GGML_API struct ggml_cplan ggml_graph_plan   (const struct ggml_cgraph * cgraph, int n_threads /*= GGML_DEFAULT_N_THREADS*/);
     GGML_API enum ggml_status  ggml_graph_compute(      struct ggml_cgraph * cgraph, struct ggml_cplan * cplan);
+
+    // Copy host memory ranges in parallel with the thread team and CPU placement of the last
+    // ggml_graph_compute call. Call from the thread that runs ggml_graph_compute.
+    // Returns false (nothing copied) if no such team exists (no OpenMP, or a single thread).
+    struct ggml_host_copy_range {
+        void       * dst;
+        const void * src;
+        size_t       bytes;
+    };
+    GGML_API bool              ggml_parallel_host_copy(const struct ggml_host_copy_range * items, int n_items);
     // same as ggml_graph_compute() but the work data is allocated as a part of the context
     // note: the drawback of this API is that you must have ensured that the context has enough memory for the work data
     GGML_API enum ggml_status  ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);
