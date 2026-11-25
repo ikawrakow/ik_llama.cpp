@@ -67,3 +67,50 @@ Pass `--output-format jsonl` to output JSONL instead of Markdown, á la
 {"n_kv_max": 8704, "n_batch": 2048, "n_ubatch": 512, "flash_attn": 0, "n_gpu_layers": -1, "n_threads": 32, "n_threads_batch": 32, "pp": 512, "tg": 128, "n_kv": 1536, "t_pp": 1.428625, "speed_pp": 358.386566, "t_tg": 2.160639, "speed_tg": 59.241734 }
 {"n_kv_max": 8704, "n_batch": 2048, "n_ubatch": 512, "flash_attn": 0, "n_gpu_layers": -1, "n_threads": 32, "n_threads_batch": 32, "pp": 512, "tg": 128, "n_kv": 2048, "t_pp": 1.360647, "speed_pp": 376.291595, "t_tg": 2.274003, "speed_tg": 56.288403 }
 ```
+
+### Sweep-only MoE-cache tuning
+
+#### Objective
+
+Find a faster MoE-cache budget and CPU share for your sweep workload. The tuner
+measures cache-off and eight cache settings, scores PP and TG after the first two
+checkpoints, and confirms a recommendation only if TG improves by at least 5%
+in both runs.
+
+#### How to use
+
+Put tuner options before `--` and a working `llama-sweep-bench` command after it.
+
+- `--budget-ceiling-mib N` (required) tests budgets at half and all of `N`.
+- `--out DIR` saves raw trial logs. Reruns overwrite matching files.
+- `--report-json` also writes `report.json`.
+
+Use a sweep with at least three checkpoints. The tuner keeps the native cache
+policy fixed (LRU by default). A positive `--moe-cache-mib` in the native
+command runs those settings fresh as a manual reference. The tuner reports the
+comparison outside search ranking.
+
+#### Example
+
+```bash
+python3 examples/sweep-bench/sweep-bench-tune.py --budget-ceiling-mib 4096 -- \
+  ./build/bin/llama-sweep-bench -m model.gguf -c 4096 -b 512 -ub 512 -cmoe \
+  --moe-cache-mib 3072 --moe-cache-cpu-share 0.5
+```
+
+#### Output example
+
+Illustrative excerpt. A full run also shows all eight probes and the winner command.
+
+```text
+Running baseline: cache-off, share 0
+...
+Measured sweep comparison
+Role                 Cache MiB  Share      PP tok/s      TG tok/s   TG Δ vs off  Status
+Baseline                     0      0       270.000        40.000       +0.00%  baseline
+Confirmation              4096   0.95       272.000        50.000      +25.00%  confirmed
+Manual reference          3072    0.5       271.000        45.000      +12.50%  outside ranking
+Recommendation: cache 4096 MiB, share 0.95, policy lru
+Confirmed vs manual TG: 50.000 vs 45.000 tok/s (+11.11%).
+Results directory: sweep-tune-results
+```
