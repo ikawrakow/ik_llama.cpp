@@ -106,6 +106,7 @@ struct llama_kv_cache {
     uint32_t head = 0;
     uint32_t size = 0;
     uint32_t used = 0; // used cells (i.e. at least one seq_id)
+    uint32_t used_max = 0; // no cell at or above this index is used
 
     std::vector<uint32_t> row_count;
 
@@ -177,6 +178,7 @@ struct llama_kv_cache {
         std::vector<llama_kv_cell> cells_snapshot;
         uint32_t head_snapshot = 0;
         uint32_t used_snapshot = 0;
+        uint32_t used_max_snapshot = 0;
 
         std::vector<ggml_tensor *> s_l_shadow;
         // the standard Mamba-2 layout keeps the rolling conv window in the k-side cache, so a
