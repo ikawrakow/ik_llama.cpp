@@ -11,6 +11,19 @@
 #include <unordered_set>
 #include <algorithm>
 
+ggml_tensor * llm_build_context::build_conv_window(ggml_cgraph * gf, ggml_tensor * past, ggml_tensor * x,
+        int il, int channel_offset) {
+    auto window = ggml_concat(ctx0, past, ggml_transpose(ctx0, x), 0);
+    const auto & ckpt = kv_self.ckpt;
+    if (ckpt.conv_offset >= 0) {
+        auto snapshot = ckpt.conv_windows[il];
+        auto dest = ggml_view_2d(ctx0, snapshot, window->ne[0], window->ne[1], snapshot->nb[1],
+                ckpt.conv_slot * snapshot->nb[2] + channel_offset * snapshot->nb[1] + ckpt.conv_offset * window->nb[0]);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, window, dest));
+    }
+    return window;
+}
+
 uint32_t llm_build_context::llama_kv_qnext_state_slots(const llama_kv_cache & kv_self) {
     uint32_t n_slots = 0;
 

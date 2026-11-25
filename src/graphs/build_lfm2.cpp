@@ -47,6 +47,10 @@ ggml_tensor * llm_build_context::build_lfm_shortconv(ggml_cgraph * gf, ggml_tens
     auto bx = ggml_mul(ctx0, b, x);
     cb(bx, "model.layers.{}.conv.gated_input", il);
 
+    if (kv_self.ckpt.conv_offset >= 0) {
+        build_conv_window(gf, conv_state, bx, il, 0);
+    }
+
     auto conv_raw = ggml_ssm_conv(ctx0, conv_state, bx, layer.ssm_conv1d, state_seq, nullptr);
     cb(conv_raw, "model.layers.{}.conv.conv", il);
 

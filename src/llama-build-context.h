@@ -300,6 +300,7 @@ struct llm_build_context {
     ggml_cgraph * build_qwen3next();
     ggml_cgraph * build_qwen4exp();
 
+    ggml_tensor * build_conv_window(ggml_cgraph * gf, ggml_tensor * past, ggml_tensor * x, int il, int channel_offset);
     ggml_tensor * build_lfm_shortconv(ggml_cgraph * gf, ggml_tensor * input, ggml_tensor * state_seq,
             uint32_t state_seq_id, bool reset_state, int il);
 

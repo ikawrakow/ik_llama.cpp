@@ -252,8 +252,9 @@ bool llama_model_dflash_io_tensors_match(
         return false;
     }
 
+    const int32_t tok_rows = (int32_t) draft_model->tok_embd->ne[1];
     return (int32_t) draft_model->tok_embd->ne[0] == n_embd &&
-           (int32_t) draft_model->tok_embd->ne[1] == n_vocab &&
+           (tok_rows == n_vocab || tok_rows == (int32_t) draft_model->hparams.n_vocab_model) &&
            (int32_t) output->ne[0] == n_embd &&
            (int32_t) output->ne[1] == n_vocab;
 }
@@ -286,6 +287,10 @@ bool llama_model_share_dflash_io_tensors(
 
     if (draft_model->tok_embd == nullptr) {
         draft_model->tok_embd = target_model->tok_embd;
+    }
+
+    if (dflash2 && target_model->arch == LLM_ARCH_INKLING2_LOOP) {
+        draft_model->tok_norm = target_model->tok_norm;
     }
 
     if (draft_model->output == nullptr) {

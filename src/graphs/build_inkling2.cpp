@@ -97,7 +97,7 @@ static ggml_tensor * inkling_conv(llm_build_context & llm, ggml_cgraph * gf, int
     if (batch.pos && batch.pos[0] == 0) {
         past = ggml_fill(ctx, past, 0.0f);
     }
-    auto window = ggml_concat(ctx, past, ggml_cont(ctx, ggml_transpose(ctx, x)), 0);
+    auto window = llm.build_conv_window(gf, past, x, il, channel_offset);
     auto tail = ggml_view_2d(ctx, window, history, channels, window->nb[1], tokens * window->nb[0]);
     const int sequences = batch.n_seq_id ? batch.n_seq_id[0] : 1;
     for (int i = 0; i < sequences; ++i) {
@@ -352,18 +352,36 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         const int offset = (hparams.n_embd_k_gqa(il) + hparams.n_embd_v_gqa(il) + hparams.n_embd);
         x = ggml_add(ctx0, residual, inkling_conv(*this, gf, il, ffn, offset, layer.ffn_post_conv));
         x = lctx.cvec.apply_to(ctx0, x, il);
-        cb(x, "l_out", il);
+        if (!(lctx.dflash.capture && il == n_layer - 1)) {
+            cb(x, "l_out", il);
+        }
     }
 
-    if (n_outputs == 0 && !cparams.embeddings) {
+    const bool skip_head = n_outputs == 0 && !cparams.embeddings;
+    if (skip_head && !lctx.dflash.capture) {
         ggml_build_forward_expand(gf, x);
         return gf;
     }
     x = inkling_row(ctx0, inkling_mix(ctx0, blocks, x, model.output_res_query), 0);
+    auto norm = model.output_norm;
+    if (lctx.dflash.capture) {
+        x = ggml_fused_rms_norm(ctx0, x, norm, norm_rms_eps);
+        cb(x, "l_out", n_layer - 1);
+        ggml_build_forward_expand(gf, x);
+        if (skip_head) {
+            return gf;
+        }
+        norm = nullptr;
+    }
     if (inp_out_ids) {
         x = ggml_get_rows(ctx0, x, inp_out_ids);
+    } else if (lctx.dflash.capture) {
+        x = ggml_view_tensor(ctx0, x);
     }
-    auto logits = build_output(lctx, ctx0, x, model.output, model.output_norm, cb, true);
+    if (lctx.dflash.capture) {
+        cb(x, "result_norm", -1);
+    }
+    auto logits = build_output(lctx, ctx0, x, model.output, norm, cb, true);
     const float cap = hparams.f_final_logit_softcapping;
     logits = ggml_softcap(ctx0, logits, 1.0f / cap, cap);
     cb(logits, "result_output", -1);

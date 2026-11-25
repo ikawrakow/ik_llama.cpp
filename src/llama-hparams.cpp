@@ -165,14 +165,17 @@ void llm_load_hparams(
     // get hparams kv
     ml.get_key(LLM_KV_VOCAB_SIZE, hparams.n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, hparams.n_vocab, !ignore_vocab);
 
-    if (model.arch == LLM_ARCH_INKLING2_LOOP) {
-        if (hparams.n_layer > LLAMA_MAX_LAYERS) {
-            throw std::runtime_error("Inkling block count exceeds the supported layer count");
-        }
-        hparams.n_vocab_model = hparams.n_vocab;
-        ml.get_key(LLM_KV_VOCAB_SIZE_UNPADDED, hparams.n_vocab);
-        if (!hparams.n_vocab || hparams.n_vocab > hparams.n_vocab_model) {
-            throw std::runtime_error("invalid Inkling unpadded vocabulary size");
+    if (model.arch == LLM_ARCH_INKLING2_LOOP && hparams.n_layer > LLAMA_MAX_LAYERS) {
+        throw std::runtime_error("Inkling block count exceeds the supported layer count");
+    }
+    if (model.arch == LLM_ARCH_DFLASH2 || model.arch == LLM_ARCH_INKLING2_LOOP) {
+        uint32_t valid_vocab;
+        if (ml.get_key(LLM_KV_VOCAB_SIZE_UNPADDED, valid_vocab, model.arch == LLM_ARCH_INKLING2_LOOP)) {
+            if (valid_vocab == 0 || valid_vocab > hparams.n_vocab) {
+                throw std::runtime_error("invalid unpadded vocabulary size");
+            }
+            hparams.n_vocab_model = hparams.n_vocab;
+            hparams.n_vocab = valid_vocab;
         }
     }
 
@@ -2556,6 +2559,13 @@ void llm_load_hparams(
                 ml.get_key("dflash.conv_group_size",  hparams.dflash_conv_group_size);
                 ml.get_key("dflash.selector_rank",    hparams.dflash_selector_rank);
                 ml.get_key("dflash.selector_top_k",   hparams.dflash_selector_top_k);
+                std::string mode;
+                if (ml.get_key("dflash.selector_softcap_mode", mode, false)) {
+                    if (mode != "after_correction" && mode != "before_correction") {
+                        throw std::runtime_error("invalid DFlash2 selector_softcap_mode: " + mode);
+                    }
+                    hparams.dflash_softcap_after_correction = mode == "after_correction";
+                }
                 ml.get_key(LLM_KV_TOKENIZER_MASK_ID,       hparams.dflash_mask_token_id);
                 ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn, false);
                 load_dflash_target_layer_ids(

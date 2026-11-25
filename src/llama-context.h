@@ -198,6 +198,10 @@ struct llama_kv_cache {
         std::vector<int64_t> per_step_ple_dim;
         std::vector<int64_t> per_step_ple_offset;
 
+        std::vector<ggml_tensor *> conv_windows;
+        std::map<std::pair<llama_seq_id, int32_t>, std::vector<std::pair<ggml_backend_t, ggml_cgraph *>>> conv_restore_graphs;
+        llama_seq_id conv_slot = -1;
+        int32_t conv_offset = -1;
         int32_t per_step_n_tokens = 0;
         int32_t per_step_max_allocated = 0;
         int64_t per_step_ssm_state_size = 0;
@@ -266,6 +270,8 @@ struct llama_kv_cache {
             per_step_ple.clear();
             per_step_ple_dim.clear();
             per_step_ple_offset.clear();
+            conv_windows.clear();
+            conv_restore_graphs.clear();
             per_step_n_tokens = 0;
             per_step_max_allocated = 0;
             per_step_ssm_state_size = 0;

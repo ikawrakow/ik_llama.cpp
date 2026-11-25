@@ -3498,10 +3498,11 @@ bool create_tensors_helper::create_dflash2_tensors(const LLM_TN & tn) {
             {(int64_t) hparams.dflash_n_target_features, n_embd}, 0);
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     model.dflash_hidden_norm = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_HIDDEN_NORM, "weight"), {n_embd}, 0);
+    const int64_t codebook_rows = hparams.n_vocab_model ? hparams.n_vocab_model : n_vocab;
     model.dflash_selector_prev = create_tensor(ctx_output,
-            tn(LLM_TENSOR_DFLASH_SELECTOR_PREV, "weight"), {rank, n_vocab}, 0);
+            tn(LLM_TENSOR_DFLASH_SELECTOR_PREV, "weight"), {rank, codebook_rows}, 0);
     model.dflash_selector_next = create_tensor(ctx_output,
-            tn(LLM_TENSOR_DFLASH_SELECTOR_NEXT, "weight"), {rank, n_vocab}, 0);
+            tn(LLM_TENSOR_DFLASH_SELECTOR_NEXT, "weight"), {rank, codebook_rows}, 0);
     model.dflash_selector_hidden = create_tensor(ctx_output,
             tn(LLM_TENSOR_DFLASH_SELECTOR_HIDDEN, "weight"), {n_embd, rank}, 0);
 
