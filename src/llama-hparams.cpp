@@ -377,6 +377,86 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_DORY:
+            {
+                // Dory is a looped nGPT stack: physical modules alternate attention (even) and
+                // MLP (odd); the recurrent group shares weights across passes but owns a KV slot
+                // per visit. It has no LayerNorm/RMSNorm, so the eps hparams carry the nGPT fold
+                // constants init_std and alpha_init instead.
+                ml.get_key("dory.init_std",   hparams.f_norm_eps);
+                ml.get_key("dory.alpha_init", hparams.f_norm_rms_eps);
+                if (!(hparams.f_norm_eps > 0.0f)) {
+                    throw std::runtime_error("dory: init_std must be > 0");
+                }
+
+                uint32_t n_input = 0, n_recurrent = 0, n_output = 0;
+                ml.get_key("dory.input_layer_count",     n_input);
+                ml.get_key("dory.recurrent_layer_count", n_recurrent);
+                ml.get_key("dory.output_layer_count",    n_output);
+                ml.get_key("dory.num_loops",             hparams.n_loops);
+
+                // sliding modules use freq_base_2; full-attention modules use freq_base
+                ml.get_key("dory.rope.freq_base_2", hparams.rope_freq_base_train_swa, false);
+                hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
+                if (hparams.n_swa == 0) {
+                    throw std::runtime_error("dory: sliding_window must be > 0");
+                }
+
+                const uint32_t n_phys = hparams.n_layer; // block_count counts physical modules
+                if (hparams.n_loops < 1 || n_input == 0 || n_recurrent == 0 ||
+                        n_input + n_recurrent + n_output != n_phys || n_phys % 2 != 0) {
+                    throw std::runtime_error("dory: invalid input/recurrent/output module counts");
+                }
+                hparams.loop_start = n_input;
+                hparams.loop_end   = n_input + n_recurrent;
+
+                // layer_pattern: one char per attention module ('S' sliding, '*' full, '-' MLP),
+                // mapped to even physical indices.
+                std::string pattern;
+                ml.get_key("dory.layer_pattern", pattern, false);
+                const uint32_t n_attn = n_phys / 2;
+                if (!pattern.empty()) {
+                    std::vector<char> entries;
+                    for (char c : pattern) {
+                        if (c != '-') {
+                            entries.push_back(c);
+                        }
+                    }
+                    if (entries.size() != n_attn) {
+                        throw std::runtime_error("dory: layer_pattern length mismatch");
+                    }
+                    for (uint32_t ia = 0; ia < n_attn; ++ia) {
+                        if (entries[ia] != 'S' && entries[ia] != '*') {
+                            throw std::runtime_error("dory: layer_pattern entries must be 'S' or '*'");
+                        }
+                        hparams.swa_layers[2*ia] = entries[ia] == 'S' ? 1 : 0;
+                    }
+                } else {
+                    // default: full attention on every fourth attention module
+                    for (uint32_t ia = 0; ia < n_attn; ++ia) {
+                        hparams.swa_layers[2*ia] = ia % 4 == 3 ? 0 : 1;
+                    }
+                }
+                bool any_swa = false;
+                for (uint32_t i = 0; i < n_phys; ++i) {
+                    any_swa |= hparams.swa_layers[i] != 0;
+                }
+                if (!any_swa) {
+                    throw std::runtime_error("dory: no sliding-window module");
+                }
+
+                // expand loop passes into KV cache slots; weights remain shared
+                const uint64_t slots = (uint64_t) n_phys + (uint64_t) (hparams.n_loops - 1) * n_recurrent;
+                if (slots > LLAMA_MAX_LAYERS) {
+                    throw std::runtime_error("dory: cache slots exceed LLAMA_MAX_LAYERS");
+                }
+                hparams.n_layer_phys = n_phys;
+                hparams.n_layer_all  = (uint32_t) slots;
+                hparams.skip_loop_final_norm = true; // Dory applies its own L2Norm between passes
+
+                model.type = n_phys == 72 ? e_model::MODEL_4B : e_model::MODEL_UNKNOWN;
+            } break;
         case LLM_ARCH_INKLING2_LOOP:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);

@@ -1765,6 +1765,16 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             quantize &= name.find("_res_query.weight") == std::string::npos;
         }
 
+        // Dory: raw learned per-channel nGPT scales and residual rates must stay unquantized
+        if (model.arch == LLM_ARCH_DORY) {
+            quantize &= name.find("output_scale.weight")    == std::string::npos;
+            quantize &= name.find("attn_qk_scale.weight")   == std::string::npos;
+            quantize &= name.find("attn_gate_scale.weight") == std::string::npos;
+            quantize &= name.find("ffn_gate_scale.weight")  == std::string::npos;
+            quantize &= name.find("ffn_up_scale.weight")    == std::string::npos;
+            quantize &= name.find("residual_alpha.weight")  == std::string::npos;
+        }
+
         // quantize the extra output tensor
         quantize = tensor == output_tensor || quantize;
 
@@ -2357,6 +2367,16 @@ static void estimate_imatrix_internal(const std::string & fname_inp,
             quantize &= name.find("attn_rel_bias") == std::string::npos;
             quantize &= name.find("loop_")         == std::string::npos;
             quantize &= name.find("_res_query.weight") == std::string::npos;
+        }
+
+        // Dory: raw learned per-channel nGPT scales and residual rates must stay unquantized
+        if (model.arch == LLM_ARCH_DORY) {
+            quantize &= name.find("output_scale.weight")    == std::string::npos;
+            quantize &= name.find("attn_qk_scale.weight")   == std::string::npos;
+            quantize &= name.find("attn_gate_scale.weight") == std::string::npos;
+            quantize &= name.find("ffn_gate_scale.weight")  == std::string::npos;
+            quantize &= name.find("ffn_up_scale.weight")    == std::string::npos;
+            quantize &= name.find("residual_alpha.weight")  == std::string::npos;
         }
 
         if (quantize) {

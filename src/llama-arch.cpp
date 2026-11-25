@@ -8,6 +8,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA,           "llama"        },
     { LLM_ARCH_NANBEIGE,        "nanbeige"     },
     { LLM_ARCH_INKLING2_LOOP,   "inkling2_loop" },
+    { LLM_ARCH_DORY,            "dory"         },
     { LLM_ARCH_K2_HORIZON,      "k2-horizon"   },
     { LLM_ARCH_LLAMA4,          "llama4"       },
     { LLM_ARCH_DECI,            "deci"         },

@@ -789,6 +789,10 @@ bool llama_context::update_cache_copies() {
     const int n_layer = model.mtp && cparams.mtp_op_type != MTP_OP_NONE ?
         model.hparams.n_layer : model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
     auto layer_has_attention_kv = [&](int il) {
+        // Dory alternates attention (even physical module) and MLP (odd); MLP modules have no KV
+        if (model.arch == LLM_ARCH_DORY) {
+            return model.hparams.phys_layer(il) % 2 == 0;
+        }
         return !model.hparams.is_recurrent(il);
     };
 
@@ -10941,6 +10945,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_LFM3:
         case LLM_ARCH_SPARK2_5:
+        case LLM_ARCH_DORY:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
