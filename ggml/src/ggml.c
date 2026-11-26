@@ -25078,9 +25078,9 @@ static int ggml_compute_forward_ssm_conv_f32(
 // Mamba-2 layout: s = conv_x {d_conv - 1 + n_t, d_inner, n_s}, c = conv1d.weight.
 // Ported from upstream llama.cpp (ggml/src/ggml-cpu/ops.cpp).
 // Now also used for the Inkling2 convolutiuon with delta
-static void ggml_compute_forward_ssm_conv_m2_f32(
+static int ggml_compute_forward_ssm_conv_m2_f32(
         const struct ggml_compute_params * params,
-        struct ggml_tensor * dst) {
+        struct ggml_tensor * dst, int node, const struct ggml_cgraph * cgraph) {
     const struct ggml_tensor * src0 = dst->src[0]; // conv_x
     const struct ggml_tensor * src1 = dst->src[1]; // conv1d.weight
     const struct ggml_tensor * src2 = dst->src[2]; // delta
@@ -25101,6 +25101,25 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
     // the weight is indexed as c[i0 + i1*nc]; a non-contiguous slice would silently
     // convolve with the wrong taps (the CUDA twin honours the stride)
     GGML_ASSERT(src1->nb[1] == nc*sizeof(float));
+
+    const char * add_ptr = NULL;
+    size_t nb1_add = 0, nb2_add = 0;
+    float C = 1;
+    if (node + 2 < cgraph->n_nodes) {
+        if (cgraph->nodes[node+1]->op == GGML_OP_ADD &&
+            cgraph->nodes[node+2]->op == GGML_OP_SCALE &&
+            cgraph->nodes[node+1]->src[0] == dst &&
+            cgraph->nodes[node+2]->src[0] == cgraph->nodes[node+1]) {
+            struct ggml_tensor * add1 = cgraph->nodes[node+1]->src[1];
+            if (add1 && add1->type == GGML_TYPE_F32 && ggml_are_same_shape(dst, add1)) {
+                add_ptr = (const char *)add1->data;
+                nb1_add = add1->nb[1];
+                nb2_add = add1->nb[2];
+                memcpy(&C, cgraph->nodes[node+2]->op_params, sizeof(C));
+                dst = cgraph->nodes[node+2];
+            }
+        }
+    }
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -25123,7 +25142,8 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
         int ir    = last - first;
         const float * s = (const float *) ((const char *) src0->data + ir0*(src0->nb[1])); // {d_conv, d_inner, n_s}
         const float * c = (const float *) ((const char *) src1->data + ir0*(src1->nb[1])); // {d_conv, d_inner}
-        float * x = (float *) ((char *) dst->data + ir0*(dst->nb[0])); // {d_inner, n_t, n_s}
+        float * x = (float *) ((char *)dst->data + ir0*(dst->nb[0])); // {d_inner, n_t, n_s}
+        const float * add = add_ptr ? (const float *)add_ptr + ir0 : NULL;
 
         if (src2 == NULL) {
             for (int i1 = 0; i1 < ir; ++i1) {
@@ -25131,6 +25151,7 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
                 for (int i0 = 0; i0 < nc; ++i0) {
                     sumf += s[i0 + i1*ncs] * c[i0 + i1*nc];
                 }
+                if (add) sumf = C*(sumf + add[i1]);
                 x[i1] = sumf;
             }
         } else {
@@ -25141,10 +25162,11 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
                 for (int i0 = 0; i0 < nc; ++i0) {
                     sumf += s[i0 + i1*ncs] * (c[i0 + i1*nc] + a[nc - 1 - i0 + ia*nc]);
                 }
+                if (add) sumf = C*(sumf + add[i1]);
                 x[i1] = sumf;
             }
         }
-        return;
+        return add_ptr ? node + 2 : node;
     }
 
     // row range for this thread
@@ -25159,6 +25181,7 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
             const float * s = (const float *) ((const char *) src0->data + ir0*(src0->nb[1]) + i2*(src0->nb[0]) + i3*(src0->nb[2])); // {d_conv, d_inner, n_s}
             const float * c = (const float *) ((const char *) src1->data + ir0*(src1->nb[1])); // {d_conv, d_inner}
             float * x = (float *) ((char *) dst->data + ir0*(dst->nb[0]) + i2*(dst->nb[1]) + i3*(dst->nb[2])); // {d_inner, n_t, n_s}
+            const float * add = add_ptr ? (const float *)(add_ptr + i2*nb1_add + i3*nb2_add) + ir0 : NULL;
 
             if (src2 == NULL) {
                 // d_inner
@@ -25171,6 +25194,7 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
                     for (int i0 = 0; i0 < nc; ++i0) {
                         sumf += s[i0 + i1*ncs] * c[i0 + i1*nc];
                     }
+                    if (add) sumf = C*(sumf + add[i1]);
                     x[i1] = sumf;
                 }
             } else {
@@ -25181,11 +25205,13 @@ static void ggml_compute_forward_ssm_conv_m2_f32(
                     for (int i0 = 0; i0 < nc; ++i0) {
                         sumf += s[i0 + i1*ncs] * (c[i0 + i1*nc] + a[nc - 1 - i0 + ia*nc]);
                     }
+                    if (add) sumf = C*(sumf + add[i1]);
                     x[i1] = sumf;
                 }
             }
         }
     }
+    return add_ptr ? node + 2 : node;
 }
 
 static int ggml_compute_forward_ssm_conv(const struct ggml_compute_params * params,
@@ -25197,8 +25223,7 @@ static int ggml_compute_forward_ssm_conv(const struct ggml_compute_params * para
                 // src[4] (per-step saved conv states) is optional on the Qwen3-Next path, so
                 // it cannot tell the two layouts apart.
                 if (dst->src[3] == NULL) {
-                    ggml_compute_forward_ssm_conv_m2_f32(params, dst);
-                    return node;
+                    return ggml_compute_forward_ssm_conv_m2_f32(params, dst, node, cgraph);
                 }
                 return ggml_compute_forward_ssm_conv_f32(params, dst, node, cgraph);
             } break;
