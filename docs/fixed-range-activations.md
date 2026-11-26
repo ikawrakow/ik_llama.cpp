@@ -81,10 +81,11 @@ Per-expert p99.9 varies by about 2-3x between experts of the same layer
 (max/min up to ~35x), which is exactly why the scalar version loses more
 quality.  With the AVX2 `Q8_2_X4` fixed quantizer (and `Q8_0_X4`), `pp512` is
 no longer slower than the dynamic path within measurement noise (25.6/25.0 vs
-26.5 t/s on this machine).  `Q8_K` still uses the scalar fixed path; it is the
-next SIMD candidate for K-quant models.  The remaining win would come from
-fusing the quantization into the SiTU GLU output, which avoids the F32
-round-trip.
+26.5 t/s on this machine), and `tg128` is also at parity within noise
+(~3.79 vs ~3.74 t/s over 3 repetitions).  `Q8_K` still uses the scalar fixed
+path; it is the next SIMD candidate for K-quant models.  The remaining win
+would come from fusing the quantization into the SiTU GLU output, which avoids
+the F32 round-trip.
 
 The clamp is intentional: `SiTU` bounds the GLU output by
 `beta * beta_linear` in theory, but the useful range is much smaller.  Start
