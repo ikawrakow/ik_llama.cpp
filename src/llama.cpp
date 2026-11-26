@@ -12042,14 +12042,17 @@ static uint32_t dsv4_state_n_used_k_rows(llama_pos pos_max, uint32_t ratio, uint
     return (uint32_t) std::min<uint64_t>(kv_rows, n_rows);
 }
 
+// rows per stream of the largest tensor: with shared streams the index-key owners do not all
+// have the same number of rows, and each tensor saves min(its own rows, this count)
 static uint32_t dsv4_cache_stream_rows(const std::vector<ggml_tensor *> & vec, uint32_t n_stream) {
     n_stream = std::max<uint32_t>(1, n_stream);
+    uint32_t rows = 0;
     for (const auto * t : vec) {
         if (t != nullptr && t->ne[1] % n_stream == 0) {
-            return (uint32_t)(t->ne[1] / n_stream);
+            rows = std::max(rows, (uint32_t)(t->ne[1] / n_stream));
         }
     }
-    return 0;
+    return rows;
 }
 
 // Compute per-stream byte offset and size for a DSV4 cache tensor.
