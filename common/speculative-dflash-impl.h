@@ -229,7 +229,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         const int32_t n_target_model_layers = llama_n_layer(model_tgt);
         for (int32_t layer_id : target_layer_ids) {
-            if (layer_id < 0 || layer_id >= n_target_model_layers) {
+            if (layer_id != LLAMA_DFLASH_FINAL_LAYER_ID && (layer_id < 0 || layer_id >= n_target_model_layers)) {
                 LOG_ERR("%s: invalid DFlash target layer id %d for target model with %d layers\n",
                         __func__, layer_id, n_target_model_layers);
                 target_layer_ids.clear();

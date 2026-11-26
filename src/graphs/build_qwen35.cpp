@@ -155,7 +155,8 @@ ggml_cgraph * llm_build_context::build_qwen35() {
                 cb(Rin, "mhc_R_entry", il);
             }
 
-            ggml_tensor * out_ids = (!in_mhc && il == n_transformer_layers - 1 && !lctx.cparams.mtp) ? inp_out_ids : nullptr;
+            ggml_tensor * out_ids = (!in_mhc && il == n_transformer_layers - 1 && !lctx.cparams.mtp &&
+                                      !lctx.dflash.capture) ? inp_out_ids : nullptr;
 
             if (in_mhc) {
                 GGML_ASSERT(model.layers[il].mhc_attn_w != nullptr && model.layers[il].mhc_ffn_w != nullptr);
@@ -215,8 +216,15 @@ ggml_cgraph * llm_build_context::build_qwen35() {
             inpL = cur;
         }
 
+        // DFlash drafts may consume the final normalized hidden as an extra feature
+        if (lctx.dflash.capture) {
+            ggml_tensor * final_norm = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
+            cb(final_norm, "l_final", -1);
+            ggml_build_forward_expand(gf, final_norm);
+        }
+
         // reduce output tokens if the last layer is looped
-        if (inp_out_ids && !lctx.cparams.mtp && use_mhc && n_transformer_layers > 0) {
+        if (inp_out_ids && !lctx.cparams.mtp && !lctx.dflash.capture && use_mhc && n_transformer_layers > 0) {
             const uint32_t ip_last = hparams.phys_layer(n_transformer_layers - 1);
             if (ip_last >= hparams.mhc_start && ip_last < hparams.mhc_end) {
                 inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);

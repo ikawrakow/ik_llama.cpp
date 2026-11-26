@@ -492,6 +492,11 @@ static bool llama_dflash_parse_layer_id(const struct ggml_tensor * tensor, int32
         return false;
     }
 
+    if (std::strcmp(tensor->name, "l_final") == 0) {
+        layer_id = LLAMA_DFLASH_FINAL_LAYER_ID;
+        return true;
+    }
+
     static constexpr const char * prefix = "l_out-";
     if (std::strncmp(tensor->name, prefix, std::strlen(prefix)) != 0) {
         return false;

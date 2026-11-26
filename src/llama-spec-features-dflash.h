@@ -14,6 +14,9 @@ struct llama_spec_feature_view;
 
 ggml_tensor * llama_dflash_hc_mean_for_capture(ggml_context * ctx, ggml_tensor * tensor, int32_t hc_count);
 
+// target feature source that is not an execution layer: the final output norm
+static constexpr int32_t LLAMA_DFLASH_FINAL_LAYER_ID = 999;
+
 static inline bool llama_dflash_capture_layer_requested(const std::vector<int32_t> & layer_ids, int32_t layer_id) {
     return std::find(layer_ids.begin(), layer_ids.end(), layer_id) != layer_ids.end();
 }
