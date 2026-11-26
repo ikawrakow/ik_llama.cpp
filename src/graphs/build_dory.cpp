@@ -14,12 +14,17 @@ namespace {
 
 // L2Norm projects onto the unit sphere: x / sqrt(sum_rows(x^2) + 1e-6), not RMS.
 // ggml_l2_norm clamps the denominator instead, so use the reference form.
-ggml_tensor * dory_l2_norm(ggml_context * ctx, ggml_tensor * x) {
+// Identity (exact): x/sqrt(S + eps) = (1/sqrt(n)) * rms_norm(x, eps/n), n = ne[0],
+// so the 5-op sqr/sum_rows/scale_bias/sqrt/div chain is rms_norm + scale (2 ops).
+// dory_rms_norm exposes the unscaled rms form: sqrt(n) * dory_l2_norm(x). The FFN
+// consumes it directly because its suv_scale = sqrt(n_embd) cancels the factor.
+ggml_tensor * dory_rms_norm(ggml_context * ctx, ggml_tensor * x) {
     static constexpr float eps = 1e-6f;
-    ggml_tensor * s = ggml_sum_rows(ctx, ggml_sqr(ctx, x)); // [1, nrows]
-    s = ggml_scale_bias(ctx, s, 1.0f, eps);                 // sum + eps
-    s = ggml_sqrt(ctx, s);
-    return ggml_div(ctx, x, s);
+    return ggml_rms_norm(ctx, x, eps / (float) x->ne[0]);
+}
+
+ggml_tensor * dory_l2_norm(ggml_context * ctx, ggml_tensor * x) {
+    return ggml_scale(ctx, dory_rms_norm(ctx, x), 1.0f / std::sqrt((float) x->ne[0]));
 }
 
 // GGUF scale vectors may be BF16; ggml binary ops do not mix BF16 with F32 activations.
@@ -49,7 +54,9 @@ ggml_cgraph * llm_build_context::build_dory() {
     const float alpha    = norm_rms_eps;
 
     // sqk_scale and s_gate_scale are already folded into the F32 attn_qk_scale /
-    // attn_gate_scale weights at load (llm_fold_dory_scales).
+    // attn_gate_scale weights at load (llm_fold_dory_scales). suv_scale = sqrt(n_embd)
+    // is cancelled by the FFN's rms_norm input form; only its reciprocal survives,
+    // recovering the unit-sphere h for the residual.
     const float suv_scale    = std::sqrt((float) n_embd);
     const float lambda_scale = alpha / init_std;
     const float logit_factor = 1.0f / init_std;
@@ -87,13 +94,14 @@ ggml_cgraph * llm_build_context::build_dory() {
         const auto & layer = model.layers[il];
         const bool is_attn = hparams.phys_layer(il) % 2 == 0;
 
-        ggml_tensor * h = dory_l2_norm(ctx0, inp);
-        cb(h, "module_inp_norm", il);
-
+        ggml_tensor * h;
         ggml_tensor * cur;
         ggml_tensor * rate;
 
         if (is_attn) {
+            h = dory_l2_norm(ctx0, inp);
+            cb(h, "module_inp_norm", il);
+
             ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, layer.wq, h);
             ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, layer.wk, h);
             ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, layer.wv, h);
@@ -146,10 +154,18 @@ ggml_cgraph * llm_build_context::build_dory() {
 
             rate = dory_residual_rate(ctx0, layer.attn_resid_alpha, lambda_scale);
         } else {
-            ggml_tensor * gate = llm_build_lora_mm(lctx, ctx0, layer.ffn_gate, h);
-            gate = ggml_mul(ctx0, gate, ggml_scale(ctx0, dory_f32(ctx0, layer.ffn_gate_scale), suv_scale));
-            ggml_tensor * up = llm_build_lora_mm(lctx, ctx0, layer.ffn_up, h);
-            up = ggml_mul(ctx0, up, ggml_scale(ctx0, dory_f32(ctx0, layer.ffn_up_scale), suv_scale));
+            // h_rms = sqrt(n_embd) * l2_norm(inp). The ffn_gate/ffn_up GEMMs consume
+            // it unscaled: the inherited sqrt(n_embd) cancels the suv_scale that used
+            // to multiply their results, so the scale vectors apply plain (2 ggml_scale
+            // saved). The residual interpolation still needs the unit-sphere h.
+            ggml_tensor * h_rms = dory_rms_norm(ctx0, inp);
+            h = ggml_scale(ctx0, h_rms, 1.0f / suv_scale);
+            cb(h, "module_inp_norm", il);
+
+            ggml_tensor * gate = llm_build_lora_mm(lctx, ctx0, layer.ffn_gate, h_rms);
+            gate = ggml_mul(ctx0, gate, dory_f32(ctx0, layer.ffn_gate_scale));
+            ggml_tensor * up = llm_build_lora_mm(lctx, ctx0, layer.ffn_up, h_rms);
+            up = ggml_mul(ctx0, up, dory_f32(ctx0, layer.ffn_up_scale));
 
             cur = ggml_swiglu_split(ctx0, gate, up);       // silu(gate) * up
             cb(cur, "ffn_swiglu", il);
