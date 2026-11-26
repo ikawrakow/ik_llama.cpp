@@ -3084,6 +3084,17 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--reasoning-effort") {
+        CHECK_ARG
+        params.reasoning_effort = argv[i];
+        // Keep templates on the same level as model steering.
+        if (params.reasoning_effort != "default") {
+            params.default_template_kwargs["reasoning_effort"] = json(params.reasoning_effort).dump();
+        } else {
+            params.reasoning_effort.clear();
+        }
+        return true;
+    }
     if (arg == "--reasoning-budget-message") {
         CHECK_ARG
         std::string value = argv[i];
@@ -3563,6 +3574,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                         "(default: none)", });
     options.push_back({ "main",        "-rea,  --reasoning",  "[on|off|auto]"
                                                                  "Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))" });
+    options.push_back({ "main",        "       --reasoning-effort LEVEL",  "reasoning effort level for templates and models that support it, e.g. low, medium, high, xhigh, max or none\n"
+                                                                 "(default: model default, or 'default' to use it explicitly)\n"
+                                                                 "'none' disables activation steering; in llama-cli combine it with --reasoning off to also close the thinking block" });
     options.push_back({ "main",        "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
 
     options.push_back({ "main",        "       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
@@ -4530,6 +4544,14 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
 
     for (auto [op, on_off] : params.offload_policy) {
         llama_set_offload_policy(lctx, op, on_off);
+    }
+
+    if (!params.reasoning_effort.empty() &&
+            !llama_set_reasoning_effort(lctx, 0, params.reasoning_effort.c_str())) {
+        fprintf(stderr, "%s: error: unsupported reasoning effort '%s'\n", __func__, params.reasoning_effort.c_str());
+        llama_free(lctx);
+        llama_free_model(model);
+        return iparams;
     }
 
     if (!params.control_vectors.empty()) {

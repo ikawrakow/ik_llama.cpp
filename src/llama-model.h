@@ -353,6 +353,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_shexp = nullptr;
     struct ggml_tensor * ffn_down_shexp = nullptr;
     struct ggml_tensor * ffn_up_shexp = nullptr;
+    struct ggml_tensor * ffn_effort_steer = nullptr; // optional reasoning-effort steering vector
     struct ggml_tensor * ffn_latent_down = nullptr;
     struct ggml_tensor * ffn_latent_up = nullptr;
 
@@ -646,6 +647,18 @@ struct llama_model {
     llama_split_tensor split_output_norm;
 
     std::vector<llama_layer> layers;
+
+    // Optional reasoning-effort steering levels (Raon-1 mini final).
+    std::vector<int32_t>     reasoning_effort_layers;
+    std::vector<std::string> reasoning_effort_names;
+    std::vector<float>       reasoning_effort_alphas;
+    std::string              reasoning_effort_default;
+    float                    reasoning_effort_default_alpha = 0.0f;
+
+    bool has_reasoning_effort_steering() const {
+        return !reasoning_effort_layers.empty() && !reasoning_effort_names.empty() &&
+               reasoning_effort_names.size() == reasoning_effort_alphas.size();
+    }
 
     llama_split_mode split_mode;
     int main_gpu;

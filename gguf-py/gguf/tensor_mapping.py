@@ -380,6 +380,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_mlp.up_proj",     # hy_v3
         ),
 
+        MODEL_TENSOR.FFN_EFFORT_STEER: (
+            "model.layers.{bid}.moe.reasoning_effort_steering",  # raon1
+        ),
+
         # AWQ-activation gate
         MODEL_TENSOR.FFN_ACT: (
             "transformer.blocks.{bid}.ffn.act",  # mpt

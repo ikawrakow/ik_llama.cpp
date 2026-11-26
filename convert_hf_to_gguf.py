@@ -9143,9 +9143,23 @@ class Raon1Model(Model):
         self.gguf_writer.add_hyper_connection_count(self._with_default(hp, "raon_mhc_streams", 4))
         self.gguf_writer.add_hyper_connection_epsilon(self._with_default(hp, "raon_mhc_selector_eps", 1e-5))
         self.gguf_writer.add_hyper_connection_magnitude(self._with_default(hp, "raon_mhc_post_factor", 2.0))
+        # Optional reasoning-effort steering (absent from the preview).
+        # "none" means unsteered (alpha 0).
+        steering = hp.get("reasoning_effort_steering") or {}
+        alpha = steering.get("alpha") or {}
+        levels = [(name, float(value)) for name, value in alpha.items() if name != "none"]
+        if levels:
+            self.gguf_writer.add_reasoning_effort(
+                steering.get("layers", []),
+                [name for name, _ in levels],
+                [value for _, value in levels],
+                steering.get("default", "high"),
+            )
         self.gguf_writer.add_file_type(self.ftype)
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int):
+        if new_name.endswith(".ffn_effort_steer.weight"):
+            return gguf.GGMLQuantizationType.F32
         if ".hc_" in new_name and not new_name.endswith("_fn.weight"):
             return gguf.GGMLQuantizationType.F32
         quantized = tuple(t for t in (
@@ -9181,6 +9195,11 @@ class Raon1Model(Model):
             for kind, tensor in (("FN", fn), ("BASE", base), ("SCALE", scale)):
                 yield self.format_tensor_name(getattr(gguf.MODEL_TENSOR, f"{prefix}_{kind}"), bid), tensor
             del self._mhc[bid, site]
+            return
+
+        if name.endswith(".moe.reasoning_effort_steering"):
+            assert bid is not None
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_EFFORT_STEER, bid), data_torch.float()
             return
 
         if ".moe.experts." in name:

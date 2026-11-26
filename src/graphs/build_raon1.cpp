@@ -241,6 +241,20 @@ ggml_cgraph * llm_build_context::build_raon1() {
     cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
     ggml_set_input(lctx.inp_s_seq_qnext);
 
+    // Optional per-token steering alpha; a graph input so the graph need not be rebuilt.
+    bool has_effort_steer = false;
+    for (int il = 0; il < (int) hparams.n_layer; ++il) {
+        if (model.layers[il].ffn_effort_steer) {
+            has_effort_steer = true;
+            break;
+        }
+    }
+    if (has_effort_steer) {
+        lctx.inp_reasoning_effort = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
+        cb(lctx.inp_reasoning_effort, "inp_reasoning_effort", -1);
+        ggml_set_input(lctx.inp_reasoning_effort);
+    }
+
     // fixed Helmert basis and chart for the mHC selector
     ggml_tensor * helmert = nullptr;
     for (int64_t i = 0; i < hc; ++i) {
@@ -313,6 +327,18 @@ ggml_cgraph * llm_build_context::build_raon1() {
                     nullptr,
                     LLM_FFN_SITU, LLM_FFN_PAR, cb, il);
             cur = ggml_add(ctx0, moe_out, ffn_shexp);
+            if (layer.ffn_effort_steer) {
+                // Steering applies to the whole MoE branch, before hc_post.
+                ggml_tensor * alpha = ggml_reshape_2d(ctx0, lctx.inp_reasoning_effort, 1, n_tokens);
+                ggml_tensor * steer = ggml_repeat(ctx0, alpha, cur);
+                steer = ggml_mul(ctx0, steer, ggml_reshape_2d(ctx0, layer.ffn_effort_steer, n_embd, 1));
+                if (cur->type == GGML_TYPE_F32) {
+                    cur = ggml_add(ctx0, cur, steer);
+                } else {
+                    cur = ggml_add_cast(ctx0, cur, steer, cur->type);
+                }
+                cb(cur, "ffn_effort_steer", il);
+            }
             ggml_build_forward_expand(gf, cur);
         }
 

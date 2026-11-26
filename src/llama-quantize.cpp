@@ -361,6 +361,11 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
     // TODO: avoid hardcoded tensor names - use the TN_* constants
     const llm_arch arch = qs.model.arch;
 
+    // Reasoning-effort steering vectors stay F32 (they are added to the MoE output as-is).
+    if (name.find("ffn_effort_steer.weight") != std::string::npos) {
+        return GGML_TYPE_F32;
+    }
+
     // Raon-1/Xing4.0: keep MLA latents at source precision for Q6_K/Q8_0.
     if ((arch == LLM_ARCH_RAON1 || arch == LLM_ARCH_RAON1_NANO || arch == LLM_ARCH_XING4_0) &&
             (ftype == LLAMA_FTYPE_MOSTLY_Q6_K || ftype == LLAMA_FTYPE_MOSTLY_Q8_0) &&

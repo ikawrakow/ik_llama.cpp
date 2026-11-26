@@ -841,6 +841,9 @@ extern "C" {
 
     LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);
 
+    // Whether the model exposes reasoning-effort activation-steering levels (Raon-1 mini final)
+    LLAMA_API bool llama_model_supports_reasoning_effort(const struct llama_model * model);
+
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,
@@ -1237,6 +1240,10 @@ extern "C" {
     // Set whether the model is in embeddings mode or not
     // If true, embeddings will be returned but logits will not
     LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
+
+    // Set the reasoning-effort steering level for a sequence.
+    // NULL/"" = model default, "none" = unsteered; false on unknown level.
+    LLAMA_API bool llama_set_reasoning_effort(struct llama_context * ctx, llama_seq_id seq_id, const char * level);
 
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens

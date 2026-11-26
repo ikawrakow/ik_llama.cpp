@@ -975,6 +975,28 @@ bool llama_model_loader::get_arr(const std::string & key, std::vector<T> & resul
     return true;
 }
 
+bool llama_model_loader::get_arr(const std::string & key, std::vector<std::string> & result, const bool required) {
+    const int kid = gguf_find_key(meta, key.c_str());
+
+    if (kid < 0 || gguf_get_kv_type(meta, kid) != GGUF_TYPE_ARRAY) {
+        if (required) {
+            throw std::runtime_error(format("string array key not found in model: %s", key.c_str()));
+        }
+        return false;
+    }
+    if (gguf_get_arr_type(meta, kid) != GGUF_TYPE_STRING) {
+        throw std::runtime_error(format("%s is not a string array", key.c_str()));
+    }
+
+    const size_t n = gguf_get_arr_n(meta, kid);
+    result.clear();
+    result.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        result.emplace_back(gguf_get_arr_str(meta, kid, i));
+    }
+    return true;
+}
+
 template<typename T, size_t N_MAX>
 bool llama_model_loader::get_arr(const std::string & key, std::array<T, N_MAX> & result, const bool required) {
     const int kid = gguf_find_key(meta, key.c_str());
@@ -2149,7 +2171,13 @@ template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum ll
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(const std::string &, unsigned int &, bool);
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(enum llm_kv, unsigned int&, bool);
 template bool llama_model_loader::get_arr<uint32_t>(const std::string &, std::vector<uint32_t> &, bool);
+template bool llama_model_loader::get_arr<int32_t>(const std::string &, std::vector<int32_t> &, bool);
+template bool llama_model_loader::get_arr<float>(const std::string &, std::vector<float> &, bool);
 template bool llama_model_loader::get_arr<uint64_t>(const std::string &, std::vector<uint64_t> &, bool);
+template bool llama_model_loader::get_arr<std::vector<uint32_t>>(enum llm_kv, std::vector<uint32_t> &, bool);
+template bool llama_model_loader::get_arr<std::vector<int32_t>>(enum llm_kv, std::vector<int32_t> &, bool);
+template bool llama_model_loader::get_arr<std::vector<float>>(enum llm_kv, std::vector<float> &, bool);
+template bool llama_model_loader::get_arr<std::vector<std::string>>(enum llm_kv, std::vector<std::string> &, bool);
 template bool llama_model_loader::get_arr<int32_t, 8>(const std::string &, std::array<int32_t, 8> &, bool);
 template bool llama_model_loader::get_arr<uint32_t, 8>(const std::string &, std::array<uint32_t, 8> &, bool);
 
@@ -2176,15 +2204,7 @@ void llm_load_hadamard(llama_model_loader & ml, llama_model & model) {
 
     const auto get_str_arr = [&](const std::string & key) {
         std::vector<std::string> out;
-        const int kid = gguf_find_key(ml.meta, key.c_str());
-        if (kid < 0 || gguf_get_kv_type(ml.meta, kid) != GGUF_TYPE_ARRAY || gguf_get_arr_type(ml.meta, kid) != GGUF_TYPE_STRING) {
-            return out;
-        }
-        const size_t n = gguf_get_arr_n(ml.meta, kid);
-        out.reserve(n);
-        for (size_t i = 0; i < n; ++i) {
-            out.emplace_back(gguf_get_arr_str(ml.meta, kid, i));
-        }
+        ml.get_arr(key, out, false);
         return out;
     };
 

@@ -670,6 +670,8 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `chat_template_kwargs`: Allows sending additional parameters to the json templating system. For example: `{"enable_thinking": false}`
 
+`reasoning_effort`: Reasoning effort level (for example `low`, `medium`, `high`, `xhigh`, `max` or `none`). It is passed to the chat template and, for models with activation steering (Raon-1 mini), selects the matching steering alpha per request. `none` also closes the thinking block in the prompt; the same key inside `chat_template_kwargs` only steers the model.
+
 `reasoning_format`: The reasoning format to be parsed. If set to `none`, it will output the raw generated text.
 
 `thinking_forced_open`: Force a reasoning model to always output the reasoning. Only works on certain models.

@@ -5745,6 +5745,8 @@ bool create_tensors_helper::create_raon1_tensors(const LLM_TN & tn) {
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", il), {n_embd, n_ff_shexp}, 0);
             layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", il), {n_ff_shexp, n_embd}, 0);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", il), {n_embd, n_ff_shexp}, 0);
+            layer.ffn_effort_steer = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EFFORT_STEER, "weight", il), {n_embd},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
         }
     }
 
