@@ -35,7 +35,7 @@ IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int un
         int typeB, const void * B, long strideB,
         const char * up_b, const char * gate_b,
         float * C, long nb1, long nb2, const void * vrow_mapping, float limit,
-        float situ_beta, float situ_beta_linear, int ith, int nth);
+        float situ_beta, float situ_beta_linear, int ith, int nth, int dst_contiguous);
 
 IQK_API int iqk_dequant_type(int type, int Ny);
 

@@ -660,6 +660,7 @@ extern "C" {
         GGML_OP_OUT_PROD,
         GGML_OP_FUSED_UP_GATE,
         GGML_OP_MOE_FUSED_UP_GATE,
+        GGML_OP_MOE_UP_GATE_QUANT,
         GGML_OP_MUL_MULTI_ADD,
         GGML_OP_HADAMARD,
 
@@ -1775,6 +1776,15 @@ extern "C" {
             struct ggml_tensor  * ids,
             struct ggml_tensor  * a_up_b,
             struct ggml_tensor  * a_gate_b,
+            enum ggml_unary_op    op);
+
+    GGML_API struct ggml_tensor * ggml_moe_up_gate_quant(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a_up,
+            struct ggml_tensor  * a_gate,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * down,
             enum ggml_unary_op    op);
 
     GGML_API struct ggml_tensor * ggml_fused_up_gate(

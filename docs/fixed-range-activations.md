@@ -90,3 +90,14 @@ the F32 round-trip.
 The clamp is intentional: `SiTU` bounds the GLU output by
 `beta * beta_linear` in theory, but the useful range is much smaller.  Start
 with p99.9 and compare against `max`.
+
+## 5. Experimental fused up-gate (opt-in)
+
+`IK_FUSE_ENABLE=1` selects `GGML_OP_MOE_UP_GATE_QUANT`: the SiTU GLU output is
+quantized into the tensor that `down` consumes, so the down matmul skips its
+activation quantization pass.  The implementation uses a shared F32 scratch
+and a barrier per expert; it is numerically correct (PPL 4.0284 with dynamic
+scales, 4.0701 with per-expert p99.9, identical to the non-fused path) but it
+is currently slower on prefill (21-22 vs ~29 t/s) because of the per-expert
+barriers.  It is therefore off by default; the next step is a tile-level
+quantization inside `mul_mat_up_gate_NxM` that removes the scratch/barriers.

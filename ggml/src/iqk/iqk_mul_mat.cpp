@@ -1028,7 +1028,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
         int typeB, const void * B, long strideB,
         const char * up_b_c, const char * gate_b_c,
         float * C, long nb1, long nb2, const void * vrow_mapping, float limit,
-        float situ_beta, float situ_beta_linear, int ith, int nth) {
+        float situ_beta, float situ_beta_linear, int ith, int nth, int dst_contiguous) {
 
     const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
     //assert(row_mapping != nullptr);
@@ -1070,6 +1070,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
                 auto up_b   = up_b_c   ? (const float *)up_b_c + ix : nullptr;
                 auto gate_b = gate_b_c ? (const float *)gate_b_c + ix : nullptr;
                 DataInfo info{C + ix, (const char *)B, nb1/sizeof(float), row_size_qy, first_y, ne11, row_mapping, nb2/sizeof(float)};
+                info.dst_contiguous = dst_contiguous != 0;
                 mm.mul_mat_up_gate_NxM(ne00, Xu, Xg, row_size_qx, up_b, gate_b, info, nrc_x, last_y, unary_op, limit, situ_beta, situ_beta_linear);
             });
 
@@ -1090,6 +1091,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
     nrc_x *= num_rows;
     DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float),
         row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
+    info.dst_contiguous = dst_contiguous != 0;
     auto up_b   = up_b_c   ? (const float *)up_b_c + first_x : nullptr;
     auto gate_b = gate_b_c ? (const float *)gate_b_c + first_x : nullptr;
     mm.mul_mat_up_gate_NxM(ne00, (const char *)Aup + row_size_qx*first_x, (const char *)Agate + row_size_qx*first_x, row_size_qx,
@@ -2907,7 +2909,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*n
         int /*typeA*/, const void * /*Aup*/, const void * /*Agate*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
         float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, float,
-        float, float, int /*ith*/, int /*nth*/) {
+        float, float, int /*ith*/, int /*nth*/, int /*dst_contiguous*/) {
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }

@@ -4807,6 +4807,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OUT_PROD",
     "FUSED_UP_GATE",
     "MOE_FUSED_UP_GATE",
+    "MOE_UP_GATE_QUANT",
     "MUL_MULTI_ADD",
     "HADAMARD",
 
@@ -4902,7 +4903,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "INKLING2_CLIP",
 };
 
-static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
+static_assert(GGML_OP_COUNT == 115, "GGML_OP_COUNT != 115");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4939,6 +4940,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "X*Y",
     "X*Y1&X*Y2",
     "X*Y1&X*Y2",
+    "quant(X*Y1&X*Y2)",
     "x1*y1+x2*y2+...",
     "hadamard(x)",
 
@@ -5035,7 +5037,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
 };
 
-static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
+static_assert(GGML_OP_COUNT == 115, "GGML_OP_COUNT != 115");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6191,19 +6193,29 @@ void ggml_set_input_scale_array(struct ggml_tensor * tensor, const float * scale
     ++g_n_input_scale_arrays;
 }
 
+static const float * ggml_get_input_scale_array_ptr(const struct ggml_tensor * tensor, int64_t * n) {
+    if (tensor && strncmp(tensor->name, "moe_cache.", 10) == 0) {
+        return NULL;
+    }
+    for (size_t i = 0; i < g_n_input_scale_arrays; ++i) {
+        if (g_input_scale_arrays[i].tensor == tensor) {
+            *n = g_input_scale_arrays[i].n;
+            return g_input_scale_arrays[i].scales;
+        }
+    }
+    return NULL;
+}
+
 float ggml_get_input_scale_expert(const struct ggml_tensor * tensor, int64_t expert) {
     // MoE cache tensors are indexed by slot, not by expert.  Until the scales
     // are remapped through slot_map, only the scalar fallback is correct.
     if (tensor && strncmp(tensor->name, "moe_cache.", 10) == 0) {
         return ggml_get_input_scale(tensor);
     }
-    for (size_t i = 0; i < g_n_input_scale_arrays; ++i) {
-        if (g_input_scale_arrays[i].tensor == tensor) {
-            if (expert >= 0 && expert < g_input_scale_arrays[i].n) {
-                return g_input_scale_arrays[i].scales[expert];
-            }
-            break;
-        }
+    int64_t n = 0;
+    const float * scales = ggml_get_input_scale_array_ptr(tensor, &n);
+    if (scales && expert >= 0 && expert < n) {
+        return scales[expert];
     }
     return ggml_get_input_scale(tensor);
 }
@@ -8908,6 +8920,41 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
     result->src[3] = ids;
     result->src[4] = as_up_b;
     result->src[5] = as_gate_b;
+
+    ggml_set_op_params_i32(result, 0, (int32_t) op);
+
+    return result;
+}
+
+struct ggml_tensor * ggml_moe_up_gate_quant(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a_up,
+            struct ggml_tensor  * a_gate,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * down,
+            enum   ggml_unary_op  op) {
+    GGML_ASSERT(a_up->ne[3] == 1);
+    GGML_ASSERT(!a_gate || a_gate->ne[3] == 1);
+    GGML_ASSERT(b->ne[3] == 1);
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(ids->ne[2] == 1 && ids->ne[3] == 1);
+    GGML_ASSERT(ids->ne[1] == b->ne[2]);
+
+    const int64_t n_ff = a_gate ? a_up->ne[1] : a_up->ne[1]/2;
+    const enum ggml_type out_type = ggml_mul_mat_vec_dot_type(down, b->ne[2], GGML_OP_MUL_MAT_ID);
+    GGML_ASSERT(out_type != GGML_TYPE_F32 && out_type != GGML_TYPE_BF16);
+    GGML_ASSERT(n_ff % ggml_blck_size(out_type) == 0);
+
+    const int64_t ne[4] = { n_ff, ids->ne[0], b->ne[2], 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, out_type, 4, ne);
+
+    result->op   = GGML_OP_MOE_UP_GATE_QUANT;
+    result->src[0] = a_up;
+    result->src[1] = a_gate;
+    result->src[2] = b;
+    result->src[3] = ids;
+    result->src[6] = down;
 
     ggml_set_op_params_i32(result, 0, (int32_t) op);
 
@@ -19537,18 +19584,18 @@ static void ggml_compute_forward_mul_mat_id(
         const int64_t ir10 = dr1*ith;
         const int64_t ir11 = MIN(ir10 + dr1, nr1);
 
+        int64_t act_scale_n = 0;
+        const float * act_scale_array = ggml_get_input_scale_array_ptr(src0, &act_scale_n);
+
         for (int64_t ir1 = ir10; ir1 < ir11; ++ir1) {
             const int64_t i13 = ir1/(ne11*ne12);
             const int64_t i12 = (ir1 - i13*ne11*ne12)/ne11;
             const int64_t i11 = ir1 - i13*ne11*ne12 - i12*ne11;
             float row_scale = act_scale;
-            if (ne13 == 1) {
-                // For the MoE cache, `ids` holds slot numbers, not expert numbers.
-                // ggml_get_input_scale_expert() detects the moe_cache prefix and
-                // falls back to the scalar scale in that case.
+            if (act_scale_array && ne13 == 1) {
                 const int32_t expert = *(const int32_t *)((const char *) ids->data + i11*ids->nb[0] + i12*ids->nb[1]);
-                if (expert >= 0 && expert < n_as) {
-                    row_scale = ggml_get_input_scale_expert(src0, expert);
+                if (expert >= 0 && expert < act_scale_n) {
+                    row_scale = act_scale_array[expert];
                 }
             }
             ggml_quantize_act_row(vec_dot_type,
@@ -19880,18 +19927,18 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         const int64_t ir10 = dr1*ith;
         const int64_t ir11 = MIN(ir10 + dr1, nr1);
 
+        int64_t act_scale_n = 0;
+        const float * act_scale_array = ggml_get_input_scale_array_ptr(src0, &act_scale_n);
+
         for (int64_t ir1 = ir10; ir1 < ir11; ++ir1) {
             const int64_t i13 = ir1/(ne11*ne12);
             const int64_t i12 = (ir1 - i13*ne11*ne12)/ne11;
             const int64_t i11 = ir1 - i13*ne11*ne12 - i12*ne11;
             float row_scale = act_scale;
-            if (ne13 == 1) {
-                // For the MoE cache, `ids` holds slot numbers, not expert numbers.
-                // ggml_get_input_scale_expert() detects the moe_cache prefix and
-                // falls back to the scalar scale in that case.
+            if (act_scale_array && ne13 == 1) {
                 const int32_t expert = *(const int32_t *)((const char *) ids->data + i11*ids->nb[0] + i12*ids->nb[1]);
-                if (expert >= 0 && expert < n_as) {
-                    row_scale = ggml_get_input_scale_expert(src0, expert);
+                if (expert >= 0 && expert < act_scale_n) {
+                    row_scale = act_scale_array[expert];
                 }
             }
             ggml_quantize_act_row(vec_dot_type,
@@ -19997,7 +20044,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata_ug, row_size_ug,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, local_chunk, chunks_per_expert_ug)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, local_chunk, chunks_per_expert_ug, 0)) GGML_ABORT("fatal error");
 
         chunk_id_ug = atomic_fetch_add(&params->shared->current_chunk, 1);
     }
@@ -20047,12 +20094,179 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata, row_size,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, ith, nth)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, ith, nth, 0)) GGML_ABORT("fatal error");
 
     }
 #endif
 #undef MMID_MATRIX_ROW
 }
+
+static void ggml_compute_forward_moe_up_gate_quant(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+
+    GGML_ASSERT(!dst->src[1] || dst->src[0]->type == dst->src[1]->type);
+    GGML_ASSERT(!dst->src[1] || ggml_are_same_shape(dst->src[0], dst->src[1]));
+    GGML_ASSERT(dst->type != GGML_TYPE_F32);
+
+    const struct ggml_tensor * src1 = dst->src[2];
+    const struct ggml_tensor * ids  = dst->src[3];
+    const struct ggml_tensor * down = dst->src[6];
+    const struct ggml_tensor * src0_1 = dst->src[0];
+    const struct ggml_tensor * src0_2 = dst->src[1];
+    const struct ggml_tensor * src0 = src0_1; // so GGML_TENSOR_BINARY_OP_LOCALS works
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const enum ggml_type type = src0->type;
+    const enum ggml_type out_type = dst->type;
+
+    enum ggml_type const vec_dot_type = ggml_mul_mat_vec_dot_type(src0, ne12, GGML_OP_MOE_FUSED_UP_GATE);
+
+    GGML_ASSERT(nb00 == ggml_type_size(type));
+    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+    GGML_ASSERT(ne13 == 1);
+    GGML_ASSERT(nb0 == ggml_type_size(out_type));
+    GGML_ASSERT((size_t) nb1 == ggml_row_size(out_type, ne0));
+
+    const int n_ids = ids->ne[0];
+    const int n_as  = ne02;
+
+    if (params->shared->cplan && params->shared->cplan->moe_expert_prefetch) {
+        ggml_moe_prefetch_kernel_hook(dst, ith);
+    }
+
+    char * wdata_src1_end = (src1->type == vec_dot_type) ?
+            (char *) params->wdata :
+            (char *) params->wdata + GGML_PAD(ggml_row_size(vec_dot_type, src1->ne[0])*ggml_nrows(src1), sizeof(int64_t));
+
+    struct mmid_row_mapping {
+        int32_t i1;
+        int32_t i2;
+    };
+
+    int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end);
+    struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as);
+
+    if (src1->type != vec_dot_type) {
+        char * wdata = params->wdata;
+
+        const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
+        const size_t nbw2 = nbw1*ne11;
+        const size_t nbw3 = nbw2*ne12;
+
+        GGML_ASSERT(params->wsize >= ne13*nbw3);
+        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+
+        const int64_t nr1  = ne11*ne12*ne13;
+        const int64_t dr1  = (nr1 + nth - 1)/nth;
+        const int64_t ir10 = dr1*ith;
+        const int64_t ir11 = MIN(ir10 + dr1, nr1);
+
+        const float act_scale = ggml_get_input_scale(src0);
+        int64_t act_scale_n = 0;
+        const float * act_scale_array = ggml_get_input_scale_array_ptr(src0, &act_scale_n);
+
+        for (int64_t ir1 = ir10; ir1 < ir11; ++ir1) {
+            const int64_t i13 = ir1/(ne11*ne12);
+            const int64_t i12 = (ir1 - i13*ne11*ne12)/ne11;
+            const int64_t i11 = ir1 - i13*ne11*ne12 - i12*ne11;
+            float row_scale = act_scale;
+            if (act_scale_array && ne13 == 1) {
+                const int32_t expert = *(const int32_t *)((const char *) ids->data + i11*ids->nb[0] + i12*ids->nb[1]);
+                if (expert >= 0 && expert < act_scale_n) {
+                    row_scale = act_scale_array[expert];
+                }
+            }
+            ggml_quantize_act_row(vec_dot_type,
+                    (const float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                    (void *)        (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                    ne10, row_scale);
+        }
+    }
+
+#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
+
+    GGML_ASSERT(ids->ne[1] == dst->ne[2]);
+    for (int64_t iid1 = ith; iid1 < ids->ne[1]; iid1 += nth) {
+        for (int id = 0; id < n_ids; ++id) {
+            const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+            if (i02 < 0 || i02 >= n_as) {
+                memset((char *)dst->data + id*dst->nb[1] + iid1*dst->nb[2], 0, nb1);
+            }
+        }
+    }
+
+    if (ith == 0) {
+        memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
+        for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+            for (int id = 0; id < n_ids; ++id) {
+                const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+                if (i02 < 0 || i02 >= n_as) continue;
+                MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
+                matrix_row_counts[i02] += 1;
+            }
+        }
+    }
+
+    ggml_barrier(params->shared);
+
+    const float limit = *(const float *)(dst->op_params + 1);
+    const float situ_beta = *(const float *)(dst->op_params + 2);
+    const float situ_beta_linear = *(const float *)(dst->op_params + 3);
+
+    const void * wdata_ug = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+    const size_t row_size_ug = ggml_row_size(vec_dot_type, ne10);
+
+    // Shared F32 scratch for one activation row per token.  n_ff * n_tokens
+    // floats is a few MB at prefill and 4.5 KB at decode.
+    const size_t scratch_elems = (size_t) ne0 * ne2;
+    float * scratch = (float *)((char *) params->wdata + params->wsize - scratch_elems*sizeof(float));
+
+    for (int cur_a = 0; cur_a < n_as; ++cur_a) {
+        const int64_t cne1 = matrix_row_counts[cur_a];
+        if (cne1 == 0) {
+            continue;
+        }
+
+        const char *src0_1_cur, *src0_2_cur;
+        if (src0_2) {
+            src0_1_cur = (const char *) src0_1->data + cur_a*nb02;
+            src0_2_cur = (const char *) src0_2->data + cur_a*nb02;
+        } else {
+            src0_2_cur = (const char *) src0_1->data + cur_a*nb02;
+            src0_1_cur = src0_2_cur + nb02/2;
+        }
+
+        const int64_t nr0 = src0_2 ? ne01 : ne01/2;
+
+        if (!iqk_moe_fused_up_gate(nr0, cne1, ne00, ne11, dst->op_params[0],
+                            type, src0_1_cur, src0_2_cur, nb01,
+                            vec_dot_type, (const char *)wdata_ug, row_size_ug,
+                            NULL, NULL,
+                            scratch, (long) (ne0*sizeof(float)), 0,
+                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, ith, nth, 1)) {
+            GGML_ABORT("fatal error");
+        }
+
+        ggml_barrier(params->shared);
+
+        const float scale = ggml_get_input_scale_expert(down, cur_a);
+        for (int64_t r = ith; r < cne1; r += nth) {
+            const struct mmid_row_mapping map = matrix_rows[cur_a*ne12 + r];
+            char * qrow = (char *) dst->data + map.i1*dst->nb[1] + map.i2*dst->nb[2];
+            ggml_quantize_act_row(out_type, scratch + r*ne0, qrow, ne0, scale);
+        }
+
+        ggml_barrier(params->shared);
+    }
+
+#undef MMID_MATRIX_ROW
+}
+
 
 static void ggml_compute_forward_mul_mat_up_gate(
         const struct ggml_compute_params * params,
@@ -20127,7 +20341,7 @@ static void ggml_compute_forward_mul_mat_up_gate(
                          vec_dot_type, (const char *)wdata, row_size,
                          NULL, NULL,
                          (float *)dst->data, nb1, nb2,
-                         NULL, limit, situ_beta, situ_beta_linear, ith, nth)) GGML_ABORT("fatal error");
+                         NULL, limit, situ_beta, situ_beta_linear, ith, nth, 0)) GGML_ABORT("fatal error");
 
 }
 #endif
@@ -28552,6 +28766,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_mul_mat_id_up_gate(params, tensor);
             } break;
+        case GGML_OP_MOE_UP_GATE_QUANT:
+            {
+                ggml_compute_forward_moe_up_gate_quant(params, tensor);
+            } break;
         case GGML_OP_FUSED_UP_GATE:
             {
                 ggml_compute_forward_mul_mat_up_gate(params, tensor);
@@ -29530,6 +29748,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
         case GGML_OP_MOE_FUSED_UP_GATE:
+            {
+                GGML_ABORT("fatal error"); // TODO: not implemented
+            }
+        case GGML_OP_MOE_UP_GATE_QUANT:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -30715,6 +30937,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_MOE_FUSED_UP_GATE:
+        case GGML_OP_MOE_UP_GATE_QUANT:
         case GGML_OP_FUSED_UP_GATE:
         case GGML_OP_OUT_PROD:
         case GGML_OP_SOLVE_TRI:
@@ -30957,6 +31180,22 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * src2->ne[2] * sizeof(int64_t); // matrix_rows
+                } break;
+            case GGML_OP_MOE_UP_GATE_QUANT:
+                {
+                    cur = 0;
+                    const struct ggml_tensor * src0 = node->src[0];
+                    const struct ggml_tensor * src2 = node->src[2];
+                    const enum ggml_type vec_dot_type = ggml_mul_mat_vec_dot_type(src0, src2->ne[2], node->op);
+                    if (src2->type != vec_dot_type) {
+                        cur += ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
+                    }
+                    const int n_as = src0->ne[2];
+                    cur += GGML_PAD(cur, sizeof(int64_t));       // align
+                    cur += n_as * sizeof(int64_t);               // matrix_row_counts
+                    cur += n_as * src2->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur += GGML_PAD(cur, sizeof(float));         // align scratch
+                    cur += node->ne[0] * node->ne[2] * sizeof(float); // shared F32 row scratch
                 } break;
             case GGML_OP_FUSED_UP_GATE:
                 {

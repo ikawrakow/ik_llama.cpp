@@ -2279,6 +2279,21 @@ llm_expert_gating_func_type   gating_op,
     }
 
     ggml_tensor * par;
+    bool quantize_up_gate = false;
+    if (can_use_fmoe && up_gate_exps && !cache_ids && !cached_up_gate && !cached_down &&
+            type_op == LLM_FFN_SITU && !up_gate_exps_b && down_exps &&
+            lctx.lora_adapters.empty() && lctx.model.hadamard_rotation(down_exps) == nullptr) {
+        const int64_t n_ff = up_gate_exps->ne[1]/2;
+        const ggml_type out_type = ggml_internal_get_type_traits(down_exps->type).vec_dot_type;
+        const ggml_type_traits_t out_tt = ggml_internal_get_type_traits(out_type);
+        quantize_up_gate = out_type != GGML_TYPE_F32 && out_type != GGML_TYPE_COUNT &&
+            out_tt.from_float_scaled != nullptr && n_ff % ggml_blck_size(out_type) == 0 &&
+            getenv("IK_FUSE_ENABLE") != nullptr;
+        if (quantize_up_gate && getenv("IK_FUSE_DEBUG")) {
+            LLAMA_LOG_INFO("%s: fused up-gate quant at layer %d: n_ff=%lld out=%s\n", __func__, il,
+                    (long long) n_ff, ggml_type_name(out_type));
+        }
+    }
     if (can_use_fmoe && up_gate_exps && (!cache_ids || !up_gate_exps_b)) {
         auto hadamard_u = lctx.model.hadamard_rotation(up_exps);
         auto hadamard_g = lctx.model.hadamard_rotation(gate_exps);
@@ -2289,7 +2304,9 @@ llm_expert_gating_func_type   gating_op,
         }
         ggml_tensor * weight = cached_up_gate ? cached_up_gate : up_gate_exps;
         ggml_tensor * expert_ids = cache_ids ? cache_ids : selected_experts;
-        if (up_gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI || type_op == LLM_FFN_SITU) {
+        if (quantize_up_gate) {
+            par = ggml_moe_up_gate_quant(ctx, weight, nullptr, cur, expert_ids, down_exps, GGML_UNARY_OP_SITU_GLU);
+        } else if (up_gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI || type_op == LLM_FFN_SITU) {
             par = ggml_moe_up_gate_ext(ctx, weight, nullptr, cur, expert_ids, up_gate_exps_b, nullptr,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                     type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :

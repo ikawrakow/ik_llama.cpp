@@ -970,18 +970,21 @@ static void quantize_row_q8_0_x4_impl(const float * x, void * vy, int64_t k, flo
         __m256 v3 = _mm256_loadu_ps( x + 24 );
         x += 32;
 
-        const __m256 signBit = _mm256_set1_ps( -0.0f );
-        __m256 maxAbs = _mm256_andnot_ps( signBit, v0 );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v1 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v2 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v3 ) );
+        float d;
+        if (fixed > 0.0f) {
+            d = fixed;
+        } else {
+            const __m256 signBit = _mm256_set1_ps( -0.0f );
+            __m256 maxAbs = _mm256_andnot_ps( signBit, v0 );
+            maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v1 ) );
+            maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v2 ) );
+            maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v3 ) );
 
-        __m128 max4 = _mm_max_ps( _mm256_extractf128_ps( maxAbs, 1 ), _mm256_castps256_ps128( maxAbs ) );
-        max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
-        max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
-        const float maxScalar = _mm_cvtss_f32( max4 );
-
-        const float d = fixed > 0.0f ? fixed : maxScalar / 127.f;
+            __m128 max4 = _mm_max_ps( _mm256_extractf128_ps( maxAbs, 1 ), _mm256_castps256_ps128( maxAbs ) );
+            max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
+            max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
+            d = _mm_cvtss_f32( max4 ) / 127.f;
+        }
         if (i < nb4) {
             y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
         } else {
@@ -1121,20 +1124,23 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k, float fixed =
         __m256 v3 = _mm256_loadu_ps( x + 24 );
         x += 32;
 
-        // Compute max(abs(e)) for the block
-        const __m256 signBit = _mm256_set1_ps( -0.0f );
-        __m256 maxAbs = _mm256_andnot_ps( signBit, v0 );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v1 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v2 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v3 ) );
-
-        __m128 max4 = _mm_max_ps( _mm256_extractf128_ps( maxAbs, 1 ), _mm256_castps256_ps128( maxAbs ) );
-        max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
-        max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
-        const float max_scalar = _mm_cvtss_f32( max4 );
-
         // Quantize these floats
-        float d = fixed > 0.0f ? fixed : max_scalar / 127.f;
+        float d;
+        if (fixed > 0.0f) {
+            d = fixed;
+        } else {
+            // Compute max(abs(e)) for the block
+            const __m256 signBit = _mm256_set1_ps( -0.0f );
+            __m256 maxAbs = _mm256_andnot_ps( signBit, v0 );
+            maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v1 ) );
+            maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v2 ) );
+            maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v3 ) );
+
+            __m128 max4 = _mm_max_ps( _mm256_extractf128_ps( maxAbs, 1 ), _mm256_castps256_ps128( maxAbs ) );
+            max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
+            max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
+            d = _mm_cvtss_f32( max4 ) / 127.f;
+        }
         if constexpr (std::is_same_v<Block, block_q8_1>) {
             if (i < nb4) {
                 y4[i4].d[ir] = GGML_FP32_TO_FP16(d);

@@ -101,6 +101,7 @@ struct DataInfo {
     int           ne11;
     const mmid_row_mapping * row_mapping = nullptr;
     size_t        bs2 = 0;
+    bool          dst_contiguous = false;
 
     inline const char * src1_row(int iy) const {
         if (!row_mapping) return cy + (cur_y + iy)*by;
@@ -131,6 +132,7 @@ struct DataInfo {
     }
 #endif
     inline float * dst_row(int iy) const {
+        if (dst_contiguous) return s + (cur_y + iy)*bs;
         if (!row_mapping) return s + (cur_y + iy)*bs;
         int i12 = row_mapping[cur_y + iy].i2;
         int i1  = row_mapping[cur_y + iy].i1;
