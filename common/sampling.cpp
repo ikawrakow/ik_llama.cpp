@@ -694,20 +694,27 @@ static llama_token_data_array llama_sampling_prepare_impl(
 
         // cur_p holds token i at index i, and only the tokens in the window can be penalized:
         // penalize copies of their entries and write them back, instead of looking up every
-        // token of the vocabulary
+        // token of the vocabulary. With neutral penalties (the call returns at once) or a window
+        // that is not shorter than the vocabulary, the plain call does no more work than that.
         const llama_token * last_tokens = penalty_tokens.data() + penalty_tokens.size() - penalty_tokens_used_size;
-        std::vector<llama_token_data> pen;
-        pen.reserve(penalty_tokens_used_size);
-        for (int i = 0; i < penalty_tokens_used_size; ++i) {
-            if (last_tokens[i] >= 0 && last_tokens[i] < n_vocab) {
-                pen.push_back(cur_p.data[last_tokens[i]]);
+        const bool no_penalty = penalty_repeat == 1.0f && penalty_freq == 0.0f && penalty_present == 0.0f;
+        if (no_penalty || penalty_tokens_used_size >= n_vocab) {
+            llama_sample_repetition_penalties(ctx_main, &cur_p, last_tokens, penalty_tokens_used_size,
+                    penalty_repeat, penalty_freq, penalty_present);
+        } else {
+            std::vector<llama_token_data> pen;
+            pen.reserve(penalty_tokens_used_size);
+            for (int i = 0; i < penalty_tokens_used_size; ++i) {
+                if (last_tokens[i] >= 0 && last_tokens[i] < n_vocab) {
+                    pen.push_back(cur_p.data[last_tokens[i]]);
+                }
             }
-        }
-        llama_token_data_array pen_p = { pen.data(), pen.size(), false };
-        llama_sample_repetition_penalties(ctx_main, &pen_p, last_tokens, penalty_tokens_used_size,
-                penalty_repeat, penalty_freq, penalty_present);
-        for (const auto & td : pen) {
-            cur_p.data[td.id] = td;
+            llama_token_data_array pen_p = { pen.data(), pen.size(), false };
+            llama_sample_repetition_penalties(ctx_main, &pen_p, last_tokens, penalty_tokens_used_size,
+                    penalty_repeat, penalty_freq, penalty_present);
+            for (const auto & td : pen) {
+                cur_p.data[td.id] = td;
+            }
         }
 
         if (!penalize_nl && nl_token != LLAMA_TOKEN_NULL) {
