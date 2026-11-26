@@ -54,8 +54,10 @@ void iqk_kda_neon_impl(int32_t n_heads, int32_t gqa_ratio, int32_t repeat_type, 
         const float * beta_head = beta_data + batch_idx * layout.beta[3] + head_idx * layout.beta[2];
 
         float * state = state_out + state_head_offset;
-        for (int32_t i = 0; i < head_dim * head_dim; ++i) {
-            state[i] = state_in[state_head_offset + i];
+        if (state_out != state_in) {
+            for (int32_t i = 0; i < head_dim * head_dim; ++i) {
+                state[i] = state_in[state_head_offset + i];
+            }
         }
 
         for (int32_t t = 0; t < n_tokens; ++t) {
@@ -187,8 +189,10 @@ void iqk_kda_impl(int32_t n_heads, int32_t gqa_ratio, int32_t repeat_type, int32
         const float * beta_head = beta_data + batch_idx * layout.beta[3] + head_idx * layout.beta[2];
 
         float * state = state_out + state_head_offset;
-        for (int32_t i = 0; i < head_dim * head_dim; ++i) {
-            state[i] = state_in[state_head_offset + i];
+        if (state_out != state_in) {
+            for (int32_t i = 0; i < head_dim * head_dim; ++i) {
+                state[i] = state_in[state_head_offset + i];
+            }
         }
 
         for (int32_t t = 0; t < n_tokens; ++t) {

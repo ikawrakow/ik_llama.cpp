@@ -1794,8 +1794,10 @@ void iqk_fused_delta_net_neon_impl(int n_heads, int gqa_ratio, int repeat_type, 
         const int out_token_stride    = head_dim * n_heads;
 
         float * state = state_out + state_head_offset;
-        for (int i = 0; i < head_dim * head_dim; ++i) {
-            state[i] = state_in[state_head_offset + i];
+        if (state_out != state_in) {
+            for (int i = 0; i < head_dim * head_dim; ++i) {
+                state[i] = state_in[state_head_offset + i];
+            }
         }
 
         for (int t = 0; t < n_tokens; ++t) {
@@ -1873,6 +1875,111 @@ void iqk_fused_delta_net_neon_impl(int n_heads, int gqa_ratio, int repeat_type, 
     }
 }
 #endif
+#if defined __AVX2__ && !defined __AVX512F__
+// Prompt processing: split the work over (head, block of kRows state rows) instead of over heads only. The rows
+// of the state are independent, so the result does not change. This gives more tasks than heads when there are
+// many threads, and the kRows x head_dim slice of the state, copied into a contiguous buffer, stays in L1.
+template <int head_dim>
+IQK_NOINLINE void iqk_fused_delta_net_rows(int n_heads, int gqa_ratio, int repeat_type, int n_tokens, int n_seqs,
+        size_t vnb1, size_t vnb2, size_t vnb3,
+        const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
+        const float * state_in, float * out_data, float * state_out, int ith, int nth) {
+    constexpr int kRows = 32;
+    static_assert(head_dim % kRows == 0);
+    constexpr int nblock = head_dim/kRows;
+    const int ntask = n_heads * n_seqs * nblock;
+    const int tasks_per_thread = (ntask + nth - 1)/nth;
+    const int first = ith*tasks_per_thread;
+    const int last  = std::min(ntask, first + tasks_per_thread);
+
+    const float scale = 1.0f / sqrtf((float) head_dim);
+
+    float S[head_dim*kRows];
+    float v_new_buf[kRows];
+    float v_prime[kRows], out_val[kRows];
+
+    for (int task = first; task < last; ++task) {
+        const int h_idx = task / nblock;
+        const int r0    = (task % nblock) * kRows;
+        const int batch_idx = h_idx / n_heads;
+        const int head_idx  = h_idx % n_heads;
+        const int head_idx_kq = repeat_type == 0 ? head_idx / gqa_ratio : head_idx % (n_heads/gqa_ratio);
+
+        const int qkv_head_offset_kq  = batch_idx * (head_dim * n_tokens * n_heads/gqa_ratio) + head_idx_kq * (head_dim * n_tokens);
+        const int qkv_token_stride = head_dim;
+        const int g_batch_offset   = batch_idx * n_tokens * n_heads;
+        const int state_head_offset = batch_idx * (head_dim * head_dim * n_heads) + head_idx * (head_dim * head_dim);
+        const int out_head_offset  = batch_idx * (head_dim * n_heads * n_tokens) + head_idx * head_dim + r0;
+        const int out_token_stride = head_dim * n_heads;
+
+        for (int col = 0; col < head_dim; ++col) {
+            std::memcpy(S + col*kRows, state_in + state_head_offset + col*head_dim + r0, kRows*sizeof(float));
+        }
+
+        for (int t = 0; t < n_tokens; ++t) {
+            const float * q_t = q_data + qkv_head_offset_kq + t * qkv_token_stride;
+            const float * k_t = k_data + qkv_head_offset_kq + t * qkv_token_stride;
+            const float * v_t = v_data + batch_idx * vnb3 + head_idx * vnb2 + t * vnb1 + r0;
+
+            const float g_val    = g_data[g_batch_offset + t * n_heads + head_idx];
+            const float beta_raw = beta_data[g_batch_offset + t * n_heads + head_idx];
+
+            auto vqksum = _mm256_setzero_ps();
+            for (int i = 0; i < head_dim; i += 8) {
+                auto vq = _mm256_loadu_ps(q_t + i);
+                auto vk = _mm256_loadu_ps(k_t + i);
+                vqksum = _mm256_fmadd_ps(vk, vq, vqksum);
+            }
+            const float kq_sum = hsum_float_8(vqksum);
+
+            const float beta_val = 1.0f / (1.0f + expf(-beta_raw));
+            const float decay    = expf(fminf(g_val, 50.0f));
+
+            float attn_score = kq_sum * scale;
+
+            float * out_t = out_data + out_head_offset + t * out_token_stride;
+
+            std::memset(v_prime, 0, kRows*sizeof(float));
+            std::memset(out_val, 0, kRows*sizeof(float));
+            for (int col = 0; col < head_dim; ++col) {
+                const float k_col = k_t[col];
+                const float q_col = q_t[col];
+                for (int row = 0; row < kRows; ++row) {
+                    const float s = S[row + col * kRows];
+                    v_prime[row] += s * k_col;
+                    out_val[row] += s * q_col;
+                }
+            }
+            for (int row = 0; row < kRows; ++row) {
+                const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay;
+                v_new_buf[row] = v_new;
+                out_t[row] = out_val[row] * decay * scale + v_new * attn_score;
+            }
+
+            auto vd = _mm256_set1_ps(decay);
+            auto vmin = _mm256_set1_ps(-1e6f);
+            auto vmax = _mm256_set1_ps( 1e6f);
+            for (int col = 0; col < head_dim; ++col) {
+                auto vk = _mm256_set1_ps(k_t[col]);
+                for (int row = 0; row < kRows; row += 8) {
+                    auto vs = _mm256_loadu_ps(S + col * kRows + row);
+                    auto vn = _mm256_loadu_ps(v_new_buf + row);
+                    vs = _mm256_fmadd_ps(vn, vk, _mm256_mul_ps(vs, vd));
+                    auto mask_l = _mm256_cmp_ps(vs, vmin, _CMP_LT_OQ);
+                    auto mask_u = _mm256_cmp_ps(vs, vmax, _CMP_GT_OQ);
+                    vs = _mm256_or_ps(_mm256_and_ps(mask_l, vmin), _mm256_andnot_ps(mask_l, vs));
+                    vs = _mm256_or_ps(_mm256_and_ps(mask_u, vmax), _mm256_andnot_ps(mask_u, vs));
+                    _mm256_storeu_ps(S + col * kRows + row, vs);
+                }
+            }
+        }
+
+        for (int col = 0; col < head_dim; ++col) {
+            std::memcpy(state_out + state_head_offset + col*head_dim + r0, S + col*kRows, kRows*sizeof(float));
+        }
+    }
+}
+#endif
 template <int head_dim>
 void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n_tokens, int n_seqs,
         size_t vnb1, size_t vnb2, size_t vnb3,
@@ -1882,6 +1989,13 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
     iqk_fused_delta_net_neon_impl<head_dim>(n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, vnb1, vnb2, vnb3,
             q_data, k_data, v_data, g_data, beta_data, state_in, out_data, state_out, saved_steps, state_step_stride, ith, nth);
     return;
+#endif
+#if defined __AVX2__ && !defined __AVX512F__
+    if (n_tokens >= 32 && !saved_steps) {
+        iqk_fused_delta_net_rows<head_dim>(n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, vnb1, vnb2, vnb3,
+                q_data, k_data, v_data, g_data, beta_data, state_in, out_data, state_out, ith, nth);
+        return;
+    }
 #endif
     const int total_heads = n_heads * n_seqs;
     const int heads_per_thread = (total_heads + nth - 1) / nth;
@@ -1914,8 +2028,10 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
         const int out_token_stride = head_dim * n_heads;
 
         float * state = state_out + state_head_offset;
-        for (int i = 0; i < head_dim * head_dim; ++i) {
-            state[i] = state_in[state_head_offset + i];
+        if (state_out != state_in) {
+            for (int i = 0; i < head_dim * head_dim; ++i) {
+                state[i] = state_in[state_head_offset + i];
+            }
         }
 
         for (int t = 0; t < n_tokens; ++t) {
