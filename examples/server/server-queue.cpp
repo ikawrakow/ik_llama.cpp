@@ -197,7 +197,7 @@ server_task_result server_response::recv(int id_task) {
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_results);
         condition_results.wait(lock, [&] {
-            return !queue_results_legacy.empty();
+            return !queue_results_legacy.empty() || !queue_results.empty();
             });
 
         for (int i = 0; i < (int)queue_results_legacy.size(); i++) {
@@ -205,6 +205,19 @@ server_task_result server_response::recv(int id_task) {
                 assert(queue_results_legacy[i].id_multi == -1);
                 server_task_result res = queue_results_legacy[i];
                 queue_results_legacy.erase(queue_results_legacy.begin() + i);
+                return res;
+            }
+        }
+
+        // errors (send_error) arrive in queue_results
+        for (int i = 0; i < (int)queue_results.size(); i++) {
+            if (queue_results[i]->id == id_task) {
+                server_task_result res;
+                res.id       = queue_results[i]->id;
+                res.id_multi = queue_results[i]->id_multi;
+                res.error    = queue_results[i]->is_error();
+                res.data     = queue_results[i]->to_json();
+                queue_results.erase(queue_results.begin() + i);
                 return res;
             }
         }
