@@ -1239,6 +1239,152 @@ void quantize_row_q8_2_x4_fixed(const float * x, void * vy, int64_t k, float sca
     quantize_row_q8_1_x4_T<block_q8_2, block_q8_2_x4>(x, (block_q8_2 *)vy, k, scale);
 }
 
+void quantize_block_q8_0_x4(const float * x, void * qrow, int block_idx, float fixed) {
+    const int i4 = block_idx/4, ir = block_idx%4;
+    block_q8_0_x4 * y = (block_q8_0_x4 *)qrow;
+    int8_t * q = y[i4].qs + QK8_0*ir;
+#if defined(__AVX2__)
+    __m256 v0 = _mm256_loadu_ps(x +  0);
+    __m256 v1 = _mm256_loadu_ps(x +  8);
+    __m256 v2 = _mm256_loadu_ps(x + 16);
+    __m256 v3 = _mm256_loadu_ps(x + 24);
+    float d;
+    if (fixed > 0.0f) {
+        d = fixed;
+    } else {
+        const __m256 signBit = _mm256_set1_ps(-0.0f);
+        __m256 maxAbs = _mm256_andnot_ps(signBit, v0);
+        maxAbs = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, v1));
+        maxAbs = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, v2));
+        maxAbs = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, v3));
+        __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(maxAbs, 1), _mm256_castps256_ps128(maxAbs));
+        max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
+        max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
+        d = _mm_cvtss_f32(max4) / 127.0f;
+    }
+    const ggml_half dh = GGML_FP32_TO_FP16(d);
+    const float de = GGML_FP16_TO_FP32(dh);
+    const __m256 mul = _mm256_set1_ps(de > 0.0f ? 1.0f/de : 0.0f);
+    v0 = _mm256_round_ps(_mm256_mul_ps(v0, mul), _MM_ROUND_NEAREST);
+    v1 = _mm256_round_ps(_mm256_mul_ps(v1, mul), _MM_ROUND_NEAREST);
+    v2 = _mm256_round_ps(_mm256_mul_ps(v2, mul), _MM_ROUND_NEAREST);
+    v3 = _mm256_round_ps(_mm256_mul_ps(v3, mul), _MM_ROUND_NEAREST);
+    __m256i i0 = _mm256_cvtps_epi32(v0);
+    __m256i i1 = _mm256_cvtps_epi32(v1);
+    __m256i i2 = _mm256_cvtps_epi32(v2);
+    __m256i i3 = _mm256_cvtps_epi32(v3);
+    const __m256i lo = _mm256_set1_epi32(-127);
+    const __m256i hi = _mm256_set1_epi32( 127);
+    i0 = _mm256_max_epi32(lo, _mm256_min_epi32(hi, i0));
+    i1 = _mm256_max_epi32(lo, _mm256_min_epi32(hi, i1));
+    i2 = _mm256_max_epi32(lo, _mm256_min_epi32(hi, i2));
+    i3 = _mm256_max_epi32(lo, _mm256_min_epi32(hi, i3));
+    i0 = _mm256_packs_epi32(i0, i1);
+    i2 = _mm256_packs_epi32(i2, i3);
+    i0 = _mm256_packs_epi16(i0, i2);
+    const __m256i perm = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+    _mm256_storeu_si256((__m256i *) q, _mm256_permutevar8x32_epi32(i0, perm));
+    y[i4].d[ir] = dh;
+#else
+    float d;
+    if (fixed > 0.0f) {
+        d = fixed;
+    } else {
+        float amax = 0.0f;
+        for (int j = 0; j < QK8_0; ++j) {
+            const float v = fabsf(x[j]);
+            if (v > amax) amax = v;
+        }
+        d = amax / 127.0f;
+    }
+    const ggml_half dh = GGML_FP32_TO_FP16(d);
+    const float de = GGML_FP16_TO_FP32(dh);
+    const float id = de > 0.0f ? 1.0f/de : 0.0f;
+    for (int j = 0; j < QK8_0; ++j) {
+        int v = (int) roundf(x[j]*id);
+        q[j] = (int8_t) (v < -127 ? -127 : v > 127 ? 127 : v);
+    }
+    y[i4].d[ir] = dh;
+#endif
+}
+
+void quantize_block_q8_2_x4(const float * x, void * qrow, int block_idx, float fixed) {
+    const int i4 = block_idx/4, ir = block_idx%4;
+    block_q8_2_x4 * y = (block_q8_2_x4 *)qrow;
+    int8_t * q = y[i4].qs + QK8_2*ir;
+#if defined(__AVX2__)
+    __m256 v0 = _mm256_loadu_ps(x +  0);
+    __m256 v1 = _mm256_loadu_ps(x +  8);
+    __m256 v2 = _mm256_loadu_ps(x + 16);
+    __m256 v3 = _mm256_loadu_ps(x + 24);
+    float d;
+    if (fixed > 0.0f) {
+        d = fixed;
+    } else {
+        const __m256 signBit = _mm256_set1_ps(-0.0f);
+        __m256 maxAbs = _mm256_andnot_ps(signBit, v0);
+        maxAbs = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, v1));
+        maxAbs = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, v2));
+        maxAbs = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, v3));
+        __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(maxAbs, 1), _mm256_castps256_ps128(maxAbs));
+        max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
+        max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
+        d = _mm_cvtss_f32(max4) / 127.0f;
+    }
+    const uint16_t dh = GGML_FP32_TO_BF16(d).bits;
+    ggml_bf16_t bf; bf.bits = dh;
+    const float de = GGML_BF16_TO_FP32(bf);
+    const __m256 mul = _mm256_set1_ps(de > 0.0f ? 1.0f/de : 0.0f);
+    v0 = _mm256_round_ps(_mm256_mul_ps(v0, mul), _MM_ROUND_NEAREST);
+    v1 = _mm256_round_ps(_mm256_mul_ps(v1, mul), _MM_ROUND_NEAREST);
+    v2 = _mm256_round_ps(_mm256_mul_ps(v2, mul), _MM_ROUND_NEAREST);
+    v3 = _mm256_round_ps(_mm256_mul_ps(v3, mul), _MM_ROUND_NEAREST);
+    __m256i i0 = _mm256_cvtps_epi32(v0);
+    __m256i i1 = _mm256_cvtps_epi32(v1);
+    __m256i i2 = _mm256_cvtps_epi32(v2);
+    __m256i i3 = _mm256_cvtps_epi32(v3);
+    const __m256i lo = _mm256_set1_epi32(-127);
+    const __m256i hi = _mm256_set1_epi32( 127);
+    i0 = _mm256_max_epi32(lo, _mm256_min_epi32(hi, i0));
+    i1 = _mm256_max_epi32(lo, _mm256_min_epi32(hi, i1));
+    i2 = _mm256_max_epi32(lo, _mm256_min_epi32(hi, i2));
+    i3 = _mm256_max_epi32(lo, _mm256_min_epi32(hi, i3));
+    const int isum = hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)));
+    i0 = _mm256_packs_epi32(i0, i1);
+    i2 = _mm256_packs_epi32(i2, i3);
+    i0 = _mm256_packs_epi16(i0, i2);
+    const __m256i perm = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+    _mm256_storeu_si256((__m256i *) q, _mm256_permutevar8x32_epi32(i0, perm));
+    y[i4].d[ir] = dh;
+    ((int16_t *)y[i4].d)[ir + 4] = (int16_t) isum;
+#else
+    float d;
+    if (fixed > 0.0f) {
+        d = fixed;
+    } else {
+        float amax = 0.0f;
+        for (int j = 0; j < QK8_2; ++j) {
+            const float v = fabsf(x[j]);
+            if (v > amax) amax = v;
+        }
+        d = amax / 127.0f;
+    }
+    const uint16_t dh = GGML_FP32_TO_BF16(d).bits;
+    ggml_bf16_t bf; bf.bits = dh;
+    const float de = GGML_BF16_TO_FP32(bf);
+    const float id = de > 0.0f ? 1.0f/de : 0.0f;
+    int sum = 0;
+    for (int j = 0; j < QK8_2; ++j) {
+        int v = (int) roundf(x[j]*id);
+        v = v < -127 ? -127 : v > 127 ? 127 : v;
+        q[j] = (int8_t) v;
+        sum += v;
+    }
+    y[i4].d[ir] = dh;
+    ((int16_t *)y[i4].d)[ir + 4] = (int16_t) sum;
+#endif
+}
+
 //
 // ============================================== iq2_K
 //

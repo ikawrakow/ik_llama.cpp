@@ -2284,7 +2284,7 @@ llm_expert_gating_func_type   gating_op,
             type_op == LLM_FFN_SITU && !up_gate_exps_b && down_exps &&
             lctx.lora_adapters.empty() && lctx.model.hadamard_rotation(down_exps) == nullptr) {
         const int64_t n_ff = up_gate_exps->ne[1]/2;
-        const ggml_type out_type = ggml_internal_get_type_traits(down_exps->type).vec_dot_type;
+        const ggml_type out_type = ggml_mul_mat_vec_dot_type(down_exps, n_tokens, GGML_OP_MUL_MAT_ID);
         const ggml_type_traits_t out_tt = ggml_internal_get_type_traits(out_type);
         quantize_up_gate = out_type != GGML_TYPE_F32 && out_type != GGML_TYPE_COUNT &&
             out_tt.from_float_scaled != nullptr && n_ff % ggml_blck_size(out_type) == 0 &&

@@ -6237,7 +6237,7 @@ void ggml_copy_input_scale(struct ggml_tensor * dst, const struct ggml_tensor * 
     ggml_copy_input_scale_array(dst, src);
 }
 
-static inline enum ggml_type ggml_mul_mat_vec_dot_type(const struct ggml_tensor * a, int64_t n_col, enum ggml_op op) {
+enum ggml_type ggml_mul_mat_vec_dot_type(const struct ggml_tensor * a, int64_t n_col, enum ggml_op op) {
 #if GGML_USE_IQK_MULMAT
 #if defined(__aarch64__) && !defined(__ARM_FEATURE_BF16)
     const int min_col = 4;
@@ -20044,7 +20044,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata_ug, row_size_ug,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, local_chunk, chunks_per_expert_ug, 0)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, local_chunk, chunks_per_expert_ug, 0, NULL, NULL, 0, 0, 0.0f)) GGML_ABORT("fatal error");
 
         chunk_id_ug = atomic_fetch_add(&params->shared->current_chunk, 1);
     }
@@ -20094,7 +20094,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata, row_size,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, ith, nth, 0)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, ith, nth, 0, NULL, NULL, 0, 0, 0.0f)) GGML_ABORT("fatal error");
 
     }
 #endif
@@ -20221,10 +20221,14 @@ static void ggml_compute_forward_moe_up_gate_quant(
     const void * wdata_ug = (src1->type == vec_dot_type) ? src1->data : params->wdata;
     const size_t row_size_ug = ggml_row_size(vec_dot_type, ne10);
 
-    // Shared F32 scratch for one activation row per token.  n_ff * n_tokens
-    // floats is a few MB at prefill and 4.5 KB at decode.
-    const size_t scratch_elems = (size_t) ne0 * ne2;
-    float * scratch = (float *)((char *) params->wdata + params->wsize - scratch_elems*sizeof(float));
+    void (*q_block)(const float *, void *, int, float) = NULL;
+    if (out_type == GGML_TYPE_Q8_2_X4) {
+        q_block = quantize_block_q8_2_x4;
+    } else if (out_type == GGML_TYPE_Q8_0_X4) {
+        q_block = quantize_block_q8_0_x4;
+    } else {
+        GGML_ABORT("unsupported fused up-gate output type");
+    }
 
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
@@ -20242,26 +20246,17 @@ static void ggml_compute_forward_moe_up_gate_quant(
         }
 
         const int64_t nr0 = src0_2 ? ne01 : ne01/2;
+        const float scale = ggml_get_input_scale_expert(down, cur_a);
 
         if (!iqk_moe_fused_up_gate(nr0, cne1, ne00, ne11, dst->op_params[0],
                             type, src0_1_cur, src0_2_cur, nb01,
                             vec_dot_type, (const char *)wdata_ug, row_size_ug,
                             NULL, NULL,
-                            scratch, (long) (ne0*sizeof(float)), 0,
-                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, ith, nth, 1)) {
+                            (float *) dst->data, (long) dst->nb[1], (long) dst->nb[2],
+                            matrix_rows + cur_a*ne12, limit, situ_beta, situ_beta_linear, ith, nth, 0,
+                            q_block, dst->data, (long) dst->nb[1], (long) dst->nb[2], scale)) {
             GGML_ABORT("fatal error");
         }
-
-        ggml_barrier(params->shared);
-
-        const float scale = ggml_get_input_scale_expert(down, cur_a);
-        for (int64_t r = ith; r < cne1; r += nth) {
-            const struct mmid_row_mapping map = matrix_rows[cur_a*ne12 + r];
-            char * qrow = (char *) dst->data + map.i1*dst->nb[1] + map.i2*dst->nb[2];
-            ggml_quantize_act_row(out_type, scratch + r*ne0, qrow, ne0, scale);
-        }
-
-        ggml_barrier(params->shared);
     }
 
 #undef MMID_MATRIX_ROW
@@ -20341,7 +20336,7 @@ static void ggml_compute_forward_mul_mat_up_gate(
                          vec_dot_type, (const char *)wdata, row_size,
                          NULL, NULL,
                          (float *)dst->data, nb1, nb2,
-                         NULL, limit, situ_beta, situ_beta_linear, ith, nth, 0)) GGML_ABORT("fatal error");
+                         NULL, limit, situ_beta, situ_beta_linear, ith, nth, 0, NULL, NULL, 0, 0, 0.0f)) GGML_ABORT("fatal error");
 
 }
 #endif
@@ -31186,7 +31181,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur = 0;
                     const struct ggml_tensor * src0 = node->src[0];
                     const struct ggml_tensor * src2 = node->src[2];
-                    const enum ggml_type vec_dot_type = ggml_mul_mat_vec_dot_type(src0, src2->ne[2], node->op);
+                    const enum ggml_type vec_dot_type = ggml_mul_mat_vec_dot_type(src0, src2->ne[2], GGML_OP_MOE_FUSED_UP_GATE);
                     if (src2->type != vec_dot_type) {
                         cur += ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
                     }
@@ -31194,8 +31189,6 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * src2->ne[2] * sizeof(int64_t); // matrix_rows
-                    cur += GGML_PAD(cur, sizeof(float));         // align scratch
-                    cur += node->ne[0] * node->ne[2] * sizeof(float); // shared F32 row scratch
                 } break;
             case GGML_OP_FUSED_UP_GATE:
                 {

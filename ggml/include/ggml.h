@@ -3530,6 +3530,8 @@ extern "C" {
 
     GGML_API ggml_type_traits_t ggml_internal_get_type_traits(enum ggml_type type);
 
+    GGML_API enum ggml_type ggml_mul_mat_vec_dot_type(const struct ggml_tensor * a, int64_t n_col, enum ggml_op op);
+
     typedef struct {
         int                   n_device;
         int                   split_dim;

@@ -149,26 +149,34 @@ struct MulMat {
 #endif
         auto op = ggml_unary_op(unary_op);
         float tmp[k_x_step*16];
-        auto process = [&tmp, n, op, vx_gate, vx_up, gate_b, up_b, bx, xstep = k_x_step, limit, situ_beta, situ_beta_linear] (mul_mat_t func, const DataInfo& this_info, int ix, int this_nrc_x, int ny) {
-            func(n, (const void *)((const char *)vx_gate + ix*bx), bx, this_info, this_nrc_x);
+        float qtmp[k_x_step*16];
+        auto process = [&tmp, &qtmp, n, op, vx_gate, vx_up, gate_b, up_b, bx, xstep = k_x_step, limit, situ_beta, situ_beta_linear] (mul_mat_t func, const DataInfo& this_info, int ix, int this_nrc_x, int ny) {
+            DataInfo dst_info = this_info;
+            if (this_info.q_block) {
+                dst_info.s = qtmp;
+                dst_info.bs = xstep;
+                dst_info.dst_contiguous = true;
+                dst_info.dst_cur_y = 0;
+            }
+            func(n, (const void *)((const char *)vx_gate + ix*bx), bx, dst_info, this_nrc_x);
             for (int ky = 0; ky < ny; ++ky) {
+                float * out = dst_info.dst_row(ky);
                 if (gate_b) {
                     auto b = gate_b + ix;
-                    auto x = this_info.dst_row(ky);
-                    for (int j = 0; j < this_nrc_x; ++j) x[j] += b[j];
+                    for (int j = 0; j < this_nrc_x; ++j) out[j] += b[j];
                 }
                 if (op == GGML_UNARY_OP_SITU_GLU) {
-                    situ(this_nrc_x, this_info.dst_row(ky), tmp + ky*xstep, situ_beta);
+                    situ(this_nrc_x, out, tmp + ky*xstep, situ_beta);
                 } else {
-                    activate(op, this_nrc_x, this_info.dst_row(ky), tmp + ky*xstep);
+                    activate(op, this_nrc_x, out, tmp + ky*xstep);
                 }
                 if (op != GGML_UNARY_OP_SITU_GLU && limit > 1e-6f) {
                     for (int j = 0; j < this_nrc_x; ++j) tmp[ky*xstep + j] = std::min(tmp[ky*xstep + j], limit);
                 }
             }
-            func(n, (const void *)((const char *)vx_up + ix*bx), bx, this_info, this_nrc_x);
+            func(n, (const void *)((const char *)vx_up + ix*bx), bx, dst_info, this_nrc_x);
             for (int ky = 0; ky < ny; ++ky) {
-                auto result = this_info.dst_row(ky);
+                float * result = dst_info.dst_row(ky);
                 if (up_b) {
                     auto b = up_b + ix;
                     for (int j = 0; j < this_nrc_x; ++j) result[j] += b[j];
@@ -183,6 +191,15 @@ struct MulMat {
                     for (int j = 0; j < this_nrc_x; ++j) result[j] = std::max(-limit, std::min(limit, result[j]));
                 }
                 for (int j = 0; j < this_nrc_x; ++j) result[j] *= tmp[ky*xstep + j];
+
+                if (this_info.q_block) {
+                    const mmid_row_mapping * map = this_info.row_mapping ? &this_info.row_mapping[this_info.cur_y + ky] : nullptr;
+                    GGML_ASSERT(map != nullptr);
+                    char * qrow = (char *) this_info.q_data + map->i1*this_info.q_nb1 + map->i2*this_info.q_nb2;
+                    for (int j = 0; j < this_nrc_x; j += 32) {
+                        this_info.q_block(result + j, qrow, (this_info.q_x0 + ix + j)/32, this_info.q_scale);
+                    }
+                }
             }
         };
         if (func16 && nrc_y >= 16) {
@@ -1028,7 +1045,8 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
         int typeB, const void * B, long strideB,
         const char * up_b_c, const char * gate_b_c,
         float * C, long nb1, long nb2, const void * vrow_mapping, float limit,
-        float situ_beta, float situ_beta_linear, int ith, int nth, int dst_contiguous) {
+        float situ_beta, float situ_beta_linear, int ith, int nth, int dst_contiguous,
+        void (*q_block)(const float *, void *, int, float), void * q_data, long q_nb1, long q_nb2, float q_scale) {
 
     const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
     //assert(row_mapping != nullptr);
@@ -1071,6 +1089,12 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
                 auto gate_b = gate_b_c ? (const float *)gate_b_c + ix : nullptr;
                 DataInfo info{C + ix, (const char *)B, nb1/sizeof(float), row_size_qy, first_y, ne11, row_mapping, nb2/sizeof(float)};
                 info.dst_contiguous = dst_contiguous != 0;
+                info.q_block = q_block;
+                info.q_data = q_data;
+                info.q_nb1 = q_nb1;
+                info.q_nb2 = q_nb2;
+                info.q_scale = q_scale;
+                info.q_x0 = ix;
                 mm.mul_mat_up_gate_NxM(ne00, Xu, Xg, row_size_qx, up_b, gate_b, info, nrc_x, last_y, unary_op, limit, situ_beta, situ_beta_linear);
             });
 
@@ -1084,14 +1108,24 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
     }
     auto num_rows = MulMat::num_rows(ggml_type(typeA));
     GGML_ASSERT(Nx%num_rows == 0);
-    auto nrc_x = (Nx/num_rows + nth - 1)/nth;
-    auto first_x = ith*nrc_x;
-    if (first_x + nrc_x > Nx/num_rows) nrc_x = Nx/num_rows - first_x;
-    first_x *= num_rows;
+    const int64_t units = Nx/num_rows;
+    int64_t per = (units + nth - 1)/nth;
+    if (q_block) per = ((per + 31)/32)*32;
+    const int64_t first_u = ith*per;
+    int64_t nrc_x = first_u < units ? std::min(per, units - first_u) : 0;
+    if (nrc_x == 0) return true;
+    const int64_t first_x = first_u*num_rows;
     nrc_x *= num_rows;
+    GGML_ASSERT(!q_block || nrc_x % 32 == 0);
     DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float),
         row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
     info.dst_contiguous = dst_contiguous != 0;
+    info.q_block = q_block;
+    info.q_data = q_data;
+    info.q_nb1 = q_nb1;
+    info.q_nb2 = q_nb2;
+    info.q_scale = q_scale;
+    info.q_x0 = first_x;
     auto up_b   = up_b_c   ? (const float *)up_b_c + first_x : nullptr;
     auto gate_b = gate_b_c ? (const float *)gate_b_c + first_x : nullptr;
     mm.mul_mat_up_gate_NxM(ne00, (const char *)Aup + row_size_qx*first_x, (const char *)Agate + row_size_qx*first_x, row_size_qx,
@@ -2909,7 +2943,8 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*n
         int /*typeA*/, const void * /*Aup*/, const void * /*Agate*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
         float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, float,
-        float, float, int /*ith*/, int /*nth*/, int /*dst_contiguous*/) {
+        float, float, int /*ith*/, int /*nth*/, int /*dst_contiguous*/,
+        void (*)(const float *, void *, int, float), void *, long, long, float) {
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }

@@ -102,6 +102,14 @@ struct DataInfo {
     const mmid_row_mapping * row_mapping = nullptr;
     size_t        bs2 = 0;
     bool          dst_contiguous = false;
+    // Optional block-wise quantized output sink (fused up-gate path).
+    void        (*q_block)(const float *, void *, int, float) = nullptr;
+    void        * q_data = nullptr;
+    size_t        q_nb1 = 0;
+    size_t        q_nb2 = 0;
+    float         q_scale = 0.0f;
+    int           q_x0 = 0;
+    int           dst_cur_y = 0;
 
     inline const char * src1_row(int iy) const {
         if (!row_mapping) return cy + (cur_y + iy)*by;
@@ -132,7 +140,7 @@ struct DataInfo {
     }
 #endif
     inline float * dst_row(int iy) const {
-        if (dst_contiguous) return s + (cur_y + iy)*bs;
+        if (dst_contiguous) return s + (dst_cur_y + iy)*bs;
         if (!row_mapping) return s + (cur_y + iy)*bs;
         int i12 = row_mapping[cur_y + iy].i2;
         int i1  = row_mapping[cur_y + iy].i1;
