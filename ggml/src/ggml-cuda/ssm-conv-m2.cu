@@ -20,6 +20,7 @@ static __global__ void ssm_conv_m2_f32(const float * src0_ptr, const float * src
                                     const int src0_nb0, const int src0_nb1, const int src0_nb2, const int src1_nb1,
                                     [[maybe_unused]] const int src2_nb1,
                                     float * dst_ptr, const int dst_nb0, const int dst_nb1, const int dst_nb2,
+                                    const float * add, const int nb1_add, const int nb2_add, float C,
                                     const int64_t n_t, [[maybe_unused]] const int head_size) {
     const float * GGML_CUDA_RESTRICT src0  = src0_ptr;
     const float * GGML_CUDA_RESTRICT src1  = src1_ptr;
@@ -32,11 +33,13 @@ static __global__ void ssm_conv_m2_f32(const float * src0_ptr, const float * src
     const float * x_block = (const float *) ((const char *) src0 + bidx * src0_nb2 + bidy * split_d_inner * src0_nb1);
     const float * w_block = (const float *) ((const char *) src1 + bidy * split_d_inner * src1_nb1);
     float *       y_block = (float *) ((char *) dst + bidx * dst_nb2 + bidy * split_d_inner * dst_nb0);
+    const float * a_block = add ? (float *) ((char *) add + bidx * nb2_add + bidy * split_d_inner * sizeof(float)) : nullptr;
 
     const int stride_x = src0_nb1 / sizeof(float);
     const int stride_w = src1_nb1 / sizeof(float);
     const int stride_y = dst_nb1 / sizeof(float);
     const int stride_d = src2_nb1 / sizeof(float);
+    const int stride_a = nb1_add  / sizeof(float);
 
     float x[d_conv] = { 0.0f };
     float w[d_conv] = { 0.0f };
@@ -71,8 +74,8 @@ static __global__ void ssm_conv_m2_f32(const float * src0_ptr, const float * src
                 sumf += x[(i + j) % d_conv] * w[j];
             }
         }
-        //sumf += b;
-        y_block[i * stride_y + tid] = sumf;
+        if (a_block) sumf += a_block[i * stride_a + tid];
+        y_block[i * stride_y + tid] = sumf * C;
     }
 }
 
@@ -81,7 +84,9 @@ static __global__ void ssm_conv_m2_long_token_f32(const float * __restrict__ src
                                                const float * __restrict__ delta,
                                                const int src0_nb0, const int src0_nb1, const int src0_nb2,
                                                const int src1_nb1, const int src2_nb1, float * __restrict__ dst, const int dst_nb0,
-                                               const int dst_nb1, const int dst_nb2, const int64_t n_t, const int head_size) {
+                                               const int dst_nb1, const int dst_nb2,
+                                               const float * add, const int nb1_add, const int nb2_add, float C,
+                                               const int64_t n_t, const int head_size) {
     const int tid  = threadIdx.x;
     const int bidx = blockIdx.x;
     const int bidy = blockIdx.y;
@@ -90,13 +95,14 @@ static __global__ void ssm_conv_m2_long_token_f32(const float * __restrict__ src
     const float * x_block = (const float *) ((const char *) src0 + bidx * src0_nb2 + bidy * split_d_inner * src0_nb1 +
                                              bidz * split_n_t * src0_nb0);
     const float * w_block = (const float *) ((const char *) src1 + bidy * split_d_inner * src1_nb1);
-    float *       y_block =
-        (float *) ((char *) dst + bidx * dst_nb2 + bidz * split_n_t * dst_nb1 + bidy * split_d_inner * dst_nb0);
+    float *       y_block = (float *) ((char *) dst + bidx * dst_nb2 + bidz * split_n_t * dst_nb1 + bidy * split_d_inner * dst_nb0);
+    const float * a_block = add ? (float *) ((char *) add + bidx * nb2_add + bidz * split_n_t * nb1_add + bidy * split_d_inner * sizeof(float)) : nullptr;
 
     const int stride_x = src0_nb1 / sizeof(float);
     const int stride_w = src1_nb1 / sizeof(float);
     const int stride_d = src2_nb1 / sizeof(float);
     const int stride_y = dst_nb1 / sizeof(float);
+    const int stride_a = nb1_add / sizeof(float);
 
     const int64_t local_n_t = min(split_n_t, n_t - bidz * split_n_t);
     const int     n_cols    = d_conv - 1 + split_n_t;
@@ -148,14 +154,15 @@ static __global__ void ssm_conv_m2_long_token_f32(const float * __restrict__ src
                 sumf += smem[tid * n_cols + i + j] * w[j];
             }
         }
-        //sumf += b;
-        y_block[i * stride_y + tid] = sumf;
+        if (a_block) sumf += a_block[i * stride_a + tid];
+        y_block[i * stride_y + tid] = sumf * C;
     }
 }
 
 static void ssm_conv_m2_f32_cuda(const float * src0, const float * src1, const float * delta, const int src0_nb0, const int src0_nb1,
                               const int src0_nb2, const int src1_nb1, const int src2_nb1, float * dst, const int dst_nb0, const int dst_nb1,
-                              const int dst_nb2, const int64_t nc, const int64_t nr, const int64_t n_t,
+                              const int dst_nb2, const float * add, const int nb1_add, const int nb2_add, float C,
+                              const int64_t nc, const int64_t nr, const int64_t n_t,
                               const int64_t n_s, int head_size, cudaStream_t stream) {
     const int threads = 128;
     GGML_ASSERT(nr % threads == 0);
@@ -166,10 +173,10 @@ static void ssm_conv_m2_f32_cuda(const float * src0, const float * src1, const f
             const dim3 blocks(n_s, (nr + threads - 1) / threads, 1);
             if (delta && head_size > 0) {
                 ssm_conv_m2_f32<threads, kNC, true><<<blocks, threads, 0, stream>>>(src0, src1, delta, src0_nb0, src0_nb1,
-                        src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t, head_size);
+                        src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, add, nb1_add, nb2_add, C, n_t, head_size);
             } else {
                 ssm_conv_m2_f32<threads, kNC, false><<<blocks, threads, 0, stream>>>(src0, src1, delta, src0_nb0, src0_nb1,
-                        src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t, head_size);
+                        src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, add, nb1_add, nb2_add, C, n_t, head_size);
             }
 
         } else {
@@ -178,10 +185,10 @@ static void ssm_conv_m2_f32_cuda(const float * src0, const float * src1, const f
             const size_t  smem_size = threads * (kNC - 1 + split_n_t) * sizeof(float);
             if (delta && head_size > 0) {
                 ssm_conv_m2_long_token_f32<threads, kNC, split_n_t,  true><<<blocks, threads, smem_size, stream>>>(
-                        src0, src1, delta, src0_nb0, src0_nb1, src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t, head_size);
+                        src0, src1, delta, src0_nb0, src0_nb1, src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, add, nb1_add, nb2_add, C, n_t, head_size);
             } else {
                 ssm_conv_m2_long_token_f32<threads, kNC, split_n_t, false><<<blocks, threads, smem_size, stream>>>(
-                        src0, src1, delta, src0_nb0, src0_nb1, src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t, head_size);
+                        src0, src1, delta, src0_nb0, src0_nb1, src0_nb2, src1_nb1, src2_nb1, dst, dst_nb0, dst_nb1, dst_nb2, add, nb1_add, nb2_add, C, n_t, head_size);
             }
         }
     };
@@ -196,12 +203,21 @@ static void ssm_conv_m2_f32_cuda(const float * src0, const float * src1, const f
     }
 }
 
-void ggml_cuda_op_ssm_conv_m2(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+void ggml_cuda_op_ssm_conv_m2(ggml_backend_cuda_context & ctx, ggml_tensor * dst0) {
+    ggml_tensor *add = nullptr, *scale = nullptr;
+    auto dst = dst0;
+    if (dst0->op == GGML_OP_SCALE) {
+        scale = dst0;
+        add = scale->src[0];
+        GGML_ASSERT(add->op == GGML_OP_ADD);
+        dst = add->src[0];
+        GGML_ASSERT(dst->op == GGML_OP_SSM_CONV);
+    }
     const struct ggml_tensor * src0 = dst->src[0];  // conv_x
     const struct ggml_tensor * src1 = dst->src[1];  // conv1d.weight
     const struct ggml_tensor * src2 = dst->src[2];
 
-    const struct ggml_tensor * out = dst;
+    const struct ggml_tensor * out = dst0;
 
     const int64_t nc  = src1->ne[0];                // d_conv
     const int64_t nr  = src0->ne[1];                // d_inner
@@ -234,6 +250,24 @@ void ggml_cuda_op_ssm_conv_m2(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         head_size = nr / n_head;
     }
 
-    ssm_conv_m2_f32_cuda(src0_d, src1_d, bias_d, src0->nb[0], src0->nb[1], src0->nb[2], src1->nb[1], src2 ? src2->nb[1] : 0, dst_d, out->nb[0], out->nb[1],
-                         out->nb[2], nc, nr, n_t, n_s, head_size, stream);
+    float C = 1.0f;
+    if (scale) {
+        memcpy(&C, scale->op_params, sizeof(C));
+    }
+    const float * add_d = nullptr;
+    size_t nb1_add = 0, nb2_add = 0;
+    if (add) {
+        auto b = add->src[1];
+        GGML_ASSERT(ggml_are_same_shape(out, b));
+        GGML_ASSERT(b->type == GGML_TYPE_F32);
+        GGML_ASSERT(b->nb[0] == sizeof(float));
+        add_d = (const float *)b->data;
+        nb1_add = b->nb[1];
+        nb2_add = b->nb[2];
+    }
+
+    ssm_conv_m2_f32_cuda(src0_d, src1_d, bias_d, src0->nb[0], src0->nb[1], src0->nb[2], src1->nb[1], src2 ? src2->nb[1] : 0,
+            dst_d, out->nb[0], out->nb[1], out->nb[2],
+            add_d, nb1_add, nb2_add, C,
+            nc, nr, n_t, n_s, head_size, stream);
 }

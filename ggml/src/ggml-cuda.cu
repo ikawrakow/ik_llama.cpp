@@ -4984,7 +4984,16 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SSM_CONV:
             if (dst->src[3] == nullptr) {
                 // Mamba-2 layout (Nemotron-H, Inkling2, etc.)
-                ggml_cuda_op_ssm_conv_m2(ctx, dst);
+                if (fusion && i + 2 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_ADD &&
+                    cgraph->nodes[i+2]->op == GGML_OP_SCALE &&
+                    cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
+                    cgraph->nodes[i+1]->src[0] == dst) {
+                    ggml_cuda_op_ssm_conv_m2(ctx, cgraph->nodes[i+2]);
+                    i += 2;
+                } else {
+                    ggml_cuda_op_ssm_conv_m2(ctx, dst);
+                }
             } else {
                 ggml_cuda_op_ssm_conv(ctx, dst);
             }
