@@ -32,9 +32,8 @@ ggml_tensor * dory_f32(ggml_context * ctx, ggml_tensor * t) {
     return t->type == GGML_TYPE_F32 ? t : ggml_cast(ctx, t, GGML_TYPE_F32);
 }
 
-ggml_tensor * dory_residual_rate(ggml_context * ctx, ggml_tensor * alpha, float lambda_scale) {
-    return ggml_abs(ctx, ggml_scale(ctx, dory_f32(ctx, alpha), lambda_scale));
-}
+// The residual rate |alpha * alpha_init/init_std| is folded into the F32
+// residual_alpha weight at load (llm_fold_dory_scales); the graph reads it directly.
 
 // Interpolate from the normalized input: h_norm + rate * (cur - h_norm).
 ggml_tensor * dory_residual(ggml_context * ctx, ggml_tensor * h_norm, ggml_tensor * cur, ggml_tensor * rate) {
@@ -49,17 +48,12 @@ ggml_tensor * dory_residual(ggml_context * ctx, ggml_tensor * h_norm, ggml_tenso
 ggml_cgraph * llm_build_context::build_dory() {
     ggml_cgraph * gf = new_graph_custom();
 
-    // nGPT fold constants (the eps hparams carry dory.init_std and dory.alpha_init).
-    const float init_std = norm_eps;
-    const float alpha    = norm_rms_eps;
-
-    // sqk_scale and s_gate_scale are already folded into the F32 attn_qk_scale /
-    // attn_gate_scale weights at load (llm_fold_dory_scales). suv_scale = sqrt(n_embd)
+    // The constant nGPT rescales — sqk', s_gate', the residual rate
+    // |alpha*alpha_init/init_std|, and the logit scale output_s/init_std — are folded
+    // into their F32 weights at load (llm_fold_dory_scales). suv_scale = sqrt(n_embd)
     // is cancelled by the FFN's rms_norm input form; only its reciprocal survives,
     // recovering the unit-sphere h for the residual.
-    const float suv_scale    = std::sqrt((float) n_embd);
-    const float lambda_scale = alpha / init_std;
-    const float logit_factor = 1.0f / init_std;
+    const float suv_scale = std::sqrt((float) n_embd);
 
     // Attention uses head_dim^-0.5 after q was scaled by the folded sqk'.
     const float kq_scale = 1.0f / std::sqrt((float) n_embd_head_k);
@@ -152,7 +146,7 @@ ggml_cgraph * llm_build_context::build_dory() {
             cur = dory_l2_norm(ctx0, cur);                 // post_attention_layernorm
             cb(cur, "attn_out_norm", il);
 
-            rate = dory_residual_rate(ctx0, layer.attn_resid_alpha, lambda_scale);
+            rate = dory_f32(ctx0, layer.attn_resid_alpha); // |alpha*lambda| folded at load
         } else {
             // h_rms = sqrt(n_embd) * l2_norm(inp). The ffn_gate/ffn_up GEMMs consume
             // it unscaled: the inherited sqrt(n_embd) cancels the suv_scale that used
@@ -175,7 +169,7 @@ ggml_cgraph * llm_build_context::build_dory() {
             cur = dory_l2_norm(ctx0, cur);                 // post_feedforward_layernorm
             cb(cur, "ffn_out", il);
 
-            rate = dory_residual_rate(ctx0, layer.ffn_resid_alpha, lambda_scale);
+            rate = dory_f32(ctx0, layer.ffn_resid_alpha); // |alpha*lambda| folded at load
         }
 
         ggml_tensor * out = dory_residual(ctx0, h, cur, rate);
@@ -223,9 +217,9 @@ ggml_cgraph * llm_build_context::build_dory() {
         return gf;
     }
 
-    // logits = (h @ W) * (logit_scale * logit_scale_factor)
+    // logits = (h @ W) * logit_scale'; logit_scale' = output_s/init_std folded at load
     cur = build_output(lctx, ctx0, cur, model.output, nullptr, cb);
-    cur = ggml_mul(ctx0, cur, ggml_scale(ctx0, dory_f32(ctx0, model.output_s), logit_factor));
+    cur = ggml_mul(ctx0, cur, dory_f32(ctx0, model.output_s));
     cb(cur, "result_output", -1);
     ggml_build_forward_expand(gf, cur);
 

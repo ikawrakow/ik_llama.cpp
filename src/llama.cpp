@@ -4380,12 +4380,15 @@ static void llm_scale_gate_inp_s(llama_model & model, bool uses_mmap) {
     }
 }
 
-// Dory (nGPT): fold the constant rescale into the sqk / s_gate vectors once at
-// load — (attn_qk_scale * sqrt(head_dim)/init_std)^2 and
-// (attn_gate_scale * n_embd^0.25/init_std)^2 — instead of recomputing it on every
-// graph pass (the looped stack visits each physical module n_loops times).
-// Stored as F32 and computed with the same two float multiplies the runtime
-// ggml_scale + ggml_sqr used, so logits are bit-identical. build_dory then just
+// Dory (nGPT): fold the constant per-channel rescales into their vectors once at
+// load instead of recomputing them on every graph pass (the looped stack visits
+// each physical module n_loops times):
+//   sqk'     = (attn_qk_scale   * sqrt(head_dim)/init_std)^2
+//   s_gate'  = (attn_gate_scale * n_embd^0.25/init_std)^2
+//   rate     = |residual_alpha  * alpha_init/init_std|
+//   logit_s' = output_scale     / init_std
+// Stored as F32 and computed with the same float ops the runtime ggml_scale /
+// ggml_sqr / ggml_abs used, so logits are bit-identical. build_dory then just
 // multiplies by the folded weight.
 static void llm_fold_dory_scales(llama_model & model) {
     const auto & hparams = model.hparams;
@@ -4393,18 +4396,30 @@ static void llm_fold_dory_scales(llama_model & model) {
     // same constants build_dory used: the context scalar is n_embd_head_k(0)
     const float sqk_scale    = std::sqrt((float) hparams.n_embd_head_k(0)) / init_std;
     const float s_gate_scale = std::pow((float) hparams.n_embd, 0.25f) / init_std;
+    const float lambda_scale = hparams.f_norm_rms_eps / init_std;
+    const float logit_factor = 1.0f / init_std;
+
+    // per-tensor transform: SQUARE = (x*c)^2, ABS_SCALE = |x*c|, SCALE = x*c
+    enum fold_kind { SQUARE, ABS_SCALE, SCALE };
+    struct fold_entry { ggml_tensor * t; float c; fold_kind kind; };
 
     // loop slots alias the physical tensors — fold each distinct tensor once
     std::unordered_set<const ggml_tensor *> seen;
-    std::vector<std::pair<ggml_tensor *, float>> todo;
+    std::vector<fold_entry> todo;
     for (auto & l : model.layers) {
-        for (const auto & tc : {std::make_pair(l.attn_qk_scale,   sqk_scale),
-                                std::make_pair(l.attn_gate_scale, s_gate_scale)}) {
-            if (tc.first && !seen.count(tc.first)) {
-                seen.insert(tc.first);
+        for (const auto & tc : {fold_entry{l.attn_qk_scale,   sqk_scale,    SQUARE},
+                                fold_entry{l.attn_gate_scale, s_gate_scale, SQUARE},
+                                fold_entry{l.attn_resid_alpha, lambda_scale, ABS_SCALE},
+                                fold_entry{l.ffn_resid_alpha,  lambda_scale, ABS_SCALE}}) {
+            if (tc.t && !seen.count(tc.t)) {
+                seen.insert(tc.t);
                 todo.push_back(tc);
             }
         }
+    }
+    if (model.output_s && !seen.count(model.output_s)) {
+        seen.insert(model.output_s);
+        todo.push_back(fold_entry{model.output_s, logit_factor, SCALE});
     }
     if (todo.empty()) {
         return;
@@ -4414,16 +4429,16 @@ static void llm_fold_dory_scales(llama_model & model) {
     // BF16 -> F32 grows, so host tensors are never rewritten in place
     size_t n_floats = 0;
     for (const auto & tc : todo) {
-        GGML_ASSERT(tc.first->extra == nullptr); // Dory does not support -sm graph splits
-        n_floats += ggml_nelements(tc.first);
+        GGML_ASSERT(tc.t->extra == nullptr); // Dory does not support -sm graph splits
+        n_floats += ggml_nelements(tc.t);
     }
     const size_t host_begin = model.aux_buffer.size();
     model.aux_buffer.resize(host_begin + n_floats);
     float * host_ptr = model.aux_buffer.data() + host_begin;
 
     for (const auto & tc : todo) {
-        ggml_tensor * t = tc.first;
-        const float c = tc.second;
+        ggml_tensor * t = tc.t;
+        const float c = tc.c;
         const int64_t n = ggml_nelements(t);
         const auto tt = ggml_internal_get_type_traits(t->type);
 
@@ -4443,7 +4458,8 @@ static void llm_fold_dory_scales(llama_model & model) {
         }
         for (int64_t i = 0; i < n; ++i) {
             vals[i] *= c;
-            vals[i] *= vals[i];
+            if (tc.kind == SQUARE)         vals[i] *= vals[i];
+            else if (tc.kind == ABS_SCALE) vals[i] = std::fabs(vals[i]);
         }
 
         if (ggml_backend_buffer_is_host(t->buffer)) {
@@ -4470,7 +4486,7 @@ static void llm_fold_dory_scales(llama_model & model) {
             t->nb[j] = t->nb[j-1]*t->ne[j-1];
         }
     }
-    LLAMA_LOG_INFO("============ %s: folded constant nGPT rescale into %zu sqk/s_gate vectors (now F32)\n",
+    LLAMA_LOG_INFO("============ %s: folded constant nGPT rescales into %zu vectors (now F32)\n",
             __func__, todo.size());
 }
 
