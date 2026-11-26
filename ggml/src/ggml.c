@@ -31008,6 +31008,12 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     return 0;
 }
 
+// thread team of the last ggml_graph_compute, reused by ggml_parallel_host_copy
+#define GGML_HC_MAX_AFFINITY 1024
+static int     g_hc_n_threads = 0;
+static int     g_hc_n_aff     = 0;
+static int32_t g_hc_aff[GGML_HC_MAX_AFFINITY];
+
 enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cplan * cplan) {
     GGML_ASSERT(cplan);
     GGML_ASSERT(cplan->n_threads > 0);
@@ -31038,6 +31044,11 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
 #ifdef GGML_USE_OPENMP
     if (n_threads > 1) {
+        g_hc_n_aff = 0;
+        if (cplan->cpu_affinity != NULL && cplan->n_cpu_affinity > 0 && cplan->n_cpu_affinity <= GGML_HC_MAX_AFFINITY) {
+            memcpy(g_hc_aff, cplan->cpu_affinity, (size_t) cplan->n_cpu_affinity * sizeof(int32_t));
+            g_hc_n_aff = cplan->n_cpu_affinity;
+        }
 //#if IK_PRINT_TIMING
 //        int64_t tim1 = ggml_time_us();
 //#endif
@@ -31057,6 +31068,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
             };
             ggml_graph_compute_thread(&worker);
         }
+        g_hc_n_threads = n_threads;
 //#if IK_PRINT_TIMING
 //        int64_t tim2 = ggml_time_us();
 //        printf("%s(...): %d us\n", __func__, (int)(tim2-tim1));
@@ -31110,6 +31122,55 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 #endif
 
     return state_shared.ec;
+}
+
+bool ggml_parallel_host_copy(const struct ggml_host_copy_range * items, int n_items) {
+#if defined(GGML_USE_OPENMP)
+    const int nt = g_hc_n_threads;
+    if (nt <= 1 || n_items <= 0) {
+        return false;
+    }
+#if defined(__gnu_linux__)
+    cpu_set_t saved_affinity;
+    const bool restore_affinity = pthread_getaffinity_np(pthread_self(), sizeof(saved_affinity), &saved_affinity) == 0;
+#endif
+    #pragma omp parallel num_threads(nt)
+    {
+        const int ith = omp_get_thread_num();
+        const int nth = omp_get_num_threads();
+        set_numa_thread_affinity(ith);
+#if defined(__gnu_linux__)
+        if (g_hc_n_aff > 0) {
+            const int cpu = g_hc_aff[ith % g_hc_n_aff];
+            if (cpu >= 0 && cpu < CPU_SETSIZE && sched_getcpu() != cpu) {
+                cpu_set_t mask;
+                CPU_ZERO(&mask);
+                CPU_SET(cpu, &mask);
+                pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
+            }
+        }
+#endif
+        for (int k = 0; k < n_items; ++k) {
+            const size_t bytes = items[k].bytes;
+            const size_t first = bytes * ith / nth;
+            const size_t last  = bytes * (ith + 1) / nth;
+            if (last > first) {
+                memcpy((char *) items[k].dst + first, (const char *) items[k].src + first, last - first);
+            }
+        }
+    }
+    clear_numa_thread_affinity();
+#if defined(__gnu_linux__)
+    if (restore_affinity) {
+        pthread_setaffinity_np(pthread_self(), sizeof(saved_affinity), &saved_affinity);
+    }
+#endif
+    return true;
+#else
+    UNUSED(items);
+    UNUSED(n_items);
+    return false;
+#endif
 }
 
 enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {
