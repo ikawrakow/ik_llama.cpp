@@ -4991,10 +4991,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     cgraph->nodes[i+1]->src[0] == dst) {
                     ggml_cuda_op_ssm_conv_m2(ctx, cgraph->nodes[i+2]);
                     i += 2;
-                    //auto src0 = cgraph->nodes[i+1]->src[0];
-                    //auto src1 = cgraph->nodes[i+1]->src[1];
-                    //printf("add: %ld x %ld x %ld + %ld x %ld x %ld; %zu, %zu\n", src0->ne[0], src0->ne[1], src0->ne[2], src1->ne[0], src1->ne[1], src1->ne[2], src1->nb[1], src1->nb[2]);
-                    ////printf("Could fuse GGML_OP_SSM_CONV with ADD & SCALE\n");
                 } else {
                     ggml_cuda_op_ssm_conv_m2(ctx, dst);
                 }
