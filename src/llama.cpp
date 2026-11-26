@@ -801,6 +801,19 @@ bool llama_context::update_cache_copies() {
     auto layer_has_attention_kv = [&](int il) {
         return !model.hparams.is_recurrent(il);
     };
+    int first_layer = 0;
+    int last_layer = n_layer;
+    if (model.arch == LLM_ARCH_STEP5 && cparams.mtp_op_type != MTP_OP_NONE) {
+        const int n_heads_model = model.hparams.nextn_predict_layers;
+        const int n_heads = mtp_n_heads > 0 ? std::min(mtp_n_heads, n_heads_model) : n_heads_model;
+        first_layer = n_layer - n_heads_model;
+        if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN) {
+            first_layer += std::clamp(mtp_step_idx, 0, n_heads - 1);
+            last_layer = first_layer + 1;
+        } else {
+            last_layer = first_layer + n_heads;
+        }
+    }
 
     if ((int)kv_self.k_l.size() < n_layer) {
         printf("%s: kv_self.k_l.size() < n_layer\n", __func__);
@@ -810,7 +823,7 @@ bool llama_context::update_cache_copies() {
         printf("%s: !kv_self.v_l.empty() && (int)kv_self.v_l.size() < n_layer\n", __func__);
         return false;
     }
-    for (int il = 0; il < n_layer; ++il) {
+    for (int il = first_layer; il < last_layer; ++il) {
         if (!layer_has_attention_kv(il) || kv_self.k_l[il] == nullptr) {
             continue;
         }
@@ -1259,7 +1272,8 @@ static bool llama_mtp_tail_uses_layer_cache(const llama_model & model) {
          model.arch == LLM_ARCH_GLM5NEXT ||
          model.arch == LLM_ARCH_QWEN35MOE ||
          model.arch == LLM_ARCH_QWEN4EXP ||
-         model.arch == LLM_ARCH_STEP35);
+         model.arch == LLM_ARCH_STEP35 ||
+         model.arch == LLM_ARCH_STEP5);
 }
 
 static bool llama_kv_cache_init(
@@ -1300,11 +1314,15 @@ static bool llama_kv_cache_init(
     cache.used = 0;
 
     cache.row_count.clear();
-    if (cparams.swa_compress && !model.supports_swa_compress()) {
+    // Step-5's MTP context owns only predictor layers. Keep their KV rewindable
+    // independently of the target context's compacted SWA window.
+    const bool compact_swa = cparams.swa_compress &&
+        !(model.arch == LLM_ARCH_STEP5 && cparams.mtp_op_type != MTP_OP_NONE);
+    if (compact_swa && !model.supports_swa_compress()) {
         if (!llama_model_is_gemma4_mtp_assistant(&model)) {
             LLAMA_LOG_WARN("%s: --swa-compress is not implemented for this model; ignoring\n", __func__);
         }
-    } else if (cparams.swa_compress) {
+    } else if (compact_swa) {
         std::vector<uint32_t> plan((size_t) hparams.n_layer, kv_size);
         bool any = false;
         for (int il = 0; il < (int) hparams.n_layer; ++il) {
@@ -10122,6 +10140,7 @@ struct llama_context * llama_init_from_model(
         model->arch != LLM_ARCH_GLM5NEXT &&
         !llm_arch_is_dsv4(model->arch) &&
         model->arch != LLM_ARCH_STEP35 &&
+        model->arch != LLM_ARCH_STEP5 &&
         model->arch != LLM_ARCH_GEMMA4_ASSISTANT &&
         model->arch != LLM_ARCH_OPENPANGU &&
         model->arch != LLM_ARCH_QWEN4EXP &&
@@ -10470,7 +10489,8 @@ struct llama_context * llama_init_from_model(
             }
         }
 
-        if (ctx->kv_self.any_compacted() && cparams.mtp && !llm_arch_is_dsv4(model->arch) && model->arch != LLM_ARCH_GEMMA4) {
+        if (ctx->kv_self.any_compacted() && cparams.mtp && !llm_arch_is_dsv4(model->arch) &&
+                model->arch != LLM_ARCH_GEMMA4 && model->arch != LLM_ARCH_STEP5) {
             LLAMA_LOG_ERROR("%s: --swa-compress is not supported together with MTP speculative decoding for this model\n", __func__);
             llama_free(ctx);
             return nullptr;

@@ -178,7 +178,7 @@ struct llm_build_context {
 
     ggml_cgraph * build_defrag(const std::vector<uint32_t> & ids);
 
-    struct ggml_tensor * build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd);
+    struct ggml_tensor * build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd, bool reuse_input = false);
 
     struct ggml_tensor * build_inp_mtp_states(int64_t n_hidden);
 

@@ -2304,6 +2304,12 @@ bool common_speculative_finalize_startup(
         return false;
     }
 
+    if (params.has_dft() && model != nullptr && params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+        std::strcmp(llama_model_arch_string(model), "step5") == 0) {
+        LOG_ERR("%s: Step-5 MTP requires predictor heads embedded in the target GGUF\n", __func__);
+        return false;
+    }
+
     if (params.has_dft()) {
         LLAMA_LOG_INFO("\n\n==================================loading DRAFT model==================================\n\n");
         if (!common_speculative_load_draft_model(params, params_base)) {
