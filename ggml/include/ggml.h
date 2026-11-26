@@ -978,6 +978,12 @@ extern "C" {
 
     GGML_API void ggml_set_input_scale(struct ggml_tensor * tensor, float scale);
     GGML_API float ggml_get_input_scale(const struct ggml_tensor * tensor);
+    // Per-expert variant for 3D expert tensors.  The scales are copied into an
+    // internal registry keyed by the tensor pointer; missing entries fall back
+    // to the scalar input scale (0 means "dynamic amax").
+    GGML_API void ggml_set_input_scale_array(struct ggml_tensor * tensor, const float * scales, int64_t n);
+    GGML_API float ggml_get_input_scale_expert(const struct ggml_tensor * tensor, int64_t expert);
+    GGML_API void ggml_copy_input_scale(struct ggml_tensor * dst, const struct ggml_tensor * src);
     GGML_API bool  ggml_mxfp4_to_nvfp4_ks(const void * src, void * dst, int n_per_row);
 
     GGML_API GGML_CALL int64_t ggml_nelements   (const struct ggml_tensor * tensor);
@@ -3480,6 +3486,9 @@ extern "C" {
 #endif
     typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
     typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
+    // Quantize a row with a caller-supplied (calibrated) scale instead of the
+    // amax of the row.  Used by the fixed-range activation path.
+    typedef void (*ggml_from_float_scaled_t)(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k, float scale);
     typedef void (*ggml_from_float_to_mat_t)
                                      (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t nr, int64_t k, int64_t bs);
     typedef void (*ggml_vec_dot_t)  (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x, size_t bx,
@@ -3498,6 +3507,7 @@ extern "C" {
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float;
         ggml_from_float_t        from_float_ref;
+        ggml_from_float_scaled_t from_float_scaled;
         ggml_from_float_to_mat_t from_float_to_mat;
         ggml_vec_dot_t           vec_dot;
         enum ggml_type           vec_dot_type;

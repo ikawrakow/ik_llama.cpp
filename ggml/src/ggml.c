@@ -10,6 +10,7 @@
 #include "ggml-impl.h"
 #include "ggml-utils.h"
 #include "ggml-quants.h"
+#include "ggml-act-calib.h"
 #include "ggml.h"
 #include "ggml-moe-prefetch.h"
 #include "iqk/iqk_quantize.h"
@@ -893,6 +894,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_q8_0,
         .from_float               = quantize_row_q8_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q8_0_ref,
+        .from_float_scaled        = quantize_row_q8_0_fixed,
         .vec_dot                  = ggml_vec_dot_q8_0_q8_0,
         .vec_dot_type             = GGML_Q8_0_VEC_DOT_TYPE,
 #if defined (__ARM_FEATURE_MATMUL_INT8)
@@ -920,6 +922,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .from_float               = quantize_row_q8_0_x4,
         .from_float_ref           = quantize_row_q8_0_x4,
+        .from_float_scaled        = quantize_row_q8_0_x4_fixed,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -940,6 +943,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .from_float               = quantize_row_q8_2_x4,
         .from_float_ref           = quantize_row_q8_2_x4,
+        .from_float_scaled        = quantize_row_q8_2_x4_fixed,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1575,6 +1579,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .type_size                = sizeof(block_q8_K),
         .is_quantized             = true,
         .from_float               = quantize_row_q8_K,
+        .from_float_scaled        = (ggml_from_float_scaled_t) quantize_row_q8_K_fixed,
         .row_meta_size            = 0,
     },
     [GGML_TYPE_Q8_K64] = {
@@ -5947,6 +5952,8 @@ static struct ggml_object * ggml_new_object(struct ggml_context * ctx, enum ggml
     return obj_new;
 }
 
+static void ggml_copy_input_scale_array(struct ggml_tensor * dst, const struct ggml_tensor * src);
+
 static struct ggml_tensor * ggml_new_tensor_impl(
         struct ggml_context * ctx,
         enum   ggml_type      type,
@@ -5957,8 +5964,6 @@ static struct ggml_tensor * ggml_new_tensor_impl(
 
     GGML_ASSERT(type >= 0 && type < GGML_TYPE_COUNT);
     GGML_ASSERT(n_dims >= 1 && n_dims <= GGML_MAX_DIMS);
-
-    const float input_scale = (type == GGML_TYPE_NVFP4_KS || type == GGML_TYPE_F8_E4M3_KS || type == GGML_TYPE_F8_E4M3_B128) && view_src ? ggml_get_input_scale(view_src) : 0.0f;
 
     // find the base tensor and absolute offset
     if (view_src != NULL && view_src->view_src != NULL) {
@@ -6034,8 +6039,9 @@ static struct ggml_tensor * ggml_new_tensor_impl(
     #pragma clang diagnostic pop
 #endif
 
-    if ((type == GGML_TYPE_NVFP4_KS || type == GGML_TYPE_F8_E4M3_KS || type == GGML_TYPE_F8_E4M3_B128) && view_src) {
-        ggml_set_input_scale(result, input_scale);
+    if (view_src && (type == view_src->type ||
+                type == GGML_TYPE_NVFP4_KS || type == GGML_TYPE_F8_E4M3_KS || type == GGML_TYPE_F8_E4M3_B128)) {
+        ggml_copy_input_scale(result, view_src);
     }
 
     // TODO: this should not be needed as long as we don't rely on aligned SIMD loads
@@ -6135,6 +6141,90 @@ float ggml_get_input_scale(const struct ggml_tensor * tensor) {
     return scale;
 }
 
+// Per-expert activation scales.  Set while loading the model, read-only during
+// inference, so the simple registry needs no locking.
+struct ggml_input_scale_array {
+    const struct ggml_tensor * tensor;
+    int64_t n;
+    float * scales;
+};
+
+static struct ggml_input_scale_array * g_input_scale_arrays;
+static size_t g_n_input_scale_arrays;
+static size_t g_cap_input_scale_arrays;
+
+void ggml_set_input_scale_array(struct ggml_tensor * tensor, const float * scales, int64_t n) {
+    if (!tensor || !scales || n <= 0) {
+        return;
+    }
+    for (size_t i = 0; i < g_n_input_scale_arrays; ++i) {
+        if (g_input_scale_arrays[i].tensor == tensor) {
+            if (g_input_scale_arrays[i].n != n) {
+                free(g_input_scale_arrays[i].scales);
+                g_input_scale_arrays[i].scales = (float *) malloc(n*sizeof(float));
+                g_input_scale_arrays[i].n = g_input_scale_arrays[i].scales ? n : 0;
+            }
+            if (g_input_scale_arrays[i].scales) {
+                memcpy(g_input_scale_arrays[i].scales, scales, n*sizeof(float));
+            }
+            return;
+        }
+    }
+    if (g_n_input_scale_arrays == g_cap_input_scale_arrays) {
+        size_t cap = g_cap_input_scale_arrays ? 2*g_cap_input_scale_arrays : 16;
+        void * p = realloc(g_input_scale_arrays, cap*sizeof(*g_input_scale_arrays));
+        if (!p) {
+            return;
+        }
+        g_input_scale_arrays = (struct ggml_input_scale_array *) p;
+        g_cap_input_scale_arrays = cap;
+    }
+    struct ggml_input_scale_array * e = &g_input_scale_arrays[g_n_input_scale_arrays];
+    e->tensor = tensor;
+    e->n = n;
+    e->scales = (float *) malloc(n*sizeof(float));
+    if (!e->scales) {
+        e->n = 0;
+        return;
+    }
+    memcpy(e->scales, scales, n*sizeof(float));
+    ++g_n_input_scale_arrays;
+}
+
+float ggml_get_input_scale_expert(const struct ggml_tensor * tensor, int64_t expert) {
+    // MoE cache tensors are indexed by slot, not by expert.  Until the scales
+    // are remapped through slot_map, only the scalar fallback is correct.
+    if (tensor && strncmp(tensor->name, "moe_cache.", 10) == 0) {
+        return ggml_get_input_scale(tensor);
+    }
+    for (size_t i = 0; i < g_n_input_scale_arrays; ++i) {
+        if (g_input_scale_arrays[i].tensor == tensor) {
+            if (expert >= 0 && expert < g_input_scale_arrays[i].n) {
+                return g_input_scale_arrays[i].scales[expert];
+            }
+            break;
+        }
+    }
+    return ggml_get_input_scale(tensor);
+}
+
+static void ggml_copy_input_scale_array(struct ggml_tensor * dst, const struct ggml_tensor * src) {
+    for (size_t i = 0; i < g_n_input_scale_arrays; ++i) {
+        if (g_input_scale_arrays[i].tensor == src) {
+            ggml_set_input_scale_array(dst, g_input_scale_arrays[i].scales, g_input_scale_arrays[i].n);
+            return;
+        }
+    }
+}
+
+void ggml_copy_input_scale(struct ggml_tensor * dst, const struct ggml_tensor * src) {
+    const float scale = ggml_get_input_scale(src);
+    if (scale != 0.0f) {
+        ggml_set_input_scale(dst, scale);
+    }
+    ggml_copy_input_scale_array(dst, src);
+}
+
 static inline enum ggml_type ggml_mul_mat_vec_dot_type(const struct ggml_tensor * a, int64_t n_col, enum ggml_op op) {
 #if GGML_USE_IQK_MULMAT
 #if defined(__aarch64__) && !defined(__ARM_FEATURE_BF16)
@@ -6153,11 +6243,23 @@ static inline enum ggml_type ggml_mul_mat_vec_dot_type(const struct ggml_tensor 
     return type_traits[a->type].vec_dot_type;
 }
 
+static inline bool ggml_act_calib_wanted(const struct ggml_tensor * t) {
+    return t && t->name[0] && strncmp(t->name, "moe_cache.", 10) != 0 &&
+        strstr(t->name, "ffn_down") != NULL && ggml_act_calib_enabled();
+}
+
+static inline void ggml_quantize_act_row(enum ggml_type type, const float * x, void * y, int64_t n, float scale) {
+    const ggml_type_traits_t * tt = &type_traits[type];
+    if (scale > 0.0f && tt->from_float_scaled) {
+        tt->from_float_scaled(x, y, n, scale);
+    } else {
+        tt->from_float(x, y, n);
+    }
+}
+
 struct ggml_tensor * ggml_dup_tensor(struct ggml_context * ctx, const struct ggml_tensor * src) {
     struct ggml_tensor * result = ggml_new_tensor(ctx, src->type, GGML_MAX_DIMS, src->ne);
-    if ((src->type == GGML_TYPE_NVFP4_KS || src->type == GGML_TYPE_F8_E4M3_KS || src->type == GGML_TYPE_F8_E4M3_B128)) {
-        ggml_set_input_scale(result, ggml_get_input_scale(src));
-    }
+    ggml_copy_input_scale(result, src);
     return result;
 }
 
@@ -19111,6 +19213,8 @@ static int ggml_compute_forward_mul_mat(
 
     enum ggml_type           const vec_dot_type         = ggml_mul_mat_vec_dot_type(src0, ne11, GGML_OP_MUL_MAT);
     ggml_from_float_t        const from_float           = type_traits[vec_dot_type].from_float;
+    const float                    act_scale            = ggml_get_input_scale(src0);
+    (void) from_float;
     int64_t                  const vec_dot_num_rows     = type_traits[type].nrows;
     int64_t                  const matmul_num_cols      = type_traits[type].ncols;
 #if !GGML_USE_IQK_MULMAT
@@ -19139,7 +19243,7 @@ static int ggml_compute_forward_mul_mat(
     //   compute by src0 rows
 
 #if GGML_USE_IQK_MULMAT
-    if (dst->type == GGML_TYPE_F32 && (src1->type == vec_dot_type || vec_dot_type == type_traits[type].vec_dot_type)) {
+    if (act_scale <= 0.0f && dst->type == GGML_TYPE_F32 && (src1->type == vec_dot_type || vec_dot_type == type_traits[type].vec_dot_type)) {
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
                     ne02, ne03, ne12, ne13, nb02, nb03, nb12, nb13, nb2/sizeof(float), nb3/sizeof(float),
                     src0->type, src0->data, nb01,
@@ -19147,6 +19251,17 @@ static int ggml_compute_forward_mul_mat(
                     (float *)dst->data, nb1/sizeof(float), ith, nth)) return node_n;
     }
 #endif
+
+    if (params->ith == 0 && ggml_act_calib_wanted(src0) && src1->type == GGML_TYPE_F32) {
+        for (int64_t i13 = 0; i13 < ne13; ++i13) {
+            for (int64_t i12 = 0; i12 < ne12; ++i12) {
+                for (int64_t i11 = 0; i11 < ne11; ++i11) {
+                    const float * row = (const float *)((const char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
+                    ggml_act_calib_observe_row(src0->name, -1, row, ne10);
+                }
+            }
+        }
+    }
 
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
@@ -19162,7 +19277,7 @@ static int ggml_compute_forward_mul_mat(
         assert(params->wsize >= ne13*nbw3);
         bool done = false;
 #if GGML_USE_IQK_MULMAT
-        if (true) {
+        if (act_scale <= 0.0f) {
             done = true;
             char * work_buffer = wdata;// + ne13*nbw3 + ith*ne10*sizeof(float);
             if (src1->type != GGML_TYPE_F32) {
@@ -19179,7 +19294,7 @@ static int ggml_compute_forward_mul_mat(
                 for (int64_t i12 = 0; i12 < ne12; ++i12) {
                     int64_t i11_processed = 0;
 #if !GGML_USE_IQK_MULMAT
-                    if ((ggml_n_dims(src1) == 2) && from_float_to_mat && gemm) {
+                    if (act_scale <= 0.0f && (ggml_n_dims(src1) == 2) && from_float_to_mat && gemm) {
                         for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
                             from_float_to_mat((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
                                     (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
@@ -19189,9 +19304,10 @@ static int ggml_compute_forward_mul_mat(
                     }
 #endif
                     for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
-                        from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                                ne10);
+                        ggml_quantize_act_row(vec_dot_type,
+                                (const float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                                (void *)        (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                                ne10, act_scale);
                     }
                 }
             }
@@ -19354,7 +19470,7 @@ static void ggml_compute_forward_mul_mat_id(
 
     ggml_vec_dot_t    const vec_dot         = type_traits[type].vec_dot;
     enum ggml_type    const vec_dot_type    = ggml_mul_mat_vec_dot_type(src0, ne12, GGML_OP_MUL_MAT_ID);
-    ggml_from_float_t const from_float      = type_traits[vec_dot_type].from_float;
+    const float             act_scale       = ggml_get_input_scale(src0);
     int64_t           const matmul_num_cols = type_traits[type].ncols;
     ggml_gemv_t       const gemv            = type_traits[type].gemv;
 
@@ -19371,6 +19487,23 @@ static void ggml_compute_forward_mul_mat_id(
     // row groups
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
+
+    if (params->ith == 0 && ggml_act_calib_wanted(src0) && src1->type == GGML_TYPE_F32 && ne13 == 1) {
+        for (int64_t i12 = 0; i12 < ne12; ++i12) {
+            for (int64_t i11 = 0; i11 < ne11; ++i11) {
+                float amax = 0.0f;
+                const float * row = (const float *)((const char *) src1->data + i12*nb12 + i11*nb11);
+                for (int64_t j = 0; j < ne10; ++j) {
+                    const float v = row[j] < 0.0f ? -row[j] : row[j];
+                    if (v > amax) amax = v;
+                }
+                const int32_t expert = *(const int32_t *)((const char *) ids->data + i11*ids->nb[0] + i12*ids->nb[1]);
+                if (expert >= 0 && expert < n_as) {
+                    ggml_act_calib_observe_value(src0->name, expert, amax);
+                }
+            }
+        }
+    }
 
     // kick off read-ahead of the selected experts before src1 quantization, so storage reads overlap that work
     if (params->shared->cplan && params->shared->cplan->moe_expert_prefetch) {
@@ -19408,9 +19541,20 @@ static void ggml_compute_forward_mul_mat_id(
             const int64_t i13 = ir1/(ne11*ne12);
             const int64_t i12 = (ir1 - i13*ne11*ne12)/ne11;
             const int64_t i11 = ir1 - i13*ne11*ne12 - i12*ne11;
-            from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                       (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                       ne10);
+            float row_scale = act_scale;
+            if (ne13 == 1) {
+                // For the MoE cache, `ids` holds slot numbers, not expert numbers.
+                // ggml_get_input_scale_expert() detects the moe_cache prefix and
+                // falls back to the scalar scale in that case.
+                const int32_t expert = *(const int32_t *)((const char *) ids->data + i11*ids->nb[0] + i12*ids->nb[1]);
+                if (expert >= 0 && expert < n_as) {
+                    row_scale = ggml_get_input_scale_expert(src0, expert);
+                }
+            }
+            ggml_quantize_act_row(vec_dot_type,
+                    (const float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                    (void *)        (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                    ne10, row_scale);
         }
     }
 
@@ -19682,6 +19826,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     const enum ggml_type type = src0->type;
 
     enum ggml_type    const vec_dot_type    = ggml_mul_mat_vec_dot_type(src0, ne12, GGML_OP_MOE_FUSED_UP_GATE);
+    const float             act_scale       = ggml_get_input_scale(src0);
 
     // we don't support permuted src0 or src1
     GGML_ASSERT(nb00 == ggml_type_size(type));
@@ -19721,8 +19866,6 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     if (src1->type != vec_dot_type) {
 
-        ggml_from_float_t const from_float = type_traits[vec_dot_type].from_float;
-
         char * wdata = params->wdata;
 
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
@@ -19741,9 +19884,20 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
             const int64_t i13 = ir1/(ne11*ne12);
             const int64_t i12 = (ir1 - i13*ne11*ne12)/ne11;
             const int64_t i11 = ir1 - i13*ne11*ne12 - i12*ne11;
-            from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                       (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                       ne10);
+            float row_scale = act_scale;
+            if (ne13 == 1) {
+                // For the MoE cache, `ids` holds slot numbers, not expert numbers.
+                // ggml_get_input_scale_expert() detects the moe_cache prefix and
+                // falls back to the scalar scale in that case.
+                const int32_t expert = *(const int32_t *)((const char *) ids->data + i11*ids->nb[0] + i12*ids->nb[1]);
+                if (expert >= 0 && expert < n_as) {
+                    row_scale = ggml_get_input_scale_expert(src0, expert);
+                }
+            }
+            ggml_quantize_act_row(vec_dot_type,
+                    (const float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                    (void *)        (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                    ne10, row_scale);
         }
     }
 
@@ -19923,6 +20077,7 @@ static void ggml_compute_forward_mul_mat_up_gate(
     const enum ggml_type type = src0->type;
 
     enum ggml_type    const vec_dot_type    = type_traits[type].vec_dot_type;
+    const float             act_scale       = ggml_get_input_scale(src0);
 
     // we don't support permuted src0 or src1
     GGML_ASSERT(nb00 == ggml_type_size(type));
@@ -19934,8 +20089,6 @@ static void ggml_compute_forward_mul_mat_up_gate(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
     GGML_ASSERT(ne13 == 1);
-
-    ggml_from_float_t const from_float = type_traits[vec_dot_type].from_float;
 
     char * wdata = params->wdata;
 
@@ -19955,9 +20108,10 @@ static void ggml_compute_forward_mul_mat_up_gate(
         const int64_t i13 = ir1/(ne11*ne12);
         const int64_t i12 = (ir1 - i13*ne11*ne12)/ne11;
         const int64_t i11 = ir1 - i13*ne11*ne12 - i12*ne11;
-        from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                   (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                   ne10);
+        ggml_quantize_act_row(vec_dot_type,
+                (const float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                (void *)        (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                ne10, act_scale);
     }
 
     ggml_barrier(params->shared);

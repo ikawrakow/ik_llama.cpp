@@ -22,6 +22,9 @@
 #include <map>
 #include <array>
 #include <charconv>
+#include <fstream>
+#include <sstream>
+#include <cstdlib>
 #include <future>
 #include <regex>
 #include <algorithm>
@@ -540,6 +543,53 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
                     fp8_precision == LLAMA_FP8_PRECISION_AUTO ? "auto" : fp8_w8a8 ? "w8a8" : "w8a16", fp8_w8a8 ? "W8A8" : "W8A16", n_fp8, n_static,
                     fp8_precision != LLAMA_FP8_PRECISION_AUTO ? "" : declared ? " (the file declares 8-bit activations)" :
                     by_scale ? " (each FP8 tensor of the file has an input scale)" : " (the file declares no 8-bit activations)");
+        }
+    }
+
+    // CPU-only experiment: feed the per-tensor scales produced by the
+    // IK_ACT_CALIB run back into the fixed-scale activation quantizer.
+    if (const char * scales_file = std::getenv("IK_ACT_SCALES"); scales_file && *scales_file) {
+        std::ifstream f(scales_file);
+        if (!f) {
+            LLAMA_LOG_WARN("%s: cannot open IK_ACT_SCALES='%s'\n", __func__, scales_file);
+        } else {
+            std::map<std::string, std::map<int, float>> scales;
+            std::string line;
+            while (std::getline(f, line)) {
+                if (line.empty() || line[0] == '#') continue;
+                std::istringstream iss(line);
+                std::string name;
+                int expert = -1;
+                float scale = 0.0f;
+                if (!(iss >> name >> expert >> scale)) continue;
+                if (!(scale > 0.0f) || !std::isfinite(scale)) continue;
+                scales[name][expert] = std::max(scales[name][expert], scale);
+            }
+            int n_applied = 0;
+            for (auto & w : weights) {
+                auto it = scales.find(w.tensor->name);
+                if (it == scales.end()) continue;
+
+                int max_expert = -1;
+                float scalar = 0.0f;
+                for (const auto & [expert, scale] : it->second) {
+                    scalar = std::max(scalar, scale);
+                    if (expert >= 0) max_expert = std::max(max_expert, expert);
+                }
+                if (max_expert >= 0) {
+                    std::vector<float> per_expert(max_expert + 1, 0.0f);
+                    for (const auto & [expert, scale] : it->second) {
+                        if (expert >= 0 && expert < (int) per_expert.size()) per_expert[expert] = scale;
+                    }
+                    ggml_set_input_scale_array(w.tensor, per_expert.data(), (int64_t) per_expert.size());
+                }
+                if (scalar > 0.0f) {
+                    ggml_set_input_scale(w.tensor, scalar);
+                }
+                ++n_applied;
+            }
+            LLAMA_LOG_INFO("%s: IK_ACT_SCALES: %d/%zu tensors got a fixed activation scale from '%s'\n",
+                    __func__, n_applied, scales.size(), scales_file);
         }
     }
 

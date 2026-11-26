@@ -912,7 +912,7 @@ void iqk_quantize_q4_0(const float * x, void * vy, int64_t k) {
 #endif
 }
 
-void quantize_row_q8_0_x4(const float * x, void * vy, int64_t k) {
+static void quantize_row_q8_0_x4_impl(const float * x, void * vy, int64_t k, float fixed) {
     const int nb = k / QK8_0;
     const int nb4 = 4*(nb/4);
 
@@ -934,7 +934,7 @@ void quantize_row_q8_0_x4(const float * x, void * vy, int64_t k) {
 
         const float amax = vmaxvq_f32(amaxv[0]);
 
-        const float d = amax / ((1 << 7) - 1);
+        const float d = fixed > 0.0f ? fixed : amax / ((1 << 7) - 1);
         const float id = d ? 1.0f/d : 0.0f;
 
         if (i < nb4) {
@@ -981,13 +981,14 @@ void quantize_row_q8_0_x4(const float * x, void * vy, int64_t k) {
         max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
         const float maxScalar = _mm_cvtss_f32( max4 );
 
-        const float d = maxScalar / 127.f;
+        const float d = fixed > 0.0f ? fixed : maxScalar / 127.f;
         if (i < nb4) {
             y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
         } else {
             y[i].d = GGML_FP32_TO_FP16(d);
         }
-        const float id = ( maxScalar != 0.0f ) ? 127.f / maxScalar : 0.0f;
+        const float de = fixed > 0.0f ? GGML_FP16_TO_FP32(GGML_FP32_TO_FP16(fixed)) : d;
+        const float id = de > 0.0f ? 1.0f/de : 0.0f;
         const __m256 mul = _mm256_set1_ps( id );
 
         v0 = _mm256_mul_ps( v0, mul );
@@ -1004,6 +1005,13 @@ void quantize_row_q8_0_x4(const float * x, void * vy, int64_t k) {
         __m256i i1 = _mm256_cvtps_epi32( v1 );
         __m256i i2 = _mm256_cvtps_epi32( v2 );
         __m256i i3 = _mm256_cvtps_epi32( v3 );
+
+        const __m256i clamp_lo = _mm256_set1_epi32(-127);
+        const __m256i clamp_hi = _mm256_set1_epi32( 127);
+        i0 = _mm256_max_epi32(clamp_lo, _mm256_min_epi32(clamp_hi, i0));
+        i1 = _mm256_max_epi32(clamp_lo, _mm256_min_epi32(clamp_hi, i1));
+        i2 = _mm256_max_epi32(clamp_lo, _mm256_min_epi32(clamp_hi, i2));
+        i3 = _mm256_max_epi32(clamp_lo, _mm256_min_epi32(clamp_hi, i3));
 
         // Convert int32 to int16
         i0 = _mm256_packs_epi32( i0, i1 );  // 0, 1, 2, 3,  8, 9, 10, 11,  4, 5, 6, 7, 12, 13, 14, 15
@@ -1026,9 +1034,17 @@ void quantize_row_q8_0_x4(const float * x, void * vy, int64_t k) {
 #endif
 }
 
+void quantize_row_q8_0_x4(const float * x, void * vy, int64_t k) {
+    quantize_row_q8_0_x4_impl(x, vy, k, 0.0f);
+}
+
+void quantize_row_q8_0_x4_fixed(const float * x, void * vy, int64_t k, float scale) {
+    quantize_row_q8_0_x4_impl(x, vy, k, scale);
+}
+
 namespace {
 template <typename Block, typename Block_x4>
-void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
+void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k, float fixed = 0.0f) {
     assert(k % QK8_1 == 0);
     const int nb = k / QK8_1;
 
@@ -1050,7 +1066,7 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
 
         const float amax = vmaxvq_f32(amaxv[0]);
 
-        const float d = amax / ((1 << 7) - 1);
+        const float d = fixed > 0.0f ? fixed : amax / ((1 << 7) - 1);
         const float id = d ? 1.0f/d : 0.0f;
 
         if (i < nb4) {
@@ -1063,7 +1079,8 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
 
         for (int j = 0; j < 8; j++) {
             const float32x4_t v  = vmulq_n_f32(srcv[j], id);
-            const int32x4_t   vi = vcvtnq_s32_f32(v);
+            int32x4_t vi = vcvtnq_s32_f32(v);
+            vi = vmaxq_s32(vdupq_n_s32(-127), vminq_s32(vdupq_n_s32(127), vi));
 
             if (i < nb4) {
                 y4[i4].qs[QK8_1*ir + 4*j + 0] = vgetq_lane_s32(vi, 0);
@@ -1117,7 +1134,7 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
         const float max_scalar = _mm_cvtss_f32( max4 );
 
         // Quantize these floats
-        float d = max_scalar / 127.f;
+        float d = fixed > 0.0f ? fixed : max_scalar / 127.f;
         if constexpr (std::is_same_v<Block, block_q8_1>) {
             if (i < nb4) {
                 y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
@@ -1153,6 +1170,16 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
         __m256i i1 = _mm256_cvtps_epi32( v1 );
         __m256i i2 = _mm256_cvtps_epi32( v2 );
         __m256i i3 = _mm256_cvtps_epi32( v3 );
+
+        // Fixed-scale quantization can exceed the Q8 range.  Clamp to
+        // [-127, 127] (not -128: several vec_dot kernels assume the dynamic
+        // quantizer's range) before packing.
+        const __m256i clamp_lo = _mm256_set1_epi32(-127);
+        const __m256i clamp_hi = _mm256_set1_epi32( 127);
+        i0 = _mm256_max_epi32(clamp_lo, _mm256_min_epi32(clamp_hi, i0));
+        i1 = _mm256_max_epi32(clamp_lo, _mm256_min_epi32(clamp_hi, i1));
+        i2 = _mm256_max_epi32(clamp_lo, _mm256_min_epi32(clamp_hi, i2));
+        i3 = _mm256_max_epi32(clamp_lo, _mm256_min_epi32(clamp_hi, i3));
 
         // Compute the sum of the quants and set y[i].s
         int isum = hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)));
@@ -1200,6 +1227,10 @@ void quantize_row_q8_1_x4(const float * x, void * vy, int64_t k) {
 
 void quantize_row_q8_2_x4(const float * x, void * vy, int64_t k) {
     quantize_row_q8_1_x4_T<block_q8_2, block_q8_2_x4>(x, (block_q8_2 *)vy, k);
+}
+
+void quantize_row_q8_2_x4_fixed(const float * x, void * vy, int64_t k, float scale) {
+    quantize_row_q8_1_x4_T<block_q8_2, block_q8_2_x4>(x, (block_q8_2 *)vy, k, scale);
 }
 
 //
