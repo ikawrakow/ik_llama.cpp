@@ -275,17 +275,6 @@ static __global__ void k_concat_very_simple(int nelem, int ne00,
     y[i] = i < ne00 ? x0[i] : x1[i - ne00];
 }
 
-static __global__ void k_concat_transposed_N(int nelem, int ne0, int ne00, size_t nb01, size_t nb10,
-        const float * __restrict__ x0, const float * __restrict__ x1, float * __restrict__ y) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= nelem) {
-        return;
-    }
-    int i1 = i / ne0;
-    int i0 = i % ne0;
-    y[i] = i0 < ne00 ? x0[i0 + i1*nb01] : x1[(i0 - ne00)*nb10 + i1];
-}
-
 void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -302,10 +291,18 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) &&
         (dim == 3 || (dim == 2 && dst->ne[3] == 1) || (dim == 1 && dst->ne[2]*dst->ne[3] == 1))) {
+        constexpr int k_block_size = 256;
         const size_t size0 = ggml_nbytes(src0);
         const size_t size1 = ggml_nbytes(src1);
-        CUDA_CHECK(cudaMemcpyAsync((char *)dst->data,         src0->data, size0, cudaMemcpyDeviceToDevice, stream));
-        CUDA_CHECK(cudaMemcpyAsync((char *)dst->data + size0, src1->data, size1, cudaMemcpyDeviceToDevice, stream));
+        if (size0 % sizeof(float) == 0 && size1 % sizeof(float) == 0) {
+            int nelem = (size0 + size1)/sizeof(float);
+            int nb = (nelem + k_block_size - 1)/k_block_size;
+            k_concat_very_simple<<<nb, k_block_size, 0, ctx.stream()>>>(nelem, size0/sizeof(float),
+                    (const float *)src0->data, (const float *)src1->data, (float *)dst->data);
+        } else {
+            CUDA_CHECK(cudaMemcpyAsync((char *)dst->data,         src0->data, size0, cudaMemcpyDeviceToDevice, stream));
+            CUDA_CHECK(cudaMemcpyAsync((char *)dst->data + size0, src1->data, size1, cudaMemcpyDeviceToDevice, stream));
+        }
         return;
     }
 
