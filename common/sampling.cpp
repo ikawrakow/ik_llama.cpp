@@ -568,14 +568,16 @@ static llama_token llama_sampling_sample_impl(
         return id;
     }
 
+    std::vector<float> original_logits;
+    llama_sampling_prepare(ctx_sampling, ctx_main, ctx_cfg, idx, /* grammar_first= */ grammar_first, &original_logits);
+
+    // read after llama_sampling_prepare(): an expiring sampling-parameter bias changes params there, and
+    // sampler_queue() reads params after it too
     const float   temp            = params.temp;
     const int     mirostat        = params.mirostat;
     const float   mirostat_tau    = params.mirostat_tau;
     const float   mirostat_eta    = params.mirostat_eta;
     const float   adaptive_target = params.adaptive_target;
-
-    std::vector<float> original_logits;
-    llama_sampling_prepare(ctx_sampling, ctx_main, ctx_cfg, idx, /* grammar_first= */ grammar_first, &original_logits);
     llama_token_data_array & cur_p = ctx_sampling->cur_p;
     if (ctx_sampling->grammar != NULL && !grammar_first) {
         GGML_ASSERT(!original_logits.empty());
