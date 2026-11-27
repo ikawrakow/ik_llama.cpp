@@ -973,6 +973,21 @@ extern "C" {
     GGML_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
 
+    GGML_API int  ggml_numa_band_count(void); // number of NUMA nodes holding at least one CPU from
+    GGML_API int  ggml_numa_band_node(int band); // system node id of the band-th active node
+    GGML_API int  ggml_numa_band_cpu_count(int band); // CPUs of the band-th active node inside the process affinity mask
+    GGML_API int  ggml_numa_band_cpu(int band, int i); // the i-th such CPU, or -1 when exhausted
+    GGML_API bool ggml_numa_mbind_range(void * start, size_t size, int node); 
+    GGML_API void ggml_numa_moe_band_split_set(bool on); // arm/disarm the node-partitioned MoE chunk
+
+    GGML_API void  ggml_numa_ensure_topology(void);
+    GGML_API bool  ggml_numa_moe_band_split_enabled(void); // true if the scheduler is armed.
+    GGML_API int   ggml_numa_page_node(void * addr); // node of the page containing addr
+    GGML_API bool  ggml_numa_mem_policy_explicit_bind(void); //true if the task memory policy is MPOL_BIND
+
+    GGML_API void  ggml_numa_dense_band_split_set(bool on);
+    GGML_API bool  ggml_numa_dense_band_split_enabled(void);
+
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);
 

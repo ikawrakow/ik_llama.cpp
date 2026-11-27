@@ -58,6 +58,11 @@ struct llama_model_loader {
     bool defer_ple = false;
     // Explicit --no-mmap with deferred tables: copy dense weights out, alias deferred only.
     bool defer_copy_dense = false;
+    // mmap alias mode: NUMA band placement will run by node-pinned first-touch
+    // instead of mbind (file-backed pages ignore mbind policy). Set during
+    // init_mappings(); consumed by llama.cpp to skip the bulk prefault and to
+    // place the bands before load_all_data().
+    bool numa_mmap_bandsplit = false;
     std::vector<ggml_backend_buffer_type_t> integrated_bufts;
     // Lazy-loader bookkeeping: mutable so const load_data_for can skip a
     // tensor already folded by a previous load_all_data/load_data_for call.

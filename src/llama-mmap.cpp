@@ -335,9 +335,24 @@ struct llama_mmap::impl {
             }
         }
         if (numa) {
-            if (posix_madvise(addr, file->size(), POSIX_MADV_RANDOM)) {
-                LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_RANDOM) failed: %s\n",
-                        strerror(errno));
+            // Use readahead. Export GGML_NUMA_MADV_RANDOM=1 to restore the old behavior.
+            if (getenv("GGML_NUMA_MADV_RANDOM") != nullptr) {
+                if (posix_madvise(addr, file->size(), POSIX_MADV_RANDOM)) {
+                    LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_RANDOM) failed: %s\n",
+                                   strerror(errno));
+                }
+            } else {
+#ifdef MADV_POPULATE_READ
+                if (madvise(addr, file->size(), MADV_POPULATE_READ)) {
+                    LLAMA_LOG_WARN("warning: madvise(.., MADV_POPULATE_READ) failed: %s\n",
+                                   strerror(errno));
+                }
+#else
+                if (posix_madvise(addr, file->size(), POSIX_MADV_WILLNEED)) {
+                    LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
+                                   strerror(errno));
+                }
+#endif
             }
         }
 
