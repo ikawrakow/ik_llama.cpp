@@ -4,6 +4,7 @@
 #include "llama-model.h"
 #include "llama-context.h"
 #include "llama-moe-cache.h"
+#include "llama-moe-cache-policy.h"
 #include "llama-delta-net.h"
 
 #include "ggml.h"
@@ -1980,6 +1981,7 @@ llm_expert_gating_func_type   gating_op,
                         ggml_cont(ctx, selected_experts);
                 if (n_tokens > 1) lookup_ids = ggml_reshape_1d(ctx, lookup_ids, ggml_nelements(lookup_ids));
                 ggml_tensor * ids = ggml_get_rows(ctx, map, lookup_ids);
+                llama_moe_cache_policy_detail::set_lookup_geometry(ids, n_expert_used);
                 cb(ids, "lru_ids", il);
                 const bool supported = ggml_backend_supports_op(backend, ids);
                 if (supported) {
@@ -2009,6 +2011,7 @@ llm_expert_gating_func_type   gating_op,
                         ggml_cont(ctx, selected_experts);
                 if (n_tokens > 1) lookup_ids = ggml_reshape_1d(ctx, lookup_ids, ggml_nelements(lookup_ids));
                 cache_slot_ids = ggml_get_rows(ctx, slot_map, lookup_ids);
+                llama_moe_cache_policy_detail::set_lookup_geometry(cache_slot_ids, n_expert_used);
                 cb(cache_slot_ids, "lru_cache_slot_ids", il);
             } else {
                 ggml_tensor * cache_lookup_ids = ggml_is_contiguous(selected_experts) ? selected_experts :
