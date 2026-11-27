@@ -19335,6 +19335,35 @@ static int ggml_compute_forward_mul_mat(
 
 // ggml_compute_forward_mul_mat_id
 
+#if GGML_USE_IQK_MULMAT && defined GGML_EXPERT_CHUNKING
+#define GGML_MOE_ORDER_MAX 1024
+
+// The experts that received rows, in decreasing order of their row count (ties in expert order),
+// computed by every thread from the same counts. Counts >= GGML_MOE_ORDER_MAX share the first
+// place. Returns false when there are too many experts.
+static bool ggml_moe_order_by_rows(const int64_t * counts, int n_as, int32_t * order) {
+    if (n_as > GGML_MOE_ORDER_MAX) {
+        return false;
+    }
+    int32_t start[GGML_MOE_ORDER_MAX + 1];
+    memset(start, 0, sizeof(start));
+    for (int a = 0; a < n_as; ++a) {
+        if (counts[a] > 0) {
+            start[counts[a] >= GGML_MOE_ORDER_MAX ? 1 : GGML_MOE_ORDER_MAX - counts[a] + 1]++;
+        }
+    }
+    for (int b = 0; b < GGML_MOE_ORDER_MAX; ++b) {
+        start[b + 1] += start[b];
+    }
+    for (int a = 0; a < n_as; ++a) {
+        if (counts[a] > 0) {
+            order[start[counts[a] >= GGML_MOE_ORDER_MAX ? 0 : GGML_MOE_ORDER_MAX - counts[a]]++] = a;
+        }
+    }
+    return true;
+}
+#endif
+
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -19465,18 +19494,29 @@ static void ggml_compute_forward_mul_mat_id(
             if (matrix_row_counts[a] > 0) total_chunks += chunks_per_expert;
         }
 
+        // with quantized experts at prefill, hand out the chunks of the experts with the most rows
+        // first, so that a large expert does not start last and leave the other threads waiting
+        int32_t order[GGML_MOE_ORDER_MAX];
+        const bool by_rows = ggml_is_quantized(type) && ids->ne[0]*ids->ne[1] >= 4*n_as &&
+                             ggml_moe_order_by_rows(matrix_row_counts, n_as, order);
+
         int chunk_id = ith;
         while (chunk_id < total_chunks) {
             // Map global chunk_id to (expert_index, local_chunk_index)
             int acc = 0, cur_a = -1, local_chunk = 0;
-            for (int a = 0; a < n_as; a++) {
-                if (matrix_row_counts[a] == 0) continue;
-                if (chunk_id < acc + chunks_per_expert) {
-                    cur_a = a;
-                    local_chunk = chunk_id - acc;
-                    break;
+            if (by_rows) {
+                cur_a = order[chunk_id / chunks_per_expert];
+                local_chunk = chunk_id % chunks_per_expert;
+            } else {
+                for (int a = 0; a < n_as; a++) {
+                    if (matrix_row_counts[a] == 0) continue;
+                    if (chunk_id < acc + chunks_per_expert) {
+                        cur_a = a;
+                        local_chunk = chunk_id - acc;
+                        break;
+                    }
+                    acc += chunks_per_expert;
                 }
-                acc += chunks_per_expert;
             }
 
             const char * src0_cur = (const char *) src0->data + cur_a*nb02;
@@ -19802,25 +19842,35 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         if (matrix_row_counts[a] > 0) total_chunks_ug += chunks_per_expert_ug;
     }
 
+    // with quantized experts at prefill, the experts with the most rows first (see mul_mat_id)
+    int32_t order[GGML_MOE_ORDER_MAX];
+    const bool by_rows = ggml_is_quantized(type) && ids->ne[0]*ids->ne[1] >= 4*n_as &&
+                         ggml_moe_order_by_rows(matrix_row_counts, n_as, order);
+
     int last_a = 0;
     int last_acc = 0;
     int chunk_id_ug = ith;
     while (chunk_id_ug < total_chunks_ug) {
         int acc = last_acc, cur_a = -1, local_chunk = 0;
-        for (int a = last_a; a < n_as; a++) {
-            if (matrix_row_counts[a] == 0) continue;
-            if (chunk_id_ug < acc + chunks_per_expert_ug) {
-                cur_a = a;
-                local_chunk = chunk_id_ug - acc;
-                break;
+        if (by_rows) {
+            cur_a = order[chunk_id_ug / chunks_per_expert_ug];
+            local_chunk = chunk_id_ug % chunks_per_expert_ug;
+        } else {
+            for (int a = last_a; a < n_as; a++) {
+                if (matrix_row_counts[a] == 0) continue;
+                if (chunk_id_ug < acc + chunks_per_expert_ug) {
+                    cur_a = a;
+                    local_chunk = chunk_id_ug - acc;
+                    break;
+                }
+                acc += chunks_per_expert_ug;
             }
-            acc += chunks_per_expert_ug;
+            if (cur_a < 0) {
+                return;
+            }
+            last_a = cur_a;
+            last_acc = acc;
         }
-        if (cur_a < 0) {
-            return;
-        }
-        last_a = cur_a;
-        last_acc = acc;
 
         const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
         if (src0_2) {
