@@ -572,6 +572,14 @@ struct llama_model {
     llama_hparams hparams = {};
     llama_vocab   vocab;
 
+    struct nt_exact { struct ggml_tensor * cols = nullptr; struct ggml_tensor * vals = nullptr; };
+    std::unordered_map<const struct ggml_tensor *, nt_exact> nt_exact_map;
+    const nt_exact * nt_exact_cols(const struct ggml_tensor * t) const {
+        if (!t || nt_exact_map.empty()) return nullptr;
+        auto it = nt_exact_map.find(t);
+        return it == nt_exact_map.end() ? nullptr : &it->second;
+    }
+
     // Prism ternary Hadamard rotations, keyed by GGUF weight name (empty for other models)
     std::unordered_map<std::string, llama_hadamard_transform> hadamard_map;
     const llama_hadamard_transform * hadamard_rotation(const struct ggml_tensor * t) const;

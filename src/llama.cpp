@@ -4260,7 +4260,7 @@ static void llm_apply_khad_pretransform(llama_model & model) {
                t == GGML_TYPE_IQ4_NL ||
                t == GGML_TYPE_Q4_K  || t == GGML_TYPE_Q5_K  || t == GGML_TYPE_Q6_K ||
                t == GGML_TYPE_IQ4_K || t == GGML_TYPE_IQ5_K ||
-               t == GGML_TYPE_IQ4_KS|| t == GGML_TYPE_IQ4_KSS||
+               t == GGML_TYPE_IQ4_KS|| t == GGML_TYPE_IQ4_KSS|| t == GGML_TYPE_IQ4_NT ||
                t == GGML_TYPE_IQ5_KS;
     };
 
@@ -5347,6 +5347,43 @@ static bool llm_load_tensors(
     }
 
     use_mmap_buffer = cth->create_tensors();
+
+    {
+        std::vector<std::pair<ggml_context *, ggml_tensor *>> nt_weights;
+        for (auto & it : ctx_map) {
+            for (ggml_tensor * t = ggml_get_first_tensor(it.second); t; t = ggml_get_next_tensor(it.second, t)) {
+                if (t->type == GGML_TYPE_IQ4_NT && t->view_src == nullptr) nt_weights.push_back({it.second, t});
+            }
+        }
+        for (auto & [ctx, t] : nt_weights) {
+            std::string base = ggml_get_name(t);
+            if (base.size() > 7 && base.compare(base.size() - 7, 7, ".weight") == 0) base.resize(base.size() - 7);
+            const std::string cname = base + ".nt_cols", vname = base + ".nt_vals";
+            const ggml_tensor * cm = ml.get_tensor_meta(cname.c_str());
+            const ggml_tensor * vm = ml.get_tensor_meta(vname.c_str());
+            if (!cm || !vm) continue;
+            if (cm->type != GGML_TYPE_I32 || (vm->type != GGML_TYPE_BF16 && vm->type != GGML_TYPE_F32) || vm->ne[0] != t->ne[1] ||
+                vm->ne[1] != cm->ne[0] || vm->ne[2] != cm->ne[1] || cm->ne[1] != t->ne[2]) {
+                throw std::runtime_error(format("IQ4_NT companion tensors of %s have unexpected shapes", ggml_get_name(t)));
+            }
+            auto & ex = model.nt_exact_map[t];
+            ex.cols = ml.create_tensor(ctx, cname, {cm->ne[0], cm->ne[1]});
+            ex.vals = ml.create_tensor(ctx, vname, {vm->ne[0], vm->ne[1], vm->ne[2]});
+        }
+        std::unordered_set<std::string> attached;
+        for (auto & it : model.nt_exact_map) { attached.insert(ggml_get_name(it.second.cols)); attached.insert(ggml_get_name(it.second.vals)); }
+        std::vector<std::pair<std::string, std::vector<int64_t>>> orphans;
+        for (const auto & w : ml.weights) {
+            const std::string n = ggml_get_name(w.tensor);
+            const bool companion = (n.size() > 8 && (n.compare(n.size() - 8, 8, ".nt_cols") == 0 || n.compare(n.size() - 8, 8, ".nt_vals") == 0));
+            if (companion && !attached.count(n)) orphans.push_back({n, std::vector<int64_t>(w.tensor->ne, w.tensor->ne + ggml_n_dims(w.tensor))});
+        }
+        for (auto & [n, ne] : orphans) ml.create_tensor(nullptr, n, ne, llama_model_loader::TENSOR_SKIP);
+        if (!model.nt_exact_map.empty()) {
+            LLAMA_LOG_INFO("%s: IQ4_NT exact columns for %zu of %zu IQ4_NT tensors (%zu companions of unused weights skipped)\n", __func__,
+                    model.nt_exact_map.size(), nt_weights.size(), orphans.size());
+        }
+    }
     // Keep file mappings for deferred tables when the mmap path is off; what
     // aliases vs copies is decided per tensor at load (dense copies under --no-mmap).
     bool keep_ple_mapping = false;

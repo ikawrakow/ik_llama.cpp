@@ -1,4 +1,5 @@
 #include "common.cuh"
+#include "nt-encoder.cuh"
 #include "ks-encoder.cuh"
 #include "../iqk/iqk_quantize.h"
 
@@ -763,7 +764,8 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
         const float * imatrix) {
     const bool ks = type == GGML_TYPE_IQ3_KS || type == GGML_TYPE_IQ4_KS || type == GGML_TYPE_IQ5_KS || type == GGML_TYPE_IQ4_KS_R4 ||
         type == GGML_TYPE_IQ4_KS_R16 || type == GGML_TYPE_IQ5_KS_R4;
-    if (type != GGML_TYPE_IQ4_KT && type != GGML_TYPE_IQ3_KT && type != GGML_TYPE_IQ2_KT && type != GGML_TYPE_IQ1_KT && !ks) {
+    const bool is_nt = type == GGML_TYPE_IQ4_NT;
+    if (type != GGML_TYPE_IQ4_KT && type != GGML_TYPE_IQ3_KT && type != GGML_TYPE_IQ2_KT && type != GGML_TYPE_IQ1_KT && !ks && !is_nt) {
         return 0;
     }
 #if defined(GGML_USE_HIPBLAS) || defined(GGML_USE_MUSA)
@@ -788,6 +790,9 @@ GGML_CALL size_t ggml_cuda_quantize(int device, enum ggml_type type, const float
     ggml_cuda_set_device(device);
     if (ks) {
         return ggml_cuda_quantize_ks(device, type, src, dst, nrows, n_per_row, nslice, imatrix);
+    }
+    if (is_nt) {
+        return ggml_cuda_quantize_nt(device, src, dst, nrows, n_per_row, nslice, imatrix);
     }
     const kt_codebook cb = kt_get_codebook(device, type);
 

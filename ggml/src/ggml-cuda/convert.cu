@@ -1,3 +1,4 @@
+#include "nt-common.cuh"
 //
 // Copyright (C) 2023-2024 The ggml authors
 // Copyright (C) 2024 Iwan Kawrakow
@@ -2048,6 +2049,13 @@ static void dequantize_row_iq4_kss_cuda(const void * vx, dst_t * y, const int64_
 }
 
 template<typename dst_t>
+static void dequantize_row_iq4_nt_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ4_NT, n_per_row);
+    const int64_t nunits = nrows * (n_per_row / 128);
+    nt_dequantize_block<<<(nunits + 1)/2, 32, 0, stream>>>(vx, y, n_per_row, row_size, nunits);
+}
+
+template<typename dst_t>
 static void dequantize_row_iq2_ks_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
     const int64_t k = nrows * n_per_row;
     const int64_t row_size = ggml_row_size(GGML_TYPE_IQ2_KS, n_per_row);
@@ -2316,6 +2324,8 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
             return dequantize_row_iq3_ks_cuda<nv_bfloat16>;
         case GGML_TYPE_IQ4_KSS:
             return dequantize_row_iq4_kss_cuda<nv_bfloat16>;
+        case GGML_TYPE_IQ4_NT:
+            return dequantize_row_iq4_nt_cuda<nv_bfloat16>;
         case GGML_TYPE_IQ4_KS:
             return dequantize_row_iq4_ks_cuda<nv_bfloat16>;
         case GGML_TYPE_NVFP4_KS:
@@ -2440,6 +2450,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq4_ks_cuda;
         case GGML_TYPE_IQ4_KSS:
             return dequantize_row_iq4_kss_cuda;
+        case GGML_TYPE_IQ4_NT:
+            return dequantize_row_iq4_nt_cuda;
         case GGML_TYPE_IQ5_KS:
             return dequantize_row_iq5_ks_cuda;
         case GGML_TYPE_IQ2_KS:
@@ -2571,6 +2583,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq4_ks_cuda;
         case GGML_TYPE_IQ4_KSS:
             return dequantize_row_iq4_kss_cuda;
+        case GGML_TYPE_IQ4_NT:
+            return dequantize_row_iq4_nt_cuda;
         case GGML_TYPE_IQ5_KS:
             return dequantize_row_iq5_ks_cuda;
         case GGML_TYPE_IQ2_KS:

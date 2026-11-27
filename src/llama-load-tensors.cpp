@@ -6155,6 +6155,10 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     auto g_meta = ml.require_tensor_meta(g_name.c_str());
 
     const bool same_scale = ggml_get_input_scale(u_meta) == ggml_get_input_scale(g_meta);
+    if (u_meta->type == GGML_TYPE_IQ4_NT) {
+        LLAMA_LOG_INFO("%s: not merging IQ4_NT up/gate (per-tensor exact columns)\n", __func__);
+        return false;
+    }
     if (u_meta->type != g_meta->type || u_meta->ne[0] != g_meta->ne[0] || u_meta->ne[2] != g_meta->ne[2] || !same_scale) {
         LLAMA_LOG_INFO("%s: not merging because up/gate meta info is different\n", __func__);
         return false;
@@ -6302,7 +6306,8 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
     const bool same_qk_scale = ggml_get_input_scale(wq) == ggml_get_input_scale(wk);
     const bool same_qv_scale = ggml_get_input_scale(wq) == ggml_get_input_scale(wv);
     bool fused_qkv = false;
-    if (ml.merge_qkv && same_qk_scale && same_qv_scale && wq->type == wk->type && wq->type == wv->type && (ignore_attn_scale || hparams.f_attention_scale == 0.0f)) {
+    if (ml.merge_qkv && same_qk_scale && same_qv_scale && wq->type == wk->type && wq->type == wv->type && wq->type != GGML_TYPE_IQ4_NT &&
+        (ignore_attn_scale || hparams.f_attention_scale == 0.0f)) {
         GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
         GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
         GGML_ASSERT(wv->ne[0] == n_embd && wv->ne[1] == n_embd_gqa);

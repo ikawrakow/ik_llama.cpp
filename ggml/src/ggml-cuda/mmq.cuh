@@ -96,6 +96,7 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ3_K_R4:
         case GGML_TYPE_IQ4_KSS:
+        case GGML_TYPE_IQ4_NT:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
         case GGML_TYPE_IQ4_KS_R16:
@@ -230,6 +231,7 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
         case GGML_TYPE_IQ3_KS  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ3_KS_R16: return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_KSS : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_IQ4_NT  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_KS  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_KS_R4  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_KS_R16 : return MMQ_DP4A_TXS_Q8_0;
@@ -302,6 +304,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_IQ3_KS  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ3_KS_R16: return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_KSS : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_IQ4_NT  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_KS  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_KS_R4  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_KS_R16 : return MMQ_MMA_TILE_X_K_Q8_0;
@@ -5069,6 +5072,7 @@ extern DECL_MMQ_CASE(GGML_TYPE_IQ2_KL);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ3_KS);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ3_KS_R16);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_KSS);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NT);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_KS);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_KS_R4);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ5_KS_R4);

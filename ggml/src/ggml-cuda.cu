@@ -72,6 +72,7 @@
 #include "ggml-cuda/indexer_topk.cuh"
 #include "ggml-cuda/ds4_comp.cuh"
 #include "ggml-cuda/inkling2.cuh"
+#include "ggml-cuda/add-exact-cols.cuh"
 
 #include <algorithm>
 #include <array>
@@ -3030,6 +3031,7 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                 !ggml_cuda_should_use_mmq(dst->src[0]->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[1])) break;
         if (!is_gemv && ggml_cuda_can_mul_mat_nvfp4(dst->src[0], src1, ggml_cuda_info().devices[ctx.device].cc)) break;
         if (!is_gemv && mmq_get_q8_1_ds_layout(src0->type) != mmq_get_q8_1_ds_layout(dst->src[0]->type)) break;
+        if (is_gemv && (src0->type == GGML_TYPE_IQ4_NT) != (dst->src[0]->type == GGML_TYPE_IQ4_NT)) break;
         if (is_gemv) {
             if (fusion && node_n + 2 < cgraph->n_nodes &&
                 cgraph->nodes[node_n+2]->op == GGML_OP_ADD &&
@@ -3211,6 +3213,7 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
     bool any_gpus_with_slow_fp16 = false;
 
     use_mul_mat_q           = use_mul_mat_q           && ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1]);
+    use_mul_mat_q           = use_mul_mat_q           && !(src0->type == GGML_TYPE_IQ4_NT && src0->ne[0] % 256 != 0);
     any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16 || !fast_fp16_available(cc);
 
     if (use_mul_mat_q && !use_mul_mat_vec_q && ggml_cuda_can_mul_mat_nvfp4(src0, src1, cc)) {
@@ -3534,7 +3537,7 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         dst_row.nb[3] = num_src1_rows*nb1;
 
         if (ggml_is_quantized(src0->type) &&
-            ggml_cuda_should_use_mmq(src0->type, ggml_cuda_info().devices[ctx.device].cc, num_src1_rows)) {
+            src0->type != GGML_TYPE_IQ4_NT && ggml_cuda_should_use_mmq(src0->type, ggml_cuda_info().devices[ctx.device].cc, num_src1_rows)) {
             auto src1_padded_num_cols = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
             auto src1_padded_row_size = src1_padded_num_cols/ggml_blck_size(GGML_TYPE_Q8_1)*ggml_type_size(GGML_TYPE_Q8_1);
             auto src1_quantized_size  = src1_padded_row_size*num_src1_rows;
@@ -3899,7 +3902,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         CUDA_CHECK(cudaGetLastError());
 
         if (next && !hada && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
-            ggml_cuda_should_use_mmq(next->src[0]->type, cc, src1->ne[2])) {
+            next->src[0]->type != GGML_TYPE_IQ4_NT && ggml_cuda_should_use_mmq(next->src[0]->type, cc, src1->ne[2])) {
             //ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, (char *)ids_device.get(), nullptr);
             ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, nullptr, nullptr);
             return i+1;
@@ -3965,7 +3968,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     bool use_quantized_src1 = false;
     int64_t src1_padded_num_cols = 0, src1_padded_row_size = 0, src1_quantized_size = 0;
     if (ggml_is_quantized(src0_1->type) && (!src0_2 || src0_1->type == src0_2->type) && src1->ne[1] == 1 && src1->ne[3] == 1) {
-        if (ggml_cuda_should_use_mmq(src0_1->type, cc, src1->ne[2])) {
+        if (src0_1->type != GGML_TYPE_IQ4_NT && ggml_cuda_should_use_mmq(src0_1->type, cc, src1->ne[2])) {
             src1_padded_num_cols = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
             src1_padded_row_size = src1_padded_num_cols/ggml_blck_size(GGML_TYPE_Q8_1)*ggml_type_size(GGML_TYPE_Q8_1);
             src1_quantized_size  = src1_padded_row_size*src1->ne[2] + get_mmq_x_max_host(cc)*sizeof(block_q8_1_mmq);
@@ -4126,7 +4129,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             final_dst.nb[2] = final_dst.nb[3] = num_src1_rows*final_dst.nb[1];
             final_src.data = (char *)next->src[0]->data + i02*next->src[0]->nb[2];
             if (ggml_is_quantized(next->src[0]->type) &&
-                ggml_cuda_should_use_mmq(final_src.type, cc, dst_row.ne[1])) {
+                final_src.type != GGML_TYPE_IQ4_NT && ggml_cuda_should_use_mmq(final_src.type, cc, dst_row.ne[1])) {
                 ggml_cuda_mul_mat_q_id(ctx, &final_src, &dst_row, nullptr, &final_dst, nullptr, nullptr);
             } else {
                 ggml_cuda_mul_mat(ctx, &final_src, &dst_row, &final_dst, nullptr, 0);
@@ -4495,6 +4498,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_INKLING2_CLIP:
             ggml_cuda_op_inkling2_clip(ctx, dst);
+            break;
+        case GGML_OP_ADD_EXACT_COLS:
+            ggml_cuda_op_add_exact_cols(ctx, dst);
             break;
         case GGML_OP_FUSED_MUL_UNARY:
             ggml_cuda_op_fused_mul_unary(ctx, dst);
@@ -5705,6 +5711,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_IQ3_KS:
                     case GGML_TYPE_IQ4_KS:
                     case GGML_TYPE_IQ4_KSS:
+                    case GGML_TYPE_IQ4_NT:
                     case GGML_TYPE_IQ5_KS:
                     case GGML_TYPE_IQ2_K:
                     case GGML_TYPE_IQ2_KS:
@@ -5902,6 +5909,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_MUL:
         case GGML_OP_FMA:
         case GGML_OP_INKLING2_CLIP:
+        case GGML_OP_ADD_EXACT_COLS:
         case GGML_OP_DIV:
         case GGML_OP_SUB:
         case GGML_OP_FUSED_RMS_NORM:
@@ -6057,6 +6065,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_buft(ggml_backend_t backend, gg
 }
 
 GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const ggml_tensor * op) {
+    if (op->op == GGML_OP_ADD_EXACT_COLS && op->src[0] && (op->src[0]->op == GGML_OP_MUL_MAT || op->src[0]->op == GGML_OP_MUL_MAT_ID)) {
+        return ggml_backend_cuda_offload_op(backend, op->src[0]);
+    }
     auto ctx = (ggml_backend_cuda_context *)backend->context;
     int min_batch_size = ctx->offload_batch_size; // originally: GGML_CUDA_MIN_BATCH_OFFLOAD;
 

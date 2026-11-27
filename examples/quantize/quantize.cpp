@@ -84,6 +84,7 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "IQ3_KS_R16",LLAMA_FTYPE_MOSTLY_IQ3_KS_R16,"IQ3_KS 16-row repacked", },
     { "IQ5_KS_R4",LLAMA_FTYPE_MOSTLY_IQ5_KS_R4,"IQ5_KS repacked", },
     { "IQ4_KSS",  LLAMA_FTYPE_MOSTLY_IQ4_KSS,  " 4.0 bpw non-linear quantization",  },
+    { "IQ4_NT",   LLAMA_FTYPE_MOSTLY_IQ4_NT,   " 4.1 bpw nibble trellis",           },
     { "IQ5_KS",   LLAMA_FTYPE_MOSTLY_IQ5_KS,   " 5.25 bpw non-linear quantization", },
     { "IQ2_K",    LLAMA_FTYPE_MOSTLY_IQ2_K,    " 2.375 bpw non-linear quantization",},
     { "IQ2_K_R4", LLAMA_FTYPE_MOSTLY_IQ2_K_R4, "IQ2_K repacked",},
@@ -170,7 +171,7 @@ static void usage(const char * executable) {
     printf("  --ignore-imatrix-rules: ignore importance matrix rules when quantizing\n");
     printf("  --dry-run: show what would be quantized without actually writing the output file\n");
     printf("  --slab-size N: process tensors larger than N MiB of f32 in slabs of up to N MiB, or of one expert slice or row group if that is larger (default: 1024, 0 = never)\n");
-    printf("  --cuda-quantize: quantize IQ4_KT, IQ3_KT, IQ2_KT, IQ1_KT, IQ3_KS, IQ4_KS, IQ4_KS_R4, IQ4_KS_R16, IQ5_KS, and IQ5_KS_R4 tensors on a CUDA device; other types use the CPU\n");
+    printf("  --cuda-quantize: quantize IQ4_KT, IQ3_KT, IQ2_KT, IQ1_KT, IQ3_KS, IQ4_KS, IQ4_KS_R4, IQ4_KS_R16, IQ5_KS, IQ5_KS_R4 and IQ4_NT tensors on a CUDA device; other types use the CPU\n");
     printf("  -dev DEVICES, --device DEVICES: CUDA device(s) for --cuda-quantize (default CUDA0; 2+ devices = row-split, e.g. -dev CUDA0,CUDA1)\n");
     printf("  -ts SPLIT, --tensor-split SPLIT: row-split shares for 2+ GPUs (e.g. -ts 3,3,2; equal when absent; requires -dev/--device with 2+ CUDA devices)\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");

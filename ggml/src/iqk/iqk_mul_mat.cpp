@@ -27,6 +27,7 @@
 #include "iqk_gemm_floats.h"
 #include "iqk_gemm_kquants.h"
 #include "iqk_gemm_ktquants.h"
+#include "iqk_gemm_nt.h"
 #include "iqk_gemm_iquants.h"
 #include "iqk_gemm_iqk_quants.h"
 #include "iqk_gemm_1bit.h"
@@ -300,6 +301,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_KS_R16: return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_IQ5_KS_R16: return nrc_y >= 32 ? q8_k_type : type;
 #endif
+            case GGML_TYPE_IQ4_NT : return nrc_y >= k_min_nrc_y ? GGML_TYPE_Q8_K128_R16 : type;
             case GGML_TYPE_IQ4_KSS: return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ4_K  : return nrc_y >= k_min_nrc_y ? q8_k_type : type;
             case GGML_TYPE_IQ4_K_R4: return nrc_y >= 32 ? q8_k_type : type;
@@ -432,6 +434,7 @@ struct MulMat {
             case GGML_TYPE_Q8_1:
             case GGML_TYPE_Q8_0_R16:
             case GGML_TYPE_Q8_K_R16:
+            case GGML_TYPE_Q8_K128_R16:
             case GGML_TYPE_MXFP4_R8:
             case GGML_TYPE_IQ4_KS_R16:
             case GGML_TYPE_IQ5_KS_R16:
@@ -482,6 +485,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_KS_R16:
             case GGML_TYPE_IQ5_KS_R16:
             case GGML_TYPE_IQ3_KS_R16:
+            case GGML_TYPE_Q8_K128_R16:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
         }
@@ -515,6 +519,8 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
 
 
     switch (typeA) {
+        case GGML_TYPE_IQ4_NT:
+            return iqk_convert_nt_q8_k128_r16(n, vx, bx, vy, nrc_x);
         //case GGML_TYPE_F16:
         //case GGML_TYPE_F32:
         //case GGML_TYPE_BF16:
@@ -614,6 +620,11 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
 
 extern "C" IQK_API int iqk_dequant_type(int type, int Ny) {
     return MulMat::is_dequant_better(ggml_type(type), Ny);
+}
+
+extern "C" IQK_API bool iqk_has_kernels(int typeA, int typeB, int ne00) {
+    MulMat mm;
+    return MulMat::prepare(typeA, typeB, ne00, mm, 1);
 }
 
 template <typename Work>
@@ -1171,6 +1182,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         //case GGML_TYPE_TQP6:
         //case GGML_TYPE_TQP7:
             return iqk_set_kernels_ktquants(ne00, typeA, typeB, mm.funcs, mm.func16);
+        case GGML_TYPE_IQ4_NT:
+        case GGML_TYPE_Q8_K128_R16:
+            return iqk_set_kernels_nt(ne00, typeA, typeB, mm.funcs, mm.func16);
         case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q2_0_R8:
         case GGML_TYPE_Q4_0:
@@ -2894,6 +2908,10 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long /*Nx*/, long /*Ny*/, long /*ne00*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
         float * /*C*/, long /*stride_C*/, int /*ith*/, int /*nth*/) {
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
+    return false;
+}
+
+extern "C" IQK_API bool iqk_has_kernels(int, int, int) {
     return false;
 }
 
