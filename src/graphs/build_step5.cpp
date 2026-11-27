@@ -2,16 +2,15 @@
 #include "../llama-model.h"
 #include "../llama-context.h"
 
+#include <algorithm>
+
 // Dense fallback: sparse_config.enabled=False in the Step5 reference. Sliding
 // layers retain their ordinary attention window; full layers attend to all history.
 ggml_cgraph * llm_build_context::build_step5() {
-    GGML_ASSERT(!cparams.mtp && cparams.mtp_op_type == MTP_OP_NONE);
     ggml_cgraph * gf = new_graph_custom();
     auto inp_pos = build_inp_pos();
-    auto inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-    auto inp_out_ids = build_inp_out_ids();
-    auto mask = build_inp_KQ_mask();
-    auto mask_swa = build_inp_KQ_mask_swa();
+    ggml_tensor * mask = nullptr;
+    ggml_tensor * mask_swa = nullptr;
     const int n_trunk = hparams.n_layer - hparams.nextn_predict_layers;
 
     // Keep Step5's asymmetric SwiGLU clamp local instead of changing the shared
@@ -25,17 +24,26 @@ ggml_cgraph * llm_build_context::build_step5() {
         return llm_build_lora_mm(lctx, ctx0, down, act);
     };
 
-    for (int il = 0; il < n_trunk; ++il) {
+    auto build_block = [&](int il, ggml_tensor * input_states, ggml_tensor * out_ids) {
         const auto & layer = model.layers[il];
         const bool swa = hparams.swa_layers[il];
+        auto & attn_mask = swa ? mask_swa : mask;
+        if (!attn_mask) {
+            if (swa) {
+                attn_mask = kv_self.any_compacted()
+                    ? build_swa_mask_for_graph(hparams.n_swa, true)
+                    : build_inp_KQ_mask_swa();
+            } else {
+                attn_mask = build_inp_KQ_mask();
+            }
+        }
         // The reference applies scaling only to the configured layer types.
         auto rope_factors = ((swa ? 2u : 1u) & hparams.rope_scaling_apply_mask)
             ? build_rope_factors(il) : nullptr;
-        auto cur = build_std_attention(gf, layer.attn_norm, inpL, inp_pos,
-                il == n_trunk - 1 && n_tokens > 1 ? inp_out_ids : nullptr,
-                rope_factors, swa ? mask_swa : mask, nullptr, nullptr,
+        auto cur = build_std_attention(gf, layer.attn_norm, input_states, inp_pos, out_ids,
+                rope_factors, attn_mask, nullptr, nullptr,
                 1.0f / sqrtf(float(hparams.n_embd_head_k(il))), 0.0f,
-                swa ? hparams.n_swa : 0, il, true, false, true);
+                swa ? hparams.n_swa : 0, il, true, false, true, false, false, nullptr, il);
 
         auto input = llm_build_norm(ctx0, cur, hparams, layer.ffn_norm, nullptr,
                 LLM_NORM_RMS, cb, il);
@@ -75,9 +83,79 @@ ggml_cgraph * llm_build_context::build_step5() {
             ffn = ggml_add(ctx0, routed, shared);
         }
         cb(ffn, "ffn_out", il);
-        inpL = lctx.cvec.apply_to(ctx0, ggml_add(ctx0, cur, ffn), il);
-        cb(inpL, "l_out", il);
+        auto output = lctx.cvec.apply_to(ctx0, ggml_add(ctx0, cur, ffn), il);
+        cb(output, "l_out", il);
+        return output;
+    };
+
+    auto export_mtp_hidden = [&](ggml_tensor * hidden) {
+        auto output = hidden->type == GGML_TYPE_F32 ? hidden : ggml_cast(ctx0, hidden, GGML_TYPE_F32);
+        cb(output, "result_mtp_embd", -1);
+        ggml_set_output(output);
+        ggml_build_forward_expand(gf, output);
+    };
+
+    if (cparams.mtp_op_type != MTP_OP_NONE) {
+        GGML_ASSERT(model.mtp && hparams.nextn_predict_layers > 0);
+        GGML_ASSERT(batch.token || batch.embd);
+
+        const int n_heads_model = hparams.nextn_predict_layers;
+        const int n_heads = lctx.mtp_n_heads > 0 ? std::min(lctx.mtp_n_heads, n_heads_model) : n_heads_model;
+        const int step = std::clamp(lctx.mtp_step_idx, 0, n_heads - 1);
+        const bool draft = cparams.mtp_op_type == MTP_OP_DRAFT_GEN;
+        auto hidden = build_inp_mtp_states(n_embd);
+        bool reuse_input = false;
+        auto build_head = [&](int head_index, bool export_output, bool emit_logits) {
+            const int il = n_trunk + head_index;
+            const auto & layer = model.layers[il];
+            const auto & nextn = layer.nextn;
+            auto token_weights = nextn.embed_tokens ? nextn.embed_tokens : model.tok_embd;
+            auto tokens = build_inp_embd_mtp(token_weights, reuse_input);
+            reuse_input = true;
+            auto input = build_mtp_input(layer, hidden, tokens, il, "mtp_eh_proj");
+            auto output = build_block(il, input, nullptr);
+            if (!export_output) {
+                ggml_build_forward_expand(gf, output);
+                return;
+            }
+            if (n_tokens > 1) {
+                output = ggml_view_2d(ctx0, output, n_embd, 1, output->nb[1],
+                        (n_tokens - 1) * output->nb[1]);
+            }
+            export_mtp_hidden(output);
+            if (emit_logits) {
+                auto head = nextn.shared_head_head ? nextn.shared_head_head : model.output;
+                auto norm = nextn.shared_head_norm ? nextn.shared_head_norm : model.output_norm;
+                auto logits = build_output(lctx, ctx0, output, head, norm, cb);
+                cb(logits, "result_output", -1);
+                ggml_build_forward_expand(gf, logits);
+            }
+        };
+
+        if (draft) {
+            build_head(step, true, true);
+        } else {
+            // Populate each head from the same target hidden states. Head zero supplies the output.
+            for (int i = n_heads - 1; i >= 0; --i) {
+                build_head(i, i == 0, i == 0 && cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED);
+            }
+        }
+        return gf;
     }
+
+    auto inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+    auto inp_out_ids = build_inp_out_ids();
+    for (int il = 0; il < n_trunk; ++il) {
+        auto out_ids = il == n_trunk - 1 && n_tokens > 1 && !cparams.mtp ? inp_out_ids : nullptr;
+        inpL = build_block(il, inpL, out_ids);
+    }
+    if (cparams.mtp) {
+        export_mtp_hidden(inpL);
+        if (inp_out_ids && n_tokens > 1) {
+            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+        }
+    }
+
     auto output = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
     cb(output, "result_output", -1);
     ggml_build_forward_expand(gf, output);

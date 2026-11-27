@@ -777,6 +777,7 @@ struct llama_model {
             || arch == LLM_ARCH_MAPLE
             || arch == LLM_ARCH_SPARK2_5
             || arch == LLM_ARCH_LFM3
+            || arch == LLM_ARCH_STEP5
             || arch == LLM_ARCH_MAPLE     || arch == LLM_ARCH_FLINT
             || arch == LLM_ARCH_RICURSIVE
             || arch == LLM_ARCH_INKLING2_LOOP

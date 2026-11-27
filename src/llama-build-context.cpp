@@ -505,17 +505,18 @@ static struct ggml_tensor * llm_build_hadamard_rotate(
         const llama_hadamard_transform & t,
         bool inverse, bool fuse_signs);
 
-struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd) {
+struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd, bool reuse_input) {
     struct ggml_tensor * cur = nullptr;
 
     lctx.inp_engram_gate_mask = nullptr;
     lctx.inp_engram_rows.clear();
     lctx.inp_engram_gate_ids.clear();
     if (batch.token) {
-        lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
-
-        cb(lctx.inp_tokens, "inp_tokens", -1);
-        ggml_set_input(lctx.inp_tokens);
+        if (!reuse_input) {
+            lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
+            cb(lctx.inp_tokens, "inp_tokens", -1);
+            ggml_set_input(lctx.inp_tokens);
+        }
 
         cur = ggml_get_rows(ctx0, mtp_tok_embd, lctx.inp_tokens);
 
@@ -525,8 +526,10 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
             cur = llm_build_hadamard_rotate(ctx0, cur, *rot, true, false);
         }
     } else {
-        lctx.inp_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, batch.n_tokens);
-        ggml_set_input(lctx.inp_embd);
+        if (!reuse_input) {
+            lctx.inp_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, batch.n_tokens);
+            ggml_set_input(lctx.inp_embd);
+        }
         cur = lctx.inp_embd;
     }
 
