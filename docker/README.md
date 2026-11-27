@@ -111,6 +111,11 @@ docker run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models
 - If CUDA is not available, use `ik_llama-cpu` instead.
 - If models are not found, ensure you mount the correct directory: `-v /my_local_files/gguf:/models:ro`
 - If you need to install `podman` or `docker` follow the [Podman Installation](https://podman.io/docs/installation) or [Install Docker Engine](https://docs.docker.com/engine/install) for your OS.
+- Build error `ld.lld: error: ... relocation R_X86_64_PC32 out of range ... references section '.text'` while linking `libggml.so`
+  nvcc embeds one copy of the CUDA fatbin (device code) per requested architecture into `libggml.so`. With several architectures this blob grows past 2 GB, and the 32-bit PC-relative jump tables that GCC emits in `ggml.c` can no longer reach `.text`.
+  Two independent remedies:
+  1. Build only for the GPUs you need, e.g. `--build-arg CUDA_DOCKER_ARCH="89-real"` (`-real` skips the extra PTX copy; this also cuts build time).
+  2. `docker/nvfatbin.lds` (passed via `-Wl,--script=...`) parks `.nv_fatbin` in its own read-only segment at the end of the image, keeping `.text`/`.rodata`/`.got` within 2 GB of each other, so long architecture lists link too.
 
 ## Extra
 
