@@ -23,6 +23,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -310,6 +311,7 @@ struct clip_model {
 
     // embeddings
     ggml_tensor * class_embedding = nullptr;
+    ggml_tensor * class_position_embedding = nullptr; // inkling2v
     ggml_tensor * patch_embeddings_0 = nullptr;
     ggml_tensor * patch_embeddings_1 = nullptr;  // second Conv2D kernel when we decouple Conv3D along temporal dimension (Qwen2VL)
     ggml_tensor * patch_bias = nullptr;
@@ -688,6 +690,53 @@ struct clip_graph {
         // build the graph
         ggml_build_forward_expand(gf, cur);
 
+        return gf;
+    }
+
+    // inkling2v: CLS ViT + 2D RoPE, 2x2 merge, GELU-ERF projector
+    ggml_cgraph * build_inkling2v() {
+        GGML_ASSERT(model.class_embedding);
+        GGML_ASSERT(model.class_position_embedding);
+        GGML_ASSERT(model.position_embeddings);
+
+        const int n_pos = n_patches + 1;
+
+        // CLS at (0,0), patches 1-indexed
+        ggml_tensor * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
+        ggml_set_name(pos_w, "pos_w");
+        ggml_set_input(pos_w);
+
+        ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
+        ggml_set_name(pos_h, "pos_h");
+        ggml_set_input(pos_h);
+
+        ggml_tensor * cur = build_inp();
+        cb(cur, "patch_embd", -1);
+        cur = ggml_add(ctx0, cur, resize_position_embeddings(GGML_SCALE_MODE_BILINEAR));
+
+        ggml_tensor * cls = ggml_add(ctx0, model.class_embedding, model.class_position_embedding);
+        cur = ggml_concat(ctx0, ggml_reshape_2d(ctx0, cls, n_embd, 1), cur, 1);
+        cb(cur, "embeddings", -1);
+
+        auto add_pos = [&](ggml_tensor * x, const clip_layer &) {
+            return build_rope_2d(ctx0, x, pos_w, pos_h, hparams.rope_theta, false);
+        };
+
+        cur = build_vit(cur, n_pos, NORM_TYPE_NORMAL, hparams.ffn_op, nullptr, add_pos);
+        cb(cur, "encoder_out", -1);
+
+        // drop CLS
+        cur = ggml_view_2d(ctx0, cur, n_embd, n_patches, cur->nb[1], cur->nb[1]);
+        cur = build_patch_merge_permute(cur, hparams.n_merge);
+        cur = build_ffn(cur,
+            model.mm_1_w, model.mm_1_b,
+            nullptr, nullptr,
+            model.mm_2_w, model.mm_2_b,
+            FFN_GELU_ERF,
+            -1);
+        cb(cur, "projected", -1);
+
+        ggml_build_forward_expand(gf, cur);
         return gf;
     }
 
@@ -3501,6 +3550,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 res = graph.build_glm4v();
             } break;
+        case PROJECTOR_TYPE_INKLING2V:
+            {
+                res = graph.build_inkling2v();
+            } break;
         case PROJECTOR_TYPE_QWEN3VL:
             {
                 res = graph.build_qwen3vl();
@@ -3985,6 +4038,15 @@ struct clip_model_loader {
                             LOG_WRN("%s: more info: https://github.com/ggml-org/llama.cpp/issues/16842\n\n", __func__);
                         }
                     } break;
+                case PROJECTOR_TYPE_INKLING2V:
+                    {
+                        hparams.ffn_op = FFN_GELU_ERF;
+                        log_ffn_op = "gelu_erf";
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge);
+                        hparams.rope_theta = 10000.0f;
+                        hparams.set_limit_image_tokens(1, 4096);
+                        hparams.set_warmup_n_tokens(32*32); // avoid OOM on warmup
+                    } break;
                 case PROJECTOR_TYPE_GLM4V:
                     {
                         hparams.rope_theta = 10000.0f;
@@ -4282,6 +4344,19 @@ struct clip_model_loader {
         }
 
         switch (model.proj_type) {
+            case PROJECTOR_TYPE_INKLING2V:
+                {
+                    // from the generic path
+                    if (!model.class_embedding || !model.position_embeddings || !model.pre_ln_w || !model.pre_ln_b) {
+                        throw std::runtime_error(string_format(
+                            "%s: inkling2v: missing class_embd, position_embd or pre_ln\n", __func__));
+                    }
+                    model.class_position_embedding = get_tensor(TN_CLASS_POS_EMBD);
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
+                } break;
             case PROJECTOR_TYPE_MLP:
             case PROJECTOR_TYPE_MLP_NORM:
                 {
@@ -5481,6 +5556,60 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
     auto & params = ctx->model.hparams;
 
     switch (ctx->proj_type()) {
+        case PROJECTOR_TYPE_INKLING2V:
+            {
+                // pad to a multiple of patch_size * n_merge; black = -1.0
+                const int align = params.patch_size * params.n_merge;
+                GGML_ASSERT(align > 0);
+
+                const clip_image_u8 * src = img;
+                clip_image_u8 resized;
+                if (params.image_max_pixels > 0 &&
+                        (int64_t) CLIP_ALIGN(original_size.width,  align) *
+                        (int64_t) CLIP_ALIGN(original_size.height, align) > params.image_max_pixels) {
+                    // direct bicubic resize, like the reference
+                    const clip_image_size new_size = img_tool::calc_size_preserved_ratio(
+                        original_size, align, 1, params.image_max_pixels);
+                    img_tool::resize(*img, resized, new_size, img_tool::RESIZE_ALGO_BICUBIC, false);
+                    src = &resized;
+                }
+
+                const int width  = CLIP_ALIGN(src->nx, align);
+                const int height = CLIP_ALIGN(src->ny, align);
+
+                // fused rescale + normalize to [-1, 1]
+                const float mean[3] = {params.image_mean[0] * 255.0f,
+                                       params.image_mean[1] * 255.0f,
+                                       params.image_mean[2] * 255.0f};
+                const float std[3]  = {params.image_std[0] * 255.0f,
+                                       params.image_std[1] * 255.0f,
+                                       params.image_std[2] * 255.0f};
+
+                clip_image_f32_ptr res(clip_image_f32_init());
+                res->nx = width;
+                res->ny = height;
+                res->buf.resize((size_t) width * height * 3);
+
+                for (int y = 0; y < height; ++y) {
+                    float * dst_row = res->buf.data() + (size_t) y * width * 3;
+                    const int x_end = y < src->ny ? std::min(width, src->nx) : 0;
+                    if (x_end > 0) {
+                        const uint8_t * src_row = src->buf.data() + (size_t) y * src->nx * 3;
+                        for (int x = 0; x < x_end; ++x) {
+                            for (int c = 0; c < 3; ++c) {
+                                dst_row[x * 3 + c] = (src_row[x * 3 + c] - mean[c]) / std[c];
+                            }
+                        }
+                    }
+                    // black padding
+                    for (int i = x_end * 3; i < width * 3; ++i) {
+                        dst_row[i] = -1.0f;
+                    }
+                }
+
+                res_imgs->entries.push_back(std::move(res));
+            } break;
+
         case PROJECTOR_TYPE_MINICPMV:
             {
                 auto const inst = llava_uhd::get_slice_instructions(ctx, original_size);
@@ -6038,6 +6167,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_INKLING2V:
             {
                 // dynamic size
                 int out_patch_size = params.patch_size * ctx->model.hparams.n_merge;
@@ -6388,6 +6518,22 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_i32("pos_x", pos_x);
                 set_input_i32("pos_y", pos_y);
+            } break;
+        case PROJECTOR_TYPE_INKLING2V:
+            {
+                // CLS at 0, patches 1-indexed
+                std::vector<int32_t> positions_w{0};
+                std::vector<int32_t> positions_h{0};
+                positions_w.reserve(n_pos);
+                positions_h.reserve(n_pos);
+                for (int y = 0; y < pos_h; ++y) {
+                    for (int x = 0; x < pos_w; ++x) {
+                        positions_w.push_back(x + 1);
+                        positions_h.push_back(y + 1);
+                    }
+                }
+                set_input_i32("pos_w", positions_w);
+                set_input_i32("pos_h", positions_h);
             } break;
         case PROJECTOR_TYPE_QWEN25VL:
             {
@@ -6740,6 +6886,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_DEEPSEEK4V:
         case PROJECTOR_TYPE_DEEPSEEK41:
+        case PROJECTOR_TYPE_INKLING2V:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_COGVLM:
         case PROJECTOR_TYPE_GLM4V:

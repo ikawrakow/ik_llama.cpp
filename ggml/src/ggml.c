@@ -23770,6 +23770,8 @@ static inline float ggml_bicubic_interp(float p0, float p1, float p2, float p3, 
     return p0 * w0 + p1 * w1 + p2 * w2 + p3 * w3;
 }
 
+#define GGML_UPSCALE_BILINEAR_TAP_SIZE (2*sizeof(int32_t) + sizeof(float))
+
 static void ggml_compute_forward_upscale_f32(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
@@ -23798,11 +23800,13 @@ static void ggml_compute_forward_upscale_f32(
         sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
     }
 
-    if (mode == GGML_SCALE_MODE_NEAREST || mode == GGML_SCALE_MODE_BILINEAR) {
+    if (mode == GGML_SCALE_MODE_NEAREST) {
         for (int64_t i3 = 0; i3 < ne3; i3++) {
-            const int64_t i03 = i3 / sf3;
+            const int64_t i03_raw = (int64_t) (i3 / sf3);
+            const int64_t i03 = GGML_CLAMP(i03_raw, 0, ne03 - 1);
             for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
-                const int64_t i02 = i2 / sf2;
+                const int64_t i02_raw = (int64_t) (i2 / sf2);
+                const int64_t i02 = GGML_CLAMP(i02_raw, 0, ne02 - 1);
                 for (int64_t i1 = 0; i1 < ne1; i1++) {
                     const int64_t i01 = i1 / sf1;
                     for (int64_t i0 = 0; i0 < ne0; i0++) {
@@ -23816,14 +23820,107 @@ static void ggml_compute_forward_upscale_f32(
                 }
             }
         }
+    } else if (mode == GGML_SCALE_MODE_BILINEAR) {
+        // horizontal taps depend only on i0: compute them once per thread
+        GGML_ASSERT(ne00 <= INT32_MAX);
+        const size_t tap_size = (size_t) ne0 * GGML_UPSCALE_BILINEAR_TAP_SIZE;
+        GGML_ASSERT(params->wdata != NULL);
+        GGML_ASSERT((size_t) ith * (tap_size + CACHE_LINE_SIZE) + tap_size <= params->wsize);
+
+        char * wbase = (char *) params->wdata + ith * (tap_size + CACHE_LINE_SIZE);
+        int32_t * x0s = (int32_t *) wbase;
+        int32_t * x1s = x0s + ne0;
+        float   * dxs = (float *) (x1s + ne0);
+
+        const float sf0i = 1.0f / sf0;
+        const float sf1i = 1.0f / sf1;
+
+        for (int64_t i0 = 0; i0 < ne0; i0++) {
+            const float x = ((float)i0 + pixel_offset) * sf0i - pixel_offset;
+            const int64_t x0_raw = (int64_t) floorf(x);
+            const int64_t x1_raw = x0_raw + 1;
+
+            const int64_t x0 = GGML_CLAMP(x0_raw, 0, ne00 - 1);
+            const int64_t x1 = GGML_CLAMP(x1_raw, 0, ne00 - 1);
+
+            float dx = x - (float)x0;
+            dx = GGML_CLAMP(dx, 0.0f, 1.0f);
+
+            x0s[i0] = (int32_t) x0;
+            x1s[i0] = (int32_t) x1;
+            dxs[i0] = dx;
+        }
+
+        const bool src_cont = src0->nb[0] == sizeof(float);
+        const bool dst_cont = dst->nb[0] == sizeof(float);
+
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            const int64_t i03_raw = (int64_t) (i3 / sf3);
+            const int64_t i03 = GGML_CLAMP(i03_raw, 0, ne03 - 1);
+            for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+                const int64_t i02_raw = (int64_t) (i2 / sf2);
+                const int64_t i02 = GGML_CLAMP(i02_raw, 0, ne02 - 1);
+
+                const char * src_plane = (const char *)src0->data + i02*nb02 + i03*nb03;
+                      char * dst_plane = (      char *)dst->data  + i2*nb2  + i3*nb3;
+
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    const float y = ((float)i1 + pixel_offset) * sf1i - pixel_offset;
+                    const int64_t y0_raw = (int64_t) floorf(y);
+                    const int64_t y1_raw = y0_raw + 1;
+
+                    const int64_t y0 = GGML_CLAMP(y0_raw, 0, ne01 - 1);
+                    const int64_t y1 = GGML_CLAMP(y1_raw, 0, ne01 - 1);
+
+                    float dy = y - (float)y0;
+                    dy = GGML_CLAMP(dy, 0.0f, 1.0f);
+
+                    const char * row0 = src_plane + y0*nb01;
+                    const char * row1 = src_plane + y1*nb01;
+                          char * orow = dst_plane + i1*nb1;
+
+                    if (src_cont && dst_cont) {
+                        const float * r0 = (const float *) row0;
+                        const float * r1 = (const float *) row1;
+                        float * d = (float *) orow;
+
+                        for (int64_t i0 = 0; i0 < ne0; i0++) {
+                            const float dx = dxs[i0];
+                            const float v00 = r0[x0s[i0]];
+                            const float v01 = r0[x1s[i0]];
+                            const float v10 = r1[x0s[i0]];
+                            const float v11 = r1[x1s[i0]];
+
+                            const float top = v00 + dx * (v01 - v00);
+                            const float bot = v10 + dx * (v11 - v10);
+                            d[i0] = top + dy * (bot - top);
+                        }
+                    } else {
+                        for (int64_t i0 = 0; i0 < ne0; i0++) {
+                            const float dx = dxs[i0];
+                            const float v00 = *(const float *)(row0 + (size_t) x0s[i0]*nb00);
+                            const float v01 = *(const float *)(row0 + (size_t) x1s[i0]*nb00);
+                            const float v10 = *(const float *)(row1 + (size_t) x0s[i0]*nb00);
+                            const float v11 = *(const float *)(row1 + (size_t) x1s[i0]*nb00);
+
+                            const float top = v00 + dx * (v01 - v00);
+                            const float bot = v10 + dx * (v11 - v10);
+                            *(float *)(orow + i0*nb0) = top + dy * (bot - top);
+                        }
+                    }
+                }
+            }
+        }
     } else if (mode == GGML_SCALE_MODE_BICUBIC) {
         // https://en.wikipedia.org/wiki/Bicubic_interpolation#Bicubic_convolution_algorithm
         const float a = -0.75f; // use alpha = -0.75 (same as PyTorch)
 
         for (int64_t i3 = 0; i3 < ne3; i3++) {
-            const int64_t i03 = i3 / sf3;
+            const int64_t i03_raw = (int64_t) (i3 / sf3);
+            const int64_t i03 = GGML_CLAMP(i03_raw, 0, ne03 - 1);
             for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
-                const int64_t i02 = i2 / sf2;
+                const int64_t i02_raw = (int64_t) (i2 / sf2);
+                const int64_t i02 = GGML_CLAMP(i02_raw, 0, ne02 - 1);
                 for (int64_t i1 = 0; i1 < ne1; i1++) {
                     const float y = ((float)i1 + pixel_offset) / sf1 - pixel_offset;
                     const int64_t y0 = (int64_t)floorf(y);
@@ -30895,6 +30992,14 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
             case GGML_OP_CONV_2D:
                 {
                     cur = 16 * 1024 * 1024; //GGML_IM2COL_WORK_SIZE;
+                } break;
+            case GGML_OP_UPSCALE:
+                {
+                    const int32_t mode = ((const int32_t *) node->op_params)[0] & 0xFF;
+                    if (mode == GGML_SCALE_MODE_BILINEAR) {
+                        const size_t tap_size = node->ne[0] * GGML_UPSCALE_BILINEAR_TAP_SIZE;
+                        cur = (tap_size + CACHE_LINE_SIZE) * n_tasks;
+                    }
                 } break;
             case GGML_OP_FLASH_ATTN_EXT:
                 {
