@@ -1229,25 +1229,36 @@ common_grammar_trigger common_grammar_trigger::from_json(const json& in) {
 #if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
 __attribute__((target("avx2")))
 static bool common_sampler_speculative_top1_avx2(const float * logits, const int n_vocab, int & best_id, float & max_val) {
-    if (n_vocab < 8) {
+    if (n_vocab < 16) {
         return false;
     }
 
-    __m256  max_v = _mm256_loadu_ps(logits);
-    __m256i id_v  = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+    __m256 max_v1 = _mm256_loadu_ps(logits);
+    __m256 max_v2 = _mm256_loadu_ps(logits + 8);
+    __m256i id_v1 = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+    __m256i id_v2 = _mm256_add_epi32(id_v1, _mm256_set1_epi32(8));
+    const __m256i step = _mm256_set1_epi32(16);
+    __m256i cur_id1 = _mm256_add_epi32(id_v1, step);
+    __m256i cur_id2 = _mm256_add_epi32(id_v2, step);
 
-    const __m256i step = _mm256_set1_epi32(8);
-    __m256i cur_id = _mm256_add_epi32(id_v, step);
+    int i = 16;
+    for (; i + 15 < n_vocab; i += 16) {
+        const __m256 x1 = _mm256_loadu_ps(logits + i);
+        const __m256 x2 = _mm256_loadu_ps(logits + i + 8);
+        const __m256 gt_max1 = _mm256_cmp_ps(x1, max_v1, _CMP_GT_OQ);
+        const __m256 gt_max2 = _mm256_cmp_ps(x2, max_v2, _CMP_GT_OQ);
 
-    int i = 8;
-    for (; i + 7 < n_vocab; i += 8) {
-        const __m256 x = _mm256_loadu_ps(logits + i);
-        const __m256 gt_max = _mm256_cmp_ps(x, max_v, _CMP_GT_OQ);
-
-        max_v = _mm256_blendv_ps(max_v, x, gt_max);
-        id_v  = _mm256_blendv_epi8(id_v, cur_id, _mm256_castps_si256(gt_max));
-        cur_id = _mm256_add_epi32(cur_id, step);
+        max_v1 = _mm256_blendv_ps(max_v1, x1, gt_max1);
+        max_v2 = _mm256_blendv_ps(max_v2, x2, gt_max2);
+        id_v1  = _mm256_blendv_epi8(id_v1, cur_id1, _mm256_castps_si256(gt_max1));
+        id_v2  = _mm256_blendv_epi8(id_v2, cur_id2, _mm256_castps_si256(gt_max2));
+        cur_id1 = _mm256_add_epi32(cur_id1, step);
+        cur_id2 = _mm256_add_epi32(cur_id2, step);
     }
+
+    auto gt_max = _mm256_cmp_ps(max_v2, max_v1, _CMP_GT_OQ);
+    auto max_v = _mm256_blendv_ps(max_v1, max_v2, gt_max);
+    auto id_v  = _mm256_blendv_epi8(id_v1, id_v2, _mm256_castps_si256(gt_max));
 
     alignas(32) float max_buf[8];
     alignas(32) int id_buf[8];
@@ -1259,13 +1270,16 @@ static bool common_sampler_speculative_top1_avx2(const float * logits, const int
 
     for (int j = 1; j < 8; ++j) {
         if (max_buf[j] > max_val) {
-            max_val = max_buf[j]; best_id = id_buf[j];
+            max_val = max_buf[j];
+            best_id = id_buf[j];
+        } else if (max_buf[j] == max_val) {
+            best_id = std::min(best_id, id_buf[j]);
         }
     }
     for (; i < n_vocab; ++i) {
-
         if (logits[i] > max_val) {
-            max_val = logits[i]; best_id = i;
+            max_val = logits[i];
+            best_id = i;
         }
     }
     return true;
