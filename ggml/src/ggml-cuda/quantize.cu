@@ -262,6 +262,30 @@ static __global__ void quantize_mmq_q8_1_id(
     }
 }
 
+static __global__ void quantize_q8_1_nt(const float * __restrict__ x, void * __restrict__ vy, const int64_t kx, const int64_t kx0_padded) {
+    const int64_t ix0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
+    if (ix0 >= kx0_padded) {
+        return;
+    }
+    const int64_t ix1 = blockIdx.y;
+    char * col = (char *) vy + ix1*(kx0_padded/QK8_1)*sizeof(block_q8_1);
+    const int64_t ib = ix0 / QK8_1, iqs = ix0 % QK8_1;
+
+    const float xi = ix0 < kx ? x[ix1*kx + ix0] : 0.0f;
+    float amax = fabsf(xi);
+    amax = warp_reduce_max(amax);
+    const float d = amax / 127;
+    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+    const int sq = (int) warp_reduce_sum((float) q);
+
+    ((int8_t *) col)[ix0] = q;
+    if (iqs > 0) {
+        return;
+    }
+    ((half *) (col + kx0_padded))[ib] = d;
+    ((int16_t *) (col + kx0_padded + 2*(kx0_padded/QK8_1)))[ib] = (int16_t) sq;
+}
+
 void quantize_row_q8_1_cuda(
     const float * x, void * vy, const int64_t kx0, const int64_t kx1, const int64_t channels,
     const int64_t kx0_padded, const ggml_type type_x, cudaStream_t stream) {
@@ -271,9 +295,12 @@ void quantize_row_q8_1_cuda(
     const int64_t block_num_x = (kx0_padded + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
     const dim3 num_blocks(block_num_x, kx1*channels, 1);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+    if (type_x == GGML_TYPE_IQ4_NT && kx1 > 1) {
+        GGML_ASSERT(kx0_padded % 256 == 0);
+        quantize_q8_1_nt<<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx0_padded);
+        return;
+    }
     quantize_q8_1<<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx0_padded);
-
-    GGML_UNUSED(type_x);
 }
 
 void quantize_mmq_q8_1_cuda(
