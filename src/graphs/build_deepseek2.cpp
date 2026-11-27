@@ -5,6 +5,17 @@
 #include <algorithm>
 #include <vector>
 
+// BailingMoE3 checkpoints rotate adjacent rotary pairs (2i, 2i + 1), but M-RoPE rotates NEOX pairs
+// (i, i + n_rot / 2). De-interleave the rotary dims [x0 x1 x2 x3 ...] -> [x0 x2 ... | x1 x3 ...]
+// so the pairs match. Applied to both q and k, so q . k and the cached keys are unchanged.
+static ggml_tensor * mrope_deinterleave_rotary_dims(ggml_context * ctx, ggml_tensor * x) {
+    const int64_t n_rot = x->ne[0], n_head = x->ne[1], n_tokens = x->ne[2];
+    x = ggml_cont(ctx, x);
+    x = ggml_reshape_4d(ctx, x, 2, n_rot / 2, n_head, n_tokens);
+    x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+    return ggml_reshape_3d(ctx, x, n_rot, n_head, n_tokens);
+}
+
 // Per-rank attention for DEEPSEEK2 under -sm graph (requires -fa + -mla>=1).
 
 ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
@@ -111,6 +122,8 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
             k_rope = ggml_rope_fast(ctx0, k_rope, rope_cache);
         } else if (hparams.use_mrope()) {
             // BailingMoe3-VL: mrope sections over the rotary part of Q/K
+            q_rope = mrope_deinterleave_rotary_dims(ctx0, q_rope);
+            k_rope = mrope_deinterleave_rotary_dims(ctx0, k_rope);
             int sections[4];
             std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
             q_rope = ggml_rope_multi(ctx0, q_rope, inp_pos, nullptr, n_rot, sections, rope_type,
@@ -882,6 +895,8 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
             k_rope = ggml_rope_fast(ctx0, k_rope, rope_cache);
         } else if (hparams.use_mrope()) {
             // BailingMoe3-VL: mrope sections over the rotary part of Q/K
+            q_rope = mrope_deinterleave_rotary_dims(ctx0, q_rope);
+            k_rope = mrope_deinterleave_rotary_dims(ctx0, k_rope);
             int sections[4];
             std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
             q_rope = ggml_rope_multi(ctx0, q_rope, inp_pos, nullptr, n_rot, sections, rope_type,
