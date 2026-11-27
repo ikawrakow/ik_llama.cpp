@@ -753,6 +753,7 @@ extern "C" {
         GGML_OP_FMA,
         GGML_OP_MULTI_ADD_UNARY,
         GGML_OP_INKLING2_CLIP,
+        GGML_OP_INKLING2_MIX,
 
         GGML_OP_COUNT,
     };
@@ -1508,6 +1509,12 @@ extern "C" {
             float scale, float bias,
             float limit,
             float clamp_min, float clamp_max);
+
+    GGML_API struct ggml_tensor * ggml_inkling2_mix(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * qk,
+            float                 kq_scales);
 
     //
     // *** from mainline begin ***
