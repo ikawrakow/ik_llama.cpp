@@ -21797,7 +21797,7 @@ static void ggml_compute_forward_inkling2_mix_f32(const struct ggml_compute_para
     struct ggml_tensor * src1 = dst->src[1];
     GGML_ASSERT(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32);
 
-    const float * fparams = (const float *)src1->op_params;
+    const float * fparams = (const float *)dst->op_params;
     float scale = fparams[0];
 
     int ith = params->ith;
@@ -21822,6 +21822,7 @@ static void ggml_compute_forward_inkling2_mix_f32(const struct ggml_compute_para
     int stride_v  = src0->nb[1] / sizeof(float);
 
     int last_iq = -1;
+    int last_it = -1;
     float sum_d = 0.0f;
     for (int ib = first; ib < last; ++ib) {
         int it  = ib/(nb00*nq);
@@ -21832,7 +21833,7 @@ static void ggml_compute_forward_inkling2_mix_f32(const struct ggml_compute_para
         const float * qk = (const float *)((const char *)src1->data + it*src1->nb[2]) + iq;
         float * y = (float *)((char *)dst->data + it*dst->nb[2] + iq*dst->nb[1]) + 32*ib0;
 
-        if (iq != last_iq) {
+        if (iq != last_iq || it != last_it) {
             float max = -INFINITY;
             for (int j = 0; j < nk; ++j) {
                 p[j] = qk[j*stride_qk];
@@ -21845,6 +21846,7 @@ static void ggml_compute_forward_inkling2_mix_f32(const struct ggml_compute_para
                 sum_d += p[j];
             }
             last_iq = iq;
+            last_it = it;
         }
 
         for (int i = 0; i < 32; ++i) {

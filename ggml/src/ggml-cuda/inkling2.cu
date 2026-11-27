@@ -119,7 +119,7 @@ static __global__ void k_softmax_gemm_f32(int ne00, int ne01, int ne10, int nele
     x1 += i10      + i2*nb12;
     y  += i10*ne00 + i2*ne00*ne10;
 
-    float max = fmaxf(x1[0], x1[1]);
+    float max = fmaxf(x1[0], x1[nb11]);
     for (int j = 2; j < ne01; ++j) max = fmaxf(max, x1[j*nb11]);
     float sum_n = 0, sum_d = 0;
     for (int j = 0; j < ne01; ++j) {
@@ -138,7 +138,7 @@ void ggml_cuda_op_inkling2_mix(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     GGML_ASSERT(src0->ne[3] == 1 && src1->ne[3] == 1);
     GGML_ASSERT(src0->ne[1] == src1->ne[1] && src0->ne[2] == src1->ne[2]);
 
-    const float * fparams = (const float *)src1->op_params;
+    const float * fparams = (const float *)dst->op_params;
     float scale = fparams[0];
 
     int64_t nelem = ggml_nelements(dst);

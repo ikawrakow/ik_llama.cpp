@@ -11,7 +11,6 @@
 struct inkling_stack {
     std::vector<ggml_tensor *> rows;
     ggml_tensor * keys = nullptr;
-    ggml_tensor * values = nullptr;
 };
 
 static ggml_tensor * inkling_norm(ggml_context * ctx, ggml_tensor * value) {
@@ -34,33 +33,14 @@ static inkling_stack inkling_sources(ggml_context * ctx, const inkling_stack & b
         stack.keys = inkling_append(ctx, stack.keys, blocks.rows[i]);
     }
     inkling_push(ctx, stack, partial);
-    //stack.values = ggml_cont(ctx, ggml_transpose(ctx, stack.keys));
-    stack.values = stack.keys;
     return stack;
 }
 
 static ggml_tensor * inkling_mix(ggml_context * ctx, const inkling_stack & stack, ggml_tensor * partial, ggml_tensor * query) {
     auto keys = partial ? inkling_append(ctx, stack.keys, inkling_norm(ctx, partial)) : stack.keys;
-    auto values =  partial || !stack.values ? keys : stack.values;
     auto scores = ggml_mul_mat(ctx, query, keys);
-    auto result = ggml_inkling2_mix(ctx, values, scores, 1.0f / std::sqrt(float(keys->ne[0])));
-    //printf("%s: query = %ld x %ld x %ld, keys = %ld x %ld x %ld -> scores = %ld x %ld x %ld -> result = %ld x %ld x %ld\n", __func__,
-    //        query->ne[0], query->ne[1], query->ne[2], keys->ne[0], keys->ne[1], keys->ne[2], scores->ne[0], scores->ne[1], scores->ne[2],
-    //        result->ne[0], result->ne[1], result->ne[2]);
+    auto result = ggml_inkling2_mix(ctx, keys, scores, 1.0f / std::sqrt(float(keys->ne[0])));
     return result;
-    //auto values = partial || !stack.values ? ggml_cont(ctx, ggml_transpose(ctx, keys)) : stack.values;
-    //ggml_tensor * scores;
-    //if (keys->ne[2] == 1) {
-    //    // avoid permute and contiguous by simply swapping the order of the GEMM operands
-    //    scores = ggml_mul_mat(ctx, keys, query);
-    //} else {
-    //    scores = ggml_mul_mat(ctx, query, keys);
-    //    scores = ggml_cont(ctx, ggml_transpose(ctx, scores));
-    //}
-    //auto probs = ggml_soft_max_ext(ctx, scores, nullptr, 1.0f / std::sqrt(float(keys->ne[0])), 0.0f);
-    //auto result = ggml_mul_mat(ctx, values, probs);
-    //ggml_mul_mat_set_prec(result, GGML_PREC_F32);
-    //return result;
 }
 
 static ggml_tensor * inkling_row(ggml_context * ctx, ggml_tensor * mixed, int index) {
