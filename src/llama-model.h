@@ -575,6 +575,14 @@ struct llama_model {
     std::unordered_map<std::string, llama_hadamard_transform> hadamard_map;
     const llama_hadamard_transform * hadamard_rotation(const struct ggml_tensor * t) const;
 
+    struct nt_exact { struct ggml_tensor * cols = nullptr; struct ggml_tensor * vals = nullptr; };
+    std::unordered_map<const struct ggml_tensor *, nt_exact> nt_exact_map;
+    const nt_exact * nt_exact_cols(const struct ggml_tensor * t) const {
+        if (!t || nt_exact_map.empty()) return nullptr;
+        auto it = nt_exact_map.find(t);
+        return it == nt_exact_map.end() ? nullptr : &it->second;
+    }
+
     struct ggml_tensor * tok_embd;
     struct ggml_tensor * type_embd;
     struct ggml_tensor * pos_embd;

@@ -12490,3 +12490,236 @@ bool iqk_validate_tensor(const ggml_tensor * tensor) {
     }
     return true;
 }
+
+#include "iqk_nt_codec.h"
+
+namespace {
+
+bool iq4nt_exact_columns(const float * imatrix, int n, int * cols) {
+    if (!imatrix) {
+        for (int k = 0; k < iqk_nt::kNx; ++k) cols[k] = k;
+        return false;
+    }
+    std::vector<int> ord(n);
+    for (int j = 0; j < n; ++j) ord[j] = j;
+    std::partial_sort(ord.begin(), ord.begin() + iqk_nt::kNx, ord.end(),
+            [imatrix] (int p, int q) { return imatrix[p] > imatrix[q] || (imatrix[p] == imatrix[q] && p < q); });
+    for (int k = 0; k < iqk_nt::kNx; ++k) cols[k] = ord[k];
+    return true;
+}
+
+void iq4nt_weights(const float * imatrix, const float * x, int n, float * h, float * w) {
+    constexpr float kEps = 1e-9f, kEps2 = kEps*kEps;
+    for (int ib = 0; ib < n/32; ++ib) {
+        const float * xb = x + 32*ib;
+        if (!imatrix) {
+            for (int j = 0; j < 32; ++j) h[32*ib + j] = 1.f;
+            continue;
+        }
+        const float * wi = imatrix + 32*ib; float sw2 = 0, sx2 = 0, swx = 0;
+        for (int j = 0; j < 32; ++j) { sw2 += wi[j]*wi[j]; sx2 += xb[j]*xb[j]; swx += wi[j]*std::fabs(xb[j]); }
+        const bool ok = sw2 > 32*kEps2 && sx2 > 32*kEps2 && swx > 32*kEps2;
+        for (int j = 0; j < 32; ++j) h[32*ib + j] = ok ? wi[j] : kEps;
+    }
+    for (int j0 = 0; j0 < n; j0 += 256) {
+        const int len = std::min(256, n - j0);
+        float s2 = 0; for (int j = 0; j < len; ++j) s2 += x[j0 + j]*x[j0 + j];
+        s2 *= 2.f/len;
+        for (int j = 0; j < len; ++j) w[j0 + j] = h[j0 + j]*std::sqrt(s2 + x[j0 + j]*x[j0 + j]);
+    }
+}
+
+struct IQ4NTTensor {
+    IQ4NTTensor(int n, const float * imatrix) : n(n), imatrix(imatrix), col(n) {
+        has_exact = iq4nt_exact_columns(imatrix, n, cols);
+        for (int t = 0; t < n; ++t) col[t] = iqk_nt::stream_column(t);
+    }
+    const int n;
+    const float * imatrix;
+    std::vector<int> col;
+    int cols[iqk_nt::kNx];
+    bool has_exact;
+};
+
+void iq4nt_prepare(const IQ4NTTensor & T, const float * x, float * h, float * w, float * xs, float * ws) {
+    const int n = T.n;
+    iq4nt_weights(T.imatrix, x, n, h, w);
+    if (T.has_exact) for (int k = 0; k < iqk_nt::kNx; ++k) w[T.cols[k]] = 0;
+    for (int t = 0; t < n; ++t) { xs[t] = x[T.col[t]]; ws[t] = w[T.col[t]]; }
+}
+
+void iq4nt_pack(const IQ4NTTensor & T, float d, const uint8_t * q, const uint8_t * nib, uint8_t * row) {
+    const int n = T.n;
+    const size_t hdr = iqk_nt::header_size(n);
+    std::memset(row, 0, hdr + n/2);
+    std::memcpy(row, &d, 4);
+    std::memcpy(row + 4, q, n/iqk_nt::kBlock);
+    uint8_t * qs = row + hdr;
+    for (int t = 0; t < n; ++t) {
+        const int ch = t/iqk_nt::kChunk, p = t%iqk_nt::kChunk;
+        qs[ch*(iqk_nt::kChunk/2) + p/2] |= nib[t] << ((p & 1) ? 4 : 0);
+    }
+}
+
+struct IQ4NTRowCoder {
+    IQ4NTRowCoder(int n, const float * imatrix) : T(n, imatrix), h(n), w(n), xs(n), ws(n), nib(n), q(n/iqk_nt::kBlock) {}
+    void encode(const float * x, uint8_t * row) {
+        const int n = T.n;
+        iq4nt_prepare(T, x, h.data(), w.data(), xs.data(), ws.data());
+        float d = 0;
+        iqk_nt::encode_stream(iqk_nt::labels(), xs.data(), ws.data(), n, 2, nib.data(), d, q.data(), wk);
+        iq4nt_pack(T, d, q.data(), nib.data(), row);
+    }
+    IQ4NTTensor T;
+    std::vector<float> h, w, xs, ws;
+    std::vector<uint8_t> nib, q;
+    iqk_nt::Work wk;
+};
+
+template <typename F> void iq4nt_parallel(int64_t count, int nthread, F && f) {
+    std::atomic<int64_t> next{0};
+    auto work = [&] () { for (;;) { const int64_t i = next++; if (i >= count) break; f(i); } };
+    std::vector<std::thread> th;
+    for (int k = 1; k < nthread; ++k) th.emplace_back(work);
+    work();
+    for (auto & t : th) t.join();
+}
+
+}
+
+size_t quantize_iq4_nt(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
+        [[maybe_unused]] const quantize_user_data * user_data) {
+    GGML_ASSERT(n_per_row%iqk_nt::kBlock == 0 && n_per_row <= 65536);
+    auto row_size = ggml_row_size(GGML_TYPE_IQ4_NT, n_per_row);
+    IQ4NTRowCoder coder(n_per_row, imatrix);
+    auto cdst = (uint8_t *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        coder.encode(src, cdst);
+        src  += n_per_row;
+        cdst += row_size;
+    }
+    return nrows * row_size;
+}
+
+size_t iqk_quantize_iq4_nt_batched(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
+        iqk_nt_search_t search, void * ctx, int max_rows, int nthread) {
+    GGML_ASSERT(n_per_row%iqk_nt::kBlock == 0 && n_per_row <= 65536);
+    if (max_rows < 1 || nrows < 1) return 0;
+    const int n = (int)n_per_row;
+    const size_t row_size = ggml_row_size(GGML_TYPE_IQ4_NT, n_per_row);
+    const auto & L = iqk_nt::labels();
+    IQ4NTTensor T(n, imatrix);
+    const int64_t R = std::min<int64_t>(max_rows, nrows);
+    std::vector<iqk_nt::EncState> st(R);
+    std::vector<float> xs(R*n), ws(R*n), xn(R*n), ww(R*n);
+    std::vector<uint8_t> nib(R*n);
+    nthread = std::max(1, nthread);
+    for (int64_t r0 = 0; r0 < nrows; r0 += R) {
+        const int64_t nr = std::min(R, nrows - r0);
+        iq4nt_parallel(nr, nthread, [&] (int64_t i) {
+            thread_local std::vector<float> h, w;
+            h.resize(n); w.resize(n);
+            iq4nt_prepare(T, src + (r0 + i)*n, h.data(), w.data(), xs.data() + i*n, ws.data() + i*n);
+            iqk_nt::enc_init(L, xs.data() + i*n, ws.data() + i*n, n, st[i]);
+        });
+        for (int pass = 0; pass < 2; ++pass) {
+            iq4nt_parallel(nr, nthread, [&] (int64_t i) {
+                iqk_nt::enc_targets(st[i], xs.data() + i*n, ws.data() + i*n, n, xn.data() + i*n, ww.data() + i*n);
+            });
+            if (search(ctx, xn.data(), ww.data(), (int)nr, n, nib.data()) != 0) return 0;
+            iq4nt_parallel(nr, nthread, [&] (int64_t i) {
+                iqk_nt::enc_finish(L, xs.data() + i*n, ws.data() + i*n, n, nib.data() + i*n, st[i]);
+            });
+        }
+        iq4nt_parallel(nr, nthread, [&] (int64_t i) {
+            iq4nt_pack(T, st[i].d_best, st[i].q_best.data(), st[i].nib_best.data(), (uint8_t *)dst + (r0 + i)*row_size);
+        });
+    }
+    return nrows*row_size;
+}
+
+const int8_t * iqk_nt_label_table(void) {
+    static const std::vector<int8_t> lab = [] {
+        std::vector<int8_t> v(65536);
+        for (int i = 0; i < 65536; ++i) v[i] = (int8_t)iqk_nt::label(i >> 12, (i >> 8) & 15, (i >> 4) & 15, i & 15);
+        return v;
+    }();
+    return lab.data();
+}
+
+void quantize_row_iq4_nt_ref(const float * x, void * y, int64_t k) {
+    quantize_iq4_nt(x, y, 1, k, nullptr, nullptr);
+}
+
+void quantize_row_iq4_nt(const float * x, void * y, int64_t k) {
+    quantize_iq4_nt(x, y, 1, k, nullptr, nullptr);
+}
+
+int iqk_iq4_nt_exact_columns(const float * imatrix, int64_t n, int32_t * cols) {
+    if (!imatrix) return 0;
+    int c[iqk_nt::kNx];
+    iq4nt_exact_columns(imatrix, (int)n, c);
+    for (int k = 0; k < iqk_nt::kNx; ++k) cols[k] = c[k];
+    return iqk_nt::kNx;
+}
+
+void dequantize_row_iq4_nt(const void * x, float * y, int64_t k) {
+    GGML_ASSERT(k%iqk_nt::kBlock == 0);
+    iqk_nt::decode_row(x, y, k);
+}
+
+void vec_dot_iq4_nt_q8_k128(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+    GGML_ASSERT(n%iqk_nt::kBlock == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    const block_q8_K128 * y = (const block_q8_K128 *)vy;
+    const auto r = iqk_nt::row_view(vx, n);
+    const int nb = n/iqk_nt::kBlock;
+#ifdef HAVE_FANCY_SIMD
+    constexpr int kOff = iqk_nt::kTableMax;
+    const iqk_nt::LabelsAvx512 L(kOff);
+    const __m512 vd = _mm512_set1_ps(r.d*(1.f/255));
+    const uint8_t * qs = r.qs;
+    __m512 accf = _mm512_setzero_ps(), offs = _mm512_setzero_ps();
+    for (int g = 0; g < nb; g += 16) {
+        const int nbg = std::min(16, nb - g);
+        const __mmask16 km = (__mmask16)((1u << nbg) - 1);
+        float dy[16], ysf[16], f[16];
+        for (int b = 0; b < 16; ++b) {
+            if (b < nbg) { dy[b] = y[g + b].d; ysf[b] = -(float)(4*kOff)*y[g + b].d*(float)y[g + b].s; }
+            else dy[b] = ysf[b] = 0.f;
+        }
+        const __m512 s16 = _mm512_mul_ps(_mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_maskz_loadu_epi8(km, r.q + g))), vd);
+        offs = _mm512_fmadd_ps(s16, _mm512_loadu_ps(ysf), offs);
+        _mm512_storeu_ps(f, _mm512_mul_ps(s16, _mm512_loadu_ps(dy)));
+        for (int b = 0; b < nbg; ++b) {
+            const int8_t * yq = y[g + b].qs;
+            __m512i ve, vo;
+            L.labels(qs, ve, vo);
+            __m512i acc = _mm512_dpbusd_epi32(_mm512_setzero_si512(), ve, _mm512_loadu_si512((const __m512i *)yq));
+            acc = _mm512_dpbusd_epi32(acc, vo, _mm512_loadu_si512((const __m512i *)(yq + 64)));
+            qs += 64;
+            accf = _mm512_fmadd_ps(_mm512_set1_ps(f[b]), _mm512_cvtepi32_ps(acc), accf);
+        }
+    }
+    *s = _mm512_reduce_add_ps(_mm512_add_ps(accf, offs));
+#else
+    const float ds = r.d*(1.f/255);
+    int n1 = 0, n2 = 0, n3 = 0;
+    float sumf = 0;
+    for (int ib = 0; ib < nb; ++ib) {
+        int sumi = 0;
+        for (int t = 128*ib; t < 128*(ib + 1); ++t) {
+            const int p = t%iqk_nt::kChunk;
+            const uint8_t byte = r.qs[ib*(iqk_nt::kChunk/2) + p/2];
+            const int n0 = (p & 1) ? byte >> 4 : byte & 15;
+            sumi += iqk_nt::label(n0, n1, n2, n3)*y[ib].qs[iqk_nt::stream_column(t) - 128*ib];
+            n3 = n2; n2 = n1; n1 = n0;
+        }
+        sumf += ds*(float)r.q[ib]*y[ib].d*(float)sumi;
+    }
+    *s = sumf;
+#endif
+}

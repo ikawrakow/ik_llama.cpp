@@ -1161,6 +1161,9 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
         }
     }
     struct ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
+    if (auto ex = lctx.model.nt_exact_cols(w); ex != nullptr) {
+        res = ggml_add_exact_cols(ctx0, res, cur_mm, ex->cols, ex->vals, nullptr);
+    }
     for (auto & it : lctx.lora_adapters) {
         struct llama_lora_weight * lora = it.first->get_weight(w);
         if (lora == nullptr) {
@@ -1322,6 +1325,10 @@ ggml_tensor * llm_build_context::llm_build_lora_mm_id(
         }
     }
     struct ggml_tensor * res = ggml_mul_mat_id(ctx0, cache_w ? cache_w : w, cur_mm, cache_ids ? cache_ids : ids);
+    if (auto ex = lctx.model.nt_exact_cols(w); ex != nullptr) {
+        GGML_ASSERT(!cache_w && !cache_ids && "IQ4_NT exact columns are not supported with the expert cache");
+        res = ggml_add_exact_cols(ctx0, res, cur_mm, ex->cols, ex->vals, ids);
+    }
     for (auto & it : lctx.lora_adapters) {
         struct llama_lora_weight * lora = it.first->get_weight(w);
         if (lora == nullptr) {
@@ -1570,7 +1577,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
 
     // the fused up/gate op consumes the activation as-is; Hadamard-folded (Prism) weights need
     // their activation transform, which is only applied by llm_build_lora_mm -> keep them separate
-    if (lctx.cparams.fused_up_gate &&
+    if (lctx.cparams.fused_up_gate && !lctx.model.nt_exact_cols(up) && !lctx.model.nt_exact_cols(gate) &&
         up && gate && can_fuse_up_gate(up, gate) && up->type != GGML_TYPE_PQ2_0 && up->type != GGML_TYPE_PQ2_0_R8 &&
         up->type != GGML_TYPE_PTQ1_0 && up->type != GGML_TYPE_PTQ1_0_R8 &&
         !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
@@ -2032,6 +2039,9 @@ llm_expert_gating_func_type   gating_op,
                          type_op == LLM_FFN_SWIGLU_OAI ||
                          (type_op == LLM_FFN_SITU && (fused_situ_on_gpu || lctx.model.n_gpu_layers == 0) &&
                           lctx.lora_adapters.empty() && lctx.cparams.fused_moe_up_gate));
+    if (lctx.model.nt_exact_cols(up_exps) || lctx.model.nt_exact_cols(gate_exps) || lctx.model.nt_exact_cols(up_gate_exps)) {
+        can_use_fmoe = false;
+    }
 
     bool share_offload_eligible = false;
     if (share_ids_ready && n_tokens <= 32) {

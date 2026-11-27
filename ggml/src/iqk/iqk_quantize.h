@@ -75,6 +75,17 @@ size_t quantize_iq4_kss(const float * GGML_RESTRICT src, void * GGML_RESTRICT ds
 void   dequantize_row_iq4_kss(const block_iq4_kss  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_iq4_kss_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
+void   quantize_row_iq4_nt_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+void   quantize_row_iq4_nt(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+size_t quantize_iq4_nt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);
+void   dequantize_row_iq4_nt(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void   vec_dot_iq4_nt_q8_k128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+int    iqk_iq4_nt_exact_columns(const float * imatrix, int64_t n, int32_t * cols);
+typedef int (*iqk_nt_search_t)(void * ctx, const float * xn, const float * ww, int rows, int n, uint8_t * nib);
+size_t iqk_quantize_iq4_nt_batched(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
+        iqk_nt_search_t search, void * ctx, int max_rows, int nthread);
+const int8_t * iqk_nt_label_table(void);
+
 void   quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4  * GGML_RESTRICT y, int64_t k);
 void   quantize_row_mxfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix, const struct quantize_user_data * use_data);

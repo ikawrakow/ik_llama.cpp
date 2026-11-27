@@ -28,9 +28,17 @@ def _iq3_ks_r16_row_bytes(n: int) -> int:
     return (band + 15) // 16
 
 
+def _iq4_nt_row_bytes(n: int) -> int:
+    if n % 128 != 0:
+        raise ValueError(f"Quantized tensor row size ({n}) is not a multiple of IQ4_NT block size (128)")
+    return (4 + n // 128 + 2 + 3) // 4 * 4 + n // 2
+
+
 def quant_row_bytes(n: int, quant_type: GGMLQuantizationType) -> int:
     block_size, type_size = GGML_QUANT_SIZES[quant_type]
     row_meta_size = GGML_ROW_META_SIZES.get(quant_type, 0)
+    if quant_type == GGMLQuantizationType.IQ4_NT:
+        return _iq4_nt_row_bytes(n)
     if quant_type == GGMLQuantizationType.IQ3_KS_R16:
         return _iq3_ks_r16_row_bytes(n)
     if quant_type in _KT_TAIL_BYTES:
@@ -57,6 +65,13 @@ def quant_shape_from_byte_shape(shape: Sequence[int], quant_type: GGMLQuantizati
             n = (band - 64) // 204 * 32
             if _iq3_ks_r16_row_bytes(n) == b:
                 return (*shape[:-1], n)
+        raise ValueError(f"Quantized tensor bytes per row ({b}) is not a valid {quant_type.name} row size")
+    if quant_type == GGMLQuantizationType.IQ4_NT:
+        b = shape[-1]
+        n = (b - 4) * 128 // 65 // 128 * 128
+        for cand in (n - 256, n - 128, n, n + 128, n + 256):
+            if cand > 0 and _iq4_nt_row_bytes(cand) == b:
+                return (*shape[:-1], cand)
         raise ValueError(f"Quantized tensor bytes per row ({b}) is not a valid {quant_type.name} row size")
     if quant_type in _KT_TAIL_BYTES:
         if shape[-1] >= row_meta_size:
