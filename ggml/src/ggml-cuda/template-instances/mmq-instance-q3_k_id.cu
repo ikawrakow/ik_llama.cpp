@@ -3,3 +3,80 @@
 #include "../mmq_id_common.cuh"
 
 DECL_MMQ_CASE(GGML_TYPE_Q3_K);
+
+template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_q3_k_r4(
+    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride, [[maybe_unused]] int blocks_per_ne00) {
+
+    constexpr int nwarps = mmq_get_nwarps_device();
+
+#ifdef INT8_MMA_AVAILABLE
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + WARP_SIZE*2);
+#else
+    constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q8_0_16;
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + txs.qs);
+#endif // INT8_MMA_AVAILABLE
+
+    const int kqsx = threadIdx.x/4;  // 0...7 -> block of 32
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += 4*nwarps) {
+        int i = i0 + 4*threadIdx.y + threadIdx.x%4;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+        int i4 = i/4;
+        int ir = i%4;
+
+        const block_q3_k_r4 * bxi = (const block_q3_k_r4 *)(x + 4*i4*stride) + kbx0;
+
+        const float d = __half2float(bxi->d[ir]);
+
+        int qh = get_int_b4(bxi->qh, 4*kqsx+ir);
+
+    #pragma unroll
+        for (int l = 0; l < 2; ++l) {
+
+            const int ql = get_int_b4(bxi->qs, 8*kqsx + ir + 4*l);
+
+#pragma unroll
+            for (int r = 0; r < 4; ++r) {
+                // byte j = 3-bit value (low 2 bits | high bit << 2) of column 32*kqsx + 16*l + 4*r + j
+                const int v = ((ql >> 2*r) & 0x03030303) | (((qh >> r) & 0x01010101) << 2);
+                // q3_K values are the 3-bit indices minus 4 -> signed bytes in [-4, 3]
+                const int w = __vsub4(v, 0x04040404);
+#ifdef INT8_MMA_AVAILABLE
+                x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + r] = w;
+#else
+                x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + r] = w;
+#endif // INT8_MMA_AVAILABLE
+            }
+
+            qh >>= 4;
+        }
+
+        int is = 8*kqsx + ir;
+        float dl1 = d * ((((bxi->scales_l[is%32] >> 4*(is/32)) & 0xf) | (((bxi->scales_h[is%16] >> 2*(is/16)) & 0x3) << 4)) - 32);
+        is += 4;
+        float dl2 = d * ((((bxi->scales_l[is%32] >> 4*(is/32)) & 0xf) | (((bxi->scales_h[is%16] >> 2*(is/16)) & 0x3) << 4)) - 32);
+
+#ifdef INT8_MMA_AVAILABLE
+        x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+0] = dl1;
+        x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+1] = dl2;
+#else
+        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+0] = dl1;
+        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+1] = dl2;
+#endif // INT8_MMA_AVAILABLE
+    }
+}
+
+template <int mmq_x, int mmq_y, bool need_check>
+struct mmq_type_traits_id<mmq_x, mmq_y, need_check, GGML_TYPE_Q3_K_R4> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q3_k_r4<mmq_y, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y>;
+};
+
+DECL_MMQ_CASE(GGML_TYPE_Q3_K_R4);
