@@ -3697,7 +3697,7 @@ struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
 
 };
 
-IQK_ALWAYS_INLINE void prepare_q4_k_quants(const uint8x16_t& m4, const uint8x16x4_t& bits, int8x16_t * qx) {
+IQK_ALWAYS_INLINE inline void prepare_q4_k_quants(const uint8x16_t& m4, const uint8x16x4_t& bits, int8x16_t * qx) {
     qx[0] = vandq_u8(bits.val[0], m4);   //  0...3 from the 4 rows
     qx[1] = vandq_u8(bits.val[1], m4);   // 16..19
     qx[2] = vandq_u8(bits.val[2], m4);   //  4...7

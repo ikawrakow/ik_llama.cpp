@@ -1033,7 +1033,7 @@ static void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
     }
 }
 
-static IQK_ALWAYS_INLINE int32x4_t interleaved_dotq(const int8x16_t * qx, const int8x16x2_t& y) {
+static IQK_ALWAYS_INLINE inline int32x4_t interleaved_dotq(const int8x16_t * qx, const int8x16x2_t& y) {
     auto sumi = vdupq_n_s32(0);
     sumi = vdotq_laneq_s32(sumi, qx[0], y.val[0], 0);
     sumi = vdotq_laneq_s32(sumi, qx[1], y.val[1], 0);
@@ -1046,7 +1046,7 @@ static IQK_ALWAYS_INLINE int32x4_t interleaved_dotq(const int8x16_t * qx, const 
     return sumi;
 }
 
-static IQK_ALWAYS_INLINE int32x4x2_t interleaved_dotq_b16(const int8x16_t * qx, const int8x16x2_t& y) {
+static IQK_ALWAYS_INLINE inline int32x4x2_t interleaved_dotq_b16(const int8x16_t * qx, const int8x16x2_t& y) {
     int32x4x2_t sumi = { vdupq_n_s32(0), vdupq_n_s32(0) };
     sumi.val[0] = vdotq_laneq_s32(sumi.val[0], qx[0], y.val[0], 0);
     sumi.val[1] = vdotq_laneq_s32(sumi.val[1], qx[1], y.val[1], 0);
@@ -1059,7 +1059,7 @@ static IQK_ALWAYS_INLINE int32x4x2_t interleaved_dotq_b16(const int8x16_t * qx, 
     return sumi;
 }
 
-static IQK_ALWAYS_INLINE int32x4_t interleaved_dotq(const int8x16_t * qx, const int8x16_t& y) {
+static IQK_ALWAYS_INLINE inline int32x4_t interleaved_dotq(const int8x16_t * qx, const int8x16_t& y) {
     auto sumi = vdupq_n_s32(0);
     sumi = vdotq_laneq_s32(sumi, qx[0], y, 0);
     sumi = vdotq_laneq_s32(sumi, qx[1], y, 1);
@@ -1068,7 +1068,7 @@ static IQK_ALWAYS_INLINE int32x4_t interleaved_dotq(const int8x16_t * qx, const 
     return sumi;
 }
 
-static IQK_ALWAYS_INLINE void prepare_iq4_nl_quants(const int8x16_t& values, const uint8x16_t& m4, const uint8x16x4_t& bits, int8x16_t * qx) {
+static IQK_ALWAYS_INLINE inline void prepare_iq4_nl_quants(const int8x16_t& values, const uint8x16_t& m4, const uint8x16x4_t& bits, int8x16_t * qx) {
     qx[0] = vqtbl1q_s8(values, vandq_u8(bits.val[0], m4));   //  0...3 from the 4 rows
     qx[1] = vqtbl1q_s8(values, vandq_u8(bits.val[1], m4));   // 16..19
     qx[2] = vqtbl1q_s8(values, vandq_u8(bits.val[2], m4));   //  4...7
@@ -1079,7 +1079,7 @@ static IQK_ALWAYS_INLINE void prepare_iq4_nl_quants(const int8x16_t& values, con
     qx[7] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[3], 4));  // 28..31
 }
 
-static IQK_ALWAYS_INLINE void prepare_iq4_nl_quants_r8(const int8x16_t& values, const uint8x16_t& m4, const uint8x16x2_t& bits, int8x16_t * qx) {
+static IQK_ALWAYS_INLINE inline void prepare_iq4_nl_quants_r8(const int8x16_t& values, const uint8x16_t& m4, const uint8x16x2_t& bits, int8x16_t * qx) {
     qx[0] = vqtbl1q_s8(values, vandq_u8(  bits.val[0], m4));
     qx[1] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[0],  4));
     qx[2] = vqtbl1q_s8(values, vandq_u8(  bits.val[1], m4));

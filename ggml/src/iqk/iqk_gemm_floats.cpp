@@ -1171,8 +1171,8 @@ void iqk_gemm_default_floats(int D, int nq, const char * cx, size_t bx, DataInfo
     mm_helper<nrc_q>(D, nq, cx, bx, info, k_step);
     if (int qrem = nq - nrc_q*(nq/nrc_q); qrem > 0) {
         switch (qrem) {
-            case  1: mm_helper<1>(D, nq, cx, bx, info, k_step);
-            case  2: mm_helper<2>(D, nq, cx, bx, info, k_step);
+            case  1: mm_helper<1>(D, nq, cx, bx, info, k_step); break;
+            case  2: mm_helper<2>(D, nq, cx, bx, info, k_step); break;
             default: mm_helper<3>(D, nq, cx, bx, info, k_step);
         }
     }
