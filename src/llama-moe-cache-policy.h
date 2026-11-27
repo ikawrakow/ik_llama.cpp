@@ -259,7 +259,7 @@ struct state {
         return true;
     }
 
-    bool plan_classlru(int32_t il, const int32_t * ids, size_t n_ids, int64_t n_tokens,
+    bool plan_classlru(int32_t il, const int32_t * ids, size_t n_ids, int64_t n_tokens, bool tick,
             std::vector<fill> & fills, size_t & n_hit, size_t & n_eviction) {
         fills.clear();
         n_hit = n_eviction = 0;
@@ -307,19 +307,20 @@ struct state {
             move_class(s, class_of(key));
             fills.push_back({e, s});
         }
-        clock[il] += n_tokens;
+        if (tick) clock[il] += n_tokens;
         return true;
     }
 
+    // tick: later visits plan in the owner's entries without advancing its clock.
     bool plan(int32_t il, const int32_t * ids, size_t n_ids, int64_t n_tokens,
-            std::vector<fill> & fills, size_t & n_hit, size_t & n_eviction) {
+            std::vector<fill> & fills, size_t & n_hit, size_t & n_eviction, bool tick = true) {
         if (policy == kind::lru) return plan_lru(il, ids, n_ids, fills, n_hit, n_eviction);
-        return plan_classlru(il, ids, n_ids, n_tokens, fills, n_hit, n_eviction);
+        return plan_classlru(il, ids, n_ids, n_tokens, tick, fills, n_hit, n_eviction);
     }
 
     bool plan_with_cpu_share(int32_t il, const int32_t * ids, size_t n_ids,
             int64_t n_tokens, int64_t selected_per_token, double share,
-            int32_t zero_slots, cpu_share_plan & out) {
+            int32_t zero_slots, cpu_share_plan & out, bool tick = true) {
         out.fills.clear();
         out.cpu.clear();
         out.gpu_map.clear();
@@ -343,7 +344,7 @@ struct state {
         }
 
         if (requested_q == 0) {
-            if (!plan(il, ids, n_ids, n_tokens, out.fills, out.n_hit, out.n_eviction)) return false;
+            if (!plan(il, ids, n_ids, n_tokens, out.fills, out.n_hit, out.n_eviction, tick)) return false;
             out.gpu_map.assign(n_expert, -1);
             out.cpu_map.assign(n_expert, -1);
             out.gpu_bias_map.assign(n_expert, n_expert);
@@ -486,7 +487,7 @@ struct state {
             out.fills.push_back({e, s});
         }
         cpu_acc[il] = next_acc;
-        clock[il] += n_tokens;
+        if (tick) clock[il] += n_tokens;
         return true;
     }
 };
