@@ -663,9 +663,8 @@ struct llama_moe_cache::impl {
                 }
                 int64_t n_tokens = 0;
                 int64_t selected_per_token = 0;
-                if (!ggml_is_contiguous(selected) ||
-                        !llama_moe_cache_policy_detail::recover_selected_geometry(selected,
-                            g.cache.n_expert, selected_per_token, n_tokens) || n_tokens > max_batch) {
+                if (!llama_moe_cache_policy_detail::recover_selected_geometry(lookup,
+                        g.cache.n_expert, selected_per_token, n_tokens) || n_tokens > max_batch) {
                     GGML_ABORT("Unable to recover MoE CPU-share token geometry for layer %d", il);
                 }
                 const ggml_tensor * selected_storage = selected->view_src ? selected->view_src : selected;
@@ -758,7 +757,7 @@ struct llama_moe_cache::impl {
         int64_t n_tokens = 1;
         int64_t selected_per_token = 0;
         if (g.cache.policy == llama_moe_cache_policy_detail::kind::classlru &&
-                (!llama_moe_cache_policy_detail::recover_selected_geometry(selected,
+                (!llama_moe_cache_policy_detail::recover_selected_geometry(lookup,
                     g.cache.n_expert, selected_per_token, n_tokens) || n_tokens > max_batch)) {
             GGML_ABORT("Unable to recover MoE cache token geometry for layer %d", il);
         }

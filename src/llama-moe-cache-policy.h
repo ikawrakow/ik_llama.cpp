@@ -491,23 +491,19 @@ struct state {
     }
 };
 
-inline bool recover_selected_geometry(const ggml_tensor * selected, int64_t n_expert,
+inline void set_lookup_geometry(ggml_tensor * lookup, int64_t selected_per_token) {
+    lookup->op_params[1] = (int32_t) selected_per_token;
+}
+
+inline bool recover_selected_geometry(const ggml_tensor * lookup, int64_t n_expert,
         int64_t & selected_per_token, int64_t & n_tokens) {
-    if (!selected || selected->type != GGML_TYPE_I32 || !ggml_is_contiguous(selected) || n_expert <= 0) return false;
-    if (selected->op == GGML_OP_RESHAPE && selected->src[0]) {
-        const ggml_tensor * source = selected->src[0];
-        if (source->ne[0] <= 0 || source->ne[0] > n_expert || source->ne[1] <= 0 || source->ne[2] != 1 ||
-                source->ne[3] != 1 || selected->ne[0] != ggml_nelements(source) ||
-                selected->ne[1] != 1 || selected->ne[2] != 1 || selected->ne[3] != 1 ||
-                ggml_nelements(selected) != ggml_nelements(source)) return false;
-        selected_per_token = source->ne[0];
-        n_tokens = source->ne[1];
-        return true;
-    }
-    if (selected->ne[0] <= 0 || selected->ne[0] > n_expert || selected->ne[1] <= 0 ||
-            selected->ne[2] != 1 || selected->ne[3] != 1) return false;
-    selected_per_token = selected->ne[0];
-    n_tokens = selected->ne[1];
+    const ggml_tensor * selected = lookup->src[1];
+    if (selected->type != GGML_TYPE_I32 || !ggml_is_contiguous(selected)) return false;
+    const int64_t n_ids = ggml_nelements(selected);
+    if (n_ids <= 0) return false;
+    selected_per_token = lookup->op_params[1];
+    if (selected_per_token <= 0 || selected_per_token > n_expert || n_ids % selected_per_token != 0) return false;
+    n_tokens = n_ids / selected_per_token;
     return true;
 }
 
