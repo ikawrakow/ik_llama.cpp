@@ -274,6 +274,10 @@ struct common_sampler {
 
     std::vector<float>* server_biases;
 
+    // allow the sampling fast path (see llama_sampling_sample_impl), enabled by the server
+    bool allow_fast_path = false;
+    std::vector<std::pair<float, int>> fast_top;
+
     // expiring logit bias
     struct elb_state {
         struct elb_token {

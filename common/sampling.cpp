@@ -257,6 +257,7 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     dst->speculative_seed = src->speculative_seed;
     dst->speculative_rng = src->speculative_rng;
     dst->server_biases = src->server_biases;
+    dst->allow_fast_path = src->allow_fast_path;
 
     if (dst->grammar) {
         llama_grammar_free(dst->grammar);
@@ -507,12 +508,211 @@ static bool grammar_should_apply(struct common_sampler * gsmpl) {
     return true;
 }
 
+// Sampling fast path: when the result depends only on the argmax (greedy) or on the top-k logits
+// (TOP_K is the first sampler that changes the candidates), select those entries straight from
+// the logits instead of building the n_vocab-entry candidate array. Grammar, reasoning budget,
+// adaptive-p, mirostat, server biases, n_probs, active penalties or DRY, and equal logits inside
+// or at the boundary of the top-k set all take the full path.
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+__attribute__((target("avx2")))
+static float sampler_fast_max_avx2(const float * x, int n) {
+    __m256 m = _mm256_set1_ps(-INFINITY);
+    int i = 0;
+    for (; i + 8 <= n; i += 8) m = _mm256_max_ps(m, _mm256_loadu_ps(x + i));
+    alignas(32) float t[8];
+    _mm256_store_ps(t, m);
+    float r = t[0];
+    for (int j = 1; j < 8; ++j) r = t[j] > r ? t[j] : r;
+    for (; i < n; ++i) r = x[i] > r ? x[i] : r;
+    return r;
+}
+
+__attribute__((target("avx2")))
+static int sampler_fast_count_ge_avx2(const float * x, int n, float thr) {
+    const __m256 t = _mm256_set1_ps(thr);
+    int c = 0, i = 0;
+    for (; i + 8 <= n; i += 8) c += __builtin_popcount(_mm256_movemask_ps(_mm256_cmp_ps(_mm256_loadu_ps(x + i), t, _CMP_GE_OQ)));
+    for (; i < n; ++i) c += x[i] >= thr;
+    return c;
+}
+
+// first index with x[i] == v (v taken from x), -1 if none
+__attribute__((target("avx2")))
+static int sampler_fast_find_avx2(const float * x, int n, float v) {
+    const __m256 t = _mm256_set1_ps(v);
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        const int m = _mm256_movemask_ps(_mm256_cmp_ps(_mm256_loadu_ps(x + i), t, _CMP_EQ_OQ));
+        if (m) return i + __builtin_ctz(m);
+    }
+    for (; i < n; ++i) if (x[i] == v) return i;
+    return -1;
+}
+
+// indices of elements > thr in the block [i, i+8), as a bit mask
+__attribute__((target("avx2")))
+static int sampler_fast_gt_mask_avx2(const float * x, float thr) {
+    return _mm256_movemask_ps(_mm256_cmp_ps(_mm256_loadu_ps(x), _mm256_set1_ps(thr), _CMP_GT_OQ));
+}
+static const bool sampler_fast_has_avx2 = __builtin_cpu_supports("avx2");
+#else
+static const bool sampler_fast_has_avx2 = false;
+static float sampler_fast_max_avx2(const float *, int) { return 0.0f; }
+static int   sampler_fast_count_ge_avx2(const float *, int, float) { return 0; }
+static int   sampler_fast_gt_mask_avx2(const float *, float) { return 0; }
+static int   sampler_fast_find_avx2(const float *, int, float) { return -1; }
+#endif
+
+// first index of the maximum (same result as std::max_element with operator< over id order)
+static int sampler_fast_argmax(const float * x, int n) {
+    float m;
+    if (sampler_fast_has_avx2) {
+        m = sampler_fast_max_avx2(x, n);
+        return sampler_fast_find_avx2(x, n, m);
+    } else {
+        m = x[0];
+        for (int i = 1; i < n; ++i) m = x[i] > m ? x[i] : m;
+    }
+    for (int i = 0; i < n; ++i) {
+        if (x[i] == m) return i;
+    }
+    return -1;   // only with NaN everywhere
+}
+
+// the k largest logits; false if the set or its order is not unique (equal values)
+static bool sampler_fast_top_k(const float * x, int n, int k, std::vector<std::pair<float, int>> & heap) {
+    heap.clear();
+    if (k <= 0 || k >= n) return false;
+    auto cmp = [](const std::pair<float, int> & a, const std::pair<float, int> & b) { return a.first > b.first; };  // min-heap
+    for (int i = 0; i < k; ++i) heap.push_back({ x[i], i });
+    std::make_heap(heap.begin(), heap.end(), cmp);
+    float thr = heap.front().first;
+    auto offer = [&](int i) {
+        if (x[i] > thr) {
+            std::pop_heap(heap.begin(), heap.end(), cmp);
+            heap.back() = { x[i], i };
+            std::push_heap(heap.begin(), heap.end(), cmp);
+            thr = heap.front().first;
+        }
+    };
+    int i = k;
+    if (sampler_fast_has_avx2) {
+        for (; i < n && (i & 7); ++i) offer(i);
+        for (; i + 8 <= n; i += 8) {
+            int m = sampler_fast_gt_mask_avx2(x + i, thr);
+            while (m) {
+                const int j = __builtin_ctz(m);
+                m &= m - 1;
+                offer(i + j);
+            }
+        }
+    }
+    for (; i < n; ++i) offer(i);
+    // uniqueness: distinct values inside the set, and nothing outside equal to its smallest value
+    std::sort(heap.begin(), heap.end(), cmp);   // descending
+    for (int j = 1; j < k; ++j) {
+        if (!(heap[j - 1].first > heap[j].first)) return false;
+    }
+    const float kth = heap[k - 1].first;
+    if (!std::isfinite(kth)) return false;
+    int cnt;
+    if (sampler_fast_has_avx2) {
+        cnt = sampler_fast_count_ge_avx2(x, n, kth);
+    } else {
+        cnt = 0;
+        for (int j = 0; j < n; ++j) cnt += x[j] >= kth;
+    }
+    return cnt == k;
+}
+
+// 0 = not eligible, 1 = greedy, 2 = top-k chain (k returned in k_out)
+static int sampler_fast_mode(const common_sampler * cs, const llama_context * ctx_cfg, int n_vocab, int & k_out) {
+    const common_params_sampling & p = cs->params;
+    if (!cs->allow_fast_path) return 0;
+    if (ctx_cfg || cs->grammar || cs->rbudget || cs->adapt_p_ctx || cs->server_biases) return 0;
+    if (p.n_probs > 0 || p.mirostat != 0 || p.adaptive_target >= 0.0f) return 0;
+    if (!(p.penalty_repeat == 1.0f && p.penalty_freq == 0.0f && p.penalty_present == 0.0f)) {
+        const auto & pt = p.use_penalty_prompt_tokens ? p.penalty_prompt_tokens : cs->prev;
+        const int32_t last_n = p.penalty_last_n < 0 ? p.n_prev : p.penalty_last_n;
+        if (std::min((int) pt.size(), last_n) > 0) return 0;
+    }
+    if (p.temp == 0.0f) return 1;
+    if (p.temp < 0.0f) return 0;
+    const bool dry_off = p.dry_multiplier == 0.0f || p.dry_base < 1.0f || p.dry_penalty_last_n == 0;
+    for (auto t : p.samplers_sequence) {
+        if (t == llama_sampler_type::TOP_K) {
+            const int k = std::max(p.top_k, p.min_keep);
+            if (p.top_k <= 0 || k >= n_vocab || k > 1024) return 0;
+            k_out = k;
+            return 2;
+        }
+        if (t == llama_sampler_type::DRY && dry_off) continue;
+        return 0;   // something else touches the full array before TOP_K
+    }
+    return 0;
+}
+
+static llama_token llama_sampling_sample_full(struct common_sampler * ctx_sampling, struct llama_context * ctx_main,
+        struct llama_context * ctx_cfg, const int idx, bool grammar_first, bool biases_applied);
+static llama_token_data_array llama_sampling_prepare_impl(struct common_sampler * ctx_sampling, struct llama_context * ctx_main,
+        struct llama_context * ctx_cfg, const int idx, bool grammar_first, std::vector<float> * original_logits,
+        bool biases_applied = false);
+
 static llama_token llama_sampling_sample_impl(
                   struct common_sampler * ctx_sampling,
                   struct llama_context * ctx_main,
                   struct llama_context * ctx_cfg,
                   const int idx,
                   bool grammar_first) {
+    const common_params_sampling & params = ctx_sampling->params;
+
+    // fast path: same logit edits as prepare, then only the entries that matter
+    {
+        const int n_vocab = llama_n_vocab(llama_get_model(ctx_main));
+        int fk = 0;
+        const int mode = sampler_fast_mode(ctx_sampling, ctx_cfg, n_vocab, fk);
+        if (mode != 0) {
+            float * lg = llama_get_logits_ith(ctx_main, idx);
+            for (auto it = params.logit_bias.begin(); it != params.logit_bias.end(); it++) {
+                lg[it->first] += it->second;
+            }
+            if (ctx_sampling->elb_states.size() > ctx_sampling->elb_idx) {
+                common_expiring_logit_bias_apply(ctx_sampling, lg);
+            }
+            auto & cur = ctx_sampling->cur;
+            if (mode == 1) {
+                const int best = sampler_fast_argmax(lg, n_vocab);
+                if (best >= 0) {
+                    cur.resize(1);
+                    cur[0] = llama_token_data{ best, lg[best], 0.0f };
+                    ctx_sampling->cur_p = { cur.data(), cur.size(), false };
+                    return best;
+                }
+            } else {
+                std::vector<std::pair<float, int>> & top = ctx_sampling->fast_top;
+                if (sampler_fast_top_k(lg, n_vocab, fk, top)) {
+                    cur.resize(top.size());
+                    for (size_t j = 0; j < top.size(); ++j) cur[j] = llama_token_data{ top[j].second, top[j].first, 0.0f };
+                    ctx_sampling->cur_p = { cur.data(), cur.size(), false };
+                    llama_token_data_array & cur_p = ctx_sampling->cur_p;
+                    sampler_queue(ctx_main, params, ctx_sampling, cur_p, std::max(1, params.min_keep));
+                    return llama_sample_token_with_rng(ctx_main, &cur_p, ctx_sampling->rng);
+                }
+            }
+            // not unique (or NaN): the biases are already applied, don't apply them twice
+            return llama_sampling_sample_full(ctx_sampling, ctx_main, ctx_cfg, idx, grammar_first, /*biases_applied=*/ true);
+        }
+    }
+    return llama_sampling_sample_full(ctx_sampling, ctx_main, ctx_cfg, idx, grammar_first, /*biases_applied=*/ false);
+}
+
+static llama_token llama_sampling_sample_full(
+                  struct common_sampler * ctx_sampling,
+                  struct llama_context * ctx_main,
+                  struct llama_context * ctx_cfg,
+                  const int idx,
+                  bool grammar_first,
+                  bool biases_applied) {
     const common_params_sampling & params = ctx_sampling->params;
 
     const float   temp            = params.temp;
@@ -522,7 +722,7 @@ static llama_token llama_sampling_sample_impl(
     const float   adaptive_target = params.adaptive_target;
 
     std::vector<float> original_logits;
-    llama_sampling_prepare(ctx_sampling, ctx_main, ctx_cfg, idx, /* grammar_first= */ grammar_first, &original_logits);
+    llama_sampling_prepare_impl(ctx_sampling, ctx_main, ctx_cfg, idx, /* grammar_first= */ grammar_first, &original_logits, biases_applied);
     llama_token_data_array & cur_p = ctx_sampling->cur_p;
     if (ctx_sampling->grammar != NULL && !grammar_first) {
         GGML_ASSERT(!original_logits.empty());
@@ -609,7 +809,8 @@ static llama_token_data_array llama_sampling_prepare_impl(
                   struct llama_context * ctx_cfg,
                   const int idx,
                   bool grammar_first,
-                  std::vector<float> * original_logits) {
+                  std::vector<float> * original_logits,
+                  bool biases_applied) {
     const common_params_sampling & params = ctx_sampling->params;
 
     const int n_vocab = llama_n_vocab(llama_get_model(ctx_main));
@@ -633,9 +834,11 @@ static llama_token_data_array llama_sampling_prepare_impl(
         *original_logits = {logits, logits + n_vocab};
     }
 
-    // apply params.logit_bias map
-    for (auto it = params.logit_bias.begin(); it != params.logit_bias.end(); it++) {
-        logits[it->first] += it->second;
+    // apply params.logit_bias map (unless the fast path already did)
+    if (!biases_applied) {
+        for (auto it = params.logit_bias.begin(); it != params.logit_bias.end(); it++) {
+            logits[it->first] += it->second;
+        }
     }
 
     if (ctx_cfg) {
@@ -643,7 +846,7 @@ static llama_token_data_array llama_sampling_prepare_impl(
         llama_sample_apply_guidance(ctx_main, logits, logits_guidance, params.cfg_scale);
     }
 
-    if (ctx_sampling->elb_states.size() > ctx_sampling->elb_idx) {
+    if (!biases_applied && ctx_sampling->elb_states.size() > ctx_sampling->elb_idx) {
         common_expiring_logit_bias_apply(ctx_sampling, logits);
     }
 

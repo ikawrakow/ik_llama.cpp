@@ -2003,6 +2003,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 common_sampler_free(slot.ctx_sampling);
             }
             slot.ctx_sampling = common_sampler_init(model, slot.sparams);
+            slot.ctx_sampling->allow_fast_path = true;
         }
         catch (std::exception & e) {
             std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
