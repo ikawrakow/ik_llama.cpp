@@ -1996,6 +1996,28 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         }
     }
 
+    // the request's expiring logit bias goes into slot.sparams before the sampler copies them:
+    // the states built below index the sampler's own elb_params
+    {
+        const auto& expiring_logit_bias = data.find("expiring_logit_bias");
+        if (expiring_logit_bias != data.end() && expiring_logit_bias->is_array()) {
+            // has new params from api
+            std::string content;
+            for (const auto& line: data["expiring_logit_bias"]) {
+                if (line.is_string()) {
+                    content += line.get<std::string>() + "\n";
+                }
+            }
+            try {
+                argparse_expiring_logit_bias(content, slot.sparams);
+            } catch (const std::invalid_argument& e) {
+                std::cerr << e.what() << '\n';
+            } catch (const std::out_of_range& e) {
+                std::cerr << e.what() << '\n';
+            }
+        }
+    }
+
     {
         try
         {
@@ -2018,34 +2040,14 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     do  // populate expiring logit bias
     {
-        const auto prev_elb_params = slot.sparams.elb_params;
-
-        const auto& expiring_logit_bias = data.find("expiring_logit_bias");
-        if (expiring_logit_bias != data.end() && expiring_logit_bias->is_array()) {
-            // has new params from api
-            std::string content;
-            for (const auto& line: data["expiring_logit_bias"]) {
-                if (line.is_string()) {
-                    content += line.get<std::string>() + "\n";
-                }
-            }
-            try {
-                argparse_expiring_logit_bias(content, slot.sparams);
-            } catch (const std::invalid_argument& e) {
-                std::cerr << e.what() << '\n';
-            } catch (const std::out_of_range& e) {
-                std::cerr << e.what() << '\n';
-            }
-        }
-
         const auto& elb_params = slot.sparams.elb_params;
         if (elb_params.empty()) {
             slot.ctx_sampling->elb_states.clear();
             break;
         }
 
-        if (!slot.prev_elb_states.empty() && (elb_params == prev_elb_params)) {
-            // reset and reuse previous states
+        if (!slot.prev_elb_states.empty() && (elb_params == default_sparams.elb_params)) {
+            // no params from the request: reset and reuse the previous states
             slot.ctx_sampling->elb_states = slot.prev_elb_states;
             for (auto& elb_state: slot.ctx_sampling->elb_states) {
                 elb_state.countup = 0;
