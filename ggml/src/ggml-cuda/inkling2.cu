@@ -101,3 +101,66 @@ bool ggml_cuda_op_inkling2_control(ggml_backend_cuda_context & ctx, ggml_tensor 
     }
     return true;
 }
+
+static __global__ void k_softmax_gemm_f32(int ne00, int ne01, int ne10, int nelem,
+        size_t nb01, size_t nb02, size_t nb11, size_t nb12,
+        const float * __restrict__ x0, const float * __restrict__ x1, float * __restrict__ y, float scale) {
+
+    int ir = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ir >= nelem) {
+        return;
+    }
+    // the result is n10*ne00*n02
+    int i2 = ir/(ne00*ne10);
+    int i10 = (ir - i2*ne00*ne10)/ne00;
+    int i00 = ir - i2*ne00*ne10 - i10*ne00;
+
+    x0 += i00      + i2*nb02;
+    x1 += i10      + i2*nb12;
+    y  += i10*ne00 + i2*ne00*ne10;
+
+    float max = fmaxf(x1[0], x1[1]);
+    for (int j = 2; j < ne01; ++j) max = fmaxf(max, x1[j*nb11]);
+    float sum_n = 0, sum_d = 0;
+    for (int j = 0; j < ne01; ++j) {
+        float p = expf(scale*(x1[j*nb11] - max));
+        sum_n += p*x0[j*nb01];
+        sum_d += p;
+    }
+    y[i00] = sum_n / sum_d;
+}
+
+void ggml_cuda_op_inkling2_mix(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    auto src0 = dst->src[0];
+    auto src1 = dst->src[1];
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->ne[3] == 1 && src1->ne[3] == 1);
+    GGML_ASSERT(src0->ne[1] == src1->ne[1] && src0->ne[2] == src1->ne[2]);
+
+    const float * fparams = (const float *)src1->op_params;
+    float scale = fparams[0];
+
+    int64_t nelem = ggml_nelements(dst);
+    int nsm = ggml_cuda_info().devices[ctx.device].nsm;
+    if (nsm*WARP_SIZE >= nelem) {
+        int nblock = (nelem + WARP_SIZE - 1)/WARP_SIZE;
+        k_softmax_gemm_f32<<<nblock, WARP_SIZE, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], src1->ne[0], nelem,
+                src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float),
+                src1->nb[1]/sizeof(float), src1->nb[2]/sizeof(float),
+                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, scale);
+    }
+    else if (2*nsm*WARP_SIZE >= nelem) {
+        int nblock = (nelem + 2*WARP_SIZE - 1)/(2*WARP_SIZE);
+        k_softmax_gemm_f32<<<nblock, 2*WARP_SIZE, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], src1->ne[0], nelem,
+                src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float),
+                src1->nb[1]/sizeof(float), src1->nb[2]/sizeof(float),
+                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, scale);
+    } else {
+        int nblock = (nelem + 4*WARP_SIZE - 1)/(4*WARP_SIZE);
+        k_softmax_gemm_f32<<<nblock, 4*WARP_SIZE, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], src1->ne[0], nelem,
+                src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float),
+                src1->nb[1]/sizeof(float), src1->nb[2]/sizeof(float),
+                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, scale);
+    }
+}

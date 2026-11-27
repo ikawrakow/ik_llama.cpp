@@ -4895,9 +4895,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FMA",
     "MULTI_ADD_UNARY_SCALE",
     "INKLING2_CLIP",
+    "INKLING2_MIX",
 };
 
-static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
+static_assert(GGML_OP_COUNT == 115, "GGML_OP_COUNT != 115");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -5027,10 +5028,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "c + a*b",
     "c*sum(unary(x,y))",
     "inkling2_clip(x)",
+    "inkling2_micx(x,y)",
 
 };
 
-static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
+static_assert(GGML_OP_COUNT == 115, "GGML_OP_COUNT != 115");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -7325,6 +7327,24 @@ struct ggml_tensor * ggml_inkling2_clip(
     return result;
 }
 
+struct ggml_tensor * ggml_inkling2_mix(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * qk,
+            float                 kq_scales) {
+    GGML_ASSERT(v->type == GGML_TYPE_F32 && qk->type == GGML_TYPE_F32);
+    GGML_ASSERT(v->ne[3] == 1 && qk->ne[3] == 1);
+    GGML_ASSERT(v->ne[2] == qk->ne[2]);
+    GGML_ASSERT(v->ne[1] == qk->ne[1]);
+
+    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, v->ne[0], qk->ne[0], v->ne[2]);
+    result->op = GGML_OP_INKLING2_MIX;
+    result->src[0] = v;
+    result->src[1] = qk;
+    memcpy(result->op_params, &kq_scales, sizeof(kq_scales));
+
+    return result;
+}
 
 // ggml_div
 
@@ -21770,6 +21790,87 @@ static void ggml_compute_forward_fused_softmax_small_gemm_f32(const struct ggml_
     }
 }
 
+static void ggml_compute_forward_inkling2_mix_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    struct ggml_tensor * src0 = dst->src[0];
+    struct ggml_tensor * src1 = dst->src[1];
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32);
+
+    const float * fparams = (const float *)src1->op_params;
+    float scale = fparams[0];
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    GGML_ASSERT(src0->ne[0] % 32 == 0);
+    int64_t nelem = ggml_nelements(dst);
+    int nblocks = nelem / 32;
+    int npt = (nblocks + nth - 1)/nth;
+
+    int first = npt*ith;
+    int last  = MIN(first + npt, nblocks);
+
+    int nb00 = src0->ne[0] / 32;
+    int nq   = src1->ne[0];
+    int nk   = src0->ne[1];
+    GGML_ASSERT(nk <= 16);
+
+    float p[16];
+
+    int stride_qk = src1->nb[1] / sizeof(float);
+    int stride_v  = src0->nb[1] / sizeof(float);
+
+    int last_iq = -1;
+    float sum_d = 0.0f;
+    for (int ib = first; ib < last; ++ib) {
+        int it  = ib/(nb00*nq);
+        int iq  = (ib - it*nb00*nq)/nb00;
+        int ib0 = ib - it*nb00*nq - iq*nb00;
+
+        const float * v  = (const float *)((const char *)src0->data + it*src0->nb[2]) + 32*ib0;
+        const float * qk = (const float *)((const char *)src1->data + it*src1->nb[2]) + iq;
+        float * y = (float *)((char *)dst->data + it*dst->nb[2] + iq*dst->nb[1]) + 32*ib0;
+
+        if (iq != last_iq) {
+            float max = -INFINITY;
+            for (int j = 0; j < nk; ++j) {
+                p[j] = qk[j*stride_qk];
+                max = MAX(max, p[j]);
+            }
+            GGML_ASSERT(max > -INFINITY);
+            sum_d = 0.0f;
+            for (int j = 0; j < nk; ++j) {
+                p[j] = expf(scale*(p[j] - max));
+                sum_d += p[j];
+            }
+            last_iq = iq;
+        }
+
+        for (int i = 0; i < 32; ++i) {
+            float sum_n = 0;
+            for (int j = 0; j < nk; ++j) {
+                sum_n += p[j] * v[i + j*stride_v];
+            }
+            y[i] = sum_n / sum_d;
+        }
+    }
+}
+
+static void ggml_compute_forward_inkling2_mix(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+
+    switch (dst->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_inkling2_mix_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("Not implemented");
+            }
+    }
+}
+
 // ggml_compute_forward_soft_max_back
 
 static void ggml_compute_forward_soft_max_back_f32(
@@ -28283,6 +28384,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_inkling2_clip(params, tensor);
             } break;
+        case GGML_OP_INKLING2_MIX:
+            {
+                ggml_compute_forward_inkling2_mix(params, tensor);
+            } break;
         case GGML_OP_FUSED_MUL_UNARY:
             {
                 ggml_compute_forward_fused_mul_unary(params, tensor);
@@ -29171,6 +29276,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 GGML_ABORT("Fatal error");
             } break;
         case GGML_OP_INKLING2_CLIP:
+            {
+                GGML_ABORT("Fatal error");
+            } break;
+        case GGML_OP_INKLING2_MIX:
             {
                 GGML_ABORT("Fatal error");
             } break;
@@ -30570,6 +30679,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MUL:
         case GGML_OP_FMA:
         case GGML_OP_INKLING2_CLIP:
+        case GGML_OP_INKLING2_MIX:
         case GGML_OP_FUSED_MUL_UNARY:
         case GGML_OP_MULTI_ADD_UNARY:
         case GGML_OP_DIV:
