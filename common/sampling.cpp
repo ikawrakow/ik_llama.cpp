@@ -507,6 +507,43 @@ static bool grammar_should_apply(struct common_sampler * gsmpl) {
     return true;
 }
 
+// A temp == 0 pick is the argmax of the logit row unless one of the steps below is active. They are
+// all the steps of llama_sampling_prepare_impl() and llama_sampling_sample_impl() that, on such a
+// call, change the logit row (params.logit_bias apart) or the candidates, or leave the candidates
+// to the caller. A new step of that kind has to be added here.
+static bool llama_sampling_greedy_from_logits(
+                  const struct common_sampler * ctx_sampling,
+                  const struct llama_context * ctx_cfg,
+                  bool grammar_first) {
+    const common_params_sampling & params = ctx_sampling->params;
+
+    if (params.temp != 0.0f) {
+        return false; // temp < 0 returns the probabilities, temp > 0 runs mirostat or the sampler queue
+    }
+    if (ctx_cfg != nullptr) {
+        return false; // guidance
+    }
+    if (ctx_sampling->elb_states.size() > ctx_sampling->elb_idx) {
+        return false; // expiring biases (they also change params)
+    }
+    if (ctx_sampling->server_biases != nullptr) {
+        return false; // server biases, added to the candidates
+    }
+    if (params.penalty_repeat != 1.0f || params.penalty_freq != 0.0f || params.penalty_present != 0.0f) {
+        return false; // penalties
+    }
+    if (ctx_sampling->grammar != nullptr) {
+        return false; // the grammar masks the candidates, or checks the pick and resamples
+    }
+    if (ctx_sampling->rbudget != nullptr &&
+        common_reasoning_budget_get_state(ctx_sampling->rbudget) == REASONING_BUDGET_FORCING) {
+        return false; // the reasoning budget masks the candidates while it forces its message
+    }
+    // the callers that read the candidates after the call: the token probabilities, and the
+    // speculative paths, which ask for the grammar first
+    return params.n_probs == 0 && !grammar_first;
+}
+
 static llama_token llama_sampling_sample_impl(
                   struct common_sampler * ctx_sampling,
                   struct llama_context * ctx_main,
@@ -514,6 +551,22 @@ static llama_token llama_sampling_sample_impl(
                   const int idx,
                   bool grammar_first) {
     const common_params_sampling & params = ctx_sampling->params;
+
+    if (llama_sampling_greedy_from_logits(ctx_sampling, ctx_cfg, grammar_first)) {
+        // the logit bias is added in place, as llama_sampling_prepare_impl() does it; the
+        // n_vocab candidates are not built
+        float * logits = llama_get_logits_ith(ctx_main, idx);
+        for (auto it = params.logit_bias.begin(); it != params.logit_bias.end(); it++) {
+            logits[it->first] += it->second;
+        }
+        const llama_token id = llama_sample_token_greedy_logits(ctx_main, logits, llama_n_vocab(llama_get_model(ctx_main)));
+
+        // leave the pick as the only candidate, not the candidates of an earlier call
+        ctx_sampling->cur.assign(1, llama_token_data{id, logits[id], 0.0f});
+        ctx_sampling->cur_p = { ctx_sampling->cur.data(), ctx_sampling->cur.size(), false };
+
+        return id;
+    }
 
     const float   temp            = params.temp;
     const int     mirostat        = params.mirostat;
@@ -676,9 +729,30 @@ static llama_token_data_array llama_sampling_prepare_impl(
         const llama_token nl_token = llama_token_nl(llama_get_model(ctx_main));
         const float nl_logit = nl_token != LLAMA_TOKEN_NULL ? logits[nl_token] : 0.0f;
 
-        llama_sample_repetition_penalties(ctx_main, &cur_p,
-                penalty_tokens.data() + penalty_tokens.size() - penalty_tokens_used_size,
-                penalty_tokens_used_size, penalty_repeat, penalty_freq, penalty_present);
+        // cur_p holds token i at index i, and only the tokens in the window can be penalized:
+        // penalize copies of their entries and write them back, instead of looking up every
+        // token of the vocabulary. With neutral penalties (the call returns at once) or a window
+        // that is not shorter than the vocabulary, the plain call does no more work than that.
+        const llama_token * last_tokens = penalty_tokens.data() + penalty_tokens.size() - penalty_tokens_used_size;
+        const bool no_penalty = penalty_repeat == 1.0f && penalty_freq == 0.0f && penalty_present == 0.0f;
+        if (no_penalty || penalty_tokens_used_size >= n_vocab) {
+            llama_sample_repetition_penalties(ctx_main, &cur_p, last_tokens, penalty_tokens_used_size,
+                    penalty_repeat, penalty_freq, penalty_present);
+        } else {
+            std::vector<llama_token_data> pen;
+            pen.reserve(penalty_tokens_used_size);
+            for (int i = 0; i < penalty_tokens_used_size; ++i) {
+                if (last_tokens[i] >= 0 && last_tokens[i] < n_vocab) {
+                    pen.push_back(cur_p.data[last_tokens[i]]);
+                }
+            }
+            llama_token_data_array pen_p = { pen.data(), pen.size(), false };
+            llama_sample_repetition_penalties(ctx_main, &pen_p, last_tokens, penalty_tokens_used_size,
+                    penalty_repeat, penalty_freq, penalty_present);
+            for (const auto & td : pen) {
+                cur_p.data[td.id] = td;
+            }
+        }
 
         if (!penalize_nl && nl_token != LLAMA_TOKEN_NULL) {
             for (size_t idx = 0; idx < cur_p.size; idx++) {

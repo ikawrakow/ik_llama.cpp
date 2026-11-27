@@ -696,6 +696,21 @@ llama_token llama_sample_token_greedy_impl(struct llama_sampling * smpl, llama_t
     return result;
 }
 
+llama_token llama_sample_token_greedy_logits_impl(struct llama_sampling * smpl, const float * logits, int32_t n_logits) {
+    GGML_ASSERT(n_logits > 0);
+
+    const int64_t t_start_sample_us = ggml_time_us();
+
+    const float * max_iter = std::max_element(logits, logits + n_logits);
+
+    llama_token result = (llama_token) (max_iter - logits);
+    if (smpl) {
+        smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+        smpl->n_sample++;
+    }
+    return result;
+}
+
 llama_token llama_sample_token_with_rng_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, std::mt19937 & rng) {
     GGML_ASSERT(smpl);
 

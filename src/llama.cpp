@@ -15628,6 +15628,10 @@ llama_token llama_sample_token_greedy(struct llama_context * ctx, llama_token_da
     return llama_sample_token_greedy_impl(ctx ? &ctx->sampling : nullptr, candidates);
 }
 
+llama_token llama_sample_token_greedy_logits(struct llama_context * ctx, const float * logits, int32_t n_logits) {
+    return llama_sample_token_greedy_logits_impl(ctx ? &ctx->sampling : nullptr, logits, n_logits);
+}
+
 llama_token llama_sample_token_with_rng(struct llama_context * ctx, llama_token_data_array * candidates, std::mt19937 & rng) {
     return llama_sample_token_with_rng_impl(&ctx->sampling, candidates, rng);
 }
