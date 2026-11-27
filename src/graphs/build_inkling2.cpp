@@ -26,20 +26,25 @@ static void inkling_push(ggml_context * ctx, inkling_stack & stack, ggml_tensor 
     stack.keys = inkling_append(ctx, stack.keys, stack.rows.back());
 }
 
-static inkling_stack inkling_sources(ggml_context * ctx, const inkling_stack & blocks, ggml_tensor * partial, int first) {
+static inkling_stack inkling_sources(ggml_context * ctx, const inkling_stack & blocks, ggml_tensor * partial, int first, const llm_build_context & llm, int il) {
     inkling_stack stack;
     for (int i = first; i < (int) blocks.rows.size(); ++i) {
         stack.rows.push_back(blocks.rows[i]);
         stack.keys = inkling_append(ctx, stack.keys, blocks.rows[i]);
+        llm.cb(stack.keys, "sources", il);
     }
     inkling_push(ctx, stack, partial);
+    llm.cb(stack.keys, "sources_push", il);
     return stack;
 }
 
-static ggml_tensor * inkling_mix(ggml_context * ctx, const inkling_stack & stack, ggml_tensor * partial, ggml_tensor * query) {
+static ggml_tensor * inkling_mix(ggml_context * ctx, const inkling_stack & stack, ggml_tensor * partial, ggml_tensor * query, const llm_build_context & llm, int il) {
     auto keys = partial ? inkling_append(ctx, stack.keys, inkling_norm(ctx, partial)) : stack.keys;
+    if (keys != stack.keys) llm.cb(keys, "mix_keys", il);
     auto scores = ggml_mul_mat(ctx, query, keys);
+    llm.cb(scores, "mix_qk", il);
     auto result = ggml_inkling2_mix(ctx, keys, scores, 1.0f / std::sqrt(float(keys->ne[0])));
+    llm.cb(result, "mix_result", il);
     return result;
 }
 
@@ -49,15 +54,20 @@ static ggml_tensor * inkling_row(ggml_context * ctx, ggml_tensor * mixed, int in
 }
 
 static ggml_tensor * inkling_control(ggml_context * ctx, ggml_tensor * dest, ggml_tensor * message, ggml_tensor * down,
-        ggml_tensor * forget, ggml_tensor * gain, float eps, ggml_cgraph * gf) {
+        ggml_tensor * forget, ggml_tensor * gain, float eps, ggml_cgraph * gf, const llm_build_context & llm, int il) {
     auto dm = ggml_concat(ctx, dest, message, 0);
+    llm.cb(dm, "c_dm", il);
     dm = ggml_reshape_2d(ctx, dm, dest->ne[0], 2*dest->ne[1]);
     dm = ggml_rms_norm(ctx, dm, eps);
+    llm.cb(dm, "c_dm_normed", il);
     dm = ggml_reshape_2d(ctx, dm, 2*dest->ne[0], dest->ne[1]);
     auto h = ggml_mul_mat(ctx, down, dm);
+    llm.cb(h, "c_h", il);
     ggml_mul_mat_set_prec(h, GGML_PREC_F32);
     auto f = ggml_mul_mat(ctx, forget, h);
+    llm.cb(f, "c_f", il);
     auto g = ggml_mul_mat(ctx, gain, h);
+    llm.cb(g, "c_g", il);
     if (gf) {
         ggml_build_forward_expand(gf, f);
         ggml_build_forward_expand(gf, g);
@@ -65,6 +75,7 @@ static ggml_tensor * inkling_control(ggml_context * ctx, ggml_tensor * dest, ggm
     ggml_mul_mat_set_prec(f, GGML_PREC_F32);
     ggml_mul_mat_set_prec(g, GGML_PREC_F32);
     auto keep = ggml_scale_bias(ctx, ggml_tanh(ctx, f), -1.0f, 1.0f);
+    llm.cb(keep, "c_keep", il);
     return ggml_add(ctx, ggml_mul(ctx, keep, dest), ggml_mul(ctx, ggml_tanh(ctx, g), message));
 }
 
@@ -85,7 +96,10 @@ static ggml_tensor * inkling_conv(llm_build_context & llm, ggml_cgraph * gf, int
     if (batch.pos && batch.pos[0] == 0) {
         past = ggml_fill(ctx, past, 0.0f);
     }
+    //printf("%s(%2d): state = %ld x %ld x %ld x %ld, past = %ld x %ld x %ld x %ld, x = %ld x %ld x %ld x %ld\n", __func__, il, state->ne[0], state->ne[1], state->ne[2], state->ne[3],
+    //        past->ne[0], past->ne[1], past->ne[2], past->ne[3], x->ne[0], x->ne[1], x->ne[2], x->ne[3]);
     auto window = llm.build_conv_window(gf, past, x, il, channel_offset);
+    llm.cb(window, "conv_window", il);
     auto tail = ggml_view_2d(ctx, window, history, channels, window->nb[1], tokens * window->nb[0]);
     const int sequences = batch.n_seq_id ? batch.n_seq_id[0] : 1;
     for (int i = 0; i < sequences; ++i) {
@@ -191,9 +205,11 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
             column = ggml_pad(ctx, column, GGML_PAD(rel_bias->ne[0] + 1, 4) - rel_bias->ne[0] - 1, 0, 0, 0);
         }
         rel_bias = ggml_concat(ctx, rel_bias, column, 0);
+        llm.cb(rel_bias, "rel_bias", il);
     }
     sinks = ggml_reshape_3d(ctx, sinks, 1, heads, tokens);
     auto rs = ggml_concat(ctx, r, sinks, 0);
+    llm.cb(rs, "rs", il);
     rs = ggml_pad(ctx, rs, rel_bias->ne[0] - rs->ne[0], 0, 0, 0);
     auto table = ggml_mul_mat(ctx, rel_bias, rs);
     auto & zero = shared.zero[heads];
@@ -280,7 +296,7 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         const auto & layer = model.layers[il];
         if (ip == hparams.loop_start) {
             if (pre) {
-                bank = inkling_sources(ctx0, blocks, x, (int) pre_blocks.rows.size() + 1);
+                bank = inkling_sources(ctx0, blocks, x, (int) pre_blocks.rows.size() + 1, *this, il);
                 blocks = pre_blocks;
                 x = pre;
             } else {
@@ -298,13 +314,16 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
                 auto q = ggml_view_1d(ctx0, c, n_embd, row * c->nb[1]);
                 auto kv = ggml_view_2d(ctx0, k, n_embd, 2, k->nb[1], row * k->nb[1]);
                 auto mlp = ggml_view_1d(ctx0, c, n_embd, (row + 1) * c->nb[1]);
-                query = ggml_concat(ctx0, ggml_concat(ctx0, q, kv, 1), mlp, 1);
+                auto q_kv = ggml_concat(ctx0, q, kv, 1);
+                cb(q_kv, "q_kv", il);
+                query = ggml_concat(ctx0, q_kv, mlp, 1);
+                cb(query, "q_kv_mlp", il);
             }
-            messages = inkling_mix(ctx0, bank, nullptr, query);
+            messages = inkling_mix(ctx0, bank, nullptr, query, *this, il);
         }
         auto blend = [&](ggml_tensor * dest, int stream) {
             return messages ? inkling_control(ctx0, dest, inkling_row(ctx0, messages, stream), layer.loop_ctrl_down[stream],
-                    layer.loop_ctrl_forget[stream], layer.loop_ctrl_gain[stream], norm_rms_eps, gf) : dest;
+                    layer.loop_ctrl_forget[stream], layer.loop_ctrl_gain[stream], norm_rms_eps, gf, *this, il) : dest;
         };
 
         const bool full = !hparams.swa_layers[il];
@@ -312,7 +331,7 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         ggml_tensor * k = x;
         ggml_tensor * v = x;
         if (ip != 0) {
-            auto mixed = inkling_mix(ctx0, blocks, x, layer.attn_res_query);
+            auto mixed = inkling_mix(ctx0, blocks, x, layer.attn_res_query, *this, il);
             q = inkling_row(ctx0, mixed, 0);
             k = full ? inkling_row(ctx0, mixed, 1) : q;
             v = full ? inkling_row(ctx0, mixed, 2) : q;
@@ -327,11 +346,12 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         auto residual = inkling_attention(*this, gf, il, q, k, v, full ? mask : swa_mask, full ? lctx.inp_scale : nullptr, shared);
         if (ip % hparams.attn_res_block_size == 0) {
             inkling_push(ctx0, blocks, x);
+            cb(blocks.keys, "push", il);
         } else {
             residual = ggml_add(ctx0, x, residual);
         }
 
-        auto ffn_input = inkling_row(ctx0, inkling_mix(ctx0, blocks, residual, layer.ffn_res_query), 0);
+        auto ffn_input = inkling_row(ctx0, inkling_mix(ctx0, blocks, residual, layer.ffn_res_query, *this, il), 0);
         ffn_input = ggml_fused_rms_norm(ctx0, blend(ffn_input, 3), layer.ffn_norm, norm_rms_eps);
         auto ffn = llm_build_moe_ffn(ctx0, lctx, ffn_input, layer.ffn_gate_inp,
                 nullptr, nullptr, layer.ffn_down_exps, layer.ffn_exp_probs_b,
@@ -350,7 +370,7 @@ ggml_cgraph * llm_build_context::build_inkling2_loop() {
         ggml_build_forward_expand(gf, x);
         return gf;
     }
-    x = inkling_row(ctx0, inkling_mix(ctx0, blocks, x, model.output_res_query), 0);
+    x = inkling_row(ctx0, inkling_mix(ctx0, blocks, x, model.output_res_query, *this, -1), 0);
     auto norm = model.output_norm;
     if (lctx.dflash.capture) {
         x = ggml_fused_rms_norm(ctx0, x, norm, norm_rms_eps);

@@ -244,6 +244,48 @@ static __global__ void concat_f32_dim0_transposed(
     }
 }
 
+static __global__ void k_concat_transposed_1(int nelem, int ne0, int ne00, size_t nb01,
+        const float * __restrict__ x0, const float * __restrict__ x1, float * __restrict__ y) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    int i1 = i / ne0;
+    int i0 = i % ne0;
+    y[i] = i0 < ne00 ? x0[i0 + i1*nb01] : x1[i1];
+}
+
+static __global__ void k_concat_simple(int nelem, int ne0, int ne00, int ne10,
+        const float * __restrict__ x0, const float * __restrict__ x1, float * __restrict__ y) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    int i1 = i / ne0;
+    int i0 = i % ne0;
+    y[i] = i0 < ne00 ? x0[i0 + i1*ne00] : x1[i0 - ne00 + i1*ne10];
+}
+
+static __global__ void k_concat_very_simple(int nelem, int ne00,
+        const float * __restrict__ x0, const float * __restrict__ x1, float * __restrict__ y) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    y[i] = i < ne00 ? x0[i] : x1[i - ne00];
+}
+
+static __global__ void k_concat_transposed_N(int nelem, int ne0, int ne00, size_t nb01, size_t nb10,
+        const float * __restrict__ x0, const float * __restrict__ x1, float * __restrict__ y) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    int i1 = i / ne0;
+    int i0 = i % ne0;
+    y[i] = i0 < ne00 ? x0[i0 + i1*nb01] : x1[(i0 - ne00)*nb10 + i1];
+}
+
 void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -264,6 +306,31 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         const size_t size1 = ggml_nbytes(src1);
         CUDA_CHECK(cudaMemcpyAsync((char *)dst->data,         src0->data, size0, cudaMemcpyDeviceToDevice, stream));
         CUDA_CHECK(cudaMemcpyAsync((char *)dst->data + size0, src1->data, size1, cudaMemcpyDeviceToDevice, stream));
+        return;
+    }
+
+    if (dim == 0 && dst->type == GGML_TYPE_F32 && dst->ne[2] == 1 && dst->ne[3] == 1 && ggml_is_contiguous(dst) &&
+        ggml_is_transposed(src1) && src1->ne[0] == 1 && src0->nb[0] == sizeof(float)) {
+        constexpr int k_block_size = 256;
+        auto nelem = ggml_nelements(dst);
+        int nb = (nelem + k_block_size - 1)/k_block_size;
+        k_concat_transposed_1<<<nb, k_block_size, 0, ctx.stream()>>>(nelem, dst->ne[0], src0->ne[0], src0->nb[1]/sizeof(float),
+                (const float *)src0->data, (const float *)src1->data, (float *)dst->data);
+        return;
+    }
+
+    if (dim == 0 && dst->type == GGML_TYPE_F32 && ggml_is_contiguous(dst) &&
+            ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        constexpr int k_block_size = 256;
+        auto nelem = ggml_nelements(dst);
+        int nb = (nelem + k_block_size - 1)/k_block_size;
+        if (ggml_nrows(dst) == 1) {
+            k_concat_very_simple<<<nb, k_block_size, 0, ctx.stream()>>>(nelem, src0->ne[0],
+                    (const float *)src0->data, (const float *)src1->data, (float *)dst->data);
+        } else {
+            k_concat_simple<<<nb, k_block_size, 0, ctx.stream()>>>(nelem, dst->ne[0], src0->ne[0], src1->ne[0],
+                    (const float *)src0->data, (const float *)src1->data, (float *)dst->data);
+        }
         return;
     }
 
@@ -289,14 +356,9 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         auto ne00_eff = (src0->ne[0]/bs)*ts/sizeof(float);
         auto ne0_eff  = (dst->ne[0]/bs)*ts/sizeof(float);
         if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
-            //if (dst->ne[1] >= 65536 || dst->ne[2] >= 65536) {
-            //    fprintf(stderr, "%s: ne1 = %ld, ne2 = %ld exceed max. blocks when computing %s\n", __func__, dst->ne[1], dst->ne[2], dst->name);
-            //    GGML_ABORT("fatal error");
-            //}
             const float * src0_d = (const float *)src0->data;
             const float * src1_d = (const float *)src1->data;
             float * dst_d = (float *)dst->data;
-            //printf("%s(%s, %s): %ld %zu %zu  %ld %zu %zu\n", __func__, src0->name, src1->name, src0->ne[0], src0->nb[0], src0->nb[1], dst->ne[0], dst->nb[0], dst->nb[1]);
             for (int i3 = 0; i3 < dst->ne[3]; i3++) {
                 concat_f32_cuda(
                         src0_d + i3 * (src0->nb[3] / 4),
@@ -310,7 +372,6 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                         //dst->ne[0]*dst->nb[0]/sizeof(float),  dst->ne[1],  dst->ne[2], dim, stream);
             }
         } else {
-            //printf("%s(not contiguous): %s(%s) and %s(%s)\n", __func__, src0->name, ggml_type_name(src0->type), src1->name, ggml_type_name(src1->type));
             auto ne10_eff = (src1->ne[0]/bs)*ts/sizeof(float);
             dim3 grid_dim(dst->ne[1], dst->ne[2], dst->ne[3]);
             concat_f32_non_cont<<<grid_dim, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(
@@ -343,10 +404,6 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     }
 
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
-        //if (dst->ne[1] >= 65536 || dst->ne[2] >= 65536) {
-        //    fprintf(stderr, "%s: ne1 = %ld, ne2 = %ld exceed max. blocks when computing %s\n", __func__, dst->ne[1], dst->ne[2], dst->name);
-        //    GGML_ABORT("fatal error");
-        //}
         const float * src0_d = (const float *)src0->data;
         const float * src1_d = (const float *)src1->data;
 

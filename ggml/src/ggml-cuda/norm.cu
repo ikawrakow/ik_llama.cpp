@@ -502,12 +502,19 @@ static void rms_norm_f32_cuda(const float * x, float * dst, const int ncols, con
     // Why did we have this assert?
     //GGML_ASSERT(ncols % WARP_SIZE == 0);
     constexpr int kBlockSize = 256;
-    if (ncols < 1024) {
+    //if (ncols < 1024) {
+    //    const dim3 block_dims(kBlockSize, 1, 1);
+    //    rms_norm_f32<kBlockSize><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
+    //} else {
+    //    const dim3 block_dims(1024, 1, 1);
+    //    rms_norm_f32<1024><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
+    //}
+    if (ncols < 512) {
         const dim3 block_dims(kBlockSize, 1, 1);
         rms_norm_f32<kBlockSize><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
     } else {
-        const dim3 block_dims(1024, 1, 1);
-        rms_norm_f32<1024><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
+        const dim3 block_dims(512, 1, 1);
+        rms_norm_f32<512><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
     }
 }
 
