@@ -106,7 +106,7 @@ static bool load_dflash_target_layer_ids(
     return true;
 }
 
-static void llama_hparams_normalize_dflash_target_layer_ids(llama_hparams & hparams, const char * model_kind) {
+static void llama_hparams_normalize_dflash_target_layer_ids(llama_hparams & hparams, [[maybe_unused]] const char * model_kind) {
     for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
         if (hparams.dflash_target_layer_ids[i] == 0) {
             // 0 marks the final output norm rather than an execution layer
