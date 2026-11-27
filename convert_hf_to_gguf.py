@@ -933,6 +933,9 @@ class Model:
         if chkhsh == "d5420e601e979078c670bc503d9ac411c311fa76b76a76267c31e0d6ba816637":
             # ref: https://huggingface.co/RecursiveSI/flint-preview
             res = "flint"
+        if chkhsh == "0e9433cbbb161f89e264eb32e8e64bfe69e834973ffca5d41d3948a604a3e2a3":
+            # ref: https://huggingface.co/nvidia/NVIDIA-Nemotron-Labs-Dory1.0-4B-BF16
+            res = "pixtral"
         if res is None:
             logger.warning("\n")
             logger.warning("**************************************************************************************")
@@ -8812,6 +8815,106 @@ class Xing4Model(DeepseekV2Model):
         if ".hc_" in new_name and not new_name.endswith("_fn.weight"):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+@Model.register("DoryForCausalLM")
+class DoryModel(Model):
+    """Dory 1.0 (NVIDIA Nemotron Labs): a looped nGPT stack.
+
+    72 physical modules alternate attention (even blk index) and MLP (odd). The recurrent group
+    (input_layer_count .. input_layer_count+recurrent_layer_count) shares weights across
+    n_recurrent_loops passes but owns an independent KV cache slot per visit. The checkpoint is
+    flat (backbone.layers.{i}.mixer.*), one module per layer, so the HF layer index is the GGUF
+    blk index. mixer.g_proj is the attention output gate; mixer.gate_proj is the SwiGLU gate.
+    The loop is expanded at load time by expand_looped_layers()/hparams.phys_layer().
+    """
+
+    model_arch = gguf.MODEL_ARCH.DORY
+
+    # nGPT parameters are 1-D and carry no .weight suffix in the checkpoint
+    _param_suffixes = (".sqk", ".s_gate", ".suv_gate", ".suv_up", ".attn_alpha", ".mlp_alpha", ".logit_scale")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hparams = self.hparams
+
+        n_groups = hparams["n_input_layers"] + hparams["n_recurrent_layers"] + hparams["n_output_layers"]
+        if n_groups != self.block_count:
+            raise ValueError(
+                f"Dory: input({hparams['n_input_layers']}) + recurrent({hparams['n_recurrent_layers']})"
+                f" + output({hparams['n_output_layers']}) modules != num_hidden_layers({self.block_count})"
+            )
+
+        layer_types = hparams["layer_types"]
+        if len(layer_types) != self.block_count:
+            raise ValueError(f"Dory: layer_types has {len(layer_types)} entries, expected {self.block_count}")
+        if unknown := set(layer_types) - {"sliding_attention", "full_attention", "mlp"}:
+            raise ValueError(f"Dory: unsupported layer_types {sorted(unknown)}")
+        # attention and MLP alternate: even modules attend, odd modules are MLP
+        for i, layer_type in enumerate(layer_types):
+            if (layer_type == "mlp") != (i % 2 == 1):
+                raise ValueError(f"Dory: layer_types[{i}] is {layer_type!r}, expected the attention/MLP alternation")
+        if not any(layer_type == "sliding_attention" for layer_type in layer_types):
+            raise ValueError("Dory: layer_types has no sliding_attention module")
+        self.layer_types = layer_types
+
+        if (act := hparams.get("hidden_act", "silu")) != "silu":
+            raise ValueError(f"Dory: unsupported hidden_act {act!r}")
+        if hparams.get("n_recurrent_loops", 0) < 1:
+            raise ValueError("Dory: n_recurrent_loops must be >= 1")
+
+    def set_gguf_parameters(self):
+        hparams = self.hparams
+        w = self.gguf_writer
+        rope = hparams["rope_parameters"]
+
+        hidden_size = hparams["hidden_size"]
+        head_dim = hparams.get("head_dim") or hidden_size // hparams["num_attention_heads"]
+
+        w.add_block_count(self.block_count)
+        w.add_context_length(hparams["max_position_embeddings"])
+        w.add_embedding_length(hidden_size)
+        w.add_feed_forward_length(hparams["intermediate_size"])
+        w.add_head_count(hparams["num_attention_heads"])
+        w.add_head_count_kv(hparams["num_key_value_heads"])
+        w.add_key_length(head_dim)
+        w.add_value_length(head_dim)
+        w.add_rope_dimension_count(head_dim)
+        w.add_rope_freq_base(rope["full_attention"]["rope_theta"])
+        w.add_sliding_window(hparams["sliding_window"])
+
+        arch = w.arch
+        # dual RoPE: full attention uses freq_base, sliding attention freq_base_2
+        w.add_float32(f"{arch}.rope.freq_base_2", rope["sliding_attention"]["rope_theta"])
+        w.add_uint32(f"{arch}.input_layer_count",     hparams["n_input_layers"])
+        w.add_uint32(f"{arch}.recurrent_layer_count", hparams["n_recurrent_layers"])
+        w.add_uint32(f"{arch}.output_layer_count",    hparams["n_output_layers"])
+        w.add_uint32(f"{arch}.num_loops",             hparams["n_recurrent_loops"])
+        # one character per physical module: 'S' sliding, '*' full, '-' MLP
+        pattern = "".join(
+            "S" if t == "sliding_attention" else "*" if t == "full_attention" else "-" for t in self.layer_types
+        )
+        w.add_string(f"{arch}.layer_pattern", pattern)
+        w.add_string(f"{arch}.recurrent_kv_cache_mode", hparams["recurrent_kv_cache_mode"])
+        # the *_scale tensors hold raw learned parameters; the reference fold constants live here
+        w.add_float32(f"{arch}.init_std",   hparams["initializer_range"])
+        w.add_float32(f"{arch}.alpha_init", hparams["ngpt_alpha_init"])
+
+        w.add_file_type(self.ftype)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.endswith(self._param_suffixes):
+            name += ".weight"
+        target = self.map_tensor_name(name)
+        if not target.endswith(".weight"):
+            target += ".weight"
+        yield target, data_torch
+
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        # raw learned per-channel nGPT scales and residual rates must stay unquantized
+        if new_name.endswith(("output_scale.weight", "attn_qk_scale.weight", "attn_gate_scale.weight",
+                              "ffn_gate_scale.weight", "ffn_up_scale.weight", "residual_alpha.weight")):
+            return gguf.GGMLQuantizationType.F32
+        return False
 
 @Model.register("Inkling2LoopForConditionalGeneration")
 class Inkling2LoopModel(Model):

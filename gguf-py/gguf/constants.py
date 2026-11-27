@@ -337,6 +337,7 @@ class MODEL_ARCH(IntEnum):
     HY_V3        = auto()
     STEP5        = auto()
     INKLING2_LOOP = auto()
+    DORY         = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -589,9 +590,18 @@ class MODEL_TENSOR(IntEnum):
     FFN_RES_QUERY        = auto()
     LOOP_MSG_QUERY       = auto()
 
+    # Dory (looped nGPT): raw learned per-channel scale parameters and residual rates
+    OUTPUT_SCALE         = auto()
+    ATTN_QK_SCALE        = auto()
+    ATTN_GATE_SCALE      = auto()
+    FFN_GATE_SCALE       = auto()
+    FFN_UP_SCALE         = auto()
+    RESIDUAL_ALPHA       = auto()
+
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.INKLING2_LOOP:  "inkling2_loop",
+    MODEL_ARCH.DORY:           "dory",
     MODEL_ARCH.STEP5:          "step5",
     MODEL_ARCH.QWEN35: 'qwen35',
     MODEL_ARCH.SENSENOVA_LOOP: 'sensenova_loop',
@@ -733,6 +743,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_RES_QUERY:          "blk.{bid}.attn_res_query",
     MODEL_TENSOR.FFN_RES_QUERY:           "blk.{bid}.ffn_res_query",
     MODEL_TENSOR.LOOP_MSG_QUERY:          "blk.{bid}.loop_msg_query",
+    MODEL_TENSOR.OUTPUT_SCALE:            "output_scale",
+    MODEL_TENSOR.ATTN_QK_SCALE:           "blk.{bid}.attn_qk_scale",
+    MODEL_TENSOR.ATTN_GATE_SCALE:         "blk.{bid}.attn_gate_scale",
+    MODEL_TENSOR.FFN_GATE_SCALE:          "blk.{bid}.ffn_gate_scale",
+    MODEL_TENSOR.FFN_UP_SCALE:            "blk.{bid}.ffn_up_scale",
+    MODEL_TENSOR.RESIDUAL_ALPHA:          "blk.{bid}.residual_alpha",
     MODEL_TENSOR.TOKEN_EMBD:           "token_embd",
     MODEL_TENSOR.TOKEN_EMBD_NORM:      "token_embd_norm",
     MODEL_TENSOR.TOKEN_TYPES:          "token_types",
@@ -2444,6 +2460,26 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     ],
     # TODO
 }
+
+MODEL_TENSORS[MODEL_ARCH.DORY] = [
+    MODEL_TENSOR.TOKEN_EMBD,
+    MODEL_TENSOR.OUTPUT,
+    MODEL_TENSOR.OUTPUT_SCALE,
+    # even physical modules are attention, odd ones are MLP
+    MODEL_TENSOR.ATTN_Q,
+    MODEL_TENSOR.ATTN_K,
+    MODEL_TENSOR.ATTN_V,
+    MODEL_TENSOR.ATTN_OUT,
+    MODEL_TENSOR.ATTN_GATE,
+    MODEL_TENSOR.ATTN_QK_SCALE,
+    MODEL_TENSOR.ATTN_GATE_SCALE,
+    MODEL_TENSOR.FFN_GATE,
+    MODEL_TENSOR.FFN_UP,
+    MODEL_TENSOR.FFN_DOWN,
+    MODEL_TENSOR.FFN_GATE_SCALE,
+    MODEL_TENSOR.FFN_UP_SCALE,
+    MODEL_TENSOR.RESIDUAL_ALPHA,
+]
 
 MODEL_TENSORS[MODEL_ARCH.INKLING2_LOOP] = [
     MODEL_TENSOR.TOKEN_EMBD,

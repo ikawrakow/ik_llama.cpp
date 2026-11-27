@@ -622,6 +622,9 @@ class GGUFWriter:
     def add_languages(self, languages: Sequence[str]) -> None:
         self.add_array(Keys.General.LANGUAGES, languages)
 
+    def add_datasets(self, datasets: Sequence[str]) -> None:
+        self.add_array(Keys.General.DATASETS, datasets)
+
     def add_tensor_extra_prec_a4(self, tensor_names: Sequence[str], values: Sequence[bool]) -> None:
         self.add_array('general.tensor_extra.name', list(tensor_names))
         self.add_array('general.tensor_extra.prec_a4', list(values))

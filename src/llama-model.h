@@ -500,6 +500,13 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_scale = nullptr;
     struct ggml_tensor * out_scale = nullptr; // gemma4 layer output scale
 
+    // Dory (looped nGPT): learned per-channel scales and residual interpolation rates;
+    // attn_qk_scale / attn_gate_scale carry the folded constant nGPT rescale (F32) after load
+    struct ggml_tensor * attn_qk_scale    = nullptr; // sqk' = (sqk * sqk_scale)^2
+    struct ggml_tensor * attn_gate_scale  = nullptr; // s_gate' = (s_gate * s_gate_scale)^2
+    struct ggml_tensor * attn_resid_alpha = nullptr;
+    struct ggml_tensor * ffn_resid_alpha  = nullptr;
+
     llama_split_tensor split_out_scale;
 
     struct llama_layer_nextn nextn;
@@ -605,6 +612,7 @@ struct llama_model {
     struct ggml_tensor * output_norm_b;
     struct ggml_tensor * output;
     struct ggml_tensor * output_b;
+    struct ggml_tensor * output_s = nullptr; // Dory: raw per-vocab logit scale
     struct ggml_tensor * output_res_query = nullptr;
     struct ggml_tensor * loop_res_query = nullptr;
     struct ggml_tensor * loop_kv_res_query = nullptr;

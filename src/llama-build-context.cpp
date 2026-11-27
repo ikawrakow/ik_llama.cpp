@@ -3617,6 +3617,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_inkling2_loop();
             } break;
+        case LLM_ARCH_DORY:
+            {
+                result = llm.build_dory();
+            } break;
         case LLM_ARCH_BLOOM:
             {
                 result = llm.build_bloom();

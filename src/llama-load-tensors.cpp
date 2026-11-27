@@ -45,6 +45,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_nanbeige_tensors(const LLM_TN & tn);
 
+    bool create_dory_tensors(const LLM_TN & tn);
+
     bool create_inkling2_loop_tensors(const LLM_TN & tn);
 
     bool create_k2horizon_tensors(const LLM_TN & tn);
@@ -720,6 +722,56 @@ static void expand_looped_layers(llama_model & model) {
 
 bool create_tensors_helper::create_nanbeige_tensors(const LLM_TN & tn) {
     bool use_mmap_buffer = create_llama_tensors(tn);
+    expand_looped_layers(model);
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_dory_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    model.tok_embd = create_tensor(ctx_input,  tn(LLM_TENSOR_TOKEN_EMBD,   "weight"), {n_embd, n_vocab});
+    model.output   = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,       "weight"), {n_embd, n_vocab});
+    // raw per-vocab logit scale; the graph applies logit_scale_factor
+    model.output_s = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_SCALE, "weight"), {n_vocab});
+
+    const int64_t n_embd_q = n_embd_head_k * n_head;
+
+    // only physical modules have tensors in the file (dense blk.0 .. n_phys-1)
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context * ctx_layer = ctx_for_layer(i);
+        auto & layer = model.layers[i];
+
+        if (i % 2 == 0) {
+            // attention module
+            layer.wq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_q});
+            layer.wk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa});
+            layer.wv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa});
+            layer.wo = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_q, n_embd});
+
+            // g_proj of the output gate, [n_embd -> n_embd_q]
+            layer.wqkv_gate = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_embd_q});
+
+            // sqk and s_gate: raw per-channel scales in the file; llm_fold_dory_scales
+            // folds the constant nGPT rescale into them (F32) at load
+            layer.attn_qk_scale   = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_QK_SCALE,   "weight", i), {n_embd_q});
+            layer.attn_gate_scale = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_GATE_SCALE, "weight", i), {n_embd_q});
+
+            layer.attn_resid_alpha = create_tensor(ctx_layer, tn(LLM_TENSOR_RESIDUAL_ALPHA, "weight", i), {n_embd});
+        } else {
+            // MLP module
+            layer.ffn_gate = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff});
+            layer.ffn_up   = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff});
+            layer.ffn_down = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd});
+
+            // suv_gate / suv_up scales
+            layer.ffn_gate_scale = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_SCALE, "weight", i), {n_ff});
+            layer.ffn_up_scale   = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_UP_SCALE,   "weight", i), {n_ff});
+
+            layer.ffn_resid_alpha = create_tensor(ctx_layer, tn(LLM_TENSOR_RESIDUAL_ALPHA, "weight", i), {n_embd});
+        }
+    }
+
+    // loop slots share physical weights and own only their KV cache
     expand_looped_layers(model);
     return use_mmap_buffer;
 }
@@ -6954,6 +7006,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_k2horizon_tensors(tn); break;
         case LLM_ARCH_NANBEIGE:
             use_mmap_buffer = create_nanbeige_tensors(tn); break;
+        case LLM_ARCH_DORY:
+            use_mmap_buffer = create_dory_tensors(tn); break;
         case LLM_ARCH_INKLING2_LOOP:
             use_mmap_buffer = create_inkling2_loop_tensors(tn); break;
         case LLM_ARCH_LLAMA:

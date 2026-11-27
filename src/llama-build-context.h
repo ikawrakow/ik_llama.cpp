@@ -272,6 +272,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_inkling2_loop();
 
+    ggml_cgraph * build_dory();
+
     ggml_cgraph * build_bloom();
 
     ggml_cgraph * build_mpt();

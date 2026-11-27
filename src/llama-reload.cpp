@@ -174,6 +174,15 @@ static const char * hotswap_unsupported_reason(const llama_model & model, const 
         // llm_scale_gate_inp_s scales this tensor in place at load time
         return "it was scaled in place at load time (llm_scale_gate_inp_s)";
     }
+    if (model.arch == LLM_ARCH_DORY &&
+        (n.find(".attn_qk_scale.")   != std::string::npos ||
+         n.find(".attn_gate_scale.") != std::string::npos ||
+         n.find(".residual_alpha.")  != std::string::npos ||
+         n.find("output_scale.")     != std::string::npos)) {
+        // llm_fold_dory_scales folded the constant nGPT rescales into these at
+        // load time; raw file bytes would be unscaled and wrong
+        return "the constant nGPT rescale was folded into it at load time (llm_fold_dory_scales)";
+    }
     if (model.arch == LLM_ARCH_BITNET && n.size() > 6 && n.compare(n.size() - 6, 6, ".scale") == 0) {
         // the scalar was copied into the paired weight's op_params at load
         // time and the graph reads it from there

@@ -88,6 +88,28 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_DORY,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+            { LLM_TENSOR_OUTPUT,          "output" },
+            { LLM_TENSOR_OUTPUT_SCALE,    "output_scale" },
+            // even physical modules are attention, odd ones are MLP
+            { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
+            { LLM_TENSOR_ATTN_GATE,       "blk.%d.attn_gate" },
+            { LLM_TENSOR_ATTN_QK_SCALE,   "blk.%d.attn_qk_scale" },
+            { LLM_TENSOR_ATTN_GATE_SCALE, "blk.%d.attn_gate_scale" },
+            { LLM_TENSOR_FFN_GATE,        "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
+            { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_GATE_SCALE,  "blk.%d.ffn_gate_scale" },
+            { LLM_TENSOR_FFN_UP_SCALE,    "blk.%d.ffn_up_scale" },
+            { LLM_TENSOR_RESIDUAL_ALPHA,  "blk.%d.residual_alpha" },
+        },
+    },
+    {
         LLM_ARCH_INKLING2_LOOP,
         {
             { LLM_TENSOR_TOKEN_EMBD,          "token_embd" },
