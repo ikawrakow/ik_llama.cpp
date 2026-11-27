@@ -371,8 +371,12 @@ void quantize_row_q8_K16(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
 void quantize_row_q8_K32(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_q8_KR8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_q8_0_x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+void quantize_row_q8_0_x4_fixed(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k, float scale);
 void quantize_row_q8_1_x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_q8_2_x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+void quantize_row_q8_2_x4_fixed(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k, float scale);
+void quantize_block_q8_0_x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT qrow, int block_idx, float scale);
+void quantize_block_q8_2_x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT qrow, int block_idx, float scale);
 void iqk_quantize_q4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 
 void repack_f32_bf16_r16 (const void * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row);

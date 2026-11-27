@@ -1371,6 +1371,8 @@ add_library(ggml
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
             ggml.c
+            ggml-act-calib.c
+            ggml-act-calib.h
             ggml-alloc.c
             ggml-backend.cpp
             ggml-moe-prefetch.cpp

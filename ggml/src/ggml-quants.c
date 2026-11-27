@@ -984,6 +984,28 @@ void quantize_row_q8_0_ref(const float * restrict x, block_q8_0 * restrict y, in
     }
 }
 
+void quantize_row_q8_0_fixed(const float * restrict x, void * restrict vy, int64_t k, float scale) {
+    assert(QK8_0 == 32);
+    assert(k % QK8_0 == 0);
+    const int64_t nb = k / QK8_0;
+
+    block_q8_0 * restrict y = vy;
+
+    const ggml_half d = GGML_FP32_TO_FP16(scale);
+    const float ds = GGML_FP16_TO_FP32(d);
+    const float id = ds > 0.0f ? 1.0f/ds : 0.0f;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        y[i].d = d;
+        for (int j = 0; j < QK8_0; ++j) {
+            int v = (int) roundf(x[i*QK8_0 + j]*id);
+            y[i].qs[j] = (int8_t) (v < -127 ? -127 : v > 127 ? 127 : v);
+        }
+    }
+}
+
+
+
 void quantize_row_q8_0(const float * restrict x, void * restrict vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
@@ -4076,6 +4098,32 @@ void quantize_row_q8_K_ref(const float * restrict x, block_q8_K * restrict y, in
         }
         y[i].d = 1/iscale;
         x += QK_K;
+    }
+}
+
+void quantize_row_q8_K_fixed(const float * restrict x, block_q8_K * restrict y, int64_t k, float scale) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    const float id = scale > 0.0f ? 1.0f/scale : 0.0f;
+
+    for (int64_t i = 0; i < nb; i++) {
+        y[i].d = scale;
+        int total = 0;
+        for (int j = 0; j < QK_K; ++j) {
+            int v = (int) roundf(x[i*QK_K + j]*id);
+            v = v < -127 ? -127 : v > 127 ? 127 : v;
+            y[i].qs[j] = (int8_t) v;
+            total += v;
+        }
+        for (int j = 0; j < QK_K/16; ++j) {
+            int sum = 0;
+            for (int ii = 0; ii < 16; ++ii) {
+                sum += y[i].qs[j*16 + ii];
+            }
+            y[i].bsums[j] = (int16_t) sum;
+        }
+        y[i].sum = scale*total;
     }
 }
 
