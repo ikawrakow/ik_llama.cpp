@@ -475,6 +475,12 @@ static_assert(16*sizeof(float) == GGML_Q8_K_R16_ALIGN, "q8_k_r16 header must be 
 static_assert(sizeof(block_q8_k_r16) == GGML_Q8_K_R16_ALIGN + 16*QK_K, "wrong q8_k_r16 block size/padding");
 static_assert(sizeof(block_q8_k_r16) % GGML_Q8_K_R16_ALIGN == 0, "q8_k_r16 block stride must keep qs aligned");
 
+typedef struct {
+    float     d[16];
+    int8_t    qs[16*128];
+} block_q8_k128_r16;
+static_assert(sizeof(block_q8_k128_r16) == GGML_Q8_K_R16_ALIGN + 16*128, "wrong q8_k128_r16 block size/padding");
+
 // (Almost) "true" 2-bit quantization.
 // Due to the need to use blocks as per ggml design, it ends up using
 // 2.0625 bpw because of the 16-bit scale for each block of 256.

@@ -514,6 +514,7 @@ extern "C" {
         GGML_TYPE_Q8_K_R16   = 397,
         GGML_TYPE_Q8_KV_R8   = 398,
         GGML_TYPE_Q8_K_R8    = 399,
+        GGML_TYPE_Q8_K128_R16 = 400,
         GGML_TYPE_COUNT,
     };
 
@@ -981,6 +982,8 @@ extern "C" {
 
     GGML_API void ggml_set_input_scale(struct ggml_tensor * tensor, float scale);
     GGML_API float ggml_get_input_scale(const struct ggml_tensor * tensor);
+
+    GGML_API bool ggml_cpu_has_matmul_kernels(enum ggml_type type);
     GGML_API bool  ggml_mxfp4_to_nvfp4_ks(const void * src, void * dst, int n_per_row);
 
     GGML_API GGML_CALL int64_t ggml_nelements   (const struct ggml_tensor * tensor);

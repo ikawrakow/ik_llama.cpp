@@ -1108,6 +1108,15 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_Q8_K128_R16] = {
+        .type_name                = "q8_k128_r16",
+        .blck_size                = 128,
+        .type_size                = sizeof(block_q8_k128_r16)/16,
+        .is_quantized             = true,
+        .vec_dot_type             = GGML_TYPE_Q8_K128,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_Q8_K_R16] = {
         .type_name                = "q8_k_r16",
         .blck_size                = QK_K,
@@ -6172,6 +6181,15 @@ static inline enum ggml_type ggml_mul_mat_vec_dot_type(const struct ggml_tensor 
     }
 #endif
     return type_traits[a->type].vec_dot_type;
+}
+
+bool ggml_cpu_has_matmul_kernels(enum ggml_type type) {
+#if GGML_USE_IQK_MULMAT
+    return iqk_has_kernels(type, type_traits[type].vec_dot_type, type_traits[type].blck_size);
+#else
+    (void)type;
+    return false;
+#endif
 }
 
 struct ggml_tensor * ggml_dup_tensor(struct ggml_context * ctx, const struct ggml_tensor * src) {
@@ -21990,6 +22008,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_Q8_K_R8:
         case GGML_TYPE_Q8_0_R16:
         case GGML_TYPE_Q8_K_R16:
+        case GGML_TYPE_Q8_K128_R16:
         case GGML_TYPE_IQ3_KS_R16:
         case GGML_TYPE_Q8_KV_R8:
         case GGML_TYPE_Q8_KR8:

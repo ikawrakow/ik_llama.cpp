@@ -26,7 +26,7 @@
 #include <algorithm>
 #include <vector>
 
-#ifdef __AVX512F__
+#if defined(__AVX2__) || defined(__AVX512F__)
 #include <immintrin.h>
 #endif
 
@@ -113,6 +113,42 @@ struct LabelsAvx512 {
         ve = sum4(_mm512_add_epi8(E0, E1), a1, _mm512_add_epi8(a1, O1), _mm512_add_epi8(a1, E1));
         const __m512i a2 = _mm512_add_epi8(O0, E1);
         vo = sum4(_mm512_add_epi8(O0, O1), a2, _mm512_add_epi8(a2, E0), _mm512_add_epi8(a2, O1));
+    }
+};
+#endif
+
+#ifdef __AVX2__
+struct LabelsAvx2 {
+    __m256i t[4], m4;
+    LabelsAvx2() {
+        for (int k = 0; k < 4; ++k) {
+            int8_t tb[16];
+            for (int i = 0; i < 16; ++i) tb[i] = table16(k, i);
+            t[k] = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)tb));
+        }
+        m4 = _mm256_set1_epi8(0x0f);
+    }
+    inline __m256i sum4(__m256i i0, __m256i i1, __m256i i2, __m256i i3) const {
+        return _mm256_add_epi8(_mm256_add_epi8(_mm256_shuffle_epi8(t[0], i0), _mm256_shuffle_epi8(t[1], i1)),
+                               _mm256_add_epi8(_mm256_shuffle_epi8(t[2], i2), _mm256_shuffle_epi8(t[3], i3)));
+    }
+    inline void half(const uint8_t * qs, __m256i & ve, __m256i & vo) const {
+        const __m256i B0 = _mm256_loadu_si256((const __m256i *)qs);
+        const __m256i B1 = _mm256_loadu_si256((const __m256i *)(qs - 1));
+        const __m256i B2 = _mm256_loadu_si256((const __m256i *)(qs - 2));
+        const __m256i E0 = _mm256_and_si256(B0, m4);
+        const __m256i O0 = _mm256_and_si256(_mm256_srli_epi16(B0, 4), m4);
+        const __m256i E1 = _mm256_and_si256(B1, m4);
+        const __m256i O1 = _mm256_and_si256(_mm256_srli_epi16(B1, 4), m4);
+        const __m256i O2 = _mm256_and_si256(_mm256_srli_epi16(B2, 4), m4);
+        const __m256i a1 = _mm256_add_epi8(E0, O2);
+        ve = sum4(_mm256_add_epi8(E0, E1), a1, _mm256_add_epi8(a1, O1), _mm256_add_epi8(a1, E1));
+        const __m256i a2 = _mm256_add_epi8(O0, E1);
+        vo = sum4(_mm256_add_epi8(O0, O1), a2, _mm256_add_epi8(a2, E0), _mm256_add_epi8(a2, O1));
+    }
+    inline void labels(const uint8_t * qs, __m256i * v) const {
+        half(qs, v[0], v[2]);
+        half(qs + 32, v[1], v[3]);
     }
 };
 #endif
