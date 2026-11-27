@@ -39,7 +39,9 @@ def get_short_name(long_quant_name):
     return long_quant_name.replace("GGML_TYPE_", "").lower()
 
 
-def get_head_sizes(type_k, type_v):
+def get_head_sizes(type_k, type_v, vkq_size=None):
+    if vkq_size == 16 and type_k == type_v and type_k in ["GGML_TYPE_Q4_0", "GGML_TYPE_Q6_0"]:
+        return [128, 256]
     if type_k == "GGML_TYPE_F16" and type_v == "GGML_TYPE_F16":
         return [64, 128, 256]
     if type_k == "GGML_TYPE_F16":
@@ -53,7 +55,7 @@ for filename in glob("*.cu"):
 for vkq_size in [16, 32]:
     for type_k in TYPES_KV:
         for type_v in TYPES_KV:
-            for head_size in get_head_sizes(type_k, type_v):
+            for head_size in get_head_sizes(type_k, type_v, vkq_size):
                 with open(f"fattn-vec-f{vkq_size}-instance-hs{head_size}-{get_short_name(type_k)}-{get_short_name(type_v)}.cu", "w") as f:
                     f.write(SOURCE_FATTN_VEC.format(vkq_size=vkq_size, head_size=head_size, type_k=type_k, type_v=type_v))
 
