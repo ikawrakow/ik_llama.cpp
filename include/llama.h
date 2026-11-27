@@ -1715,6 +1715,13 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
             struct llama_context * ctx,
           llama_token_data_array * candidates);
 
+    /// @details Same as llama_sample_token_greedy() over the candidates {i, logits[i]}, 0 <= i < n_logits,
+    ///          without building them.
+    LLAMA_API llama_token llama_sample_token_greedy_logits(
+            struct llama_context * ctx,
+                     const float * logits,
+                         int32_t   n_logits);
+
     /// @details Randomly selects a token from the candidates based on their probabilities using the RNG of ctx.
     LLAMA_API llama_token llama_sample_token(
             struct llama_context * ctx,
