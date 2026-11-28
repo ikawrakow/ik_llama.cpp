@@ -10,6 +10,7 @@
 
 #include <unordered_set>
 #include <algorithm>
+#include <functional>
 
 ggml_tensor * llm_build_context::build_conv_window(ggml_cgraph * gf, ggml_tensor * past, ggml_tensor * x,
         int il, int channel_offset) {
@@ -1460,6 +1461,27 @@ static constexpr bool fused_situ_on_gpu = false;
 static constexpr bool fused_situ_on_gpu = true;
 #endif
 
+namespace {
+static ggml_tensor * build_situ_activation(
+        ggml_context * ctx, ggml_tensor * gate, ggml_tensor * up,
+        float beta, float linear_beta, const std::function<void(ggml_tensor *)> & on_op) {
+    ggml_tensor * gate_softcap = ggml_softcap(ctx, gate, 1.0f / beta, beta);
+    on_op(gate_softcap);
+    ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx, gate);
+    on_op(gate_sigmoid);
+    ggml_tensor * situ_gate = ggml_mul(ctx, gate_softcap, gate_sigmoid);
+    on_op(situ_gate);
+    ggml_tensor * situ_up = up;
+    if (linear_beta > 0.0f) {
+        situ_up = ggml_softcap(ctx, up, 1.0f / linear_beta, linear_beta);
+        on_op(situ_up);
+    }
+    ggml_tensor * result = ggml_mul(ctx, situ_gate, situ_up);
+    on_op(result);
+    return result;
+}
+}
+
 ggml_tensor * llm_build_context::llm_build_ffn(
         ggml_context * ctx,
        llama_context & lctx,
@@ -2045,8 +2067,22 @@ llm_expert_gating_func_type   gating_op,
                          type_op == LLM_FFN_SWIGLU_OAI ||
                          (type_op == LLM_FFN_SITU && (fused_situ_on_gpu || lctx.model.n_gpu_layers == 0) &&
                           lctx.lora_adapters.empty() && lctx.cparams.fused_moe_up_gate));
+    auto fused_up_gate_op = [&]() {
+        return type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
+               type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU :
+               type_op == LLM_FFN_SITU ? GGML_UNARY_OP_SITU_GLU : GGML_UNARY_OP_SWIGLU_OAI;
+    };
+    auto set_fused_up_gate_params = [&](ggml_tensor * op) {
+        *((float *)(op->op_params + 1)) = lctx.model.swiglu_limit(il, false);
+        *((float *)(op->op_params + 2)) = lctx.model.hparams.situ_beta;
+        *((float *)(op->op_params + 3)) = lctx.model.hparams.situ_linear_beta;
+        if (lctx.cparams.force_experts_offload_device) {
+            op->op_params[11] = lctx.model.default_layer_device[il] + 1;
+        }
+    };
 
     bool share_offload_eligible = false;
+    bool share_situ_use_fused = false;
     if (share_ids_ready && n_tokens <= 32) {
         ggml_backend_t gpu_backend = lctx.moe_cache->backend(il);
         ggml_backend_t cpu_backend = lctx.backend_cpu;
@@ -2073,35 +2109,59 @@ llm_expert_gating_func_type   gating_op,
         if (use_fused && up_gate_exps) {
             cached_ops.push_back(ggml_moe_up_gate_ext(ctx, cached_up_gate, nullptr, probe_input,
                     share_gpu_ids, nullptr, nullptr,
-                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI));
-            if (lctx.cparams.force_experts_offload_device) {
-                cached_ops.back()->op_params[11] = lctx.model.default_layer_device[il]+1;
-            }
+                    fused_up_gate_op()));
+            set_fused_up_gate_params(cached_ops.back());
         } else if (use_fused) {
             cached_ops.push_back(ggml_moe_up_gate_ext(ctx, cached_up, cached_gate, probe_input,
                     share_gpu_ids, nullptr, nullptr,
-                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI));
-            if (lctx.cparams.force_experts_offload_device) {
-                cached_ops.back()->op_params[11] = lctx.model.default_layer_device[il]+1;
-            }
+                    fused_up_gate_op()));
+            set_fused_up_gate_params(cached_ops.back());
         } else if (up_gate_exps) {
             cached_matmul(cached_up_gate, probe_input);
         } else {
             cached_matmul(cached_up, probe_input);
             cached_matmul(cached_gate, probe_input);
         }
-        cached_matmul(cached_down, down_input);
-        share_offload_eligible = llm_moe_cache_detail::share_ops_eligible(
-                gpu_backend, cpu_backend, host_ops, cached_ops);
+        if (type_op == LLM_FFN_SITU) {
+            ggml_tensor * probe_gate = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, down_exps->ne[0], 1, n_tokens);
+            ggml_tensor * probe_up = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, down_exps->ne[0], 1, n_tokens);
+            build_situ_activation(ctx, probe_gate, probe_up,
+                    lctx.model.hparams.situ_beta, lctx.model.hparams.situ_linear_beta,
+                    [&](ggml_tensor * op) { host_ops.push_back(op); });
+            if (use_fused) {
+                cached_matmul(cached_down, down_input);
+                share_situ_use_fused = llm_moe_cache_detail::share_ops_eligible(
+                        gpu_backend, cpu_backend, host_ops, cached_ops);
+                share_offload_eligible = share_situ_use_fused;
+            }
+            if (!share_offload_eligible) {
+                cached_ops.clear();
+                if (up_gate_exps) {
+                    cached_matmul(cached_up_gate, probe_input);
+                } else {
+                    cached_matmul(cached_up, probe_input);
+                    cached_matmul(cached_gate, probe_input);
+                }
+                ggml_tensor * gpu_probe_gate = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, down_exps->ne[0], 1, n_tokens);
+                ggml_tensor * gpu_probe_up = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, down_exps->ne[0], 1, n_tokens);
+                build_situ_activation(ctx, gpu_probe_gate, gpu_probe_up,
+                        lctx.model.hparams.situ_beta, lctx.model.hparams.situ_linear_beta,
+                        [&](ggml_tensor * op) { cached_ops.push_back(op); });
+                cached_matmul(cached_down, down_input);
+                share_offload_eligible = llm_moe_cache_detail::share_ops_eligible(
+                        gpu_backend, cpu_backend, host_ops, cached_ops);
+            }
+        } else {
+            cached_matmul(cached_down, down_input);
+            share_offload_eligible = llm_moe_cache_detail::share_ops_eligible(
+                    gpu_backend, cpu_backend, host_ops, cached_ops);
+        }
     }
 
-    if (share_ids_ready && share_offload_eligible && can_use_fmoe && !weight_before_ffn && n_tokens <= 32 && lctx.model.hadamard_rotation(up_exps) == nullptr &&
+    if (share_ids_ready && share_offload_eligible && (can_use_fmoe || type_op == LLM_FFN_SITU) && !weight_before_ffn && n_tokens <= 32 && lctx.model.hadamard_rotation(up_exps) == nullptr &&
             lctx.model.hadamard_rotation(gate_exps) == nullptr &&
             lctx.model.hadamard_rotation(up_gate_exps) == nullptr &&
-            lctx.model.hadamard_rotation(down_exps) == nullptr &&
-            type_op != LLM_FFN_SITU) {
+            lctx.model.hadamard_rotation(down_exps) == nullptr) {
         ggml_backend_t gpu_backend = lctx.moe_cache->backend(il);
         ggml_backend_t cpu_backend = lctx.backend_cpu;
         ggml_tensor * share_cur = ggml_reshape_3d(ctx, cur, n_embd, 1, n_tokens);
@@ -2122,7 +2182,7 @@ llm_expert_gating_func_type   gating_op,
             cpu_ops.push_back(padded);
             return padded;
         };
-        auto activate = [&](ggml_tensor * gate, ggml_tensor * up, std::vector<ggml_tensor *> & ops) {
+        auto activate = [&](bool gpu, ggml_tensor * gate, ggml_tensor * up, std::vector<ggml_tensor *> & ops) {
             ggml_tensor * value = nullptr;
             if (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU) {
                 value = ggml_fused_mul_unary(ctx, gate, up,
@@ -2130,8 +2190,13 @@ llm_expert_gating_func_type   gating_op,
                 *((float *)(value->op_params + 1)) = lctx.model.swiglu_limit(il, false);
             } else if (type_op == LLM_FFN_SWIGLU_OAI) {
                 value = ggml_swiglu_oai(ctx, gate, up, 1.702f, 7.0f);
+            } else if (type_op == LLM_FFN_SITU) {
+                const auto & hp = lctx.model.hparams;
+                ggml_backend_t backend = gpu ? gpu_backend : cpu_backend;
+                value = build_situ_activation(ctx, gate, up, hp.situ_beta, hp.situ_linear_beta,
+                        [&](ggml_tensor * op) { force_op(backend, op, ops); });
             }
-            if (value) ops.push_back(value);
+            if (value && type_op != LLM_FFN_SITU) ops.push_back(value);
             return value;
         };
         auto build_par = [&](bool gpu, std::vector<ggml_tensor *> & ops) {
@@ -2142,24 +2207,18 @@ llm_expert_gating_func_type   gating_op,
             ggml_tensor * w_gate = gpu ? cached_gate : gate_exps;
             const bool have_bias = up_gate_exps_b || up_exps_b || gate_exps_b;
             const bool use_fused = gpu && can_use_fmoe && !have_bias && (up_gate_exps ||
-                    (lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type));
+                    (lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type)) &&
+                    (type_op != LLM_FFN_SITU || share_situ_use_fused);
             if (use_fused) {
                 ggml_tensor * value;
                 if (up_gate_exps) {
                     value = ggml_moe_up_gate_ext(ctx, w_up_gate, nullptr, share_cur, ids_w, nullptr, nullptr,
-                            type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                            type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
+                            fused_up_gate_op());
                 } else {
                     value = ggml_moe_up_gate_ext(ctx, w_up, w_gate, share_cur, ids_w, nullptr, nullptr,
-                            type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                            type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
+                            fused_up_gate_op());
                 }
-                *((float *)(value->op_params + 1)) = lctx.model.swiglu_limit(il, false);
-                *((float *)(value->op_params + 2)) = lctx.model.hparams.situ_beta;
-                *((float *)(value->op_params + 3)) = lctx.model.hparams.situ_linear_beta;
-                if (lctx.cparams.force_experts_offload_device) {
-                    value->op_params[11] = lctx.model.default_layer_device[il]+1;
-                }
+                set_fused_up_gate_params(value);
                 ops.push_back(value);
                 return value;
             }
@@ -2212,7 +2271,7 @@ llm_expert_gating_func_type   gating_op,
                     force_op(gpu ? gpu_backend : cpu_backend, gate, ops);
                 }
             }
-            return activate(gate, up, ops);
+            return activate(gpu, gate, up, ops);
         };
 
         ggml_tensor * gpu_par = build_par(true, gpu_ops);
@@ -2331,13 +2390,8 @@ llm_expert_gating_func_type   gating_op,
             const auto & hp = lctx.model.hparams;
             gate = ggml_cont(ctx, gate);
             up = ggml_cont(ctx, up);
-            auto situ_gate = [&](ggml_tensor * x, float beta) {
-                return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
-            };
-            auto situ_up = [&](ggml_tensor * x, float beta) {
-                return beta > 0.0f ? ggml_softcap(ctx, x, 1.0f/beta, beta) : x;
-            };
-            par = ggml_mul(ctx, situ_gate(gate, hp.situ_beta), situ_up(up, hp.situ_linear_beta));
+            par = build_situ_activation(ctx, gate, up, hp.situ_beta, hp.situ_linear_beta,
+                    [](ggml_tensor *) {});
         } else {
             GGML_ABORT("fatal error");
         }
@@ -2454,13 +2508,8 @@ llm_expert_gating_func_type   gating_op,
             par = ggml_swiglu_oai(ctx, gate, up, alpha, limit);
         } else if (type_op == LLM_FFN_SITU) {
             const auto & hp = lctx.model.hparams;
-            auto situ_gate = [&](ggml_tensor * x, float beta) {
-                return ggml_mul(ctx, ggml_softcap(ctx, x, 1.0f/beta, beta), ggml_sigmoid(ctx, x));
-            };
-            auto situ_up = [&](ggml_tensor * x, float beta) {
-                return beta > 0.0f ? ggml_softcap(ctx, x, 1.0f/beta, beta) : x;
-            };
-            par = ggml_mul(ctx, situ_gate(gate, hp.situ_beta), situ_up(up, hp.situ_linear_beta));
+            par = build_situ_activation(ctx, gate, up, hp.situ_beta, hp.situ_linear_beta,
+                    [](ggml_tensor *) {});
         }
         else {
             GGML_ABORT("fatal error");
