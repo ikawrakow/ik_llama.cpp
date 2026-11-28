@@ -670,9 +670,8 @@ ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool 
         return nullptr;
     }
 
-    // non-causal image decode: full mask, unless the arch handles the non-causal
-    // span inside the window view (swa_full_non_causal, e.g. DSV4 vision)
-    if (!cparams.causal_attn && !hparams.swa_full_non_causal) {
+    // compacted cache: keep the bounded window view, made non-causal below
+    if (!cparams.causal_attn && !hparams.swa_full_non_causal && !compacted) {
         return build_inp_KQ_mask_swa();
     }
 
