@@ -1174,6 +1174,7 @@ struct ggml_backend_sched_split {
     int i_start;
     int i_end;
     struct ggml_tensor * inputs[GGML_SCHED_MAX_SPLIT_INPUTS];
+    struct ggml_tensor * expert_copies[GGML_SCHED_MAX_SPLIT_INPUTS];
     int n_inputs;
     // graph view of this split
     struct ggml_cgraph graph;
@@ -1308,6 +1309,13 @@ static inline bool ggml_backend_sched_offload_enabled(ggml_backend_sched_t sched
 #define tensor_backend_id(tensor) sched->hv_tensor_backend_ids[hash_id(tensor)]
 #define tensor_id_copy(id, backend_id, copy_id) sched->hv_tensor_copies[(id) * sched->n_backends * sched->n_copies + (backend_id) * sched->n_copies + (copy_id)]
 #define tensor_copy(tensor, backend_id, copy_id) tensor_id_copy(hash_id(tensor), backend_id, copy_id)
+
+static ggml_tensor * split_input_copy(ggml_backend_sched_t sched, const ggml_backend_sched_split * split, int j) {
+    if (split->expert_copies[j]) {
+        return split->expert_copies[j];
+    }
+    return tensor_copy(split->inputs[j], split->backend_id, sched->cur_copy);
+}
 
 // returns the priority of the backend, lower id is higher priority
 static int ggml_backend_sched_backend_id(ggml_backend_sched_t sched, ggml_backend_t backend) {
@@ -1926,6 +1934,22 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 }
 
                 if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
+                    const bool expert_weight = ((node->op == GGML_OP_MUL_MAT_ID && j == 0) ||
+                            (node->op == GGML_OP_MOE_FUSED_UP_GATE && j < 2)) &&
+                            src->buffer && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+                    if (expert_weight && ggml_backend_buffer_is_host(src->buffer)) {
+                        int k = 0;
+                        while (k < split->n_inputs && (split->inputs[k] != src || !split->expert_copies[k])) ++k;
+                        if (k == split->n_inputs) {
+                            GGML_ASSERT(k < GGML_SCHED_MAX_SPLIT_INPUTS);
+                            split->inputs[k] = src;
+                            split->expert_copies[k] = ggml_dup_tensor_layout(sched->ctx, src);
+                            ggml_format_name(split->expert_copies[k], "%s#%s#%d", ggml_backend_name(sched->backends[cur_backend_id]), src->name, i_split);
+                            ++split->n_inputs;
+                        }
+                        node->src[j] = split->expert_copies[k];
+                        continue;
+                    }
                     // create a copy of the input in the split's backend
                     if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
                         if (node->op == GGML_OP_REDUCE) {
@@ -1953,14 +1977,15 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         }
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split->inputs[n_inputs] = src;
+                        split->expert_copies[n_inputs] = nullptr;
                         }
-                    } else if (((node->op == GGML_OP_MUL_MAT_ID && j == 0) || (node->op == GGML_OP_MOE_FUSED_UP_GATE && j < 2)) &&
-                               src->buffer && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                    } else if (expert_weight) {
                         // the copy holds only the experts selected in the split that made it
                         int k = 0;
                         while (k < split->n_inputs && split->inputs[k] != src) ++k;
                         if (k == split->n_inputs) {
                             GGML_ASSERT(split->n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
+                            split->expert_copies[split->n_inputs] = nullptr;
                             split->inputs[split->n_inputs++] = src;
                         }
                     }
@@ -2010,7 +2035,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
             struct ggml_tensor * input = split->inputs[j];
             const size_t input_id = hash_id(input);
-            struct ggml_tensor * input_cpy = tensor_id_copy(input_id, split->backend_id, sched->cur_copy);
+            struct ggml_tensor * input_cpy = split_input_copy(sched, split, j);
 
             // add a dependency to the input source so that it is not freed before the copy is done
             struct ggml_tensor * input_dep = ggml_view_tensor(sched->ctx, input);
@@ -2047,6 +2072,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             struct ggml_backend_sched_split * split = &sched->splits[i];
             int backend_id = split->backend_id;
             for (int j = 0; j < split->n_inputs; j++) {
+                if (split->expert_copies[j]) continue;
                 struct ggml_tensor * input = split->inputs[j];
                 size_t id = hash_id(input);
                 for (int c = 0; c < sched->n_copies; c++) {
@@ -2112,7 +2138,7 @@ static bool ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
     ggml_backend_t split_backend = sched->backends[split_backend_id];
     if (split_backend->iface.cpy_all_inputs) {
         ggml_tensor * copies[GGML_SCHED_MAX_SPLIT_INPUTS];
-        for (int j = 0; j < split->n_inputs; ++j) copies[j] = tensor_copy(split->inputs[j], split_backend_id, sched->cur_copy);
+        for (int j = 0; j < split->n_inputs; ++j) copies[j] = split_input_copy(sched, split, j);
         if (split_backend->iface.cpy_all_inputs(sched, split_backend, split->n_inputs, split->inputs, copies,
                     split->graph.nodes[0], sched->callback_copy != nullptr)) {
             return true;
@@ -2127,7 +2153,7 @@ static bool ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
         const int j = pass_input % split->n_inputs;
         ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[j]);
         struct ggml_tensor * input = split->inputs[j];
-        struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+        struct ggml_tensor * input_cpy = split_input_copy(sched, split, j);
         const bool callback_handles_copy = !(input->flags & GGML_TENSOR_FLAG_INPUT) && sched->callback_copy &&
                 sched->callback_copy(split_backend, input, input_cpy, &split->graph,
                         GGML_BACKEND_SCHED_COPY_PHASE_QUERY,
