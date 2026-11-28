@@ -8,6 +8,7 @@
 #include "convert.cuh"
 #include "f8.cuh"
 #include "dequantize.cuh"
+#include "vecdotq.cuh"
 #include "tq.cuh"
 
 #define CUDA_Q8_0_NE_ALIGN 2048
@@ -917,6 +918,40 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
     for (int j = 0; j < 4; ++j) {
         y[j+ 0] = d * kvalues_mxfp4[q4[j] & 0xf];
         y[j+16] = d * kvalues_mxfp4[q4[j] >>  4];
+    }
+}
+
+template<typename dst_t>
+static __global__ void dequantize_block_mxfp4_r8(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
+
+    int64_t ii = blockIdx.x;
+
+    int64_t nblock = n_per_row/QK_K;
+    int64_t row  = ii/nblock;
+    int64_t row8 = row/8;
+    int64_t ir   = row%8;
+    // group of 8 rows -> n_per_row/32 block_mxfp4_r8; within output block ii
+    // the 8 column-sub-blocks are at (ii%nblock)*8 + ib
+    int64_t ibl = row8*(n_per_row/32) + (ii%nblock)*8;
+
+    const int tid = threadIdx.x;
+    const int  il = tid/8; // 0...3
+    const int  ib = tid%8; // 0...7
+
+    const block_mxfp4_r8 * x = (const block_mxfp4_r8 *)vx;
+    dst_t * y = yy + 256*ii + 32*ib + 4*il;
+
+    constexpr uint32_t uval[2] = { 0x00200000, 0x00400000 };
+    union { float f; uint32_t u; } helper;
+    helper.u = x[ibl+ib].e[ir] >= 2 ? uint32_t(x[ibl+ib].e[ir] - 1) << 23u : uval[x[ibl+ib].e[ir]];
+    const float d = helper.f;
+
+    // word 8*il + ir: byte b -> low nibble col 4*il+b, high nibble col 4*il+b+16
+    const int aux_q4 = get_int_b1(x[ibl+ib].qs, 8*il + ir);
+    for (int j = 0; j < 4; ++j) {
+        const int byte = (aux_q4 >> (8*j)) & 0xff;
+        y[j + 0] = d * kvalues_mxfp4[byte & 0xf];
+        y[j+16] = d * kvalues_mxfp4[byte >> 4];
     }
 }
 
@@ -2024,6 +2059,14 @@ static void dequantize_row_iq4_ks_cuda(const void * vx, dst_t * y, const int64_t
 }
 
 template<typename dst_t>
+static void dequantize_row_mxfp4_r8_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
+    const int64_t row_size = ggml_row_size(GGML_TYPE_MXFP4, n_per_row);
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_mxfp4_r8<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+}
+
+template<typename dst_t>
 static void dequantize_row_nvfp4_ks_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
     const int64_t row_size = ggml_row_size(GGML_TYPE_NVFP4_KS, n_per_row);
     const int64_t nblock = nrows*(n_per_row/QK_NVFP4);
@@ -2432,6 +2475,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq4_nl_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_MXFP4_R8:
+            return dequantize_row_mxfp4_r8_cuda;
         case GGML_TYPE_NVFP4_KS:
             return dequantize_row_nvfp4_ks_cuda;
         case GGML_TYPE_IQ4_XS:
@@ -2563,6 +2608,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq4_nl_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_MXFP4_R8:
+            return dequantize_row_mxfp4_r8_cuda;
         case GGML_TYPE_NVFP4_KS:
             return dequantize_row_nvfp4_ks_cuda;
         case GGML_TYPE_IQ4_XS:
