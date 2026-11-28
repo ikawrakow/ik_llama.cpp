@@ -4373,7 +4373,7 @@ template <int q8_type>
 void iqk_quantize_row_q8_K_T(const float * x, void * vy, int64_t k) {
     const int nb = k / QK_K;
     const int nb32 = k / 32;
-    const int nbtail = nb32 - 8*nb;
+    [[maybe_unused]] const int nbtail = nb32 - 8*nb;
     //printf("Quantizing row with k = %ld, nb = %d, nbtail = %d\n", k, nb, nbtail);
     block_q8_K * y = (block_q8_K *)vy;
 #ifdef __AVX2__

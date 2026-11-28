@@ -552,7 +552,7 @@ struct HelperQ40 final : public BaseHelper {
         int j = F16::block_size*i;
         auto dl = (const block_q4_0 *)Base::lblock(l1) + j/QK4_0;
 #ifdef __aarch64__
-        auto vd = F16::set1(*(const float16_t *)&dl->d);
+        auto vd = vld1q_dup_f16((const float16_t *)&dl->d);
         auto q  = vld1q_u8(dl->qs);
         q = j%QK4_0 ? vshrq_n_u8(q, 4) : vandq_u8(q, mask);
         q = vaddq_s8(q, m8);
@@ -596,8 +596,8 @@ struct HelperQ41 final : public BaseHelper {
         int j = F16::block_size*i;
         auto dl = (const block_q4_1 *)Base::lblock(l1) + j/QK4_1;
 #ifdef __aarch64__
-        auto vd = F16::set1(*(const float16_t *)&dl->d);
-        auto vm = F16::set1(*(const float16_t *)&dl->m);
+        auto vd = vld1q_dup_f16((const float16_t *)&dl->d);
+        auto vm = vld1q_dup_f16((const float16_t *)&dl->m);
         auto q  = vld1q_u8(dl->qs);
         q = (j%QK4_1) ? vshrq_n_u8(q, 4) : vandq_u8(q, mask);
         v1 = vfmaq_f16(vm, vd, vcvtq_f16_u16(vmovl_u8(vget_low_u8(q))));
@@ -645,7 +645,7 @@ struct HelperIQ4nl final : public BaseHelper {
         int j = F16::block_size*i;
         auto dl = (const block_iq4_nl *)Base::lblock(l1) + j/QK4_0;
 #ifdef __aarch64__
-        auto vd = F16::set1(*(const float16_t *)&dl->d);
+        auto vd = vld1q_dup_f16((const float16_t *)&dl->d);
         auto q  = vld1q_u8(dl->qs);
         q = j%QK4_0 ? vshrq_n_u8(q, 4) : vandq_u8(q, mask);
         q = vqtbl1q_s8(values, q);

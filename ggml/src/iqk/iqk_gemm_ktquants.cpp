@@ -4104,7 +4104,7 @@ void mul_mat_iq1_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
                 for (int ib = 0; ib < nt%4; ++ib) {
                     auto yv = vld1q_s8_x2(yb[ib].qs);
                     auto sumi = vdotq_s32(vdotq_s32(vdupq_n_s32(0), xv[ib].val[0], yv.val[0]), xv[ib].val[1], yv.val[1]);
-                    auto dxy = vmulq_f32(vdupq_n_f32(dx[ib]), vcvt_f32_f16(vdup_n_f16(*(const float16_t *)&yb[ib].d)));
+                    auto dxy = vmulq_f32(vdupq_n_f32(dx[ib]), vcvt_f32_f16(vld1_dup_f16((const float16_t *)&yb[ib].d)));
                     accd[iy] = vfmaq_f32(accd[iy], dxy, vcvtq_f32_s32(sumi));
                 }
             }
@@ -4256,7 +4256,7 @@ void mul_mat_iq2_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
                 for (int ib = 0; ib < nt - 4*(nt/4); ++ib) {
                     auto yv = vld1q_s8_x2(yb[ib].qs);
                     auto sumi = vdotq_s32(vdotq_s32(vdupq_n_s32(0), xv[ib].val[0], yv.val[0]), xv[ib].val[1], yv.val[1]);
-                    auto dxy = vmulq_f32(vdupq_n_f32(dx[ib]), vcvt_f32_f16(vdup_n_f16(*(const float16_t *)&yb[ib].d)));
+                    auto dxy = vmulq_f32(vdupq_n_f32(dx[ib]), vcvt_f32_f16(vld1_dup_f16((const float16_t *)&yb[ib].d)));
                     accd[iy] = vfmaq_f32(accd[iy], dxy, vcvtq_f32_s32(sumi));
                 }
             }
