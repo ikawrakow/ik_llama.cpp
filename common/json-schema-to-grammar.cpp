@@ -309,6 +309,66 @@ static std::string format_literal(const std::string & literal) {
 
 std::string gbnf_format_literal(const std::string & literal) { return format_literal(literal); }
 
+// True if `i` is escaped by an odd number of backslashes.
+static bool is_escaped(const std::string & s, size_t i) {
+    size_t backslashes = 0;
+    while (i > backslashes && s[i - backslashes - 1] == '\\') {
+        backslashes++;
+    }
+    return backslashes % 2 == 1;
+}
+
+// Splits a regex on top-level '|'.
+static std::vector<std::string> split_top_level_alternatives(const std::string & pattern) {
+    std::vector<std::string> alternatives;
+    size_t start = 0;
+    int depth = 0;
+    bool in_class = false;
+    for (size_t i = 0; i < pattern.size(); i++) {
+        char c = pattern[i];
+        if (c == '\\') {
+            i++; // skip escaped char
+        } else if (in_class) {
+            if (c == ']') {
+                in_class = false;
+            }
+        } else if (c == '[') {
+            in_class = true;
+        } else if (c == '(') {
+            depth++;
+        } else if (c == ')') {
+            if (depth > 0) {
+                depth--;
+            }
+        } else if (c == '|' && depth == 0) {
+            alternatives.push_back(pattern.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    alternatives.push_back(pattern.substr(start));
+    return alternatives;
+}
+
+// Detects '^' / '$' that are not at pattern boundaries.
+static bool has_internal_anchor(const std::string & pattern) {
+    bool in_class = false;
+    for (size_t i = 0; i < pattern.size(); i++) {
+        char c = pattern[i];
+        if (c == '\\') {
+            i++; // skip escaped char
+        } else if (in_class) {
+            if (c == ']') {
+                in_class = false;
+            }
+        } else if (c == '[') {
+            in_class = true;
+        } else if (c == '^' || c == '$') {
+            return true;
+        }
+    }
+    return false;
+}
+
 class common_schema_converter {
 private:
     friend class common_schema_info;
@@ -345,12 +405,68 @@ private:
         return string_join(rules, " | ");
     }
 
-    std::string _visit_pattern(const std::string & pattern, const std::string & name) {
-        if (!(pattern.front() == '^' && pattern.back() == '$')) {
-            _errors.push_back("Pattern must start with '^' and end with '$'");
-            return "";
+    // Builds a rule for a regex body; missing anchors become `char*` prefix/suffix.
+    std::string _pattern_rule(const std::string & body, const std::string & name, bool start_anchor, bool end_anchor) {
+        // Empty unanchored body matches any string.
+        if (body.empty() && !(start_anchor && end_anchor)) {
+            return _add_primitive("string", PRIMITIVE_RULES.at("string"));
         }
-        std::string sub_pattern = pattern.substr(1, pattern.length() - 2);
+
+        std::string char_rule;
+        if (!start_anchor || !end_anchor) {
+            char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
+        }
+
+        std::string rule = "\"\\\"\" ";
+        if (!start_anchor) {
+            rule += char_rule + "* ";
+        }
+        rule += "(" + _pattern_body_to_grammar(body, name) + ")";
+        if (!end_anchor) {
+            rule += " " + char_rule + "*";
+        }
+        rule += " \"\\\"\" space";
+        return rule;
+    }
+
+    std::string _visit_pattern(const std::string & pattern, const std::string & name) {
+        auto fallback = [&](const char * reason) {
+            _warnings.push_back("Pattern " + pattern + " is not supported (" + reason + "), accepting any string");
+            return _add_rule(name, _add_primitive("string", PRIMITIVE_RULES.at("string")));
+        };
+
+        // Each top-level alternative may have its own anchors.
+        struct alternative {
+            std::string body;
+            bool start_anchor;
+            bool end_anchor;
+        };
+        std::vector<alternative> alternatives;
+        for (const auto & raw : split_top_level_alternatives(pattern)) {
+            bool alt_start_anchor = !raw.empty() && raw.front() == '^';
+            bool alt_end_anchor   = !raw.empty() && raw.back() == '$' && !is_escaped(raw, raw.size() - 1);
+
+            std::string body = raw;
+            if (alt_start_anchor) {
+                body.erase(0, 1);
+            }
+            if (alt_end_anchor) {
+                body.pop_back();
+            }
+            if (has_internal_anchor(body)) {
+                return fallback("anchor inside the pattern");
+            }
+            alternatives.push_back({body, alt_start_anchor, alt_end_anchor});
+        }
+
+        std::vector<std::string> rules;
+        for (const auto & alt : alternatives) {
+            rules.push_back(_pattern_rule(alt.body, name, alt.start_anchor, alt.end_anchor));
+        }
+        return _add_rule(name, string_join(rules, " | "));
+    }
+
+    std::string _pattern_body_to_grammar(const std::string & sub_pattern, const std::string & name) {
         std::unordered_map<std::string, std::string> sub_rule_ids;
 
         size_t i = 0;
@@ -551,7 +667,7 @@ private:
             }
             return join_seq();
         };
-        return _add_rule(name, "\"\\\"\" (" + to_rule(transform()) + ") \"\\\"\" space");
+        return to_rule(transform());
     }
 
     /*
