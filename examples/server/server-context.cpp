@@ -3948,10 +3948,11 @@ void server_context::apply_checkpoint(server_slot & slot) {
             for (auto ck = slot.server_cached_prompt.checkpoints.begin(); ck != slot.server_cached_prompt.checkpoints.end();) {
                 bool drop = ck->pos_max > pos_next || !(ck->pos_min < pos_min_thold || ck->pos_min == 0);
                 if (!drop && llama_model_has_recurrent(model)) {
-                    // Recurrent state cannot be rewound: keep aligned checkpoints only.
+                    // Recurrent state cannot be rewound: keep checkpoints that match
+                    // the reused prefix, ignoring whitespace-only differences.
                     const llama_pos pos_c = std::min(pos_next, std::max(ck->pos_min + 1, ck->pos_max));
                     const int32_t n_c = slot.cache_tokens.size_up_to_pos(pos_c);
-                    const auto pfx = slot.cache_tokens.get_common_prefix_first_n(ctx, slot.prompt_tokens, n_c, true);
+                    const auto pfx = slot.cache_tokens.get_common_prefix_first_n(ctx, slot.prompt_tokens, n_c, false);
                     drop = (int32_t) pfx.first != n_c;
                 }
                 if (drop) {
@@ -4007,7 +4008,8 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 if (!do_reset) {
                     pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                     slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
-                    auto prefix = slot.cache_tokens.get_common_prefix_first_n(ctx, slot.prompt_tokens, slot.n_past, true);
+                    const bool exact_prefix = !llama_model_has_recurrent(model);
+                    auto prefix = slot.cache_tokens.get_common_prefix_first_n(ctx, slot.prompt_tokens, slot.n_past, exact_prefix);
                     slot.n_past_prompt = prefix.second;
 
                     if ((int32_t) prefix.first != slot.n_past) {

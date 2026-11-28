@@ -392,7 +392,7 @@ common_prefix find_common_text_token_prefix(const llama_context* ctx, const llam
     if (a.size() <= start || b.size() <= start) {
         return token_prefix;
     }
-    std::set<char> ignore_set = { ' ', '\n' ,'\r' };
+    std::set<char> ignore_set = { ' ', '\t', '\n' ,'\r' };
 
     llama_tokens a_sub(a.begin() + start, a.end());
     llama_tokens b_sub(b.begin() + start, b.end());
