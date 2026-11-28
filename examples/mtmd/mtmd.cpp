@@ -306,6 +306,10 @@ struct mtmd_context {
             img_end = "<|im_end|>";
 
         }
+        else if (proj == PROJECTOR_TYPE_INKLING2V) {
+            // <|content_image|> opens the image block
+            img_beg = "<|content_image|>";
+        }
         else if (proj == PROJECTOR_TYPE_GEMMA4V || proj == PROJECTOR_TYPE_GEMMA4UV) {
             // <|image> ... (image embeddings) ... <image|>
             img_beg = "<|image>";
