@@ -279,7 +279,10 @@ struct mtmd_context {
             img_end = "[IMG_END]";
 
         } else if (proj == PROJECTOR_TYPE_QWEN2VL || proj == PROJECTOR_TYPE_QWEN25VL || proj == PROJECTOR_TYPE_QWEN3VL || proj == PROJECTOR_TYPE_LING3VL) {
-            // <|vision_start|> ... (image embeddings) ... <|vision_end|>
+            img_beg = "<|vision_start|>";
+            img_end = "<|vision_end|>";
+
+        } else if (proj == PROJECTOR_TYPE_LFM3VL) {
             img_beg = "<|vision_start|>";
             img_end = "<|vision_end|>";
 
