@@ -243,6 +243,9 @@ static ggml_tensor * inkling_attention(llm_build_context & llm, ggml_cgraph * gf
     if (v_hadamard > 0) {
         result = ggml_hadamard(ctx, result, v_hadamard);
     }
+    if (!llm.cparams.offload_kqv) {
+        ggml_backend_sched_set_tensor_backend(llm.lctx.sched, result, llm.lctx.backend_cpu);
+    }
     result = ggml_reshape_2d(ctx, result, dv * heads, tokens);
     llm.cb(result, "kqv_merged_cont", il);
     gated = ggml_fused_mul_unary(ctx, gated, result, GGML_UNARY_OP_SIGMOID);
