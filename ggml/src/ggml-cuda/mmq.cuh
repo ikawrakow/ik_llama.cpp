@@ -2379,7 +2379,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 }
 
 template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_mxfp4_r8(
-    const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, [[maybe_unused]] int blocks_per_ne00) {
+    const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride, int blocks_per_ne00) {
 
 #ifdef INT8_MMA_AVAILABLE
     int   * x_qs = (int   *)  x_tile;
@@ -2392,6 +2392,10 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 
     const int kbx  = threadIdx.x / QI4_NL;
     const int kqsx = threadIdx.x % QI4_NL;
+    // The last 256-column chunk can start within 7 blocks of the row end; wrap
+    // the block index instead of reading past the row's block area (the extra
+    // columns are zero in the padded activations, so they contribute nothing).
+    const int kbx_w = kbx % blocks_per_ne00;
 
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
@@ -2402,7 +2406,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         }
 
         const int ir = i % 8;
-        const block_mxfp4_r8 * bxi = (const block_mxfp4_r8 *)(x + 8*(i/8)*stride) + kbx0 + kbx;
+        const block_mxfp4_r8 * bxi = (const block_mxfp4_r8 *)(x + 8*(i/8)*stride) + (kbx0 + kbx_w) % blocks_per_ne00;
 
         const int aux_q4 = get_int_b1(bxi->qs, 8*kqsx + ir);
         const int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
@@ -2418,6 +2422,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 
     const int blocks_per_tile_x_row = WARP_SIZE / QI4_NL;
     const int kbxd = threadIdx.x % blocks_per_tile_x_row;
+    const int kbxd_w = kbxd % blocks_per_ne00;
 
     union { float f; uint32_t u; } helper;
 
@@ -2430,7 +2435,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         }
 
         const int ir = i % 8;
-        const block_mxfp4_r8 * bxi = (const block_mxfp4_r8 *)(x + 8*(i/8)*stride) + kbx0 + kbxd;
+        const block_mxfp4_r8 * bxi = (const block_mxfp4_r8 *)(x + 8*(i/8)*stride) + (kbx0 + kbxd_w) % blocks_per_ne00;
         helper.u = bxi->e[ir] ? uint32_t(bxi->e[ir]) << 23u : 0x00400000;
 
 #ifdef INT8_MMA_AVAILABLE

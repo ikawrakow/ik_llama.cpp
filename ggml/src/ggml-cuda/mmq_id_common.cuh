@@ -1127,7 +1127,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 }
 
 template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_mxfp4_r8(
-    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride, [[maybe_unused]] int blocks_per_ne00) {
+    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride, int blocks_per_ne00) {
     constexpr int nwarps = mmq_get_nwarps_device();
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
@@ -1145,6 +1145,10 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     const int txi = warp_size > threads_per_row ? threadIdx.x % threads_per_row : threadIdx.x;
     const int kbx  = txi / QI_MXFP4;
     const int kqsx = txi % QI_MXFP4;
+    // The last 256-column chunk can start within 7 blocks of the row end; wrap
+    // the block index instead of reading past the row's block area (the extra
+    // columns are zero in the padded activations, so they contribute nothing).
+    const int kbx_w = kbx % blocks_per_ne00;
 
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nrows*nwarps) {
@@ -1156,7 +1160,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 
         const int ir = i % 8;
         // group of 8 rows -> 8*stride bytes; block at column position kbx0+kbx
-        const block_mxfp4_r8 * bxi = (const block_mxfp4_r8 *)(x + 8*(i/8)*stride) + kbx0 + kbx;
+        const block_mxfp4_r8 * bxi = (const block_mxfp4_r8 *)(x + 8*(i/8)*stride) + (kbx0 + kbx_w) % blocks_per_ne00;
 
         const int aux_q4 = get_int_b1(bxi->qs, 8*kqsx + ir);
         const int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
@@ -1174,6 +1178,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     constexpr int blocks_per_tile_x_row = MMQ_TILE_NE_K / QI_MXFP4;
     constexpr int rows_per_warp = warp_size / blocks_per_tile_x_row;
     const int kbxd = threadIdx.x % blocks_per_tile_x_row;
+    const int kbxd_w = kbxd % blocks_per_ne00;
 
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * rows_per_warp) {
@@ -1184,7 +1189,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         }
 
         const int ir = i % 8;
-        const block_mxfp4_r8 * bxi = (const block_mxfp4_r8 *)(x + 8*(i/8)*stride) + kbx0 + kbxd;
+        const block_mxfp4_r8 * bxi = (const block_mxfp4_r8 *)(x + 8*(i/8)*stride) + (kbx0 + kbxd_w) % blocks_per_ne00;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_df[i*MMQ_MMA_TILE_X_K_Q8_1                 + kbxd] = ggml_cuda_e8m0_to_fp32(bxi->e[ir])*0.5f;
