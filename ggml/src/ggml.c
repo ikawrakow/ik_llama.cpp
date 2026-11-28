@@ -11618,16 +11618,18 @@ void ggml_flash_attn_ext_add_sinks(
 
 void ggml_flash_attn_ext_add_rel_bias(
         struct ggml_tensor * a,
-        struct ggml_tensor * table,
+        struct ggml_tensor * weight,
+        struct ggml_tensor * rs,
         struct ggml_tensor * pos_q,
         struct ggml_tensor * pos_k) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-    GGML_ASSERT(a->src[0]->ne[2] == table->ne[1]);
-    GGML_ASSERT(table->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->src[0]->ne[2] == rs->ne[1]);
+    GGML_ASSERT(weight->type == GGML_TYPE_F32 && rs->type == GGML_TYPE_F32);
 
-    a->src[6] = table;
+    a->src[6] = rs;
     a->src[7] = pos_q;
     a->src[8] = pos_k;
+    a->src[9] = weight;
 }
 
 // ggml_flash_attn_back
@@ -24243,6 +24245,16 @@ static inline const float * ggml_flash_attn_f32_row(
     return scratch;
 }
 
+static inline float ggml_flash_attn_rel_bias_dot(const struct ggml_tensor * rs, const char * row,
+        const struct ggml_tensor * weight, int distance) {
+    const char * w = (const char *) weight->data + distance*weight->nb[1];
+    float sum = 0.0f;
+    for (int d = 0; d < rs->ne[0]; ++d) {
+        sum += *(const float *)(row + d*rs->nb[0]) * *(const float *)(w + d*weight->nb[0]);
+    }
+    return sum;
+}
+
 #ifdef _MSC_VER
 static __forceinline
 #else
@@ -24251,7 +24263,7 @@ static inline __attribute__((always_inline))
 void ggml_compute_forward_flash_attn_ext_f16(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst,
-        const struct ggml_tensor * table) {
+        const struct ggml_tensor * rs) {
 
     const struct ggml_tensor * q     = dst->src[0];
     const struct ggml_tensor * k     = dst->src[1];
@@ -24396,8 +24408,10 @@ void ggml_compute_forward_flash_attn_ext_f16(
     ggml_vec_dot_t    const kq_vec_dot     = type_traits[k->type].vec_dot;
     ggml_to_float_t   const v_to_float     = type_traits[v->type].to_float;
 
-    const bool f16_acc = !table && v->type == GGML_TYPE_F16;
-    if (table) {
+    const struct ggml_tensor * weight = dst->src[9];
+    const uint32_t last = rs ? weight->ne[1] - 1 : 0;
+    const bool f16_acc = !rs && v->type == GGML_TYPE_F16;
+    if (rs) {
         GGML_ASSERT(q->type == GGML_TYPE_F32 || type_traits[q->type].to_float);
         GGML_ASSERT(k->type == GGML_TYPE_F32 || type_traits[k->type].to_float);
     } else {
@@ -24432,8 +24446,9 @@ void ggml_compute_forward_flash_attn_ext_f16(
         }
 
         const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1]) : NULL;
-        const char * bias = table ? (const char *) table->data + h*table->nb[1] + iq1*table->nb[2] : NULL;
-        const int32_t pos_q = table ? ggml_get_i32_1d(dst->src[7], iq1) : 0;
+        const char * rs_row = rs ? (const char *) rs->data + h*rs->nb[1] + iq1*rs->nb[2] : NULL;
+        const int32_t pos_q = rs ? ggml_get_i32_1d(dst->src[7], iq1) : 0;
+        const float tail = rs ? ggml_flash_attn_rel_bias_dot(rs, rs_row, weight, last) : 0.0f;
         // without a mask, src[5] lists the K rows of this query
         const int32_t * kv_idx = !mask && dst->src[5] ? (const int32_t *)((char *) dst->src[5]->data + iq1*dst->src[5]->nb[1]) : NULL;
         const int64_t n_kv = kv_idx ? dst->src[5]->ne[0] : nek1;
@@ -24447,7 +24462,7 @@ void ggml_compute_forward_flash_attn_ext_f16(
         const int iv2 = iq2 / rv2;
 
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
-        if (table) {
+        if (rs) {
             pq = ggml_flash_attn_f32_row(q, pq, Q_q, Dk);
         } else {
             q_to_vec_dot(pq, Q_q, Dk);
@@ -24469,7 +24484,7 @@ void ggml_compute_forward_flash_attn_ext_f16(
             float s; // KQ value
 
             const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
-            if (table) {
+            if (rs) {
                 const float * key = ggml_flash_attn_f32_row(k, k_data, V32, Dk);
                 ggml_vec_dot_f32(Dk, &s, 0, key, 0, pq, 0, 1);
             } else {
@@ -24477,12 +24492,11 @@ void ggml_compute_forward_flash_attn_ext_f16(
             }
 
             s = softcap == 0.0f ? s*scale + mv : softcap*tanhf(s*scale) + mv; // scale KQ value and apply mask
-            if (table) {
+            if (rs) {
                 const struct ggml_tensor * positions = dst->src[8];
                 const int32_t pos_k = *(const int32_t *)((const char *) positions->data + ic*positions->nb[0]);
-                const uint32_t last = table->ne[0] - 1;
-                const uint32_t distance = pos_q >= pos_k ? MIN((uint32_t) pos_q - (uint32_t) pos_k, last) : last;
-                s += *(const float *)(bias + distance*table->nb[0]);
+                const uint32_t delta = (uint32_t) pos_q - (uint32_t) pos_k;
+                s += pos_q >= pos_k && delta < last ? ggml_flash_attn_rel_bias_dot(rs, rs_row, weight, delta) : tail;
             }
 
             const float Mold = M;
@@ -24521,7 +24535,7 @@ void ggml_compute_forward_flash_attn_ext_f16(
                 }
 
                 const float * values = V32;
-                if (table) {
+                if (rs) {
                     values = ggml_flash_attn_f32_row(v, v_data, V32, Dv);
                 } else {
                     v_to_float(v_data, V32, Dv);

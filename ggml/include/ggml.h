@@ -2622,11 +2622,12 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
-    // table: [distance, query head, query row]; the last distance entry applies beyond the table extent.
+    // weight: [Kd, distance]; rs: [Kd, query head, query row]. The last weight column applies beyond the extent.
     // positions follow query and KV view order.
     GGML_API void ggml_flash_attn_ext_add_rel_bias(
             struct ggml_tensor * a,
-            struct ggml_tensor * table,
+            struct ggml_tensor * weight,
+            struct ggml_tensor * rs,
             struct ggml_tensor * pos_q,
             struct ggml_tensor * pos_k);
 

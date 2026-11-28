@@ -1708,7 +1708,7 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
 
     if (!mask || nk1%32 != 0) return false; // the implementation assumes mask is not null and nk is a multiple of 32
 
-    if (bias.table) {
+    if (bias.rs) {
         return iqk_fa_128_128_bias(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
                 q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S, bias);
     }

@@ -31,6 +31,30 @@
 
 // clang-format off
 
+inline float IQKRelBias::dot(const float * row, int distance) const {
+    const float * weight = w + size_t(distance)*kd;
+    if (kd%4 == 0) {
+#ifdef __AVX2__
+        auto sum = _mm_setzero_ps();
+        for (int d = 0; d < kd; d += 4) {
+            sum = _mm_fmadd_ps(_mm_loadu_ps(row + d), _mm_loadu_ps(weight + d), sum);
+        }
+        return hsum_float_4(sum);
+#else
+        auto sum = vdupq_n_f32(0.0f);
+        for (int d = 0; d < kd; d += 4) {
+            sum = vfmaq_f32(sum, vld1q_f32(row + d), vld1q_f32(weight + d));
+        }
+        return vaddvq_f32(sum);
+#endif
+    }
+    float sum = 0.0f;
+    for (int d = 0; d < kd; ++d) {
+        sum += row[d] * weight[d];
+    }
+    return sum;
+}
+
 namespace {
 
 // Compute effective K boundary by scanning ALL query rows (union-of-masks).
@@ -761,12 +785,13 @@ struct FlashMS : Bias {
     FlashMS(float scale, float softcap, Bias bias) : Bias(bias), vscale(F16::set1(scale)), softcap(softcap), h_inf(GGML_FP32_TO_FP16(-INFINITY)) {}
 
     inline void load_bias(int j, float * values) const {
-        const float * row = this->table + j*this->row_stride;
+        const float * row = this->rs + j*this->row_stride;
         const int32_t q = this->pos_q[j*this->pos_q_stride];
+        const float tail = this->dot(row, this->last);
         for (int i = 0; i < k_step; ++i) {
             const int32_t k = this->pos_k[this->key_offset + i];
-            const int32_t distance = q >= k ? int32_t(std::min(uint32_t(q) - uint32_t(k), uint32_t(this->max_distance))) : this->max_distance;
-            values[i] = row[distance];
+            const uint32_t delta = uint32_t(q) - uint32_t(k);
+            values[i] = q >= k && delta < this->last ? this->dot(row, delta) : tail;
         }
     }
 
