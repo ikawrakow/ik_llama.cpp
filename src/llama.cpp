@@ -7107,9 +7107,10 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             // the flash-attn mask is allocated as [n_kv, n_tokens_pad] and must be filled
             // using KV cache cell metadata — not batch-token indices — because image tokens
             // occupy cells starting at n_past, not at cell 0.
-            // swa_full_non_causal: in a non-causal (image) span the window only clips
-            // cells older than the span; in-span cells attend fully. Track each span start.
-            const bool swa_skip_window = hparams.swa_full_non_causal && !cparams.causal_attn;
+            // non-causal image span: bidirectional; DSV4 keeps its own span handling
+            const bool non_causal       = !cparams.causal_attn;
+            const bool bidirectional    = non_causal && !hparams.swa_full_non_causal;
+            const bool swa_skip_window  = non_causal && hparams.swa_full_non_causal;
             std::unordered_map<llama_seq_id, llama_pos> ubatch_span_min;
             if (swa_skip_window) {
                 for (int j = 0; j < n_tokens; ++j) {
@@ -7141,6 +7142,8 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 const int64_t win_off = built.win_off;
                 const bool      compacted    = built.compacted;
                 const int64_t   row_base     = mask_kv_self.sink_rows;
+                const int64_t   row_end      = mask_kv_self.head_swa +
+                    (&mask_kv_self == &kv_self ? n_tokens : 0);
                 const llama_pos pos_base     = mask_kv_self.pos_base_swa;
                 for (int j = 0; j < n_tokens; ++j) {
                     const llama_pos    pos    = batch.pos[j];
@@ -7152,9 +7155,9 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                         const llama_pos cell_pos = compacted
                             ? pos_base + (llama_pos) (i - row_base) : mask_kv_self.cells[i].pos;
                         const bool in_seq = compacted
-                            ? cell_pos >= pos_base : mask_kv_self.cells[i].has_seq_id(seq_id);
+                            ? cell_pos >= pos_base && i < row_end : mask_kv_self.cells[i].has_seq_id(seq_id);
                         float f;
-                        if (!in_seq || cell_pos > pos) {
+                        if (!in_seq || (!bidirectional && cell_pos > pos)) {
                             f = -INFINITY;
                         } else {
                             f = hparams.use_alibi ? -std::abs(cell_pos - pos) : 0.0f;
@@ -7167,7 +7170,6 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                     f = -INFINITY;
                                 }
                             } else if (pos - cell_pos >= (int32_t) built.window) {
-                                // swa_full_non_causal: skip the window for in-span cells
                                 if (!(span_min_set && cell_pos >= span_min)) {
                                     f = -INFINITY;
                                 }
