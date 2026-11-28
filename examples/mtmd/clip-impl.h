@@ -26,6 +26,7 @@
 #define KEY_N_BLOCK             "clip.%s.block_count"
 #define KEY_PROJ_DIM            "clip.%s.projection_dim"
 #define KEY_N_HEAD              "clip.%s.attention.head_count"
+#define KEY_N_HEAD_KV           "clip.%s.attention.head_count_kv"
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
 
 // vision-specific
@@ -33,6 +34,7 @@
 #define KEY_IMAGE_SIZE          "clip.vision.image_size"
 #define KEY_IMAGE_MIN_PIXELS    "clip.vision.image_min_pixels"
 #define KEY_IMAGE_MAX_PIXELS    "clip.vision.image_max_pixels"
+#define KEY_IMAGE_RESIZE_ALGO   "clip.vision.image_resize_algo"
 #define KEY_PREPROC_IMAGE_SIZE  "clip.vision.preproc_image_size"
 #define KEY_PATCH_SIZE          "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN          "clip.vision.image_mean"
@@ -112,6 +114,12 @@
 #define TN_DEEPSTACK_FC1   "v.deepstack.%d.fc1.%s"      // qwen3vl deepstack
 #define TN_DEEPSTACK_FC2   "v.deepstack.%d.fc2.%s"      // qwen3vl deepstack
 
+// lfm3vl
+#define TN_LFM3VL_EMBEDDING_NORM  "%s.embedding_norm.%s"
+#define TN_LFM3VL_CONV2D_IN_PROJ  "%s.blk.%d.conv2d_in_proj.%s"
+#define TN_LFM3VL_CONV2D_SPATIAL  "%s.blk.%d.conv2d_spatial.%s"
+#define TN_LFM3VL_CONV2D_OUT_PROJ "%s.blk.%d.conv2d_out_proj.%s"
+
 // mimicpmv
 #define TN_MINICPMV_POS_EMBD_K "resampler.pos_embed_k"
 #define TN_MINICPMV_QUERY      "resampler.query"
@@ -190,6 +198,7 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
     PROJECTOR_TYPE_VOXTRAL,
     PROJECTOR_TYPE_LFM2,
+    PROJECTOR_TYPE_LFM3VL,
     PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_LIGHTONOCR,
@@ -227,6 +236,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN25O,   "qwen2.5o"},
     { PROJECTOR_TYPE_VOXTRAL,   "voxtral"},
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
+    { PROJECTOR_TYPE_LFM3VL,    "lfm3vl"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
     { PROJECTOR_TYPE_KIMIK25,   "kimik25"},
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
